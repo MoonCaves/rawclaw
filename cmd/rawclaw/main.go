@@ -15,7 +15,7 @@ import (
 
 func main() {
 	root := cli.NewRootCmd(cli.BuildInfo{Version: version, Commit: commit, Date: date})
-	if err := root.Execute(); err != nil {
+	if err := cli.Execute(root, os.Args[1:]); err != nil {
 		// ExitError carries an explicit exit code (and an optional message);
 		// everything else is a generic exit 1.
 		var ee cli.ExitError

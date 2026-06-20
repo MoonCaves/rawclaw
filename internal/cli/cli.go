@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/adapters"
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
@@ -27,6 +28,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/semantic"
 	"github.com/MoonCaves/rawclaw/internal/view"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // Options holds every parsed flag for one rawclaw invocation, bound to the
@@ -57,6 +59,7 @@ type Options struct {
 	ExcludePath      string
 	MinMessages      int
 	DebugSearch      bool
+	Timeout          time.Duration
 
 	aroundSet bool // tracks whether --around was provided (unset means "no anchor")
 }
@@ -164,6 +167,15 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.IntVar(&opts.MinMessages, "min-messages", 0, "only sessions with >= N messages (drops thin/bootstrap threads)")
 	f.BoolVar(&opts.DebugSearch, "debug-search", false, "explain WHY each hit ranked where it did (LLM-free scoring breakdown)")
 
+	// --timeout is PERSISTENT (every subcommand inherits it): rawclaw must be
+	// self-bounding so an agent never needs an external `timeout(1)`. Default 30s;
+	// RAWCLAW_TIMEOUT overrides the default; --timeout 0 disables the watchdog.
+	// The watchdog itself is armed in Execute (which wraps root.Execute) so it is
+	// disarmed on EVERY path — including a command that returns an error, where
+	// cobra would skip a PersistentPostRunE hook.
+	root.PersistentFlags().DurationVar(&opts.Timeout, "timeout", defaultTimeout,
+		"hard wall-clock deadline for the whole run; exits 124 if exceeded (0 disables; env RAWCLAW_TIMEOUT)")
+
 	// Validate the role/sort enums before running: reject anything outside the
 	// allowed set with an "invalid choice" message (stderr + exit 2), keeping the
 	// validation in cobra's pre-run hook.
@@ -183,6 +195,33 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newVersionCmd(build))
 	return root
+}
+
+// Execute runs the command tree under the self-bounding watchdog. It resolves the
+// effective deadline from --timeout / RAWCLAW_TIMEOUT (a lenient pre-parse, so the
+// watchdog is armed BEFORE cobra dispatches — covering even a slow PreRun), arms
+// the watchdog, then runs root.Execute. The disarm is deferred, so the watchdog
+// goroutine is always torn down — on success, on a returned error, or on a panic —
+// which keeps the goroutine-leak detector green. main calls this instead of
+// root.Execute() directly.
+func Execute(root *cobra.Command, args []string) error {
+	to := resolveTimeoutFromArgs(args, os.Getenv("RAWCLAW_TIMEOUT"))
+	stop := startWatchdog(to, root.ErrOrStderr(), osExit)
+	defer stop()
+	root.SetArgs(args)
+	return root.Execute()
+}
+
+// resolveTimeoutFromArgs leniently parses just the --timeout value out of args
+// (ignoring unknown flags / parse errors) so the watchdog can arm before cobra's
+// own parse. Falls back to RAWCLAW_TIMEOUT, then the default.
+func resolveTimeoutFromArgs(args []string, env string) time.Duration {
+	probe := pflag.NewFlagSet("rawclaw-timeout-probe", pflag.ContinueOnError)
+	probe.ParseErrorsWhitelist.UnknownFlags = true
+	probe.SetOutput(io.Discard)
+	to := probe.Duration("timeout", defaultTimeout, "")
+	_ = probe.Parse(args)
+	return resolveTimeout(probe.Changed("timeout"), *to, env)
 }
 
 // newVersionCmd wires `rawclaw version`: print the build stamp (same banner as
