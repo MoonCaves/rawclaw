@@ -28,4 +28,13 @@ Initial release.
 - **Optional semantic tier** — bring-your-own-embedder, reciprocal-rank-fused with the keyword hits,
   pure-Go cosine, off by default (keyword search needs no model or network).
 
+### Fixed
+
+- **`browse` no longer deadlocks** on the single-connection read pool: session rows are now
+  drained and the cursor closed before per-session preview queries run, instead of issuing a
+  second query while the first cursor still holds the only connection.
+- **`--scroll` / `agent` session resolution** now resolves a bare session UUID to its parent
+  session rather than false-tripping the ambiguity guard against that session's own subagent
+  transcript (which shares the UUID prefix).
+
 [0.1.0]: https://github.com/MoonCaves/rawclaw/releases/tag/v0.1.0
