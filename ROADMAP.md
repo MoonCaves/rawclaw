@@ -125,8 +125,8 @@ as a punch-list of self-evidence gaps to retire.
 
 Applied here, best → worst: **auto-detect non-tty (piped) output and emit grep-friendly lines** (the agent greps,
 it just works — zero knowledge required); failing that, a one-line stderr hint at the moment of grepping; failing
-that, the skill/README documents `--brief` / `--json`. Pair with **forgiving input parsing** (adopt `the prior art`'s
-pattern: single-dash long flags, case-folding, typo-correction, `find`/`grep`→`search` aliases) so an agent's
+that, the skill/README documents `--brief` / `--json`. Pair with **forgiving input parsing**
+(single-dash long flags, case-folding, typo-correction, `find`/`grep`→`search` aliases) so an agent's
 natural attempt succeeds without knowing the exact syntax. **(planned)**
 
 ### Shell completion
