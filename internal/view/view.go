@@ -433,8 +433,12 @@ func Browse(tdir string, limit int, since, before string) []BrowseRow {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
 
+	// Drain the session rows fully and CLOSE them before running any per-session
+	// preview query. ConnectRO is a single-connection pool (SetMaxOpenConns(1)), so
+	// calling sessionPreview (another con.Query) while these rows are still open
+	// blocks forever waiting for a second connection — database/sql.(*DB).conn
+	// deadlock. Collect first, release the connection, then preview.
 	var out []BrowseRow
 	for rows.Next() {
 		var (
@@ -443,17 +447,20 @@ func Browse(tdir string, limit int, since, before string) []BrowseRow {
 			n      sql.NullInt64
 		)
 		if err := rows.Scan(&id, &lastTS, &n); err != nil {
+			_ = rows.Close()
 			return nil
 		}
-		out = append(out, BrowseRow{
-			SessionID: id,
-			LastTS:    lastTS.Float64,
-			N:         int(n.Int64),
-			Preview:   sessionPreview(con, id),
-		})
+		out = append(out, BrowseRow{SessionID: id, LastTS: lastTS.Float64, N: int(n.Int64)})
 	}
-	if err := rows.Err(); err != nil {
+	rowsErr := rows.Err()
+	_ = rows.Close() // release the single connection before the preview queries
+	if rowsErr != nil {
 		return nil
+	}
+
+	// Connection is now free — fill each preview with its own query.
+	for i := range out {
+		out[i].Preview = sessionPreview(con, out[i].SessionID)
 	}
 	return out
 }

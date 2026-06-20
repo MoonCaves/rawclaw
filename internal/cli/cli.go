@@ -95,6 +95,10 @@ func NewRootCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Record whether --around was explicitly provided.
 			opts.aroundSet = cmd.Flags().Changed("around")
+			// --this-desk: hidden backward-compat alias for --this-project.
+			if cmd.Flags().Changed("this-desk") {
+				opts.ThisProject = true
+			}
 			return runRoot(cmd, opts, args)
 		},
 	}
@@ -105,6 +109,8 @@ func NewRootCmd() *cobra.Command {
 		"the project's working directory (e.g. ~/code/my-project); encoded to "+
 			"find its transcripts. An already-encoded ~/.claude/projects path also works.")
 	f.BoolVar(&opts.ThisProject, "this-project", false, "narrow to THIS project only (default searches all projects)")
+	f.Bool("this-desk", false, "") // hidden backward-compat alias for --this-project
+	_ = f.MarkHidden("this-desk")
 	f.BoolVar(&opts.All, "all", false, "(default) search every project")
 	f.BoolVar(&opts.Brief, "brief", false, "flat one-line hits (no bookends/window) — quick scan")
 	f.StringVar(&opts.Scroll, "scroll", "", "keep-reading: window around --around in this session")
