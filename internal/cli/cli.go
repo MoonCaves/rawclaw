@@ -193,6 +193,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root.AddCommand(newAgentCmd())
 	root.AddCommand(newArchiveCmd())
 	root.AddCommand(newDeleteCmd())
+	root.AddCommand(newUpgradeCmd(build))
 	root.AddCommand(newVersionCmd(build))
 	return root
 }
