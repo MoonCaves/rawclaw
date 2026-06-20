@@ -420,3 +420,40 @@ func TestScrollUnique(t *testing.T) {
 		t.Fatalf("unique Scroll resolved wrong session: %+v", res)
 	}
 }
+
+// writeSubagentSession writes a subagent transcript under
+// <proj>/<parent>/subagents/<stem>.jsonl, which the indexer flags is_subagent=1
+// with parent=<parent> (see index.SessionIDFor).
+func writeSubagentSession(t *testing.T, proj, parent, stem, content string) {
+	t.Helper()
+	dir := filepath.Join(proj, parent, "subagents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	line := `{"type":"user","uuid":"u-` + stem + `","timestamp":"2026-06-01T10:00:00Z",` +
+		`"message":{"role":"user","content":"` + content + `"}}`
+	path := filepath.Join(dir, stem+".jsonl")
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// TestScrollIgnoresSubagentSibling: a bare session UUID that also prefixes the
+// session's OWN subagent transcript must resolve to the parent, not false-trip
+// the ambiguity guard against its child. The two share the UUID prefix but are
+// one logical session. Regression for the Scroll is_subagent filter.
+func TestScrollIgnoresSubagentSibling(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	proj := t.TempDir()
+	writeScrollSession(t, proj, "a1b2c3d4aaaa", "alpha")
+	writeSubagentSession(t, proj, "a1b2c3d4aaaa", "agentchild", "child")
+	scope := []Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+
+	res, err := Scroll(scope, "a1b2c3d4", 1, 5)
+	if err != nil {
+		t.Fatalf("scroll past subagent sibling: unexpected err %v", err)
+	}
+	if res == nil || res.SessionID != "a1b2c3d4aaaa" {
+		t.Fatalf("want parent session a1b2c3d4aaaa, got %+v", res)
+	}
+}

@@ -346,30 +346,49 @@ func Scroll(scope []Scope, session8 string, aroundID, window int) (*ScrollResult
 		project string
 		dbp     string
 	}
-	var cands []cand
-	for _, s := range scope {
-		dbp, _, _, err := index.EnsureIndexed(s.TDir, false)
-		if err != nil {
-			continue
+	// collect resolves the prefix against every scope. When excludeSub is set we
+	// drop agent sub-sessions (id "<parent>/agent-..."), because a session and
+	// its own sub-agent share the UUID prefix: without this, scrolling a bare
+	// session UUID false-trips the ambiguity guard against its own child
+	// transcript (the two rows are one logical session). We fall back to
+	// including sub-sessions only when nothing top-level matched, so scrolling a
+	// full "<parent>/agent-..." id still resolves.
+	collect := func(excludeSub bool) []cand {
+		q := `SELECT id FROM sessions WHERE id LIKE ? ORDER BY id LIMIT 2`
+		if excludeSub {
+			q = `SELECT id FROM sessions WHERE id LIKE ? AND is_subagent = 0 ORDER BY id LIMIT 2`
 		}
-		con, err := index.ConnectRO(dbp)
-		if err != nil {
-			continue
-		}
-		rows, qErr := con.Query(`SELECT id FROM sessions WHERE id LIKE ? ORDER BY id LIMIT 2`, session8+"%")
-		if qErr != nil {
-			con.Close()
-			continue
-		}
-		for rows.Next() {
-			var sid string
-			if err := rows.Scan(&sid); err != nil {
-				break
+		var cs []cand
+		for _, s := range scope {
+			dbp, _, _, err := index.EnsureIndexed(s.TDir, false)
+			if err != nil {
+				continue
 			}
-			cands = append(cands, cand{sid: sid, project: s.Project, dbp: dbp})
+			con, err := index.ConnectRO(dbp)
+			if err != nil {
+				continue
+			}
+			rows, qErr := con.Query(q, session8+"%")
+			if qErr != nil {
+				con.Close()
+				continue
+			}
+			for rows.Next() {
+				var sid string
+				if err := rows.Scan(&sid); err != nil {
+					break
+				}
+				cs = append(cs, cand{sid: sid, project: s.Project, dbp: dbp})
+			}
+			rows.Close()
+			con.Close()
 		}
-		rows.Close()
-		con.Close()
+		return cs
+	}
+
+	cands := collect(true)
+	if len(cands) == 0 {
+		cands = collect(false)
 	}
 
 	switch len(cands) {
