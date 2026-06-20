@@ -13,12 +13,12 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/minio/selfupdate"
 	"github.com/spf13/cobra"
-	"golang.org/x/mod/semver"
 )
 
 // Self-update is the bootstrapping feature: whatever release a user installs by
@@ -115,7 +115,7 @@ func runUpgrade(cmd *cobra.Command, build BuildInfo, checkOnly, force bool) erro
 
 	if checkOnly {
 		if updateAvailable {
-			fmt.Fprintf(out, "update available: %s → %s\n", current, semver.Canonical(latest))
+			fmt.Fprintf(out, "update available: %s → %s\n", current, canonicalSemver(latest))
 			return ExitError{Code: exitUpdateAvailable}
 		}
 		fmt.Fprintf(out, "rawclaw %s is already the latest\n", current)
@@ -131,11 +131,11 @@ func runUpgrade(cmd *cobra.Command, build BuildInfo, checkOnly, force bool) erro
 		return ExitError{
 			Code: 2,
 			Msg: fmt.Sprintf("this is an unstamped %q build; re-run with --force to replace it with %s",
-				current, semver.Canonical(latest)),
+				current, canonicalSemver(latest)),
 		}
 	}
 
-	fmt.Fprintf(out, "downloading rawclaw %s for %s/%s ...\n", semver.Canonical(latest), runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(out, "downloading rawclaw %s for %s/%s ...\n", canonicalSemver(latest), runtime.GOOS, runtime.GOARCH)
 
 	bin, err := downloadVerifiedBinary(ctx, upgradeHTTPClient, upgradeRepo, latest, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
@@ -157,22 +157,20 @@ func runUpgrade(cmd *cobra.Command, build BuildInfo, checkOnly, force bool) erro
 		return fmt.Errorf("applying update (your existing binary is intact): %w", err)
 	}
 
-	fmt.Fprintf(out, "rawclaw %s → %s\n", current, semver.Canonical(latest))
+	fmt.Fprintf(out, "rawclaw %s → %s\n", current, canonicalSemver(latest))
 	return nil
 }
 
 // isStampedRelease reports whether v looks like a real release tag (e.g. "v0.1.0"
-// or "0.1.0") rather than the unstamped "dev" default. semver.IsValid wants a
-// leading "v", so we normalise first.
+// or "0.1.0") rather than the unstamped "dev" default.
 func isStampedRelease(v string) bool {
 	if v == "" || v == "dev" {
 		return false
 	}
-	return semver.IsValid(ensureV(v))
+	return isValidSemver(v)
 }
 
-// ensureV prefixes a bare semver with "v" so golang.org/x/mod/semver accepts it.
-// "0.1.0" → "v0.1.0"; "v0.1.0" is returned unchanged.
+// ensureV prefixes a bare version with "v" for display ("0.1.0" → "v0.1.0").
 func ensureV(v string) string {
 	if strings.HasPrefix(v, "v") {
 		return v
@@ -180,19 +178,82 @@ func ensureV(v string) string {
 	return "v" + v
 }
 
+// canonicalSemver normalises a version to a leading "v" for display. rawclaw only
+// ever compares its own clean release tags, so this does not reformat the numbers.
+func canonicalSemver(v string) string { return ensureV(v) }
+
+// parseSemver parses "v?MAJOR.MINOR.PATCH(-prerelease)?(+build)?" into its numeric
+// core and pre-release identifier. Build metadata is dropped (semver: not used for
+// precedence). ok is false unless the core is exactly three non-negative integers.
+func parseSemver(v string) (core [3]int, pre string, ok bool) {
+	v = strings.TrimPrefix(v, "v")
+	if i := strings.IndexByte(v, '+'); i >= 0 { // drop build metadata
+		v = v[:i]
+	}
+	if i := strings.IndexByte(v, '-'); i >= 0 { // split off the pre-release
+		pre = v[i+1:]
+		v = v[:i]
+	}
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return core, pre, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return core, pre, false
+		}
+		core[i] = n
+	}
+	return core, pre, true
+}
+
+// isValidSemver reports whether v is a MAJOR.MINOR.PATCH version (optional leading
+// "v", optional pre-release/build).
+func isValidSemver(v string) bool {
+	_, _, ok := parseSemver(v)
+	return ok
+}
+
+// compareSemver returns -1, 0, +1 for a vs b by semver precedence: numeric core
+// first, then a release outranks an equal-core pre-release (1.0.0-rc < 1.0.0), and
+// two pre-releases compare by identifier string (enough for our clean tags).
+func compareSemver(a, b string) int {
+	ca, pa, _ := parseSemver(a)
+	cb, pb, _ := parseSemver(b)
+	for i := 0; i < 3; i++ {
+		if ca[i] != cb[i] {
+			if ca[i] < cb[i] {
+				return -1
+			}
+			return 1
+		}
+	}
+	switch {
+	case pa == pb:
+		return 0
+	case pa == "": // a is a release, b is a pre-release → a is newer
+		return 1
+	case pb == "":
+		return -1
+	case pa < pb:
+		return -1
+	default:
+		return 1
+	}
+}
+
 // compareVersions reports current vs latest as semver: -1 (current older),
-// 0 (equal), +1 (current newer). Both are normalised to a leading "v". An
-// invalid version on either side is an error (the caller decides whether a dev
-// current excuses it).
+// 0 (equal), +1 (current newer). An invalid version on either side is an error
+// (the caller decides whether a dev current excuses it).
 func compareVersions(current, latest string) (int, error) {
-	c, l := ensureV(current), ensureV(latest)
-	if !semver.IsValid(c) {
+	if !isValidSemver(current) {
 		return 0, fmt.Errorf("current version %q is not valid semver", current)
 	}
-	if !semver.IsValid(l) {
+	if !isValidSemver(latest) {
 		return 0, fmt.Errorf("latest version %q is not valid semver", latest)
 	}
-	return semver.Compare(c, l), nil
+	return compareSemver(current, latest), nil
 }
 
 // assetName returns the goreleaser archive name for a GOOS/GOARCH — mirroring
