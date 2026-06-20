@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
@@ -455,5 +456,37 @@ func TestScrollIgnoresSubagentSibling(t *testing.T) {
 	}
 	if res == nil || res.SessionID != "a1b2c3d4aaaa" {
 		t.Fatalf("want parent session a1b2c3d4aaaa, got %+v", res)
+	}
+}
+
+// TestBrowseReturnsPreviewsWithoutDeadlock pins the browse deadlock fix. Browse
+// runs a per-session preview query for each row it returns, on the same
+// single-connection RO pool (index.ConnectRO sets SetMaxOpenConns(1)). The bug
+// shipped in v0.1.0 was issuing that preview query from inside the still-open
+// session-rows cursor, which blocked forever waiting for a second connection.
+// The fix drains and closes the rows before previewing. This test exercises that
+// composition against a real index and, via a timeout, turns a reintroduced
+// deadlock into a loud failure instead of a hung CI run.
+func TestBrowseReturnsPreviewsWithoutDeadlock(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	proj := t.TempDir()
+	writeScrollSession(t, proj, "aaaa00000001", "investigating the browse deadlock on the single conn pool")
+	writeScrollSession(t, proj, "bbbb00000002", "tracing the scroll resolver and subagent ids")
+
+	done := make(chan []BrowseRow, 1)
+	go func() { done <- Browse(proj, 10, "", "") }()
+
+	select {
+	case rows := <-done:
+		if len(rows) < 2 {
+			t.Fatalf("Browse returned %d rows, want >= 2", len(rows))
+		}
+		for _, r := range rows {
+			if r.Preview == "" {
+				t.Errorf("session %s has empty Preview — drain-then-preview did not run", r.SessionID)
+			}
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Browse() did not return within 10s — single-conn pool deadlock reintroduced")
 	}
 }
