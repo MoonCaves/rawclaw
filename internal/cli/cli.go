@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -76,11 +77,37 @@ func (o *Options) params(rawMatch string) retrieve.SearchParams {
 	}
 }
 
-// NewRootCmd builds the rawclaw cobra command tree (root + the `agent`
-// subcommand). The root RunE dispatches the shape (browse/discovery/brief/
-// scroll/stats/resume/reindex-vectors) per the parsed flags. The `agent`
-// subcommand delegates to agentproto.Run.
-func NewRootCmd() *cobra.Command {
+// BuildInfo carries the compile-time stamp (set in package main via ldflags)
+// down into the command tree so `--version` and the `version` subcommand report
+// the real release. The zero value is honest: an un-stamped build shows "dev".
+type BuildInfo struct {
+	Version string
+	Commit  string
+	Date    string
+}
+
+// versionString renders the one-line version banner shown by `--version` and the
+// `version` subcommand. Empty fields fall back to "dev"/"unknown".
+func (b BuildInfo) versionString() string {
+	v, c, d := b.Version, b.Commit, b.Date
+	if v == "" {
+		v = "dev"
+	}
+	if c == "" {
+		c = "unknown"
+	}
+	if d == "" {
+		d = "unknown"
+	}
+	return fmt.Sprintf("rawclaw %s (commit: %s, built: %s)", v, c, d)
+}
+
+// NewRootCmd builds the rawclaw cobra command tree (root + the `agent`, `archive`,
+// `delete`, and `version` subcommands). The root RunE dispatches the shape
+// (browse/discovery/brief/scroll/stats/resume/reindex-vectors) per the parsed
+// flags. The `agent` subcommand delegates to agentproto.Run. The build stamp
+// feeds `--version` (cobra-native) and the `version` subcommand.
+func NewRootCmd(build BuildInfo) *cobra.Command {
 	opts := &Options{}
 
 	root := &cobra.Command{
@@ -88,6 +115,9 @@ func NewRootCmd() *cobra.Command {
 		Short: "Search the Claude Code transcript record",
 		Long: "Search the Claude Code transcript record. Default: discovery across ALL projects " +
 			"(goal→match→resolution per hit). --this-project to narrow; no query = browse this project.",
+		// Cobra wires a `--version` flag automatically when Version is non-empty,
+		// printing this template and exiting 0.
+		Version:       build.versionString(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		// Positional args are the query terms; any count is valid (no query = browse).
@@ -144,10 +174,35 @@ func NewRootCmd() *cobra.Command {
 		return validateChoice("sort", opts.Sort, "newest", "oldest")
 	}
 
+	// `--version` prints the banner verbatim (cobra's default template prefixes
+	// "{{.Name}} version", which would double the "rawclaw").
+	root.SetVersionTemplate("{{.Version}}\n")
+
 	root.AddCommand(newAgentCmd())
 	root.AddCommand(newArchiveCmd())
 	root.AddCommand(newDeleteCmd())
+	root.AddCommand(newVersionCmd(build))
 	return root
+}
+
+// newVersionCmd wires `rawclaw version`: print the build stamp (same banner as
+// the cobra-native `--version` flag) plus the embedding Go toolchain version.
+func newVersionCmd(build BuildInfo) *cobra.Command {
+	return &cobra.Command{
+		Use:           "version",
+		Short:         "Print version information",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+			fmt.Fprintln(out, build.versionString())
+			if info, ok := debug.ReadBuildInfo(); ok {
+				fmt.Fprintf(out, "go: %s\n", info.GoVersion)
+			}
+			return nil
+		},
+	}
 }
 
 // newAgentCmd wires `rawclaw agent search|read|outline ...`. Flag parsing is

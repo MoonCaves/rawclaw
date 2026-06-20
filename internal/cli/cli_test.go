@@ -31,7 +31,7 @@ func findSub(cmd *cobra.Command, name string) *cobra.Command {
 func TestNewRootCmd(t *testing.T) {
 	t.Parallel()
 
-	cmd := NewRootCmd()
+	cmd := NewRootCmd(BuildInfo{})
 	if cmd == nil {
 		t.Fatal("NewRootCmd returned nil")
 	}
@@ -240,7 +240,7 @@ func TestChoiceValidation(t *testing.T) {
 func TestScrollRequiresAround(t *testing.T) {
 	t.Parallel()
 
-	cmd := NewRootCmd()
+	cmd := NewRootCmd(BuildInfo{})
 	var out, errb bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errb)
@@ -266,7 +266,7 @@ func TestScrollRequiresAround(t *testing.T) {
 func TestDebugSearchFlagRoutes(t *testing.T) {
 	t.Parallel()
 
-	cmd := NewRootCmd()
+	cmd := NewRootCmd(BuildInfo{})
 	var out, errb bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errb)
@@ -317,6 +317,56 @@ func TestDebugSearchBreakdownShows(t *testing.T) {
 	for _, want := range []string{`"score"`, `"bm25_rank": 0`, `"coverage": 2`, `"method": "bm25 + coverage re-rank"`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("DebugSearchJSON missing %q in:\n%s", want, string(b))
+		}
+	}
+}
+
+// TestVersionSubcommand: `rawclaw version` prints the injected build stamp on
+// stdout and exits cleanly.
+func TestVersionSubcommand(t *testing.T) {
+	t.Parallel()
+
+	cmd := NewRootCmd(BuildInfo{Version: "1.2.3", Commit: "abc1234", Date: "2026-06-21"})
+	var out, errb bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errb)
+	cmd.SetArgs([]string{"version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("version subcommand: %v", err)
+	}
+	for _, want := range []string{"rawclaw 1.2.3", "commit: abc1234", "built: 2026-06-21", "go:"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("version output missing %q in %q", want, out.String())
+		}
+	}
+}
+
+// TestVersionFlag: the cobra-native `--version` flag prints the same banner.
+func TestVersionFlag(t *testing.T) {
+	t.Parallel()
+
+	cmd := NewRootCmd(BuildInfo{Version: "9.9.9", Commit: "deadbee", Date: "2026-01-01"})
+	var out, errb bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errb)
+	cmd.SetArgs([]string{"--version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("--version flag: %v", err)
+	}
+	if !strings.Contains(out.String(), "rawclaw 9.9.9") {
+		t.Errorf("--version output missing banner in %q", out.String())
+	}
+}
+
+// TestBuildInfoDefaults: an un-stamped (zero) BuildInfo reports the honest
+// dev/unknown defaults rather than empty fields.
+func TestBuildInfoDefaults(t *testing.T) {
+	t.Parallel()
+
+	got := BuildInfo{}.versionString()
+	for _, want := range []string{"rawclaw dev", "commit: unknown", "built: unknown"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("zero BuildInfo versionString missing %q in %q", want, got)
 		}
 	}
 }
