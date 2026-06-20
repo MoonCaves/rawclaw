@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/spf13/cobra v1.10.2
+	go.uber.org/goleak v1.3.0
 	modernc.org/sqlite v1.45.0
 )
 
