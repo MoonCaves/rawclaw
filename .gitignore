@@ -1,0 +1,13 @@
+# Binaries
+/rawclaw
+/dist/
+*.exe
+*.test
+*.out
+
+# Go
+/vendor/
+*.prof
+
+# Local caches / OS
+.DS_Store

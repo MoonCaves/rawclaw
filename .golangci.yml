@@ -1,0 +1,29 @@
+version: "2"
+
+# RawClaw lint config. Keep the linter set lean and CLI-focused: catch real
+# correctness bugs, not stylistic noise. errcheck stays ON, but the two
+# universally-ignored families are excluded — writes to an io.Writer (print-style
+# output to stdout/buffers) and defer Close() on read paths —
+# because their errors are non-actionable and checking them adds noise without
+# changing behavior.
+linters:
+  default: standard
+  settings:
+    errcheck:
+      exclude-functions:
+        # print-style writes to os.Stdout / buffers:
+        - (io.Writer).Write
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # defer Close() on read-only handles / connections:
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*os.File).Close
+        - (io.Closer).Close
+  exclusions:
+    rules:
+      # Test code may ignore Scan/Close errors in assertions for brevity.
+      - path: _test\.go
+        linters:
+          - errcheck
