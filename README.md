@@ -1,4 +1,4 @@
-# RawClaw 🐾
+# RawClaw
 
 **Your AI already knew. It just couldn't find it.**
 
