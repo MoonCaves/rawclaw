@@ -191,6 +191,47 @@ func TestDeleteCmd_ConfirmNoAborts(t *testing.T) {
 	}
 }
 
+// TestDeleteCmd_YesSkipsPrompt: --yes deletes without consulting stdin. With
+// empty stdin (which would abort via EOF if the prompt ran), the matched session
+// is still removed — proving the prompt was skipped for non-interactive use.
+func TestDeleteCmd_YesSkipsPrompt(t *testing.T) {
+	root := newCfgRoot(t)
+	thin := writeSession(t, root, "proj-a", "thin3333eeee", 1)
+
+	// Empty stdin: if the y/N prompt ran, EOF would abort and the file would
+	// survive. With --yes the prompt is skipped and the delete proceeds.
+	out, err := runCmd(t, newDeleteCmd(), "", "--max-messages", "5", "--yes")
+	if err != nil {
+		t.Fatalf("delete --yes: %v\nout: %s", err, out)
+	}
+	if strings.Contains(out, "[y/N]") {
+		t.Errorf("--yes should not print the y/N prompt; out: %s", out)
+	}
+	if !strings.Contains(out, "Deleted 1 session") {
+		t.Errorf("want deletion summary under --yes; out: %s", out)
+	}
+	if _, err := os.Stat(thin); !os.IsNotExist(err) {
+		t.Errorf("session still present after --yes delete (err=%v)", err)
+	}
+}
+
+// TestDeleteCmd_YesShortFlag: the -y short form behaves identically to --yes.
+func TestDeleteCmd_YesShortFlag(t *testing.T) {
+	root := newCfgRoot(t)
+	thin := writeSession(t, root, "proj-a", "thin4444ffff", 1)
+
+	out, err := runCmd(t, newDeleteCmd(), "", "--max-messages", "5", "-y")
+	if err != nil {
+		t.Fatalf("delete -y: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, "Deleted 1 session") {
+		t.Errorf("want deletion summary under -y; out: %s", out)
+	}
+	if _, err := os.Stat(thin); !os.IsNotExist(err) {
+		t.Errorf("session still present after -y delete (err=%v)", err)
+	}
+}
+
 // TestParseBefore covers the --before accepted formats and rejection.
 func TestParseBefore(t *testing.T) {
 	t.Parallel()

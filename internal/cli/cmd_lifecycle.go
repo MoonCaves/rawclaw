@@ -51,6 +51,7 @@ type deleteFlags struct {
 	project     string
 	maxMessages int
 	dryRun      bool
+	yes         bool
 }
 
 // newDeleteCmd wires `rawclaw delete`: filter-gated, dry-run-first deletion of
@@ -78,6 +79,7 @@ func newDeleteCmd() *cobra.Command {
 	fl.StringVar(&f.project, "project", "", "only sessions whose transcript-dir path contains this substring")
 	fl.IntVar(&f.maxMessages, "max-messages", 0, "only sessions with at most N messages (drops thin/bootstrap threads)")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "report the plan without deleting anything")
+	fl.BoolVarP(&f.yes, "yes", "y", false, "skip the interactive y/N prompt (for non-interactive/agent use)")
 	return cmd
 }
 
@@ -121,13 +123,17 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 		return nil
 	}
 
-	ok, err := confirm(cmd.InOrStdin(), out, len(plan.Matched))
-	if err != nil {
-		return fmt.Errorf("read confirmation: %w", err)
-	}
-	if !ok {
-		fmt.Fprintln(out, "Aborted; nothing deleted.")
-		return nil
+	// --yes skips the interactive prompt for non-interactive/agent use. Without it
+	// we always prompt y/N; an EOF (non-tty / closed stdin) still aborts safely.
+	if !f.yes {
+		ok, err := confirm(cmd.InOrStdin(), out, len(plan.Matched))
+		if err != nil {
+			return fmt.Errorf("read confirmation: %w", err)
+		}
+		if !ok {
+			fmt.Fprintln(out, "Aborted; nothing deleted.")
+			return nil
+		}
 	}
 
 	opts.DryRun = false
