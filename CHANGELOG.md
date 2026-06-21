@@ -27,6 +27,17 @@ Initial release.
   and low-signal messages are filtered from previews without ever dropping the session.
 - **Optional semantic tier** — bring-your-own-embedder, reciprocal-rank-fused with the keyword hits,
   pure-Go cosine, off by default (keyword search needs no model or network).
+- **Self-update** — `rawclaw upgrade` (alias `update`) downloads the latest release for your
+  OS/arch, sha256-verifies it against the release's published checksums (a mismatch aborts
+  without touching the installed binary), and atomically replaces the running binary with
+  rollback on failure; `rawclaw upgrade --check` reports whether a newer release exists
+  (exit 10) without downloading anything.
+- **`version` command + `--version` flag** — print the build stamp (version / commit / date)
+  injected via ldflags at release time.
+- **Self-terminating `--timeout` watchdog** — every run is bounded by a hard wall-clock deadline
+  so an agent never needs an external `timeout(1)`; default 30s, `--timeout 0` disables it,
+  `RAWCLAW_TIMEOUT` overrides the default, and exceeding the deadline exits 124.
+- **`delete --yes`** (alias `-y`) — skip the y/N confirmation prompt for non-interactive use.
 
 ### Fixed
 

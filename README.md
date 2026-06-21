@@ -50,9 +50,22 @@ Claude Code quietly saves every conversation you have with it as JSONL transcrip
 go install github.com/MoonCaves/rawclaw/cmd/rawclaw@latest
 ```
 
-Or grab a release binary — a single static file with no dependencies — from the [releases page](https://github.com/MoonCaves/rawclaw/releases) and put it on your `PATH`.
+Or grab a release binary — no runtime dependencies, a single static binary — from the [releases page](https://github.com/MoonCaves/rawclaw/releases) and put it on your `PATH`.
 
-RawClaw is a single static binary: pure Go, no cgo, cross-compiles to Linux / macOS / ARM. The keyword core has **zero runtime dependencies, no LLM, and needs no API keys**.
+RawClaw is a single static binary: pure Go, no cgo, cross-compiles to Linux / macOS / ARM. The keyword core has **no runtime dependencies, no LLM, and needs no API keys**.
+
+---
+
+## Keeping it current
+
+RawClaw updates itself — the binary you install by hand is the last one you install by hand:
+
+```bash
+rawclaw upgrade            # update in place to the latest release
+rawclaw upgrade --check    # report whether a newer release exists (exit 10 if so)
+```
+
+`upgrade` downloads the release for your OS/arch, **sha256-verifies it against the release's published checksums** (a mismatch aborts without touching your installed binary), then **atomically replaces** the running binary with rollback on failure. `--check` only reports — it downloads nothing and exits `10` when an update is available (so scripts can gate on it). An unstamped `dev` build won't replace itself without `--force`.
 
 ---
 
@@ -68,9 +81,14 @@ rawclaw --stats                             # corpus overview (this project; --a
 rawclaw "query" --json                     # machine-readable output for scripts/agents
 rawclaw "query" --since 2026-01-01 --before 2026-02-01   # date-scoped
 rawclaw --list                              # list searchable projects
+rawclaw delete --yes <session8>             # delete a session non-interactively (no y/N prompt)
+rawclaw version                             # print the version + build stamp
+rawclaw --timeout 2m "query"                # raise the self-terminating deadline (0 disables it)
 ```
 
 **Query tips:** a single distinctive word is sharpest · `"exact phrase"` for adjacency · `term*` for a prefix · `a NOT b` to exclude · `--include-path` / `--exclude-path` to scope by project · `--json` works on every shape.
+
+**Built to never hang.** Every run is bounded by a self-terminating watchdog so an agent never needs an external `timeout(1)`: `--timeout 2m` raises the deadline, `--timeout 0` disables it, and `RAWCLAW_TIMEOUT` (a Go duration like `45s` or `2m`) overrides the default. The default is `30s`; exceeding the deadline exits `124` (the `timeout(1)` convention). `delete --yes` (alias `-y`) skips the confirmation prompt for non-interactive use.
 
 ### Agent protocol
 

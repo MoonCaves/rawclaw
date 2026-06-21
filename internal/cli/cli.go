@@ -137,7 +137,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	}
 
 	f := root.Flags()
-	f.IntVar(&opts.Limit, "limit", 8, "")
+	f.IntVar(&opts.Limit, "limit", 8, "max hits to return")
 	f.StringVar(&opts.Dir, "dir", cwd(),
 		"the project's working directory (e.g. ~/code/my-project); encoded to "+
 			"find its transcripts. An already-encoded ~/.claude/projects path also works.")
@@ -150,11 +150,11 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.IntVar(&opts.Around, "around", 0, "message id to center --scroll on (see #ids in discovery output)")
 	f.IntVar(&opts.Window, "window", 5, "--scroll: messages each side of the anchor")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
-	f.StringVar(&opts.Role, "role", "", "")
-	f.StringVar(&opts.Sort, "sort", "", "")
+	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
+	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
 	f.BoolVar(&opts.IncludeTools, "include-tools", false, "also match/show tool calls + tool-only hits")
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
-	f.BoolVar(&opts.Reindex, "reindex", false, "")
+	f.BoolVar(&opts.Reindex, "reindex", false, "force a full re-index before searching")
 	f.BoolVar(&opts.JSON, "json", false, "machine-readable JSON output (for agents/scripts)")
 	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready `claude --resume` command for a session id (use the 8-char id from search output)")
 	f.BoolVar(&opts.Stats, "stats", false, "corpus overview (sessions/messages/date span) for this project, or --all for every project")
