@@ -27,8 +27,8 @@ import (
 // base permanently (a broken updater can't ship its own fix), so the design is
 // deliberately conservative: HTTPS only, mandatory sha256 verification of the
 // downloaded asset against the release's checksums.txt (the security boundary),
-// and an atomic replace-with-rollback (the proven seam from github.com/minio/selfupdate,
-// inlined in apply.go) rather than a fragile in-place overwrite.
+// and an atomic replace-with-rollback (the standard POSIX swap, in apply.go)
+// rather than a fragile in-place overwrite.
 
 const (
 	// upgradeRepo is the GitHub owner/repo releases are published under.

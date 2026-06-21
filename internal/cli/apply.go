@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 )
 
-// The atomic replace-with-rollback below is adapted from github.com/minio/selfupdate
-// (apply.go, Apache-2.0) — https://github.com/minio/selfupdate. We inline the ~40
-// lines of the proven seam rather than carry the dependency: rawclaw layers its own
-// mandatory sha256 verification (verifyChecksum) ahead of this, so the library's
-// checksum/signature/patch machinery is dead weight. Credit and licence to MinIO.
+// The atomic replace-with-rollback below is the standard POSIX technique for
+// swapping a running executable in place: write a sibling temp file, move the
+// current binary aside, rename the new one in, and roll the original back on a
+// failed swap. We implement it directly rather than carry a self-update
+// dependency — rawclaw layers its own mandatory sha256 verification
+// (verifyChecksum) ahead of this, so a library's checksum/signature/patch
+// machinery would be dead weight.
 
 // rollbackError reports that an update's final swap failed AND the automatic
 // rollback to the original binary ALSO failed — the install is now in a bad state
@@ -42,7 +44,7 @@ func asRollbackError(err error) error {
 }
 
 // applyTarget atomically replaces the file at targetPath with newBytes, with
-// rollback on a failed swap. The sequence (from minio/selfupdate CommitBinary):
+// rollback on a failed swap. The standard atomic-swap sequence:
 //
 //	write  <target>.new  (mode 0755)
 //	remove <target>.old  (stale leftovers)
