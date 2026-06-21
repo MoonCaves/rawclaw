@@ -36,9 +36,15 @@ var (
 	reLeadBool       = regexp.MustCompile(`(?i)^\s*(AND|OR|NOT)\b\s*`) // leading boolean keyword
 	reTrailBool      = regexp.MustCompile(`(?i)\s+(AND|OR|NOT)\s*$`)   // trailing boolean keyword
 	reDottedID       = regexp.MustCompile(`\b(\w+(?:[._-]\w+)+)\b`)    // dotted/hyphenated identifier
-	reWhitespace     = regexp.MustCompile(`\s+`)                       // snippet whitespace collapse
-	reBoolAnd        = regexp.MustCompile(`\s*&&\s*`)                  // && operator
-	reBoolOr         = regexp.MustCompile(`\s*\|\|\s*`)                // || operator
+	// reProtect matches, in textual order, the runs SanitizeFTS5Query sets aside
+	// as one sentinel each: a quoted run (may be empty) OR a path-like token (one
+	// containing '/', e.g. ~/.claude/projects). Path tokens stop at whitespace and
+	// the NUL sentinel so a path can't swallow an already-protected phrase.
+	reProtect    = regexp.MustCompile(`"[^"]*"|[^\s\x00]*/[^\s\x00]*`)
+	reWhitespace = regexp.MustCompile(`\s+`)           // snippet whitespace collapse
+	reBoolAnd    = regexp.MustCompile(`\s*&&\s*`)      // && operator
+	reBoolOr     = regexp.MustCompile(`\s*\|\|\s*`)    // || operator
+	reInfixNot   = regexp.MustCompile(`\S\s+NOT\s+\S`) // an infix, uppercase NOT (FTS5 only treats uppercase as the operator; excludes a leading/trailing-only NOT)
 )
 
 // ParseTerms splits a query into lowercased phrases (quoted) + bare terms,
@@ -140,11 +146,22 @@ func MakeSnippet(text string, terms []string) (snippet string, ok bool) {
 
 // SanitizeFTS5Query neutralizes FTS5 syntax hazards in a plain-English query:
 // protects quoted phrases, drops structural chars, tames wildcards, strips a
-// leading/trailing boolean keyword, and quotes dotted/hyphenated identifiers.
+// leading/trailing boolean keyword, and quotes path-like / dotted-hyphenated
+// identifiers so FTS5 keeps each as one searchable phrase.
 func SanitizeFTS5Query(q string) string {
-	// 1) Set quoted phrases aside; each becomes one sentinel byte.
-	phrases := reQuotedAny.FindAllString(q, -1)
-	s := reQuotedAny.ReplaceAllString(q, sentinel)
+	// 1) Set aside (in textual order) each protected run — a quoted phrase, or a
+	// path-like token with a '/'. Each becomes one sentinel byte; a path is
+	// quoted so FTS5 reads it as an adjacency phrase of its tokens (which matches
+	// the path) instead of treating '/' as a token separator and dropping it.
+	phrases := make([]string, 0)
+	s := reProtect.ReplaceAllStringFunc(q, func(run string) string {
+		if strings.HasPrefix(run, `"`) {
+			phrases = append(phrases, run) // already-quoted: kept verbatim
+		} else {
+			phrases = append(phrases, `"`+strings.ReplaceAll(run, `"`, "")+`"`) // path-like: quote it
+		}
+		return sentinel
+	})
 
 	// 2) Drop FTS5 structural characters.
 	s = reFTS5Structural.ReplaceAllString(s, " ")
@@ -161,7 +178,7 @@ func SanitizeFTS5Query(q string) string {
 	// 5) Quote session_id / a.b.c so FTS5 keeps them one token.
 	s = reDottedID.ReplaceAllString(s, `"$1"`)
 
-	// 6) Restore the protected phrases, in order.
+	// 6) Restore the protected runs (quoted phrases + path-likes), in order.
 	if len(phrases) > 0 {
 		s = restorePhrases(s, phrases)
 	}
@@ -169,19 +186,20 @@ func SanitizeFTS5Query(q string) string {
 }
 
 // StripStopwords drops Stopwords tokens from a query while preserving quoted
-// phrases untouched.
+// phrases untouched. A quoted phrase may carry an attached prefix-'*' (e.g.
+// SanitizeFTS5Query turns `self-update*` into `"self-update"*`), so the sentinel
+// can be embedded in a token rather than standing alone — it is restored in
+// place after the stopword filter, never dropped as a bare NUL.
 func StripStopwords(q string) string {
 	quoted := reQuotedAny.FindAllString(q, -1)
 	holes := reQuotedAny.ReplaceAllString(q, sentinel)
 
 	out := []string{}
-	qi := 0
 	for _, t := range strings.Fields(holes) {
-		if t == sentinel {
-			if qi < len(quoted) {
-				out = append(out, quoted[qi])
-				qi++
-			}
+		// A token carrying a sentinel is a (possibly decorated) quoted phrase —
+		// never a stopword. Keep it; the phrase is restored after the loop.
+		if strings.Contains(t, sentinel) {
+			out = append(out, t)
 			continue
 		}
 		key := strings.Trim(strings.ToLower(t), "*")
@@ -190,7 +208,11 @@ func StripStopwords(q string) string {
 		}
 		out = append(out, t)
 	}
-	return strings.TrimSpace(strings.Join(out, " "))
+	joined := strings.Join(out, " ")
+	if len(quoted) > 0 {
+		joined = restorePhrases(joined, quoted)
+	}
+	return strings.TrimSpace(joined)
 }
 
 // HasSearchableToken reports whether the query has any token that is not a bare
@@ -361,6 +383,13 @@ func runeIndexAtByte(s string, byteOffset int) int {
 // lookbehind, so the `!` clause is checked manually.
 func hasBoolOps(s string) bool {
 	if strings.Contains(s, "&&") || strings.Contains(s, "||") {
+		return true
+	}
+	// A spelled-out infix NOT ("deploy NOT staging") is exclusion, documented in
+	// the search skill. Recognize it here so it routes through the boolean path
+	// (a raw FTS5 expr) BEFORE StripStopwords — which would otherwise drop "not"
+	// as a stopword and silently no-op the exclusion.
+	if reInfixNot.MatchString(s) {
 		return true
 	}
 	for i := 0; i < len(s); i++ {

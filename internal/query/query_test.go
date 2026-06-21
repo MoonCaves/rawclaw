@@ -54,6 +54,19 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"quote dotted chain", "a.b.c thing", `"a.b.c" thing`},
 		{"protect quoted phrase verbatim", `"exact phrase"`, `"exact phrase"`},
 		{"phrase plus dotted id", `"keep me" session_id`, `"keep me" "session_id"`},
+		// FIX 3: a trailing '*' on a dotted/hyphenated identifier must land OUTSIDE
+		// the quote so FTS5 reads it as a valid prefix on the phrase's tokens.
+		{"prefix star on hyphenated id", "self-update*", `"self-update"*`},
+		{"prefix star on dotted id", "os.Rename*", `"os.Rename"*`},
+		{"prefix star on underscore id", "is_subagent*", `"is_subagent"*`},
+		// FIX 5: a path-like token (one with a '/') is quoted so FTS5 reads it as a
+		// phrase of its tokens instead of dropping '/' as a separator and matching
+		// nothing.
+		{"quote tilde path", "~/.claude/projects", `"~/.claude/projects"`},
+		{"quote relative path", ".claude/projects", `".claude/projects"`},
+		{"two paths keep textual order", "a/b c.d/e.f", `"a/b" "c.d/e.f"`},
+		{"path then quoted phrase order", `src/main.go "exact phrase"`, `"src/main.go" "exact phrase"`},
+		{"quoted phrase then path order", `"exact phrase" src/main.go`, `"exact phrase" "src/main.go"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,6 +91,11 @@ func TestStripStopwords(t *testing.T) {
 		{"strips star then checks stop", "the* api", "api"},
 		{"all stopwords", "the of to in on", ""},
 		{"quoted stopword kept verbatim", `"is" foo`, `"is" foo`},
+		// FIX 3: a quoted phrase carrying an attached prefix-'*' (the sanitizer's
+		// output for `self-update*`) must survive intact — the sentinel-bearing
+		// token is restored in place, never dropped as a bare NUL.
+		{"prefix star on quoted id survives", `"self-update"*`, `"self-update"*`},
+		{"prefix star on dotted id survives", `"os.Rename"* lookup`, `"os.Rename"* lookup`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -245,6 +263,51 @@ func TestBooleanToFTS5(t *testing.T) {
 		_, used := BooleanToFTS5("foo!bar")
 		if used {
 			t.Errorf("usedOperators = true for mid-word '!', want false")
+		}
+	})
+
+	// FIX 4: a spelled-out infix NOT is exclusion (documented in the search
+	// skill). It must route through the boolean path (used=true) and survive into
+	// the FTS5 expr verbatim — NOT through the plain path where StripStopwords
+	// would silently drop "not".
+	t.Run("infix NOT is an operator", func(t *testing.T) {
+		expr, used := BooleanToFTS5("deploy NOT staging")
+		if !used {
+			t.Fatalf("usedOperators = false for infix NOT, want true")
+		}
+		if !containsAll(expr, "deploy", "NOT", "staging") {
+			t.Errorf("expr %q missing deploy/NOT/staging", expr)
+		}
+	})
+
+	t.Run("infix NOT bypasses the stopword path", func(t *testing.T) {
+		// The defining bug: on the plain path, StripStopwords drops "not", so the
+		// exclusion no-ops (note that StripStopwords IS destructive to "not"). The
+		// boolean (RawMatch) path never calls StripStopwords, so the expr keeps NOT.
+		if got := StripStopwords("deploy NOT staging"); containsAll(got, "NOT") {
+			t.Fatalf("precondition: StripStopwords kept NOT (%q) — bug premise invalid", got)
+		}
+		expr, used := BooleanToFTS5("deploy NOT staging")
+		if !used || !containsAll(expr, "NOT") {
+			t.Errorf("boolean path must keep NOT: expr=%q used=%v", expr, used)
+		}
+	})
+
+	t.Run("lowercase infix not is NOT an operator", func(t *testing.T) {
+		// FTS5 only treats an UPPERCASE NOT as the operator; lowercase "not" is a
+		// stopword, not exclusion — so it stays on the plain path.
+		_, used := BooleanToFTS5("deploy not staging")
+		if used {
+			t.Errorf("usedOperators = true for lowercase 'not', want false")
+		}
+	})
+
+	t.Run("leading NOT is not an operator", func(t *testing.T) {
+		// A query that is only a leading/trailing NOT carries no exclusion target;
+		// it stays on the plain path (the leading bool is stripped by sanitize).
+		_, used := BooleanToFTS5("NOT staging")
+		if used {
+			t.Errorf("usedOperators = true for leading-only NOT, want false")
 		}
 	})
 }
