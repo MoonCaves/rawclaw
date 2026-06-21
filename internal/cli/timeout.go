@@ -15,6 +15,15 @@ import (
 // raise it or set --timeout 0 to disable the watchdog.
 const defaultTimeout = 30 * time.Second
 
+// upgradeWatchdog is the watchdog floor for `rawclaw upgrade` when the user gave no
+// explicit --timeout / RAWCLAW_TIMEOUT. The self-update makes up to four serial
+// network legs (releases API, the redirect fallback, the asset, checksums.txt), each
+// bounded by netTimeout (60s); the 30s default watchdog would otherwise kill a
+// legitimate download. This floor sits above the worst-case sum of those legs so the
+// download can finish, while the per-leg netTimeouts still guarantee the run never
+// hangs unbounded.
+const upgradeWatchdog = 5 * time.Minute
+
 // resolveTimeout picks the effective deadline: an explicit --timeout flag wins,
 // else RAWCLAW_TIMEOUT (a Go duration like "45s" or "2m"), else defaultTimeout.
 // A non-positive value disables the watchdog (returns 0). A malformed env var is

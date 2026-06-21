@@ -37,6 +37,61 @@ func TestResolveTimeout(t *testing.T) {
 	}
 }
 
+// TestResolveTimeoutFromArgsUpgradeFloor proves the watchdog-vs-download fix: a
+// bare `upgrade` (no --timeout, no env) must NOT inherit the 30s default that would
+// kill a download mid-flight — its floor is raised to upgradeWatchdog. An explicit
+// --timeout / RAWCLAW_TIMEOUT always wins, and non-upgrade commands are unaffected.
+func TestResolveTimeoutFromArgsUpgradeFloor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		env  string
+		want time.Duration
+	}{
+		{"bare upgrade gets the floor", []string{"upgrade"}, "", upgradeWatchdog},
+		{"update alias gets the floor", []string{"update"}, "", upgradeWatchdog},
+		{"upgrade --check gets the floor", []string{"upgrade", "--check"}, "", upgradeWatchdog},
+		{"explicit --timeout wins over floor", []string{"upgrade", "--timeout", "90s"}, "", 90 * time.Second},
+		{"explicit --timeout=0 disables even for upgrade", []string{"upgrade", "--timeout", "0"}, "", 0},
+		{"RAWCLAW_TIMEOUT wins over floor", []string{"upgrade"}, "45s", 45 * time.Second},
+		{"timeout flag before subcommand still wins", []string{"--timeout", "10s", "upgrade"}, "", 10 * time.Second},
+		{"non-upgrade command keeps default", []string{"some", "query"}, "", defaultTimeout},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resolveTimeoutFromArgs(tc.args, tc.env); got != tc.want {
+				t.Errorf("resolveTimeoutFromArgs(%q, %q) = %v, want %v", tc.args, tc.env, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsUpgradeInvocation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"upgrade"}, true},
+		{[]string{"update"}, true},
+		{[]string{"upgrade", "--check"}, true},
+		{[]string{"--timeout", "5s", "upgrade"}, true},
+		{[]string{"version"}, false},
+		{[]string{"some", "search", "terms"}, false},
+		{nil, false},
+		{[]string{"--json"}, false},
+	}
+	for _, tc := range tests {
+		if got := isUpgradeInvocation(tc.args); got != tc.want {
+			t.Errorf("isUpgradeInvocation(%q) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+}
+
 // TestWatchdogFiresOnDeadline is the HARD-GUARANTEE test: a deliberately-slow
 // path (a goroutine parked far longer than the deadline, standing in for a blocked
 // DB call) must NOT outlast the watchdog. With a tiny timeout and an injected exit

@@ -216,13 +216,59 @@ func Execute(root *cobra.Command, args []string) error {
 // resolveTimeoutFromArgs leniently parses just the --timeout value out of args
 // (ignoring unknown flags / parse errors) so the watchdog can arm before cobra's
 // own parse. Falls back to RAWCLAW_TIMEOUT, then the default.
+//
+// Special case — `upgrade`/`update`: the self-update path makes up to three serial
+// network legs bounded individually by netTimeout (60s each), which the 30s default
+// watchdog would kill mid-download. So when the user has NOT explicitly chosen a
+// timeout (no --timeout flag, no RAWCLAW_TIMEOUT), the watchdog floor for an upgrade
+// is raised to upgradeWatchdog (> the worst-case sum of the legs) — preserving the
+// never-hang guarantee (the per-leg netTimeouts still bound the run) while letting a
+// legitimate download finish. An explicit --timeout / RAWCLAW_TIMEOUT always wins,
+// including `--timeout 0` to disable the watchdog entirely.
 func resolveTimeoutFromArgs(args []string, env string) time.Duration {
 	probe := pflag.NewFlagSet("rawclaw-timeout-probe", pflag.ContinueOnError)
 	probe.ParseErrorsWhitelist.UnknownFlags = true
 	probe.SetOutput(io.Discard)
 	to := probe.Duration("timeout", defaultTimeout, "")
 	_ = probe.Parse(args)
-	return resolveTimeout(probe.Changed("timeout"), *to, env)
+
+	flagSet := probe.Changed("timeout")
+	resolved := resolveTimeout(flagSet, *to, env)
+
+	// Only override the floor when the user expressed no preference at all: an
+	// explicit flag or env var is authoritative even for upgrade.
+	if !flagSet && env == "" && isUpgradeInvocation(args) && resolved < upgradeWatchdog {
+		return upgradeWatchdog
+	}
+	return resolved
+}
+
+// isUpgradeInvocation reports whether args target the `upgrade` (alias `update`)
+// subcommand — the first non-flag token. A lenient scan: it skips flags and the
+// values of known value-taking persistent flags so `--timeout 5s upgrade` still
+// resolves to the upgrade command. Flags with `=` carry their own value.
+func isUpgradeInvocation(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			// Everything after is positional; the next token is the (sub)command.
+			if i+1 < len(args) {
+				return args[i+1] == "upgrade" || args[i+1] == "update"
+			}
+			return false
+		}
+		if strings.HasPrefix(a, "-") {
+			// A space-separated value for --timeout (the only persistent value flag
+			// that could precede the subcommand) is consumed here so it isn't mistaken
+			// for the command token.
+			if (a == "--timeout") && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		return a == "upgrade" || a == "update"
+	}
+	return false
 }
 
 // newVersionCmd wires `rawclaw version`: print the build stamp (same banner as
