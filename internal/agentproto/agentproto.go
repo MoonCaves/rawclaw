@@ -1204,6 +1204,18 @@ func Run(args []string, out, errw io.Writer) int {
 		}
 	}
 
+	// Enum flags: never-silent but graceful. A bad value would otherwise filter by a
+	// role that matches nothing (silent empty) or be ignored without a word — so note
+	// it and fall back to unset/default rather than hard-erroring an agent's run.
+	if role != "" && role != "user" && role != "assistant" {
+		fmt.Fprintf(errw, "note: ignoring --role %q (choose from user, assistant)\n", role)
+		role = ""
+	}
+	if sort != "" && sort != "newest" && sort != "oldest" {
+		fmt.Fprintf(errw, "note: ignoring --sort %q (choose from newest, oldest)\n", sort)
+		sort = ""
+	}
+
 	if len(a) == 0 {
 		fmt.Fprintln(errw, "usage: rawclaw agent <search|read|outline> [args]  (--json for machine output)")
 		return 1
