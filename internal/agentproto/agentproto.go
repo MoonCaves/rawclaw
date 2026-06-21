@@ -22,13 +22,14 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
 // Protocol constants.
 const (
-	DefaultSearchLimit = 6    // top-N conversations to surface
+	DefaultSearchLimit = 8    // top-N conversations to surface (matches the human --limit default)
 	DefaultReadBudget  = 4000 // chars; the ceiling a bare --budget uses (no longer a default cap — reads are whole by default, #3)
 	OutlineBookend     = 4    // messages each end for the arc summary
 	ReadWindow         = 8    // ±messages around the anchor for Read
@@ -119,12 +120,20 @@ type OutlineResult struct {
 }
 
 // SearchOpts groups the optional search filters (keeps the signature small).
+// The scope filters (Role/Since/Before/MinMessages/IncludePath/ExcludePath)
+// mirror the default-discovery flags so `agent search` honors the SAME scoping
+// the human path does, instead of leaking their values into the FTS5 query.
 type SearchOpts struct {
 	Limit            int
 	Role             string
 	Sort             string
 	IncludeTools     bool
 	IncludeSubagents bool
+	Since            string // "" = no bound; else YYYY-MM-DD inclusive
+	Before           string // "" = no bound; else YYYY-MM-DD inclusive
+	MinMessages      int    // 0 = no minimum
+	IncludePath      string // "" = no filter; else a regex over the project working dir
+	ExcludePath      string // "" = no filter; else a regex over the project working dir
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -235,7 +244,7 @@ func runeSlice(s string, n int) string {
 // Search returns rank-ordered conversation refs matching query within scope
 // (nil scope = all projects), wrapped in an envelope that reports per-scope
 // completeness (#6) so a partial result is never mistaken for complete.
-func Search(query string, scope []view.Scope, opts SearchOpts) SearchEnvelope {
+func Search(rawQuery string, scope []view.Scope, opts SearchOpts) SearchEnvelope {
 	limit := opts.Limit
 	if limit == 0 {
 		limit = DefaultSearchLimit
@@ -252,19 +261,47 @@ func Search(query string, scope []view.Scope, opts SearchOpts) SearchEnvelope {
 		fetch = 30
 	}
 
+	// Apply the same scope filtering the human path does: a path predicate drops
+	// whole projects whose working dir doesn't match include / does match exclude,
+	// BEFORE indexing them. Role / date bounds / min-messages push into the SQL
+	// WHERE via SearchParams. None of these flag VALUES reach the FTS5 query (#1).
+	if opts.IncludePath != "" || opts.ExcludePath != "" {
+		scope = filterScopeByPath(scope, opts.IncludePath, opts.ExcludePath)
+		if len(scope) == 0 {
+			return SearchEnvelope{Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true}
+		}
+	}
+
+	// Translate human boolean operators (NOT/&&/||/!) into an explicit FTS5 expr,
+	// exactly as the default discovery path does — without this the agent path
+	// drops "not" as a stopword and a documented `deploy NOT staging` exclusion
+	// silently no-ops (#4). A query with no operators leaves RawMatch empty and
+	// takes the plain OR/coverage path, byte-identical to before.
+	rawMatch := ""
+	if ftsExpr, usedOps := query.BooleanToFTS5(rawQuery); usedOps {
+		rawMatch = ftsExpr
+	}
+
 	p := retrieve.SearchParams{
 		Role:             opts.Role,
 		Sort:             opts.Sort,
 		IncludeTools:     opts.IncludeTools,
 		IncludeSubagents: opts.IncludeSubagents,
+		Since:            opts.Since,
+		Before:           opts.Before,
+		MinMessages:      opts.MinMessages,
+		RawMatch:         rawMatch,
 	}
 
-	cands, reports := collectCandidates(scope, query, fetch, p)
+	cands, reports := collectCandidates(scope, rawQuery, fetch, p)
 
 	sortCandidates(cands, opts.Sort)
 
+	// Build every DISTINCT result first, then cap to `limit`. Capping after the
+	// full dedup lets us report Complete=false when the limit hid real candidates
+	// (#2), so an agent that sees N of many knows the set is incomplete.
 	seen := map[string]struct{}{}
-	results := []SearchRef{}
+	all := []SearchRef{}
 	for _, r := range cands {
 		// A uuid-less anchor (e.g. a summary record) is searchable but not a
 		// citeable read anchor — skip it rather than emit an unresolvable ref.
@@ -276,18 +313,40 @@ func Search(query string, scope []view.Scope, opts SearchOpts) SearchEnvelope {
 			continue
 		}
 		seen[key] = struct{}{}
-		results = append(results, SearchRef{
+		all = append(all, SearchRef{
 			Project:   r.Project,
 			SessionID: r.SessionID,
 			ISO:       r.ISO,
 			Snippet:   r.Snip,
 			ReadRef:   fmtRef(r.SessionID, r.UUID),
 		})
-		if len(results) >= limit {
-			break
+	}
+
+	results := all
+	truncated := false
+	if limit >= 0 && len(all) > limit {
+		results = all[:limit]
+		truncated = true
+	}
+	return SearchEnvelope{
+		Results:  results,
+		Scopes:   reports,
+		Complete: scopesComplete(reports) && !truncated,
+	}
+}
+
+// filterScopeByPath keeps only the scopes whose project working dir satisfies the
+// include/exclude path predicate — the same predicate the default discovery path
+// applies, evaluated against paths.ProjectCWD(scope.TDir).
+func filterScopeByPath(scope []view.Scope, include, exclude string) []view.Scope {
+	pred := query.PathPredicate(include, exclude)
+	out := make([]view.Scope, 0, len(scope))
+	for _, sc := range scope {
+		if pred(paths.ProjectCWD(sc.TDir)) {
+			out = append(out, sc)
 		}
 	}
-	return SearchEnvelope{Results: results, Scopes: reports, Complete: scopesComplete(reports)}
+	return out
 }
 
 // scopesComplete reports whether every scope was searched fresh (none skipped or
@@ -1003,6 +1062,15 @@ func Run(args []string, out, errw io.Writer) int {
 	limitS := popVal(&a, "--limit")
 	budgetS := popVal(&a, "--budget")
 	focus := popVal(&a, "--focus")
+	// Scope filters (#1): honor the SAME discovery flags the human path does.
+	// Popping their VALUES here is what stops them leaking into the FTS5 query as
+	// junk OR-terms (e.g. "assistant", "999999").
+	role := popVal(&a, "--role")
+	since := popVal(&a, "--since")
+	before := popVal(&a, "--before")
+	includePath := popVal(&a, "--include-path")
+	excludePath := popVal(&a, "--exclude-path")
+	minMessagesS := popVal(&a, "--min-messages")
 	// Expand-in-place ladder (#4): --more [level] widens the window on the SAME
 	// ref; --around N re-centers it N messages from the anchor. Both are pure
 	// follow-ups — never a re-search.
@@ -1051,6 +1119,14 @@ func Run(args []string, out, errw io.Writer) int {
 			readAround = n
 		}
 	}
+	// --min-messages N: a bad value is ignored (kept at 0 = no minimum), the only
+	// safe headless behavior — matching how --limit treats a bad value.
+	minMessages := 0
+	if minMessagesS != "" {
+		if n, err := strconv.Atoi(minMessagesS); err == nil {
+			minMessages = n
+		}
+	}
 
 	if len(a) == 0 {
 		fmt.Fprintln(errw, "usage: rawclaw agent <search|read|outline> [args]  (--json for machine output)")
@@ -1076,8 +1152,14 @@ func Run(args []string, out, errw io.Writer) int {
 		return runSearch(out, errw, positional, scope, scopeLabel, wantJSON,
 			SearchOpts{
 				Limit:            limit,
+				Role:             role,
 				IncludeTools:     includeTools,
 				IncludeSubagents: includeSubagents,
+				Since:            since,
+				Before:           before,
+				MinMessages:      minMessages,
+				IncludePath:      includePath,
+				ExcludePath:      excludePath,
 			})
 	case "read":
 		return runRead(out, errw, positional, scope, wantJSON, ReadOpts{
