@@ -12,12 +12,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/minio/selfupdate"
 	"github.com/spf13/cobra"
 )
 
@@ -27,8 +27,8 @@ import (
 // base permanently (a broken updater can't ship its own fix), so the design is
 // deliberately conservative: HTTPS only, mandatory sha256 verification of the
 // downloaded asset against the release's checksums.txt (the security boundary),
-// and an atomic replace-with-rollback delegated to github.com/minio/selfupdate
-// rather than hand-rolled.
+// and an atomic replace-with-rollback (the proven seam from github.com/minio/selfupdate,
+// inlined in apply.go) rather than a fragile in-place overwrite.
 
 const (
 	// upgradeRepo is the GitHub owner/repo releases are published under.
@@ -143,11 +143,11 @@ func runUpgrade(cmd *cobra.Command, build BuildInfo, checkOnly, force bool) erro
 	}
 
 	if err := applyUpdate(bin); err != nil {
-		// On a failed commit the library tries to roll the original binary back into
-		// place. RollbackError is non-nil ONLY when that rollback ALSO failed — i.e.
+		// On a failed swap applyTarget tries to roll the original binary back into
+		// place. asRollbackError is non-nil ONLY when that rollback ALSO failed — i.e.
 		// the install may now be broken and needs manual recovery. Distinguish the
 		// two so we never falsely claim the binary is intact.
-		if rbErr := selfupdate.RollbackError(err); rbErr != nil {
+		if rbErr := asRollbackError(err); rbErr != nil {
 			return ExitError{
 				Code: 1,
 				Msg: fmt.Sprintf("upgrade FAILED and automatic rollback also failed: %v "+
@@ -281,14 +281,23 @@ func latestReleaseTag(ctx context.Context, client *http.Client, repo string) (st
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "rawclaw-self-update")
 
+	// apiErr captures why the JSON API path failed (transport error or a non-200
+	// status) so that, if the redirect fallback also fails, we can surface the real
+	// cause — a GitHub 403 rate-limit, a 404, or a 5xx — instead of a vague failure.
+	var apiErr error
 	resp, err := client.Do(req)
-	if err == nil {
+	if err != nil {
+		apiErr = err
+	} else {
 		defer resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
 			var rel release
 			if derr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); derr == nil && rel.TagName != "" {
 				return rel.TagName, nil
 			}
+			apiErr = fmt.Errorf("github api %s returned 200 but no usable tag_name", apiURL)
+		} else {
+			apiErr = fmt.Errorf("github api %s: status %d", apiURL, resp.StatusCode)
 		}
 		// Drain so the connection can be reused before we try the fallback.
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -296,10 +305,7 @@ func latestReleaseTag(ctx context.Context, client *http.Client, repo string) (st
 
 	tag, ferr := latestTagViaRedirect(ctx, client, repo)
 	if ferr != nil {
-		if err != nil {
-			return "", fmt.Errorf("github api unreachable (%v) and redirect fallback failed: %w", err, ferr)
-		}
-		return "", ferr
+		return "", fmt.Errorf("github api failed (%v) and redirect fallback failed: %w", apiErr, ferr)
 	}
 	return tag, nil
 }
@@ -431,7 +437,7 @@ func extractFromTarGz(archive []byte, name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 	for {
@@ -503,11 +509,15 @@ func httpGetBytes(ctx context.Context, client *http.Client, url string) ([]byte,
 // the real timeout; this is a generous backstop.
 var upgradeHTTPClient = &http.Client{Timeout: 5 * time.Minute}
 
-// applyUpdate is the atomic binary-replace primitive, delegated to
-// github.com/minio/selfupdate (PrepareAndCheckBinary → CommitBinary: write a
-// sibling .new, rename current → .old, rename .new → current, roll .old back on a
-// failed commit). It's a package var so the integration test can swap in a
-// version that targets a throwaway file instead of the running executable.
+// applyUpdate is the atomic binary-replace primitive: resolve the running
+// executable's real path (os.Executable → EvalSymlinks via applyTarget), then write
+// a sibling .new, move current → .old, swap .new → current, rolling .old back on a
+// failed swap (see apply.go). It's a package var so the integration test can swap in
+// a version that targets a throwaway file instead of the running executable.
 var applyUpdate = func(bin []byte) error {
-	return selfupdate.Apply(bytes.NewReader(bin), selfupdate.Options{})
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate running executable: %w", err)
+	}
+	return applyTarget(exe, bin)
 }

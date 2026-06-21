@@ -14,9 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
-
-	"github.com/minio/selfupdate"
 )
 
 // ── version comparison (incl. the dev case) ──
@@ -25,10 +24,10 @@ func TestCompareVersions(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
+		name            string
 		current, latest string
-		want           int
-		wantErr        bool
+		want            int
+		wantErr         bool
 	}{
 		{"older", "v0.1.0", "v0.2.0", -1, false},
 		{"older bare current", "0.1.0", "v0.2.0", -1, false},
@@ -317,6 +316,37 @@ func TestLatestReleaseTagViaAPI(t *testing.T) {
 	}
 }
 
+// TestLatestReleaseTagSurfacesStatusCode proves that when the GitHub API returns a
+// non-200 (here a 403 rate-limit) AND the redirect fallback also fails, the final
+// error names the status code instead of a vague failure — so a rate-limited user
+// can see WHY.
+func TestLatestReleaseTagSurfacesStatusCode(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	// API path: 403 (the classic unauthenticated GitHub rate-limit).
+	mux.HandleFunc("/repos/MoonCaves/rawclaw/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+	})
+	// Redirect fallback path: also 403, no Location header → fallback fails too,
+	// so the API error (with its status code) is what surfaces.
+	mux.HandleFunc("/MoonCaves/rawclaw/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := &http.Client{Transport: rewriteHost{base: srv.URL}}
+	_, err := latestReleaseTag(context.Background(), client, "MoonCaves/rawclaw")
+	if err == nil {
+		t.Fatal("latestReleaseTag accepted a 403 with no usable fallback — want an error")
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Errorf("error %q does not surface the 403 status code", err.Error())
+	}
+}
+
 func TestDownloadVerifiedBinary(t *testing.T) {
 	t.Parallel()
 
@@ -369,13 +399,14 @@ func TestDownloadVerifiedBinaryRejectsTamper(t *testing.T) {
 	}
 }
 
-// ── integration: minio/selfupdate.Apply replace + rollback primitive ──
+// ── integration: the inlined atomic replace + rollback primitive (apply.go) ──
 //
 // Proves the dangerous part works on a THROWAWAY temp file (never the test
-// binary): a successful replace swaps contents atomically, and a checksum
-// mismatch is rejected with the original file untouched.
+// binary): a successful replace swaps contents atomically and cleans up its
+// scratch files, a mode is preserved, and the rollback-distinction helper reports
+// "intact" for an ordinary error.
 
-func TestSelfUpdateApplyReplacesTempBinary(t *testing.T) {
+func TestApplyTargetReplacesTempBinary(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -386,8 +417,8 @@ func TestSelfUpdateApplyReplacesTempBinary(t *testing.T) {
 	}
 
 	replacement := []byte("REPLACED-v2-contents")
-	if err := selfupdate.Apply(bytes.NewReader(replacement), selfupdate.Options{TargetPath: target}); err != nil {
-		t.Fatalf("Apply replace: %v (rollback err: %v)", err, selfupdate.RollbackError(err))
+	if err := applyTarget(target, replacement); err != nil {
+		t.Fatalf("applyTarget replace: %v (rollback err: %v)", err, asRollbackError(err))
 	}
 
 	got, err := os.ReadFile(target)
@@ -395,44 +426,79 @@ func TestSelfUpdateApplyReplacesTempBinary(t *testing.T) {
 		t.Fatalf("read replaced target: %v", err)
 	}
 	if !bytes.Equal(got, replacement) {
-		t.Errorf("target after Apply = %q, want %q", got, replacement)
+		t.Errorf("target after applyTarget = %q, want %q", got, replacement)
+	}
+
+	// The new binary must be executable (0755), and no scratch files may linger.
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat replaced target: %v", err)
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		t.Errorf("replaced binary is not executable: mode %v", info.Mode().Perm())
+	}
+	for _, scratch := range []string{".rawclaw-fake.new", ".rawclaw-fake.old"} {
+		if _, err := os.Stat(filepath.Join(dir, scratch)); !os.IsNotExist(err) {
+			t.Errorf("scratch file %s was not cleaned up (err=%v)", scratch, err)
+		}
 	}
 }
 
-// TestSelfUpdateApplyRejectsBadChecksumLeavesOriginal proves the library's own
-// pre-commit checksum gate: when the supplied Checksum doesn't match the bytes,
-// Apply fails BEFORE swapping, so the original binary is left intact (no rollback
-// needed, RollbackError is nil).
-func TestSelfUpdateApplyRejectsBadChecksumLeavesOriginal(t *testing.T) {
+// TestApplyTargetFollowsSymlink proves the helper resolves a symlink and replaces
+// the REAL file behind it (e.g. an install.sh shim in ~/bin), not the link.
+func TestApplyTargetFollowsSymlink(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	target := filepath.Join(dir, "rawclaw-fake")
-	original := []byte("ORIGINAL-must-survive")
-	if err := os.WriteFile(target, original, 0o755); err != nil {
-		t.Fatalf("seed target: %v", err)
+	real := filepath.Join(dir, "rawclaw-real")
+	link := filepath.Join(dir, "rawclaw-link")
+	if err := os.WriteFile(real, []byte("ORIGINAL"), 0o755); err != nil {
+		t.Fatalf("seed real: %v", err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unsupported here: %v", err)
 	}
 
-	replacement := []byte("REPLACEMENT")
-	badChecksum := sha256.Sum256([]byte("not-the-replacement"))
-
-	err := selfupdate.Apply(bytes.NewReader(replacement), selfupdate.Options{
-		TargetPath: target,
-		Checksum:   badChecksum[:],
-	})
-	if err == nil {
-		t.Fatal("Apply accepted a bad checksum — must reject before swapping")
-	}
-	if rb := selfupdate.RollbackError(err); rb != nil {
-		t.Errorf("unexpected rollback error (swap should not have started): %v", rb)
+	replacement := []byte("REPLACED-via-symlink")
+	if err := applyTarget(link, replacement); err != nil {
+		t.Fatalf("applyTarget through symlink: %v", err)
 	}
 
-	got, err := os.ReadFile(target)
+	got, err := os.ReadFile(real)
 	if err != nil {
-		t.Fatalf("read target after rejected Apply: %v", err)
+		t.Fatalf("read real target: %v", err)
 	}
-	if !bytes.Equal(got, original) {
-		t.Errorf("original binary was modified after a rejected update: got %q, want %q", got, original)
+	if !bytes.Equal(got, replacement) {
+		t.Errorf("real file after applyTarget = %q, want %q", got, replacement)
+	}
+	// The symlink must still point at the real file (we replaced the target, not
+	// the link).
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("symlink was clobbered: lstat err=%v mode=%v", err, fi.Mode())
+	}
+}
+
+// TestAsRollbackErrorClassifies proves the distinction the upgrade flow relies on:
+// a bare error means the original binary is intact (nil), while a *rollbackError
+// means the rollback ALSO failed and the install needs manual recovery.
+func TestAsRollbackErrorClassifies(t *testing.T) {
+	t.Parallel()
+
+	if rb := asRollbackError(fmt.Errorf("ordinary failure")); rb != nil {
+		t.Errorf("ordinary error reported a rollback failure: %v (binary should be intact)", rb)
+	}
+	if rb := asRollbackError(nil); rb != nil {
+		t.Errorf("nil error reported a rollback failure: %v", rb)
+	}
+	swapErr := errors.New("swap failed")
+	rollErr := errors.New("restore failed")
+	wrapped := &rollbackError{commit: swapErr, rollback: rollErr}
+	if rb := asRollbackError(wrapped); rb != rollErr {
+		t.Errorf("asRollbackError = %v, want the rollback cause %v", rb, rollErr)
+	}
+	// Unwrap exposes the original swap error for errors.Is/As consumers.
+	if !errors.Is(wrapped, swapErr) {
+		t.Errorf("rollbackError does not unwrap to its commit error")
 	}
 }
 
