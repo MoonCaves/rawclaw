@@ -493,6 +493,23 @@ func CountSessions(dbp string) int {
 	return n
 }
 
+// CountTopLevelSessions returns the count of TOP-LEVEL sessions (is_subagent=0)
+// — what a user means by "this project's sessions". Use this for display; the
+// raw CountSessions above includes subagent threads and is internal bookkeeping.
+// Returns -1 on error.
+func CountTopLevelSessions(dbp string) int {
+	con, err := ConnectRO(dbp)
+	if err != nil {
+		return -1
+	}
+	defer con.Close()
+	var n int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE is_subagent=0").Scan(&n); err != nil {
+		return -1
+	}
+	return n
+}
+
 // IndexStatus discriminates how EnsureIndexed obtained its result, so callers
 // can honestly report incompleteness (#6) instead of silently treating a stale
 // busy-lock fallback as a fresh index.

@@ -733,7 +733,7 @@ func runBrief(w io.Writer, o *Options, q string, p retrieve.SearchParams, ppred 
 			return nil
 		}
 		_ = sc
-		dbp, nSess, _, err := index.EnsureIndexed(td, o.Reindex)
+		dbp, _, _, err := index.EnsureIndexed(td, o.Reindex)
 		if err != nil {
 			return fmt.Errorf("brief ensure-indexed: %w", err)
 		}
@@ -741,7 +741,8 @@ func runBrief(w io.Writer, o *Options, q string, p retrieve.SearchParams, ppred 
 		if o.JSON {
 			return EmitJSON(w, rowsToJSON(res))
 		}
-		PrintResults(w, res, nSess)
+		// Top-level count only — "this project's sessions" excludes subagent threads.
+		PrintResults(w, res, index.CountTopLevelSessions(dbp))
 		return nil
 	}
 
