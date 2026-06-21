@@ -7,8 +7,8 @@
 // can be returned). It is intentionally self-contained and is NOT called from
 // the index or read path yet. Wiring it in is a separate, deliberate change.
 //
-// Design (adopted from prior art): a cheap substring prefilter gates
-// the expensive regex pass — for the common case of clean prose the scrubber
+// Design: a cheap substring prefilter gates the expensive regex pass — for the
+// common case of clean prose the scrubber
 // does near-zero work and returns the input unchanged. Each detector is a named
 // regex; a match is replaced by a [REDACTED:<name>] placeholder. The scrubber
 // errs toward NOT redacting ordinary prose: bare mentions of "token"/"key" do
