@@ -655,36 +655,52 @@ func (e *ErrSessionNotFound) Error() string {
 // *ErrSessionNotFound on 0. A failing project is skipped. Shared by Read and
 // Outline.
 func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj string, err error) {
-	var cands []sessionCand
-	for _, sc := range scope {
-		dbpC, _, _, ensureErr := index.EnsureIndexed(sc.TDir, false)
-		if ensureErr != nil {
-			continue
+	// collect resolves the prefix against every scope. When excludeSub is set we
+	// drop agent sub-sessions (id "<parent>/agent-...", is_subagent=1): a session
+	// and its sub-agents share the UUID prefix — and even the full UUID, since a
+	// subagent id is the parent UUID plus "/agent-..." — so without this filter a
+	// bare OR full session ref false-trips the ambiguity guard against the
+	// session's own subagent transcripts, breaking agent read/outline for any
+	// session that spawned a subagent. Fall back to including sub-sessions only
+	// when nothing top-level matched, so a full "<parent>/agent-..." ref still resolves.
+	collect := func(excludeSub bool) []sessionCand {
+		q := "SELECT id FROM sessions WHERE id LIKE ? ORDER BY id LIMIT 2"
+		if excludeSub {
+			q = "SELECT id FROM sessions WHERE id LIKE ? AND is_subagent = 0 ORDER BY id LIMIT 2"
 		}
-		con, openErr := index.ConnectRO(dbpC)
-		if openErr != nil {
-			continue
-		}
-		// Fetch up to 2 per project: enough to detect an in-project collision;
-		// cross-project collisions surface in the aggregate below.
-		rows, qErr := con.QueryContext(
-			context.Background(),
-			"SELECT id FROM sessions WHERE id LIKE ? ORDER BY id LIMIT 2",
-			session8+"%",
-		)
-		if qErr != nil {
-			_ = con.Close()
-			continue
-		}
-		for rows.Next() {
-			var sid string
-			if scanErr := rows.Scan(&sid); scanErr != nil {
-				break
+		var cs []sessionCand
+		for _, sc := range scope {
+			dbpC, _, _, ensureErr := index.EnsureIndexed(sc.TDir, false)
+			if ensureErr != nil {
+				continue
 			}
-			cands = append(cands, sessionCand{SessionID: sid, Project: sc.Project, dbp: dbpC})
+			con, openErr := index.ConnectRO(dbpC)
+			if openErr != nil {
+				continue
+			}
+			// Fetch up to 2 per project: enough to detect an in-project collision;
+			// cross-project collisions surface in the aggregate below.
+			rows, qErr := con.QueryContext(context.Background(), q, session8+"%")
+			if qErr != nil {
+				_ = con.Close()
+				continue
+			}
+			for rows.Next() {
+				var sid string
+				if scanErr := rows.Scan(&sid); scanErr != nil {
+					break
+				}
+				cs = append(cs, sessionCand{SessionID: sid, Project: sc.Project, dbp: dbpC})
+			}
+			_ = rows.Close()
+			_ = con.Close()
 		}
-		_ = rows.Close()
-		_ = con.Close()
+		return cs
+	}
+
+	cands := collect(true)
+	if len(cands) == 0 {
+		cands = collect(false)
 	}
 
 	switch len(cands) {
