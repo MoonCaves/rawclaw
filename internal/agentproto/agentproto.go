@@ -74,12 +74,26 @@ type ScopeReport struct {
 }
 
 // SearchEnvelope wraps the ranked results with the per-scope completeness
-// report. Complete is false if any scope was skipped or served from a stale
-// fallback.
+// report. Complete is false if any scope was skipped, served from a stale
+// fallback, or had matches the limit/fetch window hid.
+//
+// The truncation block is the never-silent counterpart of ReadResult's trim
+// fields: an agent must never receive N results without learning the set is
+// larger. Count is len(Results). TotalMatches is the DISTINCT candidates found
+// within the fetch window; TotalIsLowerBound is true when a scope hit the fetch
+// ceiling, so the true total is >= TotalMatches (it's a floor, never claimed as
+// exact). HasMore is set whenever anything was hidden, and NextCommand is the
+// literal command an agent re-issues to widen.
 type SearchEnvelope struct {
 	Results  []SearchRef   `json:"results"`
 	Scopes   []ScopeReport `json:"scopes_report"`
 	Complete bool          `json:"complete"`
+
+	Count             int    `json:"count"`
+	TotalMatches      int    `json:"total_matches"`
+	TotalIsLowerBound bool   `json:"total_is_lower_bound,omitempty"`
+	HasMore           bool   `json:"has_more"`
+	NextCommand       string `json:"next_command,omitempty"`
 }
 
 // ReadResult is a bounded excerpt around a ref. Embeds the AnchoredView shape
@@ -293,7 +307,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts) SearchEnvelope
 		RawMatch:         rawMatch,
 	}
 
-	cands, reports := collectCandidates(scope, rawQuery, fetch, p)
+	cands, reports, hitCeiling := collectCandidates(scope, rawQuery, fetch, p)
 
 	sortCandidates(cands, opts.Sort)
 
@@ -328,10 +342,31 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts) SearchEnvelope
 		results = all[:limit]
 		truncated = true
 	}
+
+	// Never-silent truncation: an agent that sees N must learn the set is larger.
+	// total is the distinct count within the fetch window; if a scope hit the fetch
+	// ceiling the true total is higher, so we report it as a lower bound rather than
+	// claim a precision we don't have. hasMore is set whenever anything was hidden —
+	// by the limit OR by the fetch window — and carries the literal widen command.
+	total := len(all)
+	hasMore := truncated || hitCeiling
+	nextCmd := ""
+	if hasMore {
+		wider := limit * 4
+		if wider < 20 {
+			wider = 20
+		}
+		nextCmd = fmt.Sprintf("rawclaw agent search %q --limit %d", rawQuery, wider)
+	}
 	return SearchEnvelope{
-		Results:  results,
-		Scopes:   reports,
-		Complete: scopesComplete(reports) && !truncated,
+		Results:           results,
+		Scopes:            reports,
+		Complete:          scopesComplete(reports) && !hasMore,
+		Count:             len(results),
+		TotalMatches:      total,
+		TotalIsLowerBound: hitCeiling,
+		HasMore:           hasMore,
+		NextCommand:       nextCmd,
 	}
 }
 
@@ -370,9 +405,10 @@ func collectCandidates(
 	query string,
 	fetch int,
 	p retrieve.SearchParams,
-) ([]retrieve.Anchor, []ScopeReport) {
+) ([]retrieve.Anchor, []ScopeReport, bool) {
 	cands := []retrieve.Anchor{}
 	reports := make([]ScopeReport, 0, len(scope))
+	hitCeiling := false
 	for _, sc := range scope {
 		rep := ScopeReport{Project: sc.Project, Dir: sc.TDir}
 		dbp, _, status, err := index.EnsureIndexed(sc.TDir, false)
@@ -390,6 +426,11 @@ func collectCandidates(
 			continue
 		}
 		rows := retrieve.MatchAnchors(con, query, fetch, p)
+		if len(rows) >= fetch {
+			// This scope filled the fetch window — there may be more matches we
+			// never pulled, so any total derived from these rows is a floor.
+			hitCeiling = true
+		}
 		for i := range rows {
 			rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
 			rows[i].Project = sc.Project
@@ -410,7 +451,7 @@ func collectCandidates(
 		}
 		reports = append(reports, rep)
 	}
-	return cands, reports
+	return cands, reports, hitCeiling
 }
 
 // sortCandidates orders the merged candidates: newest/oldest sort by ISO;
@@ -921,7 +962,7 @@ func bookendRows(con *sql.DB, fullSID, dir string) ([]rawRow, error) {
 // stale, so the agent reads a partial result AS partial (#6).
 func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 	if len(env.Results) == 0 {
-		fmt.Fprintln(w, "No matches. Try a single distinctive term, or rephrase.")
+		fmt.Fprintln(w, "No matches. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.")
 		renderScopeFooter(w, env)
 		return
 	}
@@ -934,6 +975,13 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		fmt.Fprintf(w, "  ━━ %s · %s · %s\n", iso, sid8(r.SessionID), r.Project)
 		fmt.Fprintf(w, "     …%s…\n", r.Snippet)
 		fmt.Fprintf(w, "     read ref=%s\n\n", r.ReadRef)
+	}
+	if env.HasMore {
+		total := strconv.Itoa(env.TotalMatches)
+		if env.TotalIsLowerBound {
+			total = "≥" + total
+		}
+		fmt.Fprintf(w, "showing %d of %s matches — see more: %s\n", env.Count, total, env.NextCommand)
 	}
 	renderScopeFooter(w, env)
 }
@@ -1066,6 +1114,7 @@ func Run(args []string, out, errw io.Writer) int {
 	// Popping their VALUES here is what stops them leaking into the FTS5 query as
 	// junk OR-terms (e.g. "assistant", "999999").
 	role := popVal(&a, "--role")
+	sort := popVal(&a, "--sort")
 	since := popVal(&a, "--since")
 	before := popVal(&a, "--before")
 	includePath := popVal(&a, "--include-path")
@@ -1153,6 +1202,7 @@ func Run(args []string, out, errw io.Writer) int {
 			SearchOpts{
 				Limit:            limit,
 				Role:             role,
+				Sort:             sort,
 				IncludeTools:     includeTools,
 				IncludeSubagents: includeSubagents,
 				Since:            since,
