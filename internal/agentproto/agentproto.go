@@ -94,6 +94,11 @@ type SearchEnvelope struct {
 	TotalIsLowerBound bool   `json:"total_is_lower_bound,omitempty"`
 	HasMore           bool   `json:"has_more"`
 	NextCommand       string `json:"next_command,omitempty"`
+
+	// RecencyHint fires in the default relevance order when the freshest match is
+	// well newer than the top-ranked one — so a buried "what just happened" result
+	// announces itself instead of staying hidden behind relevance.
+	RecencyHint string `json:"recency_hint,omitempty"`
 }
 
 // ReadResult is a bounded excerpt around a ref. Embeds the AnchoredView shape
@@ -358,6 +363,24 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts) SearchEnvelope
 		}
 		nextCmd = fmt.Sprintf("rawclaw agent search %q --limit %d", rawQuery, wider)
 	}
+
+	// Recency hint: in the default relevance order, if the freshest match is well
+	// newer than the top-ranked hit, recency is buried — surface it and offer the
+	// one flag that reorders, rather than silently ranking by relevance alone.
+	recencyHint := ""
+	if opts.Sort == "" && len(results) > 0 {
+		newest := ""
+		for _, r := range all {
+			if r.ISO > newest {
+				newest = r.ISO
+			}
+		}
+		if tn, err := time.Parse(time.RFC3339, newest); err == nil {
+			if tt, err2 := time.Parse(time.RFC3339, results[0].ISO); err2 == nil && tn.Sub(tt) > 24*time.Hour {
+				recencyHint = fmt.Sprintf("relevance-ranked; newest match is %s — add --sort newest for latest-first", newest[:10])
+			}
+		}
+	}
 	return SearchEnvelope{
 		Results:           results,
 		Scopes:            reports,
@@ -367,6 +390,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts) SearchEnvelope
 		TotalIsLowerBound: hitCeiling,
 		HasMore:           hasMore,
 		NextCommand:       nextCmd,
+		RecencyHint:       recencyHint,
 	}
 }
 
@@ -982,6 +1006,9 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 			total = "≥" + total
 		}
 		fmt.Fprintf(w, "showing %d of %s matches — see more: %s\n", env.Count, total, env.NextCommand)
+	}
+	if env.RecencyHint != "" {
+		fmt.Fprintf(w, "note: %s\n", env.RecencyHint)
 	}
 	renderScopeFooter(w, env)
 }
