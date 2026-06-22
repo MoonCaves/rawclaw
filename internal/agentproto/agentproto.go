@@ -19,11 +19,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/adapters"
+	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
+	"github.com/MoonCaves/rawclaw/internal/semantic"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
@@ -262,8 +265,10 @@ func runeSlice(s string, n int) string {
 
 // Search returns rank-ordered conversation refs matching query within scope
 // (nil scope = all projects), wrapped in an envelope that reports per-scope
-// completeness (#6) so a partial result is never mistaken for complete.
-func Search(rawQuery string, scope []view.Scope, opts SearchOpts) SearchEnvelope {
+// completeness (#6) so a partial result is never mistaken for complete. With a
+// non-nil embedder in relevance mode (no --sort), keyword anchors are RRF-fused
+// with vector-KNN anchors — parity with the default discovery path.
+func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed.Embedder) SearchEnvelope {
 	limit := opts.Limit
 	if limit == 0 {
 		limit = DefaultSearchLimit
@@ -312,7 +317,14 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts) SearchEnvelope
 		RawMatch:         rawMatch,
 	}
 
-	cands, reports, hitCeiling := collectCandidates(scope, rawQuery, fetch, p)
+	// Embed the query once for RRF fusion, only in relevance mode — an explicit
+	// --sort stays pure (keyword/recency), matching the discovery path.
+	var qvec []float64
+	if embedder != nil && opts.Sort == "" {
+		qvec = embedder.Embed(rawQuery)
+	}
+
+	cands, reports, hitCeiling := collectCandidates(scope, rawQuery, fetch, p, qvec)
 
 	sortCandidates(cands, opts.Sort)
 
@@ -429,6 +441,7 @@ func collectCandidates(
 	query string,
 	fetch int,
 	p retrieve.SearchParams,
+	qvec []float64,
 ) ([]retrieve.Anchor, []ScopeReport, bool) {
 	cands := []retrieve.Anchor{}
 	reports := make([]ScopeReport, 0, len(scope))
@@ -452,8 +465,15 @@ func collectCandidates(
 		rows := retrieve.MatchAnchors(con, query, fetch, p)
 		if len(rows) >= fetch {
 			// This scope filled the fetch window — there may be more matches we
-			// never pulled, so any total derived from these rows is a floor.
+			// never pulled, so any total derived from these rows is a floor. The
+			// ceiling is measured on the keyword fetch (pre-fusion), since that is
+			// what saturated.
 			hitCeiling = true
+		}
+		// RRF-fuse keyword anchors with vector-KNN when a query vector is present
+		// (relevance mode only — qvec is nil under --sort). Parity with Discovery.
+		if qvec != nil {
+			rows = semantic.Fuse(con, rows, qvec, fetch, p.IncludeSubagents)
 		}
 		for i := range rows {
 			rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
@@ -1133,7 +1153,8 @@ func Run(args []string, out, errw io.Writer) int {
 	thisProject := popBool(&a, "--this-project")
 	includeTools := popBool(&a, "--include-tools")
 	includeSubagents := popBool(&a, "--include-subagents")
-	_ = popBool(&a, "--no-budget") // deprecated no-op: no cap is now the default
+	noVector := popBool(&a, "--no-vector") // force keyword-only (skip vector fusion)
+	_ = popBool(&a, "--no-budget")         // deprecated no-op: no cap is now the default
 	limitS := popVal(&a, "--limit")
 	budgetS := popVal(&a, "--budget")
 	focus := popVal(&a, "--focus")
@@ -1237,7 +1258,11 @@ func Run(args []string, out, errw io.Writer) int {
 
 	switch verb {
 	case "search":
-		return runSearch(out, errw, positional, scope, scopeLabel, wantJSON,
+		var embedder embed.Embedder
+		if !noVector {
+			embedder = adapters.GetEmbedder()
+		}
+		return runSearch(out, errw, positional, scope, scopeLabel, wantJSON, embedder,
 			SearchOpts{
 				Limit:            limit,
 				Role:             role,
@@ -1286,6 +1311,7 @@ func runSearch(
 	scope []view.Scope,
 	scopeLabel string,
 	wantJSON bool,
+	embedder embed.Embedder,
 	opts SearchOpts,
 ) int {
 	if len(positional) == 0 {
@@ -1293,7 +1319,7 @@ func runSearch(
 		return 1
 	}
 	query := strings.Join(positional, " ")
-	env := Search(query, scope, opts)
+	env := Search(query, scope, opts, embedder)
 	if wantJSON {
 		if err := emit(out, env); err != nil {
 			fmt.Fprintf(errw, "error: %v\n", err)

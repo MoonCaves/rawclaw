@@ -55,23 +55,23 @@ func TestSearchRoleFilter(t *testing.T) {
 	})
 	scope := scopeFor(t, proj)
 
-	all := Search("deployseam", scope, SearchOpts{})
+	all := Search("deployseam", scope, SearchOpts{}, nil)
 	if len(all.Results) == 0 {
 		t.Fatal("baseline (no role) must return at least one ref")
 	}
 
-	asst := Search("deployseam", scope, SearchOpts{Role: "assistant"})
+	asst := Search("deployseam", scope, SearchOpts{Role: "assistant"}, nil)
 	if len(asst.Results) == 0 {
 		t.Fatal("role=assistant must still match the assistant message")
 	}
-	user := Search("deployseam", scope, SearchOpts{Role: "user"})
+	user := Search("deployseam", scope, SearchOpts{Role: "user"}, nil)
 	if len(user.Results) == 0 {
 		t.Fatal("role=user must still match the user message")
 	}
 
 	// The role value must NOT leak as a query term: a query whose ONLY token is a
 	// role keyword, with a role filter set, must not self-match on the keyword.
-	leak := Search("zzznotacorpusterm", scope, SearchOpts{Role: "assistant"})
+	leak := Search("zzznotacorpusterm", scope, SearchOpts{Role: "assistant"}, nil)
 	if len(leak.Results) != 0 {
 		t.Errorf("a non-matching query with --role must return 0, got %d (role value leaked into the query?)",
 			len(leak.Results))
@@ -87,16 +87,16 @@ func TestSearchSinceBeforeBounds(t *testing.T) {
 	})
 	scope := scopeFor(t, proj)
 
-	if env := Search("datedmatch", scope, SearchOpts{}); len(env.Results) == 0 {
+	if env := Search("datedmatch", scope, SearchOpts{}, nil); len(env.Results) == 0 {
 		t.Fatal("baseline must match")
 	}
-	if env := Search("datedmatch", scope, SearchOpts{Since: "2030-01-01"}); len(env.Results) != 0 {
+	if env := Search("datedmatch", scope, SearchOpts{Since: "2030-01-01"}, nil); len(env.Results) != 0 {
 		t.Errorf("--since 2030-01-01 must return 0, got %d", len(env.Results))
 	}
-	if env := Search("datedmatch", scope, SearchOpts{Before: "2000-01-01"}); len(env.Results) != 0 {
+	if env := Search("datedmatch", scope, SearchOpts{Before: "2000-01-01"}, nil); len(env.Results) != 0 {
 		t.Errorf("--before 2000-01-01 must return 0, got %d", len(env.Results))
 	}
-	if env := Search("datedmatch", scope, SearchOpts{Since: "2026-01-01", Before: "2026-12-31"}); len(env.Results) == 0 {
+	if env := Search("datedmatch", scope, SearchOpts{Since: "2026-01-01", Before: "2026-12-31"}, nil); len(env.Results) == 0 {
 		t.Error("a bracketing since/before must still match")
 	}
 }
@@ -111,13 +111,13 @@ func TestSearchMinMessages(t *testing.T) {
 	})
 	scope := scopeFor(t, proj)
 
-	if env := Search("thinthreadmatch", scope, SearchOpts{}); len(env.Results) == 0 {
+	if env := Search("thinthreadmatch", scope, SearchOpts{}, nil); len(env.Results) == 0 {
 		t.Fatal("baseline must match")
 	}
-	if env := Search("thinthreadmatch", scope, SearchOpts{MinMessages: 999999}); len(env.Results) != 0 {
+	if env := Search("thinthreadmatch", scope, SearchOpts{MinMessages: 999999}, nil); len(env.Results) != 0 {
 		t.Errorf("--min-messages 999999 must return 0, got %d", len(env.Results))
 	}
-	if env := Search("thinthreadmatch", scope, SearchOpts{MinMessages: 2}); len(env.Results) == 0 {
+	if env := Search("thinthreadmatch", scope, SearchOpts{MinMessages: 2}, nil); len(env.Results) == 0 {
 		t.Error("--min-messages 2 must still match a 2-message session")
 	}
 }
@@ -147,12 +147,12 @@ func TestSearchIncludeExcludePath(t *testing.T) {
 		{Project: paths.ProjectLabel(cooDir), TDir: cooDir},
 	}
 
-	base := Search("pathscopematch", scope, SearchOpts{})
+	base := Search("pathscopematch", scope, SearchOpts{}, nil)
 	if len(base.Results) < 2 {
 		t.Fatalf("baseline must match both projects, got %d", len(base.Results))
 	}
 
-	inc := Search("pathscopematch", scope, SearchOpts{IncludePath: "alpha"})
+	inc := Search("pathscopematch", scope, SearchOpts{IncludePath: "alpha"}, nil)
 	byProj := refsByProject(inc)
 	if byProj[paths.ProjectLabel(cooDir)] != 0 {
 		t.Errorf("--include-path alpha must drop bravo, got %+v", byProj)
@@ -161,7 +161,7 @@ func TestSearchIncludeExcludePath(t *testing.T) {
 		t.Errorf("--include-path alpha must keep alpha, got %+v", byProj)
 	}
 
-	exc := Search("pathscopematch", scope, SearchOpts{ExcludePath: "alpha"})
+	exc := Search("pathscopematch", scope, SearchOpts{ExcludePath: "alpha"}, nil)
 	byProj = refsByProject(exc)
 	if byProj[paths.ProjectLabel(libDir)] != 0 {
 		t.Errorf("--exclude-path alpha must drop alpha, got %+v", byProj)
@@ -185,7 +185,7 @@ func TestSearchTruncationSignal(t *testing.T) {
 	}
 	scope := scopeFor(t, proj)
 
-	capped := Search("capsignal", scope, SearchOpts{Limit: 2})
+	capped := Search("capsignal", scope, SearchOpts{Limit: 2}, nil)
 	if len(capped.Results) != 2 {
 		t.Fatalf("limit 2 must return exactly 2 refs, got %d", len(capped.Results))
 	}
@@ -193,7 +193,7 @@ func TestSearchTruncationSignal(t *testing.T) {
 		t.Error("a limit that hides candidates must report Complete=false (#2)")
 	}
 
-	whole := Search("capsignal", scope, SearchOpts{Limit: 100})
+	whole := Search("capsignal", scope, SearchOpts{Limit: 100}, nil)
 	if !whole.Complete {
 		t.Errorf("a limit larger than the candidate set must report Complete=true, got false; scopes=%+v", whole.Scopes)
 	}
@@ -220,8 +220,8 @@ func TestSearchNotExclusion(t *testing.T) {
 	})
 	scope := scopeFor(t, proj)
 
-	all := Search("notexcl deploy", scope, SearchOpts{Limit: 100})
-	excl := Search("notexcl deploy NOT staging", scope, SearchOpts{Limit: 100})
+	all := Search("notexcl deploy", scope, SearchOpts{Limit: 100}, nil)
+	excl := Search("notexcl deploy NOT staging", scope, SearchOpts{Limit: 100}, nil)
 	if len(excl.Results) >= len(all.Results) {
 		t.Fatalf("NOT staging must exclude the staging hit: all=%d excl=%d", len(all.Results), len(excl.Results))
 	}
@@ -244,7 +244,7 @@ func TestSearchPrefixAndPath(t *testing.T) {
 
 	cases := []string{"self-update*", "~/.claude/projects", ".claude/projects"}
 	for _, q := range cases {
-		if env := Search(q, scope, SearchOpts{}); len(env.Results) == 0 {
+		if env := Search(q, scope, SearchOpts{}, nil); len(env.Results) == 0 {
 			t.Errorf("query %q returned 0 results, want >0", q)
 		}
 	}

@@ -903,7 +903,7 @@ func TestScopeReportAllSearched(t *testing.T) {
 	writeSession(t, proj, "a1b2c3d4eeee", "f0000000aaaa", "searchable deploy content")
 	scope := scopeFor(t, proj)
 
-	env := Search("deploy", scope, SearchOpts{})
+	env := Search("deploy", scope, SearchOpts{}, nil)
 	if !env.Complete {
 		t.Errorf("clean run must report Complete=true; scopes=%+v", env.Scopes)
 	}
@@ -938,7 +938,7 @@ func TestScopeReportSkipsLocked(t *testing.T) {
 	}
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	env := Search("searchable", scope, SearchOpts{})
+	env := Search("searchable", scope, SearchOpts{}, nil)
 
 	if env.Complete {
 		t.Errorf("a stale/locked scope must report Complete=false; scopes=%+v", env.Scopes)
