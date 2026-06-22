@@ -1158,6 +1158,9 @@ func renderScopeFooter(w io.Writer, env SearchEnvelope) {
 		}
 	}
 	skipped := errored + stale
+	if skipped == 0 {
+		return
+	}
 	fmt.Fprintf(w, "note: %d of %d projects incomplete (%d error, %d stale) — results may be incomplete\n",
 		skipped, len(env.Scopes), errored, stale)
 }

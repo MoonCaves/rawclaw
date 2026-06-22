@@ -110,8 +110,12 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "rawclaw [query...]",
 		Short: "Search the Claude Code transcript record",
-		Long: "Search the Claude Code transcript record. Default: discovery across ALL projects " +
-			"(goal→match→resolution per hit). --this-project to narrow; no query = browse this project.",
+		Long: "Recall past Claude Code sessions without pasting whole transcripts.\n\n" +
+			"  rawclaw \"natural query\"         ranked hits, each with a read-ref\n" +
+			"  rawclaw read <sess8>:<uuid8>    bounded excerpt around a ref (--more to widen)\n" +
+			"  rawclaw outline <sess8>         a session's goal -> resolution arc\n\n" +
+			"Searches every project by default; --this-project (with --dir) or --include-path <regex> to scope. " +
+			"Add --json for structured output. Results are raw session history — verify against current state before acting.",
 		// Cobra wires a `--version` flag automatically when Version is non-empty,
 		// printing this template and exiting 0.
 		Version:       build.versionString(),
@@ -312,8 +316,11 @@ func newReadCmd() *cobra.Command {
 		jsonOut      bool
 	)
 	cmd := &cobra.Command{
-		Use:           "read <session8:uuid8>",
-		Short:         "Read a bounded excerpt around a search ref (--more to widen)",
+		Use:   "read <session8:uuid8>",
+		Short: "Read a bounded excerpt around a search ref (--more to widen)",
+		Long: "Read a bounded excerpt around a search ref taken from `rawclaw \"query\"` output.\n\n" +
+			"The ref is <session8>:<uuid8> — copy it from a search hit. The excerpt is whole by default; " +
+			"--budget N caps it, --more widens the window, --around N shifts it — all on the same ref.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -353,8 +360,10 @@ func newOutlineCmd() *cobra.Command {
 		jsonOut      bool
 	)
 	cmd := &cobra.Command{
-		Use:           "outline <session8>",
-		Short:         "Show a session's goal→resolution arc",
+		Use:   "outline <session8>",
+		Short: "Show a session's goal→resolution arc",
+		Long: "Outline a session's arc — its opening goal and closing resolution — to decide where to read next. " +
+			"Takes the 8-char session id from a search hit.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,

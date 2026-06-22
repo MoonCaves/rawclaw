@@ -33,7 +33,7 @@ Claude Code quietly saves every conversation you have with it as JSONL transcrip
 - **All your projects by default.** One query spans every Claude Code folder you've worked in (`--this-project` to narrow).
 - **Natural phrasing works.** Multi-word queries OR their terms and rank by how many match — you don't need the exact wording.
 - **Reads the full structure, shows the signal.** Subagent threads, tool calls, compaction summaries, and thinking blocks are all indexed, but search defaults to clean human conversation (`--include-tools` / `--include-subagents` to widen).
-- **Built for agents too.** `--json` on every shape, clean exit codes, and an `agent` protocol that returns *budgeted excerpts* instead of whole transcripts.
+- **Built for agents too.** `rawclaw "query"` returns ranked refs with a never-silent completeness envelope; `read <ref>` returns a *bounded excerpt* instead of a whole transcript; `--json` on every command.
 
 ## Who it's for
 
@@ -72,13 +72,14 @@ rawclaw upgrade --check    # report whether a newer release exists (exit 10 if s
 ## Usage
 
 ```bash
-rawclaw "where did we set up auth"         # discovery: goal → match → resolution (all projects)
-rawclaw --this-project "auth"              # narrow to the current project
-rawclaw                                     # browse: your most recent sessions
-rawclaw --scroll <session8> --around <#>   # keep reading around a hit
-rawclaw --resume <session8>                # paste-ready `claude --resume` for that session
+rawclaw "where did we set up auth"          # search (default): ranked hits + read-refs (all projects)
+rawclaw --this-project "auth"               # narrow to the current project
+rawclaw read <session8>:<uuid8>             # bounded excerpt around a ref (--more/--around/--budget/--focus)
+rawclaw outline <session8>                  # the session's goal → resolution arc
+rawclaw                                      # browse: your most recent sessions
+rawclaw --resume <session8>                 # paste-ready `claude --resume` for that session
 rawclaw --stats                             # corpus overview (this project; --all for everything)
-rawclaw "query" --json                     # machine-readable output for scripts/agents
+rawclaw "query" --json                      # machine-readable output for scripts/agents
 rawclaw "query" --since 2026-01-01 --before 2026-02-01   # date-scoped
 rawclaw --list                              # list searchable projects
 rawclaw delete --yes <session8>             # delete a session non-interactively (no y/N prompt)
@@ -90,17 +91,17 @@ rawclaw --timeout 2m "query"                # raise the self-terminating deadlin
 
 **Built to never hang.** Every run is bounded by a self-terminating watchdog so an agent never needs an external `timeout(1)`: `--timeout 2m` raises the deadline, `--timeout 0` disables it, and `RAWCLAW_TIMEOUT` (a Go duration like `45s` or `2m`) overrides the default. The default is `30s`; exceeding the deadline exits `124` (the `timeout(1)` convention). `delete --yes` (alias `-y`) skips the confirmation prompt for non-interactive use.
 
-### Agent protocol
+### For agents
 
-For an LLM agent recalling its own history without pasting whole transcripts:
+The surface is agent-first by default — an LLM recalls its own history without pasting whole transcripts:
 
 ```bash
-rawclaw agent search "query"           # ranked, copyable read-refs
-rawclaw agent read <session8>:<msg>    # a budgeted excerpt (--budget N / --no-budget)
-rawclaw agent outline <session8>       # the goal → resolution arc
+rawclaw "query"                        # ranked hits, each with a copyable read-ref + completeness envelope
+rawclaw read <session8>:<uuid8>        # a bounded excerpt around a ref (--more/--around/--budget/--focus)
+rawclaw outline <session8>             # the goal → resolution arc, to pick where to read next
 ```
 
-`--json` throughout — so an agent searches, picks a ref, and reads a bounded slice instead of blowing its context on a whole transcript.
+`--json` throughout — so an agent searches, picks a ref, and reads a bounded slice instead of its whole context on one transcript. Search is the default verb; `read` and `outline` are top-level verbs.
 
 ---
 

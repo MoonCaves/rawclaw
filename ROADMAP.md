@@ -15,16 +15,16 @@ of timing; it's the direction, in roughly the order we expect to tackle it.
 So the forward plan below isn't mistaken for the whole product — what already works today, in the
 single keyword binary:
 
-- **Keyword FTS5 search** with the goal → match → resolution view (discovery), plus `--scroll`
-  (keep reading around a hit) and browse (no query → recent sessions).
+- **Keyword FTS5 search as the default verb** — `rawclaw "query"` returns ranked hits with copyable
+  read-refs and a never-silent completeness envelope; browse (no query → recent sessions).
 - **All projects by default**, `--this-project` to narrow, `--list` to enumerate them.
 - **Query hygiene built in:** boolean operators (`a NOT b`, `x OR y`), `"exact phrase"` adjacency,
   `term*` prefix — raw agent queries can't break FTS5 syntax.
 - **Scoping flags:** `--role`, `--sort newest|oldest`, `--since`/`--before`, `--include-path` /
   `--exclude-path` (regex over the project's working dir), `--min-messages N` (drop thin/bootstrap
   threads), `--include-tools` / `--include-subagents` to widen past clean human text.
-- **`--json` on every shape** (discovery, brief, browse, scroll, stats, resume) + real exit codes.
-- **`rawclaw agent search|read|outline`** — the agent read-protocol. Refs are **source-stable**
+- **`--json` on every command** (search, browse, read, outline, stats, resume) + real exit codes.
+- **Top-level `read` / `outline` verbs** — the agent read-protocol. Refs are **source-stable**
   (`<session8>:<uuid8>`, anchored on Claude Code's own message uuid, so a citation survives re-index and
   transcript appends), and **ambiguity is rejected git-style** (a colliding prefix returns candidates, never
   the wrong session/message). A `read` returns the message **whole by default**; `--budget N` is an opt-in
@@ -88,7 +88,7 @@ Read-only recall is the core, but lightweight scriptable session management belo
   JSONL into the CWD's project and resume there). **(planned — deferred:** thin wrappers over the existing
   `--resume` shell-out; low marginal value until asked for.)
 - **`list` / `show` / `usage` subcommands** — composable, exit-code-clean siblings for `jq`/`fzf` pipelines.
-  **(planned — deferred:** `--list` (projects), `--stats` (corpus), and `--scroll` + `agent outline`/`read`
+  **(planned — deferred:** `--list` (projects), `--stats` (corpus), and the `read` / `outline` verbs
   already cover this ground; subcommands would add public surface for marginal gain.)
 
 ### Progressive read — shipped
@@ -112,9 +112,9 @@ Live signal (2026-06-20): an agent piped the default discovery output through `g
 content keyword on the *same* line — but the default view puts the date on the `━━` header and the content on
 separate `▶`/role lines, so they never co-occur, and the filter silently dropped real hits. The multi-line view
 is right for *reading* a result; it's hostile to *line-filtering across* results — and agents reach for `grep`
-by default. The grep-friendly modes already exist: `--brief` emits a self-contained one-line hit
-(`iso · session8 · role · snippet`) and `--json` composes with `jq`. The gap is **discoverability** (agents
-don't reach for them).
+by default. `--json` already composes with `jq`; a self-contained one-line hit mode
+(`iso · session8 · role · snippet`) for `grep` is still wanted. The gap is **discoverability** (agents
+don't reach for it) as much as the mode itself.
 
 **Governing tenet — self-evident like Google, no guide needed.** Order of preference for closing *any* agent-usage
 gap, worst → best: (1) ship a **skill** (knowledge in the agent's head — it must read a guide first); (2) compress
@@ -125,7 +125,7 @@ as a punch-list of self-evidence gaps to retire.
 
 Applied here, best → worst: **auto-detect non-tty (piped) output and emit grep-friendly lines** (the agent greps,
 it just works — zero knowledge required); failing that, a one-line stderr hint at the moment of grepping; failing
-that, the skill/README documents `--brief` / `--json`. Pair with **forgiving input parsing**
+that, the README documents `--json` (and a one-line hit mode, once it lands). Pair with **forgiving input parsing**
 (single-dash long flags, case-folding, typo-correction, `find`/`grep`→`search` aliases) so an agent's
 natural attempt succeeds without knowing the exact syntax. **(planned)**
 
@@ -133,7 +133,7 @@ natural attempt succeeds without knowing the exact syntax. **(planned)**
 
 `spf13/cobra` ships completion generation; we just haven't wired the command yet. Plan: a
 `rawclaw completion bash|zsh|fish|powershell` subcommand, plus dynamic completion for the arguments
-that benefit most — session-id prefixes (for `--scroll` / `--resume` / `agent read`), known project
+that benefit most — session-id prefixes (for `read` / `outline` / `--resume`), known project
 paths (for `--include-path` / `--exclude-path`), and tool names (for `--include-tools`). The session-id
 and project completers read straight from the existing index, so they cost nothing extra to maintain. **(planned)**
 
@@ -152,20 +152,20 @@ ranking is deliberately plain. Two tunings, both pure-Go and dependency-free:
 
 ## Mid term
 
-### Richer agent-protocol verbs
+### Richer read-protocol verbs
 
-The `agent` subcommand (`search` / `read` / `outline`, all `--json`, all budgeted) is the surface an
+The default search plus the `read` / `outline` verbs (all `--json`, all budgeted) are the surface an
 LLM uses to recall its own history without burning context on whole transcripts. Candidate additions,
 each keeping the budget discipline:
 
-- **`agent timeline <session8>`** — a compact, ordered spine of a session (goals, decisions, hand-offs)
+- **`timeline <session8>`** — a compact, ordered spine of a session (goals, decisions, hand-offs)
   cheaper than a full outline, for "what happened, in order."
-- **`agent related <ref>`** — given one hit, surface adjacent sessions that share entities or pick up
+- **`related <ref>`** — given one hit, surface adjacent sessions that share entities or pick up
   the same thread, so an agent can widen without re-querying blind.
-- **`agent context <ref> --budget N`** — a single call that returns a hit *plus* its goal/resolution
+- **`context <ref> --budget N`** — a single call that returns a hit *plus* its goal/resolution
   bookends pre-fit to a token budget, collapsing the common search→read round-trip.
 
-All additive; the existing three verbs and their JSON shapes don't change. **(exploring)**
+All additive; the existing verbs and their JSON shapes don't change. **(exploring)**
 
 ### Indexing & freshness
 
