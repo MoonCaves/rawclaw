@@ -8,7 +8,6 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/render"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
-	"github.com/spf13/cobra"
 )
 
 // asExit is errors.As for ExitError (test convenience).
@@ -16,18 +15,8 @@ func asExit(err error, target *ExitError) bool {
 	return errors.As(err, target)
 }
 
-// findSub returns the named direct subcommand of cmd, or nil.
-func findSub(cmd *cobra.Command, name string) *cobra.Command {
-	for _, c := range cmd.Commands() {
-		if c.Name() == name {
-			return c
-		}
-	}
-	return nil
-}
-
 // TestNewRootCmd is the command-tree smoke test: the command tree builds and carries
-// the expected binary name, the flags, and the agent subcommand.
+// the expected binary name and the flags.
 func TestNewRootCmd(t *testing.T) {
 	t.Parallel()
 
@@ -41,8 +30,8 @@ func TestNewRootCmd(t *testing.T) {
 
 	// Every flag must be wired (local flags on root).
 	wantFlags := []string{
-		"limit", "dir", "this-project", "all", "scroll", "around",
-		"window", "list", "role", "sort", "include-tools", "include-subagents",
+		"limit", "dir", "this-project", "all",
+		"list", "role", "sort", "include-tools", "include-subagents",
 		"reindex", "json", "resume", "stats", "since", "before", "no-vector",
 		"reindex-vectors", "include-path", "exclude-path", "min-messages",
 		"debug-search",
@@ -51,15 +40,6 @@ func TestNewRootCmd(t *testing.T) {
 		if cmd.Flags().Lookup(name) == nil {
 			t.Errorf("root missing flag --%s", name)
 		}
-	}
-
-	// The agent subcommand exists and disables flag parsing (protocol owns flags).
-	agent := findSub(cmd, "agent")
-	if agent == nil {
-		t.Fatal("missing `agent` subcommand")
-	}
-	if !agent.DisableFlagParsing {
-		t.Error("agent subcommand must DisableFlagParsing (protocol owns --budget/--focus)")
 	}
 }
 
@@ -192,28 +172,6 @@ func TestChoiceValidation(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestScrollRequiresAround: `--scroll X` without `--around` exits 2 (usage error).
-func TestScrollRequiresAround(t *testing.T) {
-	t.Parallel()
-
-	cmd := NewRootCmd(BuildInfo{})
-	var out, errb bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&errb)
-	cmd.SetArgs([]string{"--scroll", "a1b2c3d4"})
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("expected error when --scroll given without --around")
-	}
-	var ee ExitError
-	if !asExit(err, &ee) || ee.Code != 2 {
-		t.Errorf("want ExitError{Code:2}, got %v", err)
-	}
-	if !strings.Contains(ee.Msg, "--scroll requires --around") {
-		t.Errorf("want usage-error message, got %q", ee.Msg)
 	}
 }
 

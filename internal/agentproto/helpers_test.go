@@ -1,7 +1,6 @@
 package agentproto
 
 import (
-	"os"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
@@ -50,20 +49,5 @@ func assertOrder(t *testing.T, got, want []string) {
 		if got[i] != want[i] {
 			t.Fatalf("order = %v, want %v", got, want)
 		}
-	}
-}
-
-// chdir changes into dir for the duration of a test, returning a restore func.
-func chdir(t *testing.T, dir string) func() {
-	t.Helper()
-	prev, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("chdir %q: %v", dir, err)
-	}
-	return func() {
-		_ = os.Chdir(prev)
 	}
 }

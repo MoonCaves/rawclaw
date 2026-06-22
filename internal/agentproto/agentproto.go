@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MoonCaves/rawclaw/internal/adapters"
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -112,6 +111,7 @@ type ReadResult struct {
 	AnchorID     int    `json:"anchor_id"`
 	FocusSnippet string `json:"focus_snippet"`
 	CharBudget   *int   `json:"char_budget"` // nil = no cap
+	ReadRef      string `json:"read_ref"`    // the stable "<session8>:<uuid8>" ref this read resolved
 	Truncated    bool   `json:"truncated"`
 	// Never-silent trim (#5): when Truncated, these carry the machine counts AND
 	// the literal command an agent re-issues to recover the hidden content. Empty
@@ -143,7 +143,7 @@ type OutlineResult struct {
 
 // SearchOpts groups the optional search filters (keeps the signature small).
 // The scope filters (Role/Since/Before/MinMessages/IncludePath/ExcludePath)
-// mirror the default-discovery flags so `agent search` honors the SAME scoping
+// mirror the default-discovery flags so the default search honors the SAME scoping
 // the human path does, instead of leaking their values into the FTS5 query.
 type SearchOpts struct {
 	Limit            int
@@ -373,7 +373,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		if wider < 20 {
 			wider = 20
 		}
-		nextCmd = fmt.Sprintf("rawclaw agent search %q --limit %d", rawQuery, wider)
+		nextCmd = fmt.Sprintf("rawclaw %q --limit %d", rawQuery, wider)
 	}
 
 	// Recency hint: in the default relevance order, if the freshest match is well
@@ -408,8 +408,8 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 
 // SearchAndRender runs Search and writes the result to w: the agent envelope as
 // text, or as JSON when wantJSON. This is the exported entry the default CLI path
-// calls so a bare `rawclaw "query"` IS the agent search (no `agent` subcommand to
-// discover). scopeLabel is the human-facing "across all projects" / "on <project>"
+// calls so a bare `rawclaw "query"` IS the search — search is the default verb.
+// scopeLabel is the human-facing "across all projects" / "on <project>"
 // suffix in the text header.
 func SearchAndRender(
 	w io.Writer,
@@ -430,7 +430,7 @@ func SearchAndRender(
 
 // ReadAndRender resolves ref within scope and writes the bounded excerpt to w
 // (JSON when wantJSON). The exported entry the top-level `read` subcommand calls,
-// so reading is a top-level verb (`rawclaw read <ref>`) rather than `agent read`.
+// so reading is a top-level verb (`rawclaw read <ref>`).
 // moreLevel 0 = the default window; >0 widens it via the expand-in-place ladder.
 func ReadAndRender(
 	w io.Writer,
@@ -680,7 +680,7 @@ func Read(ref string, scope []view.Scope, opts ReadOpts) (*ReadResult, error) {
 	// content.
 	nextCmd := ""
 	if st.Truncated {
-		nextCmd = "rawclaw agent read " + fmtRef(fullSID, uuid8) + " --more"
+		nextCmd = "rawclaw read " + fmtRef(fullSID, uuid8) + " --more"
 	}
 
 	return &ReadResult{
@@ -689,6 +689,7 @@ func Read(ref string, scope []view.Scope, opts ReadOpts) (*ReadResult, error) {
 		AnchorID:     msgID,
 		FocusSnippet: focusSnippet,
 		CharBudget:   opts.Budget,
+		ReadRef:      fmtRef(fullSID, uuid8),
 		Truncated:    st.Truncated,
 		TrimmedChars: st.OmittedChars,
 		TrimmedMsgs:  st.OmittedMsgs,
@@ -1103,6 +1104,42 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		fmt.Fprintf(w, "note: %s\n", env.RecencyHint)
 	}
 	renderScopeFooter(w, env)
+
+	// Cheap disambiguation: when the matches span 2+ distinct projects, say so and
+	// point at the narrowing flags — a factual spread signal, no new heuristic.
+	if line := projectSpreadLine(env.Results); line != "" {
+		fmt.Fprintln(w, line)
+	}
+	// Freshness: the last footer line, always — these are raw transcripts, not the
+	// current state of the world.
+	fmt.Fprintln(w, freshnessNote)
+}
+
+// freshnessNote is the standing reminder that search/read results are raw session
+// history, not current truth — appended as the last footer line of both renderers.
+const freshnessNote = "note: raw session history — verify against current state before acting."
+
+// projectSpreadLine returns a one-line "matches span N projects: …" hint when the
+// results cover 2+ distinct projects (listing up to 5), or "" for a single project.
+func projectSpreadLine(results []SearchRef) string {
+	seen := map[string]struct{}{}
+	var distinct []string
+	for _, r := range results {
+		if _, dup := seen[r.Project]; dup {
+			continue
+		}
+		seen[r.Project] = struct{}{}
+		distinct = append(distinct, r.Project)
+	}
+	if len(distinct) < 2 {
+		return ""
+	}
+	shown := distinct
+	if len(shown) > 5 {
+		shown = shown[:5]
+	}
+	return fmt.Sprintf("matches span %d projects: %s — narrow with --this-project or read a specific ref.",
+		len(distinct), strings.Join(shown, ", "))
 }
 
 // renderScopeFooter prints the incompleteness footer when any scope was skipped
@@ -1143,7 +1180,7 @@ func trimNote(r *ReadResult) string {
 	}
 	next := r.NextCommand
 	if next == "" {
-		next = "rawclaw agent read " + sid8(r.SessionID) + ":" + " --more"
+		next = "rawclaw read " + sid8(r.SessionID) + ":" + " --more"
 	}
 	return "  [" + parts + " — " + next + "]"
 }
@@ -1183,11 +1220,13 @@ func renderRead(w io.Writer, r *ReadResult) {
 	}
 	if truncNote != "" {
 		// When truncated, the never-silent recovery note replaces the generic
-		// scroll hint (the note already names the literal next command).
+		// keep-reading hint (the note already names the literal next command).
 		fmt.Fprintln(w, truncNote)
-		return
+	} else {
+		fmt.Fprintf(w, "\n  keep reading:  rawclaw read %s --more   (or --around N to shift)\n", r.ReadRef)
 	}
-	fmt.Fprintf(w, "\n  scroll more:  rawclaw --scroll %s --around %d\n", sid8(r.SessionID), r.AnchorID)
+	// Freshness: the last footer line, always.
+	fmt.Fprintln(w, freshnessNote)
 }
 
 // renderOutline prints the human-readable outline output.
@@ -1213,249 +1252,7 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 	}
 }
 
-// ── CLI entry ────────────────────────────────────────────────────────────────
-
-// Run dispatches `search|read|outline` from args (the tokens AFTER `agent`),
-// writing human output to out / errors to errw. Returns the process exit code.
-// Uses a hand-rolled flag parse to stay dependency-free.
-func Run(args []string, out, errw io.Writer) int {
-	a := append([]string(nil), args...) // local copy; popFlag mutates it
-
-	wantJSON := popBool(&a, "--json")
-	thisProject := popBool(&a, "--this-project")
-	includeTools := popBool(&a, "--include-tools")
-	includeSubagents := popBool(&a, "--include-subagents")
-	noVector := popBool(&a, "--no-vector") // force keyword-only (skip vector fusion)
-	_ = popBool(&a, "--no-budget")         // deprecated no-op: no cap is now the default
-	limitS := popVal(&a, "--limit")
-	budgetS := popVal(&a, "--budget")
-	focus := popVal(&a, "--focus")
-	// Scope filters (#1): honor the SAME discovery flags the human path does.
-	// Popping their VALUES here is what stops them leaking into the FTS5 query as
-	// junk OR-terms (e.g. "assistant", "999999").
-	role := popVal(&a, "--role")
-	sort := popVal(&a, "--sort")
-	since := popVal(&a, "--since")
-	before := popVal(&a, "--before")
-	includePath := popVal(&a, "--include-path")
-	excludePath := popVal(&a, "--exclude-path")
-	minMessagesS := popVal(&a, "--min-messages")
-	// Expand-in-place ladder (#4): --more [level] widens the window on the SAME
-	// ref; --around N re-centers it N messages from the anchor. Both are pure
-	// follow-ups — never a re-search.
-	moreS := popVal(&a, "--more")
-	bareMore := popBool(&a, "--more")
-	aroundS := popVal(&a, "--around")
-
-	limit := DefaultSearchLimit
-	if limitS != "" {
-		// Ignore a parse error and keep the default (the only safe headless
-		// behavior for a bad --limit value).
-		if n, err := strconv.Atoi(limitS); err == nil {
-			limit = n
-		}
-	}
-	// Budget flip (#3): a read returns whole by DEFAULT (budget == nil). --budget
-	// is an opt-in ceiling, meaningful mainly across a multi-message window. A
-	// bare --budget with no number (left in args by popVal) falls back to the
-	// documented DefaultReadBudget.
-	bareBudget := popBool(&a, "--budget")
-	var budget *int
-	if budgetS != "" || bareBudget {
-		b := DefaultReadBudget
-		if n, err := strconv.Atoi(budgetS); err == nil {
-			b = n
-		}
-		budget = &b
-	}
-
-	// --more level: bare --more = level 1; --more N = level N. Resolve to a
-	// window radius via moreWindow (0 ⇒ default ±ReadWindow).
-	readWindow := 0
-	if moreS != "" {
-		if n, err := strconv.Atoi(moreS); err == nil {
-			readWindow = moreWindow(n)
-		} else {
-			readWindow = moreWindow(1)
-		}
-	} else if bareMore {
-		readWindow = moreWindow(1)
-	}
-	// --around N: re-center the window N messages from the anchor.
-	readAround := 0
-	if aroundS != "" {
-		if n, err := strconv.Atoi(aroundS); err == nil {
-			readAround = n
-		}
-	}
-	// --min-messages N: a bad value is ignored (kept at 0 = no minimum), the only
-	// safe headless behavior — matching how --limit treats a bad value.
-	minMessages := 0
-	if minMessagesS != "" {
-		if n, err := strconv.Atoi(minMessagesS); err == nil {
-			minMessages = n
-		}
-	}
-
-	// Enum flags: never-silent but graceful. A bad value would otherwise filter by a
-	// role that matches nothing (silent empty) or be ignored without a word — so note
-	// it and fall back to unset/default rather than hard-erroring an agent's run.
-	if role != "" && role != "user" && role != "assistant" {
-		fmt.Fprintf(errw, "note: ignoring --role %q (choose from user, assistant)\n", role)
-		role = ""
-	}
-	if sort != "" && sort != "newest" && sort != "oldest" {
-		fmt.Fprintf(errw, "note: ignoring --sort %q (choose from newest, oldest)\n", sort)
-		sort = ""
-	}
-
-	if len(a) == 0 {
-		fmt.Fprintln(errw, "usage: rawclaw agent <search|read|outline> [args]  (--json for machine output)")
-		return 1
-	}
-
-	verb := strings.ToLower(a[0])
-	a = a[1:]
-	positional := []string{}
-	for _, x := range a {
-		if !strings.HasPrefix(x, "--") {
-			positional = append(positional, x)
-		}
-	}
-
-	scope, scopeLabel, ok := buildScope(thisProject, errw)
-	if !ok {
-		return 1
-	}
-
-	switch verb {
-	case "search":
-		var embedder embed.Embedder
-		if !noVector {
-			embedder = adapters.GetEmbedder()
-		}
-		return runSearch(out, errw, positional, scope, scopeLabel, wantJSON, embedder,
-			SearchOpts{
-				Limit:            limit,
-				Role:             role,
-				Sort:             sort,
-				IncludeTools:     includeTools,
-				IncludeSubagents: includeSubagents,
-				Since:            since,
-				Before:           before,
-				MinMessages:      minMessages,
-				IncludePath:      includePath,
-				ExcludePath:      excludePath,
-			})
-	case "read":
-		return runRead(out, errw, positional, scope, wantJSON, ReadOpts{
-			Focus:        focus,
-			Budget:       budget,
-			IncludeTools: includeTools,
-			Window:       readWindow,
-			Around:       readAround,
-		})
-	case "outline":
-		return runOutline(out, errw, positional, scope, wantJSON, includeTools)
-	default:
-		fmt.Fprintf(errw, "unknown verb '%s' — expected search|read|outline\n", verb)
-		return 1
-	}
-}
-
-// buildScope resolves the active scope from --this-project. On --this-project
-// with no transcript history it prints the hint and reports ok=false (exit 1).
-func buildScope(thisProject bool, errw io.Writer) (scope []view.Scope, label string, ok bool) {
-	if thisProject {
-		sc := thisScope()
-		if sc == nil {
-			fmt.Fprintln(errw, "No transcript history for this directory. Try without --this-project.")
-			return nil, "", false
-		}
-		return sc, "on this project", true
-	}
-	return allScope(), "across all projects", true
-}
-
-func runSearch(
-	out, errw io.Writer,
-	positional []string,
-	scope []view.Scope,
-	scopeLabel string,
-	wantJSON bool,
-	embedder embed.Embedder,
-	opts SearchOpts,
-) int {
-	if len(positional) == 0 {
-		fmt.Fprintln(errw, "usage: rawclaw agent search <query>")
-		return 1
-	}
-	query := strings.Join(positional, " ")
-	env := Search(query, scope, opts, embedder)
-	if wantJSON {
-		if err := emit(out, env); err != nil {
-			fmt.Fprintf(errw, "error: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-	renderSearch(out, env, query, scopeLabel)
-	return 0
-}
-
-func runRead(
-	out, errw io.Writer,
-	positional []string,
-	scope []view.Scope,
-	wantJSON bool,
-	opts ReadOpts,
-) int {
-	if len(positional) == 0 {
-		fmt.Fprintln(errw, "usage: rawclaw agent read <session8:uuid8> [--focus TERM] [--budget N] [--more [level]] [--around N]")
-		return 1
-	}
-	result, err := Read(positional[0], scope, opts)
-	if err != nil {
-		fmt.Fprintf(errw, "error: %v\n", err)
-		return 1
-	}
-	if wantJSON {
-		if err := emit(out, result); err != nil {
-			fmt.Fprintf(errw, "error: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-	renderRead(out, result)
-	return 0
-}
-
-func runOutline(
-	out, errw io.Writer,
-	positional []string,
-	scope []view.Scope,
-	wantJSON bool,
-	includeTools bool,
-) int {
-	if len(positional) == 0 {
-		fmt.Fprintln(errw, "usage: rawclaw agent outline <session8>")
-		return 1
-	}
-	result, err := Outline(positional[0], scope, includeTools)
-	if err != nil {
-		fmt.Fprintf(errw, "error: %v\n", err)
-		return 1
-	}
-	if wantJSON {
-		if err := emit(out, result); err != nil {
-			fmt.Fprintf(errw, "error: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-	renderOutline(out, result)
-	return 0
-}
+// ── JSON emit ────────────────────────────────────────────────────────────────
 
 // emit writes obj as pretty JSON: two-space indent, no HTML escaping, and a
 // trailing newline.
@@ -1467,32 +1264,4 @@ func emit(w io.Writer, obj any) error {
 		return fmt.Errorf("encode json: %w", err)
 	}
 	return nil
-}
-
-// popBool removes flag from a if present and reports whether it was found.
-func popBool(a *[]string, flag string) bool {
-	for i, x := range *a {
-		if x == flag {
-			*a = append((*a)[:i], (*a)[i+1:]...)
-			return true
-		}
-	}
-	return false
-}
-
-// popVal removes flag and its following value from a, returning the value (or ""
-// if absent / no value follows).
-func popVal(a *[]string, flag string) string {
-	for i, x := range *a {
-		if x != flag {
-			continue
-		}
-		if i+1 < len(*a) {
-			val := (*a)[i+1]
-			*a = append((*a)[:i], (*a)[i+2:]...)
-			return val
-		}
-		return ""
-	}
-	return ""
 }

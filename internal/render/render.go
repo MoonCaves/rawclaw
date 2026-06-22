@@ -31,28 +31,6 @@ func fmtMsg(m view.ViewMsg) string {
 	return fmt.Sprintf("     %s [%s #%d] %s", star, m.Role, m.ID, m.Text)
 }
 
-// PrintScroll renders one scroll window.
-func PrintScroll(w io.Writer, s *view.ScrollResult) {
-	if s == nil || s.View == nil {
-		fmt.Fprintln(w, "Nothing to scroll (session or message id not found).")
-		return
-	}
-
-	v := s.View
-	fmt.Fprintf(
-		w,
-		"━━ %s · %s · around #%d (%d before / %d after) ━━\n",
-		sid8(s.SessionID),
-		s.Project,
-		s.Around,
-		v.MessagesBefore,
-		v.MessagesAfter,
-	)
-	for _, m := range v.Window {
-		fmt.Fprintln(w, fmtMsg(m))
-	}
-}
-
 // PrintBrowse renders the recent-sessions list for a project.
 func PrintBrowse(w io.Writer, rows []view.BrowseRow, project string) {
 	if len(rows) == 0 {

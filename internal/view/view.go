@@ -8,9 +8,7 @@ package view
 
 import (
 	"database/sql"
-	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -47,14 +45,6 @@ func nullableStr(s string) *string {
 		return nil
 	}
 	return &s
-}
-
-// ScrollResult is the keep-reading window around a message id.
-type ScrollResult struct {
-	Project   string        `json:"project"`
-	SessionID string        `json:"session_id"`
-	Around    int           `json:"around"`
-	View      *AnchoredView `json:"view"`
 }
 
 // BrowseRow is one recent-session preview row.
@@ -208,114 +198,6 @@ func sortCandidates(cands []retrieve.Anchor, mode string) {
 			return a.Rank < b.Rank
 		})
 	}
-}
-
-// ScrollCand is one session that matched a scroll prefix (for the git-style
-// ambiguity list).
-type ScrollCand struct {
-	SessionID string
-	Project   string
-}
-
-// ErrAmbiguousScroll is returned by Scroll when the session8 prefix matches more
-// than one session across scope — mirroring the agentproto/resume ambiguity
-// guard: list the candidates, resolve none.
-type ErrAmbiguousScroll struct {
-	Prefix     string
-	Candidates []ScrollCand
-}
-
-func (e *ErrAmbiguousScroll) Error() string {
-	ids := make([]string, 0, len(e.Candidates))
-	for _, c := range e.Candidates {
-		short := c.SessionID
-		if r := []rune(short); len(r) > 8 {
-			short = string(r[:8])
-		}
-		ids = append(ids, short+" ("+c.Project+")")
-	}
-	return fmt.Sprintf("ambiguous session prefix '%s' — %d matches: %s; give a longer prefix",
-		e.Prefix, len(e.Candidates), strings.Join(ids, ", "))
-}
-
-// Scroll returns the window around aroundID in whichever scoped project owns a
-// session whose id is prefixed by session8. It aggregates matches across all
-// scope and rejects an ambiguous prefix with *ErrAmbiguousScroll (mirroring the
-// agent read/resume guard). Returns (nil, nil) when nothing matches.
-func Scroll(scope []Scope, session8 string, aroundID, window int) (*ScrollResult, error) {
-	type cand struct {
-		sid     string
-		project string
-		dbp     string
-	}
-	// collect resolves the prefix against every scope. When excludeSub is set we
-	// drop agent sub-sessions (id "<parent>/agent-..."), because a session and
-	// its own sub-agent share the UUID prefix: without this, scrolling a bare
-	// session UUID false-trips the ambiguity guard against its own child
-	// transcript (the two rows are one logical session). We fall back to
-	// including sub-sessions only when nothing top-level matched, so scrolling a
-	// full "<parent>/agent-..." id still resolves.
-	collect := func(excludeSub bool) []cand {
-		q := `SELECT id FROM sessions WHERE id LIKE ? ORDER BY id LIMIT 2`
-		if excludeSub {
-			q = `SELECT id FROM sessions WHERE id LIKE ? AND is_subagent = 0 ORDER BY id LIMIT 2`
-		}
-		var cs []cand
-		for _, s := range scope {
-			dbp, _, _, err := index.EnsureIndexed(s.TDir, false)
-			if err != nil {
-				continue
-			}
-			con, err := index.ConnectRO(dbp)
-			if err != nil {
-				continue
-			}
-			rows, qErr := con.Query(q, session8+"%")
-			if qErr != nil {
-				con.Close()
-				continue
-			}
-			for rows.Next() {
-				var sid string
-				if err := rows.Scan(&sid); err != nil {
-					break
-				}
-				cs = append(cs, cand{sid: sid, project: s.Project, dbp: dbp})
-			}
-			rows.Close()
-			con.Close()
-		}
-		return cs
-	}
-
-	cands := collect(true)
-	if len(cands) == 0 {
-		cands = collect(false)
-	}
-
-	switch len(cands) {
-	case 0:
-		return nil, nil
-	case 1:
-		// fallthrough to build below
-	default:
-		out := make([]ScrollCand, 0, len(cands))
-		for _, c := range cands {
-			out = append(out, ScrollCand{SessionID: c.sid, Project: c.project})
-		}
-		return nil, &ErrAmbiguousScroll{Prefix: session8, Candidates: out}
-	}
-
-	c := cands[0]
-	con, err := index.ConnectRO(c.dbp)
-	if err != nil {
-		return nil, nil
-	}
-	defer con.Close()
-	av := BuildAnchoredView(con, c.sid, aroundID, AnchoredViewOpts{
-		Window: window, Bookend: 0, IncludeTools: true,
-	})
-	return &ScrollResult{Project: c.project, SessionID: c.sid, Around: aroundID, View: av}, nil
 }
 
 // Browse returns a project's most-recent top-level sessions (no query).

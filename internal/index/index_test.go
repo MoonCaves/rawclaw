@@ -620,7 +620,7 @@ func mustTime() time.Time { return time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC) }
 // (paths.ContainedJSONL -> sort.Strings) is lexicographically SORTED, so the same
 // corpus always produces the same msg_ids — reproducible across runs and machines.
 //
-// The id is a session-internal handle for --scroll/--around/agent read, not a
+// The id is a session-internal handle for read, not a
 // stable external contract: queries match on WHICH sessions/messages they hit,
 // not on exact anchor/ref id numbers. The sorted walk makes those internal ids
 // deterministic, and this test pins that invariant.

@@ -249,26 +249,3 @@ func TestSearchPrefixAndPath(t *testing.T) {
 		}
 	}
 }
-
-// TestRunSearchWiresScopeFlags: Run pops the scope-flag VALUES so they never land
-// in the positional query, and a non-matching --since yields a no-match (#1). The
-// regression guard is that the date value "2030-01-01" must not appear as a junk
-// query token.
-func TestRunSearchWiresScopeFlags(t *testing.T) {
-	proj := t.TempDir()
-	writeRichSession(t, proj, "a1b2c3d4eeee", "2026-06-01", []msgSpec{
-		{role: "user", uuid: "f0000000aaaa", content: "runscopematch content"},
-	})
-	cwd := chdir(t, proj)
-	defer cwd()
-	t.Setenv("HOME", t.TempDir())
-
-	var out, errw strings.Builder
-	code := Run([]string{"--this-project", "--json", "--since", "2030-01-01", "search", "runscopematch"}, &out, &errw)
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q", code, errw.String())
-	}
-	if strings.Contains(out.String(), "read_ref") {
-		t.Errorf("--since 2030-01-01 must filter out all results, got: %s", out.String())
-	}
-}

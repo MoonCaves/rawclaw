@@ -7,7 +7,6 @@ package cli
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,9 +38,6 @@ type Options struct {
 	Dir              string
 	ThisProject      bool
 	All              bool
-	Scroll           string
-	Around           int
-	Window           int
 	List             bool
 	Role             string
 	Sort             string
@@ -60,8 +56,6 @@ type Options struct {
 	MinMessages      int
 	DebugSearch      bool
 	Timeout          time.Duration
-
-	aroundSet bool // tracks whether --around was provided (unset means "no anchor")
 }
 
 // params builds the retrieve.SearchParams the search shapes read, carrying the
@@ -105,11 +99,11 @@ func (b BuildInfo) versionString() string {
 	return fmt.Sprintf("rawclaw %s (commit: %s, built: %s)", v, c, d)
 }
 
-// NewRootCmd builds the rawclaw cobra command tree (root + the `agent`, `archive`,
-// `delete`, and `version` subcommands). The root RunE dispatches the shape
-// (browse/discovery/brief/scroll/stats/resume/reindex-vectors) per the parsed
-// flags. The `agent` subcommand delegates to agentproto.Run. The build stamp
-// feeds `--version` (cobra-native) and the `version` subcommand.
+// NewRootCmd builds the rawclaw cobra command tree (root + the `read`, `outline`,
+// `archive`, `delete`, `upgrade`, and `version` subcommands). The root RunE
+// dispatches the shape (browse/discovery/stats/resume/reindex-vectors) per the
+// parsed flags. The build stamp feeds `--version` (cobra-native) and the
+// `version` subcommand.
 func NewRootCmd(build BuildInfo) *cobra.Command {
 	opts := &Options{}
 
@@ -126,8 +120,6 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 		// Positional args are the query terms; any count is valid (no query = browse).
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Record whether --around was explicitly provided.
-			opts.aroundSet = cmd.Flags().Changed("around")
 			// --this-desk: hidden backward-compat alias for --this-project.
 			if cmd.Flags().Changed("this-desk") {
 				opts.ThisProject = true
@@ -145,9 +137,6 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.Bool("this-desk", false, "") // hidden backward-compat alias for --this-project
 	_ = f.MarkHidden("this-desk")
 	f.BoolVar(&opts.All, "all", false, "(default) search every project")
-	f.StringVar(&opts.Scroll, "scroll", "", "keep-reading: window around --around in this session")
-	f.IntVar(&opts.Around, "around", 0, "message id to center --scroll on (see #ids in discovery output)")
-	f.IntVar(&opts.Window, "window", 5, "--scroll: messages each side of the anchor")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
 	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
 	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
@@ -165,6 +154,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.StringVar(&opts.ExcludePath, "exclude-path", "", "skip projects whose working dir matches this regex (e.g. /tmp, test)")
 	f.IntVar(&opts.MinMessages, "min-messages", 0, "only sessions with >= N messages (drops thin/bootstrap threads)")
 	f.BoolVar(&opts.DebugSearch, "debug-search", false, "explain WHY each hit ranked where it did (LLM-free scoring breakdown)")
+	_ = f.MarkHidden("debug-search")
 
 	// --timeout is PERSISTENT (every subcommand inherits it): rawclaw must be
 	// self-bounding so an agent never needs an external `timeout(1)`. Default 30s;
@@ -189,7 +179,6 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	// "{{.Name}} version", which would double the "rawclaw").
 	root.SetVersionTemplate("{{.Version}}\n")
 
-	root.AddCommand(newAgentCmd())
 	root.AddCommand(newReadCmd())
 	root.AddCommand(newOutlineCmd())
 	root.AddCommand(newArchiveCmd())
@@ -381,29 +370,8 @@ func newOutlineCmd() *cobra.Command {
 	return cmd
 }
 
-// newAgentCmd wires `rawclaw agent search|read|outline ...`. Flag parsing is
-// disabled so the protocol owns its own flags (--budget, --focus, --no-budget).
-// The exit code from agentproto.Run is surfaced via a typed error → os.Exit in
-// main.
-func newAgentCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:                "agent",
-		Short:              "LLM-agent protocol: search → narrow → bounded-read",
-		DisableFlagParsing: true,
-		SilenceUsage:       true,
-		SilenceErrors:      true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			code := agentproto.Run(args, cmd.OutOrStdout(), cmd.ErrOrStderr())
-			if code != 0 {
-				return ExitError{Code: code}
-			}
-			return nil
-		},
-	}
-}
-
 // runRoot dispatches the output shape in priority order:
-// list → reindex-vectors → resume → stats → scroll → browse → (search).
+// list → reindex-vectors → resume → stats → browse → (search).
 func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	out := cmd.OutOrStdout()
 
@@ -422,10 +390,6 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 
 	if o.Stats {
 		return runStats(out, o)
-	}
-
-	if o.Scroll != "" {
-		return runScroll(cmd, out, o)
 	}
 
 	if len(args) == 0 {
@@ -664,62 +628,6 @@ func runStatsFleet(w io.Writer, o *Options) error {
 	return nil
 }
 
-// runScroll renders a window of messages around an anchor in one session.
-func runScroll(cmd *cobra.Command, w io.Writer, o *Options) error {
-	if !o.aroundSet {
-		// --scroll needs an anchor message id; missing one is a usage error (exit 2).
-		return ExitError{Code: 2, Msg: "--scroll requires --around <message-id>"}
-	}
-	if !index.FTS5OK() {
-		fmt.Fprintln(w, "--scroll needs FTS5.")
-		return nil
-	}
-	var scope []view.Scope
-	if o.ThisProject {
-		sc, _, ok := thisScope(w, o)
-		if ok {
-			scope = sc
-		}
-	} else {
-		scope = allScope()
-	}
-	res, err := view.Scroll(scope, o.Scroll, o.Around, o.Window)
-	if err != nil {
-		var amb *view.ErrAmbiguousScroll
-		if errors.As(err, &amb) {
-			if o.JSON {
-				type cand struct {
-					SessionID string `json:"session_id"`
-					Project   string `json:"project"`
-				}
-				rows := make([]cand, 0, len(amb.Candidates))
-				for _, c := range amb.Candidates {
-					rows = append(rows, cand{c.SessionID, c.Project})
-				}
-				return EmitJSON(w, struct {
-					Ambiguous  bool   `json:"ambiguous"`
-					Prefix     string `json:"prefix"`
-					Candidates []cand `json:"candidates"`
-				}{true, amb.Prefix, rows})
-			}
-			fmt.Fprintf(w, "%d sessions match '%s' — narrow it:\n", len(amb.Candidates), amb.Prefix)
-			for _, c := range amb.Candidates {
-				fmt.Fprintf(w, "  %s  (%s)\n", c.SessionID, c.Project)
-			}
-			return nil
-		}
-		return err
-	}
-	if o.JSON {
-		if res == nil {
-			return EmitJSON(w, struct{}{}) // no result → emit an empty object
-		}
-		return EmitJSON(w, res)
-	}
-	render.PrintScroll(w, res)
-	return nil
-}
-
 // runBrowse handles the no-query case: list recent sessions for this project.
 func runBrowse(w io.Writer, o *Options) error {
 	sc, td, ok := thisScope(w, o)
@@ -775,8 +683,8 @@ func runSearch(w io.Writer, o *Options, args []string) error {
 		return runDebugSearch(w, o, q, p, ppred)
 	}
 
-	// DEFAULT (agent envelope) — a bare `rawclaw "query"` IS the agent search:
-	// ranked refs + never-silent envelope, no `agent` subcommand to discover.
+	// DEFAULT (agent envelope) — a bare `rawclaw "query"` IS the search:
+	// ranked refs + never-silent envelope. Search is the default verb.
 	// Org-wide unless --this-project. Path include/exclude is applied inside
 	// agentproto.Search (via opts), so the unfiltered this/all scope is passed here.
 	var scope []view.Scope
@@ -860,7 +768,7 @@ func runDebugSearch(w io.Writer, o *Options, q string, p retrieve.SearchParams, 
 
 // ── flat printers + JSON emitters ──
 
-// PrintResults renders flat one-line hits (the --brief / fallback shape).
+// PrintResults renders flat one-line hits (the fallback shape).
 // nSessions < 0 means "unknown" (rendered as '?').
 func PrintResults(w io.Writer, res []retrieve.Hit, nSessions int) {
 	if len(res) == 0 {

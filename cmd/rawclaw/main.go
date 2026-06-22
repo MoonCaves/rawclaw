@@ -1,4 +1,4 @@
-// Command rawclaw is the lightweight, headless, agent-facing search engine over
+// Command rawclaw is the lightweight, headless search engine over
 // the Claude Code transcript record (a single static pure-Go binary).
 //
 // Thin entry point: build the cobra command tree and execute it. All logic lives

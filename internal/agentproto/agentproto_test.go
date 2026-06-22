@@ -307,46 +307,6 @@ func TestSortCandidates(t *testing.T) {
 	})
 }
 
-func TestPopBool(t *testing.T) {
-	a := []string{"x", "--json", "y"}
-	if !popBool(&a, "--json") {
-		t.Fatal("popBool should find --json")
-	}
-	if strings.Join(a, " ") != "x y" {
-		t.Fatalf("after pop: %v", a)
-	}
-	if popBool(&a, "--missing") {
-		t.Fatal("popBool should not find --missing")
-	}
-}
-
-func TestPopVal(t *testing.T) {
-	tests := []struct {
-		name     string
-		args     []string
-		flag     string
-		wantVal  string
-		wantRest string
-	}{
-		{name: "value present", args: []string{"--limit", "10", "rest"}, flag: "--limit", wantVal: "10", wantRest: "rest"},
-		{name: "flag absent", args: []string{"a", "b"}, flag: "--limit", wantVal: "", wantRest: "a b"},
-		// A trailing valueless flag is left in place (no following arg to consume).
-		{name: "flag at end no value", args: []string{"a", "--budget"}, flag: "--budget", wantVal: "", wantRest: "a --budget"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			a := append([]string(nil), tt.args...)
-			got := popVal(&a, tt.flag)
-			if got != tt.wantVal {
-				t.Errorf("popVal val = %q, want %q", got, tt.wantVal)
-			}
-			if strings.Join(a, " ") != tt.wantRest {
-				t.Errorf("popVal rest = %q, want %q", strings.Join(a, " "), tt.wantRest)
-			}
-		})
-	}
-}
-
 func TestEmitJSON(t *testing.T) {
 	var buf bytes.Buffer
 	if err := emit(&buf, []SearchRef{{Project: "p", SessionID: "s", ISO: "2026", Snippet: "café <b>", ReadRef: "s:1"}}); err != nil {
@@ -427,7 +387,7 @@ func TestRenderRead(t *testing.T) {
 		Truncated:    true,
 		TrimmedChars: 1800,
 		TrimmedMsgs:  2,
-		NextCommand:  "rawclaw agent read a1b2c3d4:9f3e1c20 --more",
+		NextCommand:  "rawclaw read a1b2c3d4:9f3e1c20 --more",
 		AnchoredView: &view.AnchoredView{
 			BookendStart:   []view.ViewMsg{{ID: 1, Role: "user", Text: "start"}},
 			Window:         []view.ViewMsg{{ID: 7, Role: "user", Text: "anchored", Anchor: true}, {ID: 8, Role: "assistant", Text: "after"}},
@@ -451,7 +411,7 @@ func TestRenderRead(t *testing.T) {
 		"       [assistant #99] end\n",
 		// Never-silent trim: the note carries the omitted counts AND the literal
 		// recovery command (no bare "…[truncated]", no dead --no-budget hint).
-		"  [+1.8k chars · 2 msgs hidden — rawclaw agent read a1b2c3d4:9f3e1c20 --more]\n",
+		"  [+1.8k chars · 2 msgs hidden — rawclaw read a1b2c3d4:9f3e1c20 --more]\n",
 	}
 	for _, c := range checks {
 		if !strings.Contains(out, c) {
@@ -541,65 +501,6 @@ func TestRenderOutline(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestRunNoArgs(t *testing.T) {
-	var out, errw bytes.Buffer
-	code := Run([]string{}, &out, &errw)
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1", code)
-	}
-	if !strings.Contains(errw.String(), "usage: rawclaw agent") {
-		t.Fatalf("expected usage on stderr, got %q", errw.String())
-	}
-}
-
-func TestRunUnknownVerb(t *testing.T) {
-	var out, errw bytes.Buffer
-	code := Run([]string{"frobnicate"}, &out, &errw)
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1", code)
-	}
-	if !strings.Contains(errw.String(), "unknown verb 'frobnicate'") {
-		t.Fatalf("expected unknown-verb error, got %q", errw.String())
-	}
-}
-
-func TestRunVerbMissingPositional(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "search no query", args: []string{"search", "--json"}, want: "usage: rawclaw agent search <query>"},
-		{name: "read no ref", args: []string{"read"}, want: "usage: rawclaw agent read <session8:uuid8>"},
-		{name: "outline no id", args: []string{"outline"}, want: "usage: rawclaw agent outline <session8>"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var out, errw bytes.Buffer
-			code := Run(tt.args, &out, &errw)
-			if code != 1 {
-				t.Errorf("exit code = %d, want 1", code)
-			}
-			if !strings.Contains(errw.String(), tt.want) {
-				t.Errorf("stderr = %q, want substring %q", errw.String(), tt.want)
-			}
-		})
-	}
-}
-
-func TestRunReadBadRef(t *testing.T) {
-	// A malformed ref fails in resolveRef before any DB access — exercises the
-	// read error path end-to-end through Run.
-	var out, errw bytes.Buffer
-	code := Run([]string{"read", "not-a-ref"}, &out, &errw)
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1", code)
-	}
-	if !strings.Contains(errw.String(), "bad ref") {
-		t.Fatalf("stderr = %q, want bad ref error", errw.String())
 	}
 }
 
@@ -857,47 +758,6 @@ func TestReadMoreIssuesNoSearch(t *testing.T) {
 	}
 }
 
-func TestTrimNoteEmitsNextCommand(t *testing.T) {
-	proj := t.TempDir()
-	a := strings.Repeat("a", 100)
-	b := strings.Repeat("b", 100)
-	c := strings.Repeat("c", 100)
-	writeMultiSession(t, proj, "a1b2c3d4eeee", [][2]string{
-		{"aaaa11110000", a}, {"bbbb22220000", b}, {"cccc33330000", c},
-	})
-	scope := scopeFor(t, proj)
-
-	cap := 50
-	res, err := Read("a1b2c3d4:aaaa1111", scope, ReadOpts{Budget: &cap})
-	if err != nil {
-		t.Fatalf("Read: %v", err)
-	}
-	if !res.Truncated {
-		t.Fatal("expected truncation with budget 50 over a multi-message window")
-	}
-	// The machine flag carries the literal next command on the SAME ref + --more.
-	wantCmd := "rawclaw agent read a1b2c3d4:aaaa1111 --more"
-	if res.NextCommand != wantCmd {
-		t.Errorf("NextCommand = %q, want %q", res.NextCommand, wantCmd)
-	}
-	if res.TrimmedChars <= 0 {
-		t.Errorf("TrimmedChars should be > 0 when truncated, got %d", res.TrimmedChars)
-	}
-
-	// JSON output carries both truncated:true and next_command verbatim.
-	var buf bytes.Buffer
-	if err := emit(&buf, res); err != nil {
-		t.Fatalf("emit: %v", err)
-	}
-	js := buf.String()
-	if !strings.Contains(js, `"truncated": true`) {
-		t.Errorf("JSON missing truncated:true\n%s", js)
-	}
-	if !strings.Contains(js, `"next_command": "`+wantCmd+`"`) {
-		t.Errorf("JSON missing next_command\n%s", js)
-	}
-}
-
 func TestScopeReportAllSearched(t *testing.T) {
 	proj := t.TempDir()
 	writeSession(t, proj, "a1b2c3d4eeee", "f0000000aaaa", "searchable deploy content")
@@ -949,22 +809,5 @@ func TestScopeReportSkipsLocked(t *testing.T) {
 	st := env.Scopes[0].Status
 	if st != ScopeStaleFallback && st != ScopeSkippedError {
 		t.Errorf("locked-scope status = %q, want stale_fallback or skipped_error", st)
-	}
-}
-
-func TestRunThisProjectNoHistory(t *testing.T) {
-	// In a temp cwd with no transcript history, --this-project should print the
-	// hint and exit 1 before touching any verb.
-	dir := t.TempDir()
-	cwd := chdir(t, dir)
-	defer cwd()
-
-	var out, errw bytes.Buffer
-	code := Run([]string{"--this-project", "search", "q"}, &out, &errw)
-	if code != 1 {
-		t.Fatalf("exit code = %d, want 1", code)
-	}
-	if !strings.Contains(errw.String(), "No transcript history for this directory") {
-		t.Fatalf("stderr = %q, want no-history hint", errw.String())
 	}
 }
