@@ -690,7 +690,10 @@ func runSearch(w io.Writer, o *Options, args []string) error {
 		return runBrief(w, o, q, p, ppred)
 	}
 
-	// DISCOVERY shape (default) — bookends + window; org-wide unless --this-project.
+	// DEFAULT (agent envelope) — a bare `rawclaw "query"` IS the agent search:
+	// ranked refs + never-silent envelope, no `agent` subcommand to discover.
+	// Org-wide unless --this-project. Path include/exclude is applied inside
+	// agentproto.Search (via opts), so the unfiltered this/all scope is passed here.
 	var scope []view.Scope
 	label := ""
 	if o.ThisProject {
@@ -704,25 +707,22 @@ func runSearch(w io.Writer, o *Options, args []string) error {
 		scope = allScope()
 		label = "across all projects"
 	}
-	if ppred != nil {
-		filtered := scope[:0:0]
-		for _, s := range scope {
-			if ppred(paths.ProjectCWD(s.TDir)) {
-				filtered = append(filtered, s)
-			}
-		}
-		scope = filtered
-	}
 	var emb embed.Embedder
 	if !o.NoVector {
 		emb = adapters.GetEmbedder()
 	}
-	res := view.Discovery(scope, q, o.Limit, p, emb, "")
-	if o.JSON {
-		return EmitJSON(w, res)
-	}
-	render.PrintDiscovery(w, res, label)
-	return nil
+	return agentproto.SearchAndRender(w, q, scope, agentproto.SearchOpts{
+		Limit:            o.Limit,
+		Role:             o.Role,
+		Sort:             o.Sort,
+		IncludeTools:     o.IncludeTools,
+		IncludeSubagents: o.IncludeSubagents,
+		Since:            o.Since,
+		Before:           o.Before,
+		MinMessages:      o.MinMessages,
+		IncludePath:      o.IncludePath,
+		ExcludePath:      o.ExcludePath,
+	}, emb, label, o.JSON)
 }
 
 // runBrief handles the BRIEF shape: this-project search vs cross-project search.

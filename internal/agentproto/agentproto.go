@@ -406,6 +406,28 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	}
 }
 
+// SearchAndRender runs Search and writes the result to w: the agent envelope as
+// text, or as JSON when wantJSON. This is the exported entry the default CLI path
+// calls so a bare `rawclaw "query"` IS the agent search (no `agent` subcommand to
+// discover). scopeLabel is the human-facing "across all projects" / "on <project>"
+// suffix in the text header.
+func SearchAndRender(
+	w io.Writer,
+	query string,
+	scope []view.Scope,
+	opts SearchOpts,
+	embedder embed.Embedder,
+	scopeLabel string,
+	wantJSON bool,
+) error {
+	env := Search(query, scope, opts, embedder)
+	if wantJSON {
+		return emit(w, env)
+	}
+	renderSearch(w, env, query, scopeLabel)
+	return nil
+}
+
 // filterScopeByPath keeps only the scopes whose project working dir satisfies the
 // include/exclude path predicate — the same predicate the default discovery path
 // applies, evaluated against paths.ProjectCWD(scope.TDir).
