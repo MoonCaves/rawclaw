@@ -31,45 +31,6 @@ func fmtMsg(m view.ViewMsg) string {
 	return fmt.Sprintf("     %s [%s #%d] %s", star, m.Role, m.ID, m.Text)
 }
 
-// PrintDiscovery renders discovery results (goal→match→resolution per hit).
-// scopeLabel is e.g. "across all projects".
-func PrintDiscovery(w io.Writer, results []view.DiscoveryResult, scopeLabel string) {
-	if len(results) == 0 {
-		fmt.Fprintln(w, "No matches. (Default = top-level human text; add --include-tools / --include-subagents to widen, "+
-			"or rephrase — a single distinctive term beats a sentence.)")
-		return
-	}
-
-	fmt.Fprintf(w, "%d session(s) %s — goal → match → resolution:\n\n", len(results), scopeLabel)
-
-	for _, r := range results {
-		v := r.View
-
-		iso := r.ISO
-		if iso == "" {
-			iso = "?"
-		}
-		fmt.Fprintf(w, "━━ %s · %s · %s ━━\n", iso, sid8(r.SessionID), r.Project)
-
-		for _, m := range v.BookendStart {
-			fmt.Fprintln(w, fmtMsg(m))
-		}
-		fmt.Fprintf(
-			w,
-			"      … (±window · %d before / %d after the match) …\n",
-			v.MessagesBefore,
-			v.MessagesAfter,
-		)
-		for _, m := range v.Window {
-			fmt.Fprintln(w, fmtMsg(m))
-		}
-		for _, m := range v.BookendEnd {
-			fmt.Fprintln(w, fmtMsg(m))
-		}
-		fmt.Fprintf(w, "      ↪ keep reading:  --scroll %s --around <#id>\n\n", sid8(r.SessionID))
-	}
-}
-
 // PrintScroll renders one scroll window.
 func PrintScroll(w io.Writer, s *view.ScrollResult) {
 	if s == nil || s.View == nil {

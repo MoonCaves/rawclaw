@@ -12,11 +12,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
-	"github.com/MoonCaves/rawclaw/internal/semantic"
 )
 
 // dispCap is the default display-text cap used by anchored views and discovery.
@@ -49,15 +47,6 @@ func nullableStr(s string) *string {
 		return nil
 	}
 	return &s
-}
-
-// DiscoveryResult is one deduped discovery hit (a session arc).
-type DiscoveryResult struct {
-	Project   string        `json:"project"`
-	SessionID string        `json:"session_id"`
-	Parent    *string       `json:"parent"`
-	ISO       string        `json:"iso"`
-	View      *AnchoredView `json:"view"`
 }
 
 // ScrollResult is the keep-reading window around a message id.
@@ -192,93 +181,6 @@ func readMsgs(con *sql.DB, query string, args ...any) ([]rawMsg, error) {
 		out = append(out, m)
 	}
 	return out, rows.Err()
-}
-
-// Discovery is org-wide (or scoped) recall, lineage-deduped to top sessions,
-// each enriched with bookends+window. With a non-nil `embedder`, keyword anchors
-// are RRF-fused with vector-KNN anchors before dedup; with nil it is
-// byte-identical to keyword-only. `excludeRoot` ("" = none) drops a session
-// lineage.
-func Discovery(
-	scope []Scope,
-	query string,
-	limit int,
-	p retrieve.SearchParams,
-	embedder embed.Embedder,
-	excludeRoot string,
-) []DiscoveryResult {
-	var qvec []float64
-	if embedder != nil {
-		qvec = embedder.Embed(query)
-	}
-
-	fetch := limit * 8
-	if fetch < 30 {
-		fetch = 30
-	}
-
-	var cands []retrieve.Anchor
-	for _, s := range scope {
-		dbp, _, _, err := index.EnsureIndexed(s.TDir, false)
-		if err != nil {
-			continue
-		}
-		con, err := index.ConnectRO(dbp)
-		if err != nil {
-			continue
-		}
-		rows := retrieve.MatchAnchors(con, query, fetch, p)
-		// Fuse only in relevance mode; an explicit --sort stays pure.
-		if qvec != nil && p.Sort == "" {
-			rows = semantic.Fuse(con, rows, qvec, fetch, p.IncludeSubagents)
-		}
-		for i := range rows {
-			rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
-			rows[i].Project = s.Project
-			rows[i].DBP = dbp
-			rows[i].Rank = i
-			cands = append(cands, rows[i])
-		}
-		con.Close()
-	}
-
-	sortCandidates(cands, p.Sort)
-
-	seen := make(map[[2]string]struct{})
-	results := make([]DiscoveryResult, 0) // not nil: empty discovery must marshal to [] not null
-	for _, r := range cands {
-		if excludeRoot != "" && r.Root == excludeRoot {
-			continue
-		}
-		key := [2]string{r.Project, r.Root}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-
-		con, err := index.ConnectRO(r.DBP)
-		if err != nil {
-			continue
-		}
-		av := BuildAnchoredView(con, r.SessionID, r.ID, AnchoredViewOpts{
-			Window: 5, Bookend: 3, IncludeTools: p.IncludeTools,
-		})
-		con.Close()
-		if av == nil {
-			continue
-		}
-		results = append(results, DiscoveryResult{
-			Project:   r.Project,
-			SessionID: r.SessionID,
-			Parent:    nullableStr(r.Parent),
-			ISO:       r.ISO,
-			View:      av,
-		})
-		if len(results) >= limit {
-			break
-		}
-	}
-	return results
 }
 
 // sortCandidates orders discovery candidates per the requested sort mode.

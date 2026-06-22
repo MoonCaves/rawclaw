@@ -41,7 +41,7 @@ func TestNewRootCmd(t *testing.T) {
 
 	// Every flag must be wired (local flags on root).
 	wantFlags := []string{
-		"limit", "dir", "this-project", "all", "brief", "scroll", "around",
+		"limit", "dir", "this-project", "all", "scroll", "around",
 		"window", "list", "role", "sort", "include-tools", "include-subagents",
 		"reindex", "json", "resume", "stats", "since", "before", "no-vector",
 		"reindex-vectors", "include-path", "exclude-path", "min-messages",
@@ -120,47 +120,6 @@ func TestPrintResults(t *testing.T) {
 				if !strings.Contains(got, sub) {
 					t.Errorf("PrintResults missing %q in %q", sub, got)
 				}
-			}
-		})
-	}
-}
-
-// TestPrintAll checks the cross-project result rendering byte-for-byte.
-func TestPrintAll(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		res       []retrieve.AllHit
-		nProjects int
-		exact     string
-	}{
-		{
-			name:      "empty",
-			res:       nil,
-			nProjects: 3,
-			exact: "No matches across any of 3 projects. (Default = top-level human text; " +
-				"add --include-tools / --include-subagents to widen, or rephrase: keyword > full sentence.)\n",
-		},
-		{
-			name: "two projects, second has more hits + empty iso",
-			res: []retrieve.AllHit{
-				{Hit: retrieve.Hit{ISO: "2026-06-18", SessionID: "sid12345678", Role: "user", Snippet: "snip"}, Project: "proj", Hits: 1},
-				{Hit: retrieve.Hit{ISO: "", SessionID: "sid2", Role: "assistant", Parent: "p", Snippet: "s2"}, Project: "proj2", Hits: 4},
-			},
-			nProjects: 3,
-			exact: "2 project(s) with matches (most-recent hit each; drill in with --dir <working-dir>):\n\n" +
-				"[2026-06-18 · proj · sid12345 · user] …snip…\n\n" +
-				"[? · proj2 · sid2 · assistant (+3 more)] …s2…\n\n",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			PrintAll(&buf, tc.res, tc.nProjects)
-			if got := buf.String(); got != tc.exact {
-				t.Errorf("PrintAll\n got: %q\nwant: %q", got, tc.exact)
 			}
 		})
 	}

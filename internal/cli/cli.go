@@ -38,7 +38,6 @@ type Options struct {
 	Dir              string
 	ThisProject      bool
 	All              bool
-	Brief            bool
 	Scroll           string
 	Around           int
 	Window           int
@@ -145,7 +144,6 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.Bool("this-desk", false, "") // hidden backward-compat alias for --this-project
 	_ = f.MarkHidden("this-desk")
 	f.BoolVar(&opts.All, "all", false, "(default) search every project")
-	f.BoolVar(&opts.Brief, "brief", false, "flat one-line hits (no bookends/window) — quick scan")
 	f.StringVar(&opts.Scroll, "scroll", "", "keep-reading: window around --around in this session")
 	f.IntVar(&opts.Around, "around", 0, "message id to center --scroll on (see #ids in discovery output)")
 	f.IntVar(&opts.Window, "window", 5, "--scroll: messages each side of the anchor")
@@ -685,11 +683,6 @@ func runSearch(w io.Writer, o *Options, args []string) error {
 		return runDebugSearch(w, o, q, p, ppred)
 	}
 
-	// BRIEF — flat one-line hits.
-	if o.Brief {
-		return runBrief(w, o, q, p, ppred)
-	}
-
 	// DEFAULT (agent envelope) — a bare `rawclaw "query"` IS the agent search:
 	// ranked refs + never-silent envelope, no `agent` subcommand to discover.
 	// Org-wide unless --this-project. Path include/exclude is applied inside
@@ -723,35 +716,6 @@ func runSearch(w io.Writer, o *Options, args []string) error {
 		IncludePath:      o.IncludePath,
 		ExcludePath:      o.ExcludePath,
 	}, emb, label, o.JSON)
-}
-
-// runBrief handles the BRIEF shape: this-project search vs cross-project search.
-func runBrief(w io.Writer, o *Options, q string, p retrieve.SearchParams, ppred func(cwd string) bool) error {
-	if o.ThisProject {
-		sc, td, ok := thisScope(w, o)
-		if !ok {
-			return nil
-		}
-		_ = sc
-		dbp, _, _, err := index.EnsureIndexed(td, o.Reindex)
-		if err != nil {
-			return fmt.Errorf("brief ensure-indexed: %w", err)
-		}
-		res := retrieve.Search(dbp, q, o.Limit, p)
-		if o.JSON {
-			return EmitJSON(w, rowsToJSON(res))
-		}
-		// Top-level count only — "this project's sessions" excludes subagent threads.
-		PrintResults(w, res, index.CountTopLevelSessions(dbp))
-		return nil
-	}
-
-	res := retrieve.SearchAll(q, o.Limit, p, ppred)
-	if o.JSON {
-		return EmitJSON(w, allToJSON(res))
-	}
-	PrintAll(w, res, len(paths.AllProjectDirs()))
-	return nil
 }
 
 // runDebugSearch handles the --debug-search shape: a read-only LLM-free scoring
@@ -827,23 +791,6 @@ func PrintResults(w io.Writer, res []retrieve.Hit, nSessions int) {
 	}
 }
 
-// PrintAll renders cross-project flat hits (one row per matching project).
-func PrintAll(w io.Writer, res []retrieve.AllHit, nProjectsTotal int) {
-	if len(res) == 0 {
-		fmt.Fprintf(w, "No matches across any of %d projects. (Default = top-level human text; "+
-			"add --include-tools / --include-subagents to widen, or rephrase: keyword > full sentence.)\n", nProjectsTotal)
-		return
-	}
-	fmt.Fprintf(w, "%d project(s) with matches (most-recent hit each; drill in with --dir <working-dir>):\n\n", len(res))
-	for _, r := range res {
-		more := ""
-		if r.Hits > 1 {
-			more = fmt.Sprintf(" (+%d more)", r.Hits-1)
-		}
-		fmt.Fprintf(w, "[%s · %s · %s · %s%s] …%s…\n\n", orQ(r.ISO), r.Project, lastSlice8(r.SessionID), r.Role, more, r.Snippet)
-	}
-}
-
 // ListProjects prints the searchable-projects table (with session counts).
 func ListProjects(w io.Writer) {
 	root := paths.ProjectsRoot()
@@ -910,26 +857,6 @@ func rowsToJSON(res []retrieve.Hit) []rowJSON {
 	out := make([]rowJSON, 0, len(res))
 	for _, r := range res {
 		out = append(out, rowJSON{r.ISO, r.SessionID, r.Role, r.IsSubagent, nullableStr(r.Parent), r.Snippet})
-	}
-	return out
-}
-
-// allRowJSON / allToJSON shape the cross-project cross-project hits for JSON output.
-type allRowJSON struct {
-	ISO        string  `json:"iso"`
-	SessionID  string  `json:"session_id"`
-	Role       string  `json:"role"`
-	IsSubagent bool    `json:"is_subagent"`
-	Parent     *string `json:"parent"`
-	Snippet    string  `json:"snippet"`
-	Project    string  `json:"project"`
-	Hits       int     `json:"hits"`
-}
-
-func allToJSON(res []retrieve.AllHit) []allRowJSON {
-	out := make([]allRowJSON, 0, len(res))
-	for _, r := range res {
-		out = append(out, allRowJSON{r.ISO, r.SessionID, r.Role, r.IsSubagent, nullableStr(r.Parent), r.Snippet, r.Project, r.Hits})
 	}
 	return out
 }
