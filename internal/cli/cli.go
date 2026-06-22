@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -189,6 +190,8 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root.SetVersionTemplate("{{.Version}}\n")
 
 	root.AddCommand(newAgentCmd())
+	root.AddCommand(newReadCmd())
+	root.AddCommand(newOutlineCmd())
 	root.AddCommand(newArchiveCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newUpgradeCmd(build))
@@ -287,6 +290,95 @@ func newVersionCmd(build BuildInfo) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// verbScope resolves the scope for the read/outline verbs: nil (all projects,
+// agentproto's default) unless --this-project, in which case the single cwd/--dir
+// project — or an explicit empty scope when this-project is asked but the dir has
+// no transcript history (so it resolves nothing rather than silently going wide).
+func verbScope(thisProject bool, dir string) []view.Scope {
+	if !thisProject {
+		return nil
+	}
+	td := paths.FindTranscriptDir(dir)
+	if td == "" || !isDir(td) {
+		return []view.Scope{}
+	}
+	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}
+}
+
+// newReadCmd wires the top-level `rawclaw read <session8:uuid8>` verb: a bounded,
+// expand-in-place excerpt around a search ref. The agent-native read path,
+// promoted out of the `agent` subcommand into its own verb. Thin wrapper over
+// agentproto.Read — flag parsing only, no business logic.
+func newReadCmd() *cobra.Command {
+	var (
+		focus        string
+		budget       int
+		moreLevel    int
+		around       int
+		includeTools bool
+		thisProject  bool
+		dir          string
+		jsonOut      bool
+	)
+	cmd := &cobra.Command{
+		Use:           "read <session8:uuid8>",
+		Short:         "Read a bounded excerpt around a search ref (--more to widen)",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// --budget omitted = no cap (nil); bare --budget = the default ceiling
+			// (NoOptDefVal); --budget N = N. Detect "omitted" via Changed.
+			var b *int
+			if cmd.Flags().Changed("budget") {
+				v := budget
+				b = &v
+			}
+			return agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], verbScope(thisProject, dir),
+				focus, b, includeTools, moreLevel, around, jsonOut)
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&focus, "focus", "", "highlight the first match of this term in the window")
+	f.IntVar(&budget, "budget", agentproto.DefaultReadBudget, "cap the excerpt to N chars (omit for no cap)")
+	f.Lookup("budget").NoOptDefVal = strconv.Itoa(agentproto.DefaultReadBudget)
+	f.IntVar(&moreLevel, "more", 0, "widen the window (bare = 1 level; N = N levels)")
+	f.Lookup("more").NoOptDefVal = "1"
+	f.IntVar(&around, "around", 0, "re-center the window N messages from the anchor")
+	f.BoolVar(&includeTools, "include-tools", false, "include tool calls in the excerpt")
+	f.BoolVar(&thisProject, "this-project", false, "limit to this project (default: all projects)")
+	f.StringVar(&dir, "dir", cwd(), "project working dir for --this-project")
+	f.BoolVar(&jsonOut, "json", false, "machine-readable JSON output")
+	return cmd
+}
+
+// newOutlineCmd wires the top-level `rawclaw outline <session8>` verb: a session's
+// goal→resolution arc. Thin wrapper over agentproto.Outline.
+func newOutlineCmd() *cobra.Command {
+	var (
+		includeTools bool
+		thisProject  bool
+		dir          string
+		jsonOut      bool
+	)
+	cmd := &cobra.Command{
+		Use:           "outline <session8>",
+		Short:         "Show a session's goal→resolution arc",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0], verbScope(thisProject, dir), includeTools, jsonOut)
+		},
+	}
+	f := cmd.Flags()
+	f.BoolVar(&includeTools, "include-tools", false, "include tool calls in the arc")
+	f.BoolVar(&thisProject, "this-project", false, "limit to this project (default: all projects)")
+	f.StringVar(&dir, "dir", cwd(), "project working dir for --this-project")
+	f.BoolVar(&jsonOut, "json", false, "machine-readable JSON output")
+	return cmd
 }
 
 // newAgentCmd wires `rawclaw agent search|read|outline ...`. Flag parsing is

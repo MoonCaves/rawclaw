@@ -428,6 +428,56 @@ func SearchAndRender(
 	return nil
 }
 
+// ReadAndRender resolves ref within scope and writes the bounded excerpt to w
+// (JSON when wantJSON). The exported entry the top-level `read` subcommand calls,
+// so reading is a top-level verb (`rawclaw read <ref>`) rather than `agent read`.
+// moreLevel 0 = the default window; >0 widens it via the expand-in-place ladder.
+func ReadAndRender(
+	w io.Writer,
+	ref string,
+	scope []view.Scope,
+	focus string,
+	budget *int,
+	includeTools bool,
+	moreLevel, around int,
+	wantJSON bool,
+) error {
+	window := 0
+	if moreLevel > 0 {
+		window = moreWindow(moreLevel)
+	}
+	result, err := Read(ref, scope, ReadOpts{
+		Focus:        focus,
+		Budget:       budget,
+		IncludeTools: includeTools,
+		Window:       window,
+		Around:       around,
+	})
+	if err != nil {
+		return err
+	}
+	if wantJSON {
+		return emit(w, result)
+	}
+	renderRead(w, result)
+	return nil
+}
+
+// OutlineAndRender resolves session8 within scope and writes its goal→resolution
+// arc to w (JSON when wantJSON). The exported entry the top-level `outline`
+// subcommand calls.
+func OutlineAndRender(w io.Writer, session8 string, scope []view.Scope, includeTools, wantJSON bool) error {
+	result, err := Outline(session8, scope, includeTools)
+	if err != nil {
+		return err
+	}
+	if wantJSON {
+		return emit(w, result)
+	}
+	renderOutline(w, result)
+	return nil
+}
+
 // filterScopeByPath keeps only the scopes whose project working dir satisfies the
 // include/exclude path predicate — the same predicate the default discovery path
 // applies, evaluated against paths.ProjectCWD(scope.TDir).
