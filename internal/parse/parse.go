@@ -27,7 +27,7 @@ const NoHumanMarker = "[tool-only match — use --include-tools to see it]"
 // byte-based, so multi-byte code points are never split.
 func capRunes(s string, n int) string {
 	if n < 0 {
-		n = 0
+		return s // negative = no cap (used to render a chosen/anchored message whole)
 	}
 	if len(s) <= n {
 		// Fast path: byte length already within the rune cap.

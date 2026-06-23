@@ -114,7 +114,14 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 		if !opts.IncludeTools && m.Role != "user" && m.Role != "assistant" && !isAnchor {
 			continue
 		}
-		text := parse.Disp(m.Content, opts.IncludeTools, dispCap)
+		// The anchored message is the one the agent chose to read — render it WHOLE
+		// (cap -1 = no truncation). Neighbors stay snippets (dispCap) for context
+		// without dumping the window. --more widens; --budget caps if needed.
+		cap := dispCap
+		if isAnchor {
+			cap = -1
+		}
+		text := parse.Disp(m.Content, opts.IncludeTools, cap)
 		if text == "" && !isAnchor { // skip empty turns — keep the anchor
 			continue
 		}
