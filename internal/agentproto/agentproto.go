@@ -404,11 +404,17 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	// ranks by token match, not importance. Steer to a distinctive token + scoping,
 	// and tell the agent NOT to skip on the snippet alone (the snippet hides which
 	// hit actually matters).
+	// Drowning steer: too-broad query → the derived/important hit is buried under
+	// incidental mentions (relevance ranks by token match, not importance). Grounded
+	// in the github-search atlas's universal breadth recipe: narrow with SCOPE FILTERS
+	// first (the workhorse — path/project/date), keep to a few distinctive/literal
+	// terms (atlas "<=3 terms for signal"), and don't judge on the snippet alone.
+	// Fires on a real boundary — the fetch ceiling — OR many distinct matches.
 	narrowHint := ""
-	if total >= 20 {
-		narrowHint = "many conversations matched — terms look common; narrow with a distinctive token " +
-			"(a filename, flag, error string, or \"quoted phrase\") or --include-path <re>. " +
-			"Open a ref to judge — a snippet alone hides which hit is the important one."
+	if hitCeiling || total >= 20 {
+		narrowHint = "broad query — scope it first: --include-path <re> / --this-project / --since <date>; " +
+			"then keep to a few distinctive terms (a filename, flag, error, or \"quoted phrase\") — " +
+			"3 or fewer. Open a ref to judge; the snippet hides which hit is the important one."
 	}
 
 	return SearchEnvelope{
