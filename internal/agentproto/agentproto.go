@@ -101,6 +101,12 @@ type SearchEnvelope struct {
 	// well newer than the top-ranked one — so a buried "what just happened" result
 	// announces itself instead of staying hidden behind relevance.
 	RecencyHint string `json:"recency_hint,omitempty"`
+
+	// NarrowHint fires when a query matches MANY conversations — the terms are
+	// corpus-common, so the important/derived hit is buried under incidental
+	// mentions (relevance ranks by token match, not importance). Steers to a
+	// distinctive token + scoping, and warns against skipping on the snippet alone.
+	NarrowHint string `json:"narrow_hint,omitempty"`
 }
 
 // ReadResult is a bounded excerpt around a ref. Embeds the AnchoredView shape
@@ -393,6 +399,18 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			}
 		}
 	}
+	// Drowning steer (F4): a query matching many conversations has terms too common —
+	// the important/derived hit is buried under incidental mentions, and relevance
+	// ranks by token match, not importance. Steer to a distinctive token + scoping,
+	// and tell the agent NOT to skip on the snippet alone (the snippet hides which
+	// hit actually matters).
+	narrowHint := ""
+	if total >= 20 {
+		narrowHint = "many conversations matched — terms look common; narrow with a distinctive token " +
+			"(a filename, flag, error string, or \"quoted phrase\") or --include-path <re>. " +
+			"Open a ref to judge — a snippet alone hides which hit is the important one."
+	}
+
 	return SearchEnvelope{
 		Results:           results,
 		Scopes:            reports,
@@ -403,6 +421,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		HasMore:           hasMore,
 		NextCommand:       nextCmd,
 		RecencyHint:       recencyHint,
+		NarrowHint:        narrowHint,
 	}
 }
 
@@ -1102,6 +1121,9 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 	}
 	if env.RecencyHint != "" {
 		fmt.Fprintf(w, "note: %s\n", env.RecencyHint)
+	}
+	if env.NarrowHint != "" {
+		fmt.Fprintf(w, "note: %s\n", env.NarrowHint)
 	}
 	renderScopeFooter(w, env)
 
