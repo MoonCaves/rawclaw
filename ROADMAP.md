@@ -85,11 +85,36 @@ Read-only recall is the core, but lightweight scriptable session management belo
   filesystem move (default `~/.claude/archive/`); delete is filter-gated and dry-run-first (refuses to delete
   everything) with a tombstone file so re-index won't resurrect a deleted session.
 - **`fork` (`--fork-session`) + `here` (`--here`)** — pass-throughs to `claude` (fork a session; or copy its
-  JSONL into the CWD's project and resume there). **(planned — deferred:** thin wrappers over the existing
-  `--resume` shell-out; low marginal value until asked for.)
+  JSONL into the CWD's project and resume there). **(planned — WANTED:** powers the session-start
+  resume/fork *offer* — "continue from here, or fork from the decision / *before* it for clean,
+  un-tainted context." Thin wrappers over `claude --fork-session`/`--resume`. Note: lineage-dedup in
+  search already collapses a session + its forks to one hit, so forking won't flood recall.)
 - **`list` / `show` / `usage` subcommands** — composable, exit-code-clean siblings for `jq`/`fzf` pipelines.
   **(planned — deferred:** `--list` (projects), `--stats` (corpus), and the `read` / `outline` verbs
   already cover this ground; subcommands would add public surface for marginal gain.)
+
+### Session recap — auto, background, out-of-band  **(planned — WANTED)**
+
+A cheap per-session recap so the *next* session (and the org) starts informed. Three nesting layers:
+**title** (1 line) ⊂ **recap** (begin → middle transitions → final/current state + sidequests, via
+topic-section markers) ⊂ **central digest** (aggregator aggregates many recaps org-wide). rawclaw owns the
+per-session recap (its domain = transcripts); the recap **feeds** aggregator's central digest — rawclaw
+does not build the bulletin itself (single responsibility).
+
+- **We generate it ourselves.** Claude Code does NOT store a reusable session summary (compaction
+  summaries are baked into history, not a clean field). So a background Haiku reads the transcript (via
+  rawclaw) and writes a sidecar recap. The transcript IS the context, so the background agent needs no
+  live main-agent context — it can poke around fully without touching the user's convo.
+- **Trigger = out-of-band only (zero UX latency).** Never run the recap synchronously in the user's
+  flow (`Stop` fires every turn AND blocks — disqualified for the heavy work). Use:
+  (1) **SessionStart-lazy** — on start/resume, background-recap the *previous* session (non-blocking;
+  catches the common abandoned-session case on next return); plus
+  (2) **cron mtime-scan** — periodically recap sessions idle > N min (the only reliable catch for
+  abandoned/window-closed sessions — Claude fires NO event on abandonment; `SessionEnd` only fires on
+  clean `/exit`). `Stop` is reserved at most for ultra-light incremental *titling* (background-spawn +
+  exit, never synchronous work).
+- Likely shape: a `rawclaw recap <sess>` / `rawclaw title <sess>` verb so the logic lives in the tool,
+  and hooks/cron just invoke it in the background.
 
 ### Progressive read — shipped
 
