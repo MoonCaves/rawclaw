@@ -969,6 +969,20 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 	}
 }
 
+// LocateSession resolves a session8 prefix to its (db path, full session id)
+// across scope (nil = all projects), the exported door onto the private
+// locateSession. The `tag` verb uses it to find the db it must open read-write
+// and the full session id whose messages it tags. Returns *ErrSessionNotFound /
+// *ErrAmbiguousSession unchanged, so callers can render the same hints as Read
+// and Outline.
+func LocateSession(session8 string, scope []view.Scope) (dbPath, fullSID string, err error) {
+	if scope == nil {
+		scope = allScope()
+	}
+	dbp, sid, _, err := locateSession(scope, session8)
+	return dbp, sid, err
+}
+
 // ── verb: outline ────────────────────────────────────────────────────────────
 
 // Outline returns a session's bookend arc (first/last N user+assistant messages).
