@@ -85,6 +85,7 @@ type Anchor struct {
 
 	// Attached by the fusion / discovery layers (zero until set):
 	Fused   float64 // RRF score (semantic.Fuse)
+	Topic   string  // topic-layer label for this anchor's segment (Fuse / TopicForMessage)
 	Root    string  // lineage root session id (LineageRoot)
 	Project string  // project label
 	DBP     string  // db path this anchor came from

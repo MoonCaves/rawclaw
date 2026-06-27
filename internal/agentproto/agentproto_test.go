@@ -2,6 +2,7 @@ package agentproto
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/view"
+
+	_ "modernc.org/sqlite"
 )
 
 // writeSession writes a single-message transcript file <stem>.jsonl under proj
@@ -358,6 +361,25 @@ func TestRenderSearch(t *testing.T) {
 		// Empty ISO renders as "?".
 		if !strings.Contains(out, "  ━━ ? · ffff · proj2\n") {
 			t.Errorf("empty iso should render ?: %q", out)
+		}
+	})
+	t.Run("topic line under ref", func(t *testing.T) {
+		var buf bytes.Buffer
+		renderSearch(&buf, SearchEnvelope{Complete: true, Results: []SearchRef{
+			{Project: "proj", SessionID: "a1b2c3d4e5", ISO: "2026-06-18", Snippet: "snip", ReadRef: "a1b2c3d4:9f3e1c20", Topic: "deployment rollback"},
+		}}, "kw", "on this project")
+		out := buf.String()
+		if !strings.Contains(out, "     read ref=a1b2c3d4:9f3e1c20\n     in: deployment rollback\n") {
+			t.Errorf("topic line not rendered under ref: %q", out)
+		}
+	})
+	t.Run("no topic line when empty", func(t *testing.T) {
+		var buf bytes.Buffer
+		renderSearch(&buf, SearchEnvelope{Complete: true, Results: []SearchRef{
+			{Project: "proj", SessionID: "aaaa", ISO: "2026", Snippet: "s", ReadRef: "aaaa:9f"},
+		}}, "kw", "x")
+		if strings.Contains(buf.String(), "     in: ") {
+			t.Errorf("should not render a topic line when Topic is empty: %q", buf.String())
 		}
 	})
 	t.Run("incomplete scope footer", func(t *testing.T) {
@@ -809,5 +831,95 @@ func TestScopeReportSkipsLocked(t *testing.T) {
 	st := env.Scopes[0].Status
 	if st != ScopeStaleFallback && st != ScopeSkippedError {
 		t.Errorf("locked-scope status = %q, want stale_fallback or skipped_error", st)
+	}
+}
+
+// openCacheRW opens the cache db EnsureIndexed built, read-write, so a test can
+// insert topic rows after the keyword index exists.
+func openCacheRW(t *testing.T, dbp string) *sql.DB {
+	t.Helper()
+	con, err := sql.Open("sqlite", "file:"+dbp+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("open cache rw: %v", err)
+	}
+	con.SetMaxOpenConns(1)
+	t.Cleanup(func() { con.Close() })
+	return con
+}
+
+// TestSearchSurfacesTopicNonFused drives the no-embedder path: a keyword hit on a
+// topic-tagged message gets its Topic attached via TopicForMessage (range
+// containment), and the text render shows "in: <topic>" under the ref.
+func TestSearchSurfacesTopicNonFused(t *testing.T) {
+	proj := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	writeSession(t, proj, "sessone", "11111111-aaaa-bbbb-cccc-000000000001", "discussing the deployment rollback procedure")
+
+	// Build the keyword index first so the cache db + messages exist.
+	dbp, _, _, err := index.EnsureIndexed(proj, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+
+	// Tag a topic segment covering that message (keyed by its uuid).
+	con := openCacheRW(t, dbp)
+	if err := index.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
+	}
+	if err := index.UpsertTopicSegment(con, "sessone",
+		"11111111-aaaa-bbbb-cccc-000000000001", "", "deployment rollback", "how we rolled back", 1.0); err != nil {
+		t.Fatalf("UpsertTopicSegment: %v", err)
+	}
+	con.Close()
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	env := Search("deployment", scope, SearchOpts{}, nil) // nil embedder → non-fused path
+	if len(env.Results) == 0 {
+		t.Fatalf("expected a match for 'deployment', got none")
+	}
+	if env.Results[0].Topic != "deployment rollback" {
+		t.Fatalf("result Topic = %q, want deployment rollback", env.Results[0].Topic)
+	}
+
+	var buf bytes.Buffer
+	renderSearch(&buf, env, "deployment", "on this project")
+	if !strings.Contains(buf.String(), "     in: deployment rollback\n") {
+		t.Errorf("render missing topic line:\n%s", buf.String())
+	}
+}
+
+// TestOutlineListsTopics confirms Outline surfaces the session's topic segments
+// as a "topics:" line.
+func TestOutlineListsTopics(t *testing.T) {
+	proj := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	writeSession(t, proj, "sesstwo", "22222222-aaaa-bbbb-cccc-000000000002", "an opening message for the outline")
+
+	dbp, _, _, err := index.EnsureIndexed(proj, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+	con := openCacheRW(t, dbp)
+	if err := index.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
+	}
+	if err := index.UpsertTopicSegment(con, "sesstwo",
+		"22222222-aaaa-bbbb-cccc-000000000002", "", "first topic", "", 1.0); err != nil {
+		t.Fatalf("UpsertTopicSegment: %v", err)
+	}
+	con.Close()
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	res, err := Outline("sesstwo", scope, false)
+	if err != nil {
+		t.Fatalf("Outline: %v", err)
+	}
+	if len(res.Topics) != 1 || res.Topics[0] != "first topic" {
+		t.Fatalf("Outline Topics = %v, want [first topic]", res.Topics)
+	}
+	var buf bytes.Buffer
+	renderOutline(&buf, res)
+	if !strings.Contains(buf.String(), "  topics: first topic\n") {
+		t.Errorf("renderOutline missing topics line:\n%s", buf.String())
 	}
 }

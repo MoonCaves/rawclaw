@@ -56,6 +56,7 @@ type SearchRef struct {
 	ISO       string `json:"iso"`
 	Snippet   string `json:"snippet"`
 	ReadRef   string `json:"read_ref"`
+	Topic     string `json:"topic,omitempty"` // topic-layer label for this ref's segment, when known
 }
 
 // Scope status values for incompleteness-as-data (#6).
@@ -145,6 +146,7 @@ type OutlineResult struct {
 	Start        []view.ViewMsg `json:"start"`
 	End          []view.ViewMsg `json:"end"`
 	MidCount     int            `json:"mid_count"`
+	Topics       []string       `json:"topics,omitempty"` // topic-layer segment labels for this session, in order
 }
 
 // SearchOpts groups the optional search filters (keeps the signature small).
@@ -356,6 +358,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			ISO:       r.ISO,
 			Snippet:   r.Snip,
 			ReadRef:   fmtRef(r.SessionID, r.UUID),
+			Topic:     r.Topic,
 		})
 	}
 
@@ -570,7 +573,17 @@ func collectCandidates(
 		// RRF-fuse keyword anchors with vector-KNN when a query vector is present
 		// (relevance mode only — qvec is nil under --sort). Parity with Discovery.
 		if qvec != nil {
-			rows = semantic.Fuse(con, rows, qvec, fetch, p.IncludeSubagents)
+			rows = semantic.Fuse(con, query, rows, qvec, fetch, p.IncludeSubagents)
+		} else {
+			// Non-fused (no embedder) path: there is no FTS topic match to attach, so
+			// look up each anchor's topic by its segment range (cheap per-session
+			// lookup) — topic context shows even without vectors. A missing topic
+			// table reads as "" and leaves the anchor unchanged.
+			for i := range rows {
+				if rows[i].UUID != "" {
+					rows[i].Topic = index.TopicForMessage(con, rows[i].SessionID, rows[i].UUID)
+				}
+			}
 		}
 		for i := range rows {
 			rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
@@ -1032,6 +1045,17 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 		midCount = 0
 	}
 
+	// Topic layer: list the session's tagged segments (empty when untagged or the
+	// topic table is absent — a non-fatal "no topics").
+	var topics []string
+	if segs, terr := index.TopicsForSession(con, fullSID); terr == nil {
+		for _, s := range segs {
+			if s.Topic != "" {
+				topics = append(topics, s.Topic)
+			}
+		}
+	}
+
 	return &OutlineResult{
 		Project:      proj,
 		SessionID:    fullSID,
@@ -1040,6 +1064,7 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 		Start:        startOut,
 		End:          endOut,
 		MidCount:     midCount,
+		Topics:       topics,
 	}, nil
 }
 
@@ -1116,7 +1141,11 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		}
 		fmt.Fprintf(w, "  ━━ %s · %s · %s\n", iso, sid8(r.SessionID), r.Project)
 		fmt.Fprintf(w, "     …%s…\n", r.Snippet)
-		fmt.Fprintf(w, "     read ref=%s\n\n", r.ReadRef)
+		fmt.Fprintf(w, "     read ref=%s\n", r.ReadRef)
+		if r.Topic != "" {
+			fmt.Fprintf(w, "     in: %s\n", r.Topic)
+		}
+		fmt.Fprintln(w)
 	}
 	if env.HasMore {
 		total := strconv.Itoa(env.TotalMatches)
@@ -1268,6 +1297,9 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 	}
 	fmt.Fprintf(w, "━━ %s · %s · %s · %d messages ━━\n\n",
 		iso, sid8(r.SessionID), r.Project, r.MessageCount)
+	if len(r.Topics) > 0 {
+		fmt.Fprintf(w, "  topics: %s\n\n", strings.Join(r.Topics, " · "))
+	}
 	fmt.Fprintln(w, "  ── GOAL (session opening) ──")
 	for _, m := range r.Start {
 		fmt.Fprintf(w, "     [%s #%d] %s\n", m.Role, m.ID, m.Text)
