@@ -192,6 +192,21 @@ func MatchTopics(con *sql.DB, query string, limit int) ([]TopicHit, error) {
 	if strings.TrimSpace(query) == "" || limit <= 0 {
 		return nil, nil
 	}
+	// OR the query terms (each quoted as a literal) so a query whose words don't ALL
+	// appear in a terse topic label still matches on the ones that do; FTS5 `rank`
+	// (bm25) then orders by term overlap + rarity. Topic rows are few per project, so
+	// OR cannot drown — and this is an on-demand disambiguation tool, recall > precision.
+	var terms []string
+	for _, t := range strings.Fields(query) {
+		t = strings.Trim(strings.ReplaceAll(t, `"`, ""), "*()-:^")
+		if t != "" {
+			terms = append(terms, `"`+t+`"`)
+		}
+	}
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	match := strings.Join(terms, " OR ")
 	rows, err := con.Query(`
 SELECT m.id, ts.session_id, ts.topic
 FROM topic_fts
@@ -199,7 +214,7 @@ JOIN topic_segment ts ON ts.id = topic_fts.rowid
 JOIN messages m ON m.session_id = ts.session_id AND m.uuid = ts.start_uuid
 WHERE topic_fts MATCH ?
 ORDER BY rank
-LIMIT ?`, query, limit)
+LIMIT ?`, match, limit)
 	if err != nil {
 		return nil, nil // missing table / malformed query reads as no hits (non-fatal)
 	}
