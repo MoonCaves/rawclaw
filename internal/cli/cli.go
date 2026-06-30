@@ -185,7 +185,8 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 
 	root.AddCommand(newReadCmd())
 	root.AddCommand(newOutlineCmd())
-	root.AddCommand(newTagCmd())
+	root.AddCommand(newTagPrepCmd())
+	root.AddCommand(newTagWriteCmd())
 	root.AddCommand(newArchiveCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newUpgradeCmd(build))
