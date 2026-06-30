@@ -56,7 +56,7 @@ type SearchRef struct {
 	ISO       string `json:"iso"`
 	Snippet   string `json:"snippet"`
 	ReadRef   string `json:"read_ref"`
-	Topic     string `json:"topic,omitempty"` // topic-layer label for this ref's segment, when known
+	Topic     string `json:"topic,omitempty"` // unused in search output (topics are a separate on-demand `topics` command); omitempty keeps JSON identical to pre-topic
 }
 
 // Scope status values for incompleteness-as-data (#6).
@@ -358,7 +358,6 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			ISO:       r.ISO,
 			Snippet:   r.Snip,
 			ReadRef:   fmtRef(r.SessionID, r.UUID),
-			Topic:     r.Topic,
 		})
 	}
 
@@ -573,17 +572,7 @@ func collectCandidates(
 		// RRF-fuse keyword anchors with vector-KNN when a query vector is present
 		// (relevance mode only — qvec is nil under --sort). Parity with Discovery.
 		if qvec != nil {
-			rows = semantic.Fuse(con, query, rows, qvec, fetch, p.IncludeSubagents)
-		} else {
-			// Non-fused (no embedder) path: there is no FTS topic match to attach, so
-			// look up each anchor's topic by its segment range (cheap per-session
-			// lookup) — topic context shows even without vectors. A missing topic
-			// table reads as "" and leaves the anchor unchanged.
-			for i := range rows {
-				if rows[i].UUID != "" {
-					rows[i].Topic = index.TopicForMessage(con, rows[i].SessionID, rows[i].UUID)
-				}
-			}
+			rows = semantic.Fuse(con, rows, qvec, fetch, p.IncludeSubagents)
 		}
 		for i := range rows {
 			rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
@@ -1156,9 +1145,6 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		fmt.Fprintf(w, "  ━━ %s · %s · %s\n", iso, sid8(r.SessionID), r.Project)
 		fmt.Fprintf(w, "     …%s…\n", r.Snippet)
 		fmt.Fprintf(w, "     read ref=%s\n", r.ReadRef)
-		if r.Topic != "" {
-			fmt.Fprintf(w, "     in: %s\n", r.Topic)
-		}
 		fmt.Fprintln(w)
 	}
 	if env.HasMore {
@@ -1326,6 +1312,140 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 		for _, m := range r.End {
 			fmt.Fprintf(w, "     [%s #%d] %s\n", m.Role, m.ID, m.Text)
 		}
+	}
+}
+
+// ── verb: topics ─────────────────────────────────────────────────────────────
+
+// TopicHit is one on-demand topic-finder result: a tagged topic label, its
+// project, and a read-ref (<session8>:<uuid8>) pointing at where that topic
+// BEGINS (the segment's start message). Topics are deliberately OUT of the
+// default search ranking — this is the separate tool an agent reaches for only
+// when a normal search is ambiguous.
+type TopicHit struct {
+	Topic   string `json:"topic"`
+	Project string `json:"project"`
+	ReadRef string `json:"read_ref"`
+}
+
+// TopicsResult wraps the topic-finder hits with the query and a note. Note is
+// the helpful empty-state hint when no topics are tagged anywhere in scope.
+type TopicsResult struct {
+	Query string     `json:"query"`
+	Hits  []TopicHit `json:"hits"`
+	Note  string     `json:"note,omitempty"`
+}
+
+// topicsEmptyNote is the empty-state hint printed/emitted when no topic rows
+// exist anywhere in scope — tells the agent how topics get tagged.
+const topicsEmptyNote = "no topics tagged yet — a session is tagged via the rawclaw-topic-tagger subagent"
+
+// Topics searches ONLY the topic layer across scope (nil = all projects),
+// returning hits ordered per-project by FTS rank, capped at limit per project.
+// Each hit resolves the segment's START message id (what MatchTopics returns) to
+// its uuid for a read-ref. It never touches the keyword/vector ranking — this is
+// the separate, on-demand finder. anyTopics reports whether ANY topic rows exist
+// in scope (regardless of query match), so the caller can tell "no match" apart
+// from "nothing tagged yet".
+func Topics(query string, scope []view.Scope, limit int, includePath string) (TopicsResult, error) {
+	if limit <= 0 {
+		limit = DefaultSearchLimit
+	}
+	if scope == nil {
+		scope = allScope()
+	}
+	if includePath != "" {
+		scope = filterScopeByPath(scope, includePath, "")
+	}
+
+	hits := []TopicHit{}
+	anyTopics := false
+	for _, sc := range scope {
+		dbp, _, _, err := index.EnsureIndexed(sc.TDir, false)
+		if err != nil {
+			continue // a failing project is skipped (mirrors locateSession)
+		}
+		con, openErr := index.ConnectRO(dbp)
+		if openErr != nil {
+			continue
+		}
+		if err := index.EnsureTopicSchema(con); err != nil {
+			_ = con.Close()
+			continue
+		}
+		if topicRowsExist(con) {
+			anyTopics = true
+		}
+		thits, _ := index.MatchTopics(con, query, limit)
+		for _, h := range thits {
+			uuid := msgUUID(con, h.MsgID)
+			if uuid == "" {
+				continue // can't build a read-ref without the message uuid
+			}
+			hits = append(hits, TopicHit{
+				Topic:   h.Topic,
+				Project: sc.Project,
+				ReadRef: fmtRef(h.SessionID, uuid),
+			})
+		}
+		_ = con.Close()
+	}
+
+	res := TopicsResult{Query: query, Hits: hits}
+	if len(hits) == 0 && !anyTopics {
+		res.Note = topicsEmptyNote
+	}
+	return res, nil
+}
+
+// topicRowsExist reports whether the topic_segment table holds any row — used to
+// distinguish "query matched nothing" from "nothing is tagged yet". A missing
+// table / read error reads as false.
+func topicRowsExist(con *sql.DB) bool {
+	var one int
+	err := con.QueryRow("SELECT 1 FROM topic_segment LIMIT 1").Scan(&one)
+	return err == nil
+}
+
+// msgUUID resolves a message rowid to its uuid within an open db, for building a
+// read-ref from a TopicHit's start-message id. A missing row reads as "".
+func msgUUID(con *sql.DB, msgID int) string {
+	var uuid sql.NullString
+	if err := con.QueryRow("SELECT uuid FROM messages WHERE id=?", msgID).Scan(&uuid); err != nil {
+		return ""
+	}
+	return uuid.String
+}
+
+// TopicsAndRender runs Topics and writes the result to w (JSON when wantJSON, else
+// text). The exported entry the top-level `topics` subcommand calls.
+func TopicsAndRender(w io.Writer, query string, scope []view.Scope, limit int, includePath string, wantJSON bool) error {
+	result, err := Topics(query, scope, limit, includePath)
+	if err != nil {
+		return err
+	}
+	if wantJSON {
+		return emit(w, result)
+	}
+	renderTopics(w, result)
+	return nil
+}
+
+// renderTopics prints the human-readable topic-finder output: a one-line header
+// then one `<topic>  ·  <project>  ·  read ref=<sess8>:<uuid8>` line per hit. The
+// empty-state note prints when nothing is tagged anywhere in scope.
+func renderTopics(w io.Writer, r TopicsResult) {
+	if len(r.Hits) == 0 {
+		if r.Note != "" {
+			fmt.Fprintf(w, "%s\n", r.Note)
+			return
+		}
+		fmt.Fprintf(w, "No topics matching '%s'. Try a different concept word, or widen scope.\n", r.Query)
+		return
+	}
+	fmt.Fprintf(w, "%d topic(s) matching '%s':\n\n", len(r.Hits), r.Query)
+	for _, h := range r.Hits {
+		fmt.Fprintf(w, "  %s  ·  %s  ·  read ref=%s\n", h.Topic, h.Project, h.ReadRef)
 	}
 }
 

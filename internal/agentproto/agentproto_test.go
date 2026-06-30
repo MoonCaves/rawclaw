@@ -363,23 +363,15 @@ func TestRenderSearch(t *testing.T) {
 			t.Errorf("empty iso should render ?: %q", out)
 		}
 	})
-	t.Run("topic line under ref", func(t *testing.T) {
+	t.Run("topics are never in search output", func(t *testing.T) {
+		// Topics were pulled OUT of search ranking/display — even a populated Topic
+		// field must not render an "in:" line (topics are the separate `topics` cmd).
 		var buf bytes.Buffer
 		renderSearch(&buf, SearchEnvelope{Complete: true, Results: []SearchRef{
-			{Project: "proj", SessionID: "a1b2c3d4e5", ISO: "2026-06-18", Snippet: "snip", ReadRef: "a1b2c3d4:9f3e1c20", Topic: "deployment rollback"},
-		}}, "kw", "on this project")
-		out := buf.String()
-		if !strings.Contains(out, "     read ref=a1b2c3d4:9f3e1c20\n     in: deployment rollback\n") {
-			t.Errorf("topic line not rendered under ref: %q", out)
-		}
-	})
-	t.Run("no topic line when empty", func(t *testing.T) {
-		var buf bytes.Buffer
-		renderSearch(&buf, SearchEnvelope{Complete: true, Results: []SearchRef{
-			{Project: "proj", SessionID: "aaaa", ISO: "2026", Snippet: "s", ReadRef: "aaaa:9f"},
+			{Project: "proj", SessionID: "aaaa", ISO: "2026", Snippet: "s", ReadRef: "aaaa:9f", Topic: "deployment rollback"},
 		}}, "kw", "x")
 		if strings.Contains(buf.String(), "     in: ") {
-			t.Errorf("should not render a topic line when Topic is empty: %q", buf.String())
+			t.Errorf("search must not render a topic line: %q", buf.String())
 		}
 	})
 	t.Run("incomplete scope footer", func(t *testing.T) {
@@ -847,21 +839,19 @@ func openCacheRW(t *testing.T, dbp string) *sql.DB {
 	return con
 }
 
-// TestSearchSurfacesTopicNonFused drives the no-embedder path: a keyword hit on a
-// topic-tagged message gets its Topic attached via TopicForMessage (range
-// containment), and the text render shows "in: <topic>" under the ref.
-func TestSearchSurfacesTopicNonFused(t *testing.T) {
+// TestSearchNeverCarriesTopic locks the design change: topics are OUT of the
+// search ranking and output. A keyword hit on a topic-tagged message must come
+// back with an EMPTY Topic field (topics live only in the separate `topics`
+// command) — the non-fused (nil embedder) path no longer attaches a topic.
+func TestSearchNeverCarriesTopic(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
 	writeSession(t, proj, "sessone", "11111111-aaaa-bbbb-cccc-000000000001", "discussing the deployment rollback procedure")
 
-	// Build the keyword index first so the cache db + messages exist.
 	dbp, _, _, err := index.EnsureIndexed(proj, false)
 	if err != nil {
 		t.Fatalf("EnsureIndexed: %v", err)
 	}
-
-	// Tag a topic segment covering that message (keyed by its uuid).
 	con := openCacheRW(t, dbp)
 	if err := index.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
@@ -873,18 +863,106 @@ func TestSearchSurfacesTopicNonFused(t *testing.T) {
 	con.Close()
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	env := Search("deployment", scope, SearchOpts{}, nil) // nil embedder → non-fused path
+	env := Search("deployment", scope, SearchOpts{}, nil)
 	if len(env.Results) == 0 {
 		t.Fatalf("expected a match for 'deployment', got none")
 	}
-	if env.Results[0].Topic != "deployment rollback" {
-		t.Fatalf("result Topic = %q, want deployment rollback", env.Results[0].Topic)
+	if env.Results[0].Topic != "" {
+		t.Fatalf("result Topic = %q, want empty (topics must not surface in search)", env.Results[0].Topic)
+	}
+}
+
+// TestTopicsCommand drives the on-demand topic finder: a tagged session, queried
+// by a topic word, returns the matching topic with a well-formed read-ref
+// (<sess8>:<uuid8>) pointing at the segment's start message.
+func TestTopicsCommand(t *testing.T) {
+	proj := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	uuid := "9f3e1c20-aaaa-bbbb-cccc-000000000001" // hex prefix with letters → resolveRef-valid
+	writeSession(t, proj, "sessone", uuid, "discussing the deployment rollback procedure")
+
+	dbp, _, _, err := index.EnsureIndexed(proj, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+	con := openCacheRW(t, dbp)
+	if err := index.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
+	}
+	if err := index.UpsertTopicSegment(con, "sessone",
+		uuid, "", "deployment rollback", "how we rolled back", 1.0); err != nil {
+		t.Fatalf("UpsertTopicSegment: %v", err)
+	}
+	con.Close()
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	res, err := Topics("rollback", scope, 8, "")
+	if err != nil {
+		t.Fatalf("Topics: %v", err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("Topics hits = %d, want 1: %+v", len(res.Hits), res.Hits)
+	}
+	h := res.Hits[0]
+	if h.Topic != "deployment rollback" {
+		t.Errorf("hit Topic = %q, want deployment rollback", h.Topic)
+	}
+	// The read-ref must be a well-formed <sess8>:<uuid8> that resolveRef accepts and
+	// whose uuid8 half matches the tagged segment's start message.
+	wantRef := fmtRef("sessone", uuid)
+	if h.ReadRef != wantRef {
+		t.Errorf("hit ReadRef = %q, want %q", h.ReadRef, wantRef)
+	}
+	if _, _, err := resolveRef(h.ReadRef); err != nil {
+		t.Errorf("ReadRef %q is not resolvable: %v", h.ReadRef, err)
+	}
+	if res.Note != "" {
+		t.Errorf("note should be empty when topics exist, got %q", res.Note)
 	}
 
+	// A query that matches nothing (but topics ARE tagged) → no hits, no empty-note.
+	none, err := Topics("kubernetes", scope, 8, "")
+	if err != nil {
+		t.Fatalf("Topics(kubernetes): %v", err)
+	}
+	if len(none.Hits) != 0 || none.Note != "" {
+		t.Errorf("Topics(kubernetes) = hits %d note %q, want 0 hits and no note", len(none.Hits), none.Note)
+	}
+
+	// Render smoke: the matching hit line carries topic, project, and ref.
 	var buf bytes.Buffer
-	renderSearch(&buf, env, "deployment", "on this project")
-	if !strings.Contains(buf.String(), "     in: deployment rollback\n") {
-		t.Errorf("render missing topic line:\n%s", buf.String())
+	renderTopics(&buf, res)
+	out := buf.String()
+	if !strings.Contains(out, "deployment rollback") || !strings.Contains(out, "read ref="+wantRef) {
+		t.Errorf("renderTopics missing topic/ref line:\n%s", out)
+	}
+}
+
+// TestTopicsEmptyState confirms the helpful empty-state note when NO topics are
+// tagged anywhere in scope (distinct from a query that simply matched nothing).
+func TestTopicsEmptyState(t *testing.T) {
+	proj := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	writeSession(t, proj, "sessone", "11111111-aaaa-bbbb-cccc-000000000001", "a session with no topics tagged")
+	if _, _, _, err := index.EnsureIndexed(proj, false); err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	res, err := Topics("anything", scope, 8, "")
+	if err != nil {
+		t.Fatalf("Topics: %v", err)
+	}
+	if len(res.Hits) != 0 {
+		t.Fatalf("expected 0 hits, got %d", len(res.Hits))
+	}
+	if res.Note != topicsEmptyNote {
+		t.Errorf("note = %q, want %q", res.Note, topicsEmptyNote)
+	}
+	var buf bytes.Buffer
+	renderTopics(&buf, res)
+	if !strings.Contains(buf.String(), "no topics tagged yet") {
+		t.Errorf("renderTopics missing empty-state note:\n%s", buf.String())
 	}
 }
 

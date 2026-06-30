@@ -23,7 +23,6 @@ import (
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/embed"
-	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 )
@@ -36,12 +35,6 @@ const MinChars = 12
 
 // RRFConstant is the reciprocal-rank-fusion k.
 const RRFConstant = 60
-
-// topicWeight scales the topic channel's RRF contribution. Held BELOW 1.0 so a
-// topic match surfaces a buried segment without outranking an exact keyword top
-// hit — the relevance floor (a topic-only hit gets at most ~0.5/(RRFConstant+1),
-// well under a rank-0 keyword hit's 1/(RRFConstant+1)).
-const topicWeight = 0.5
 
 // VecHit is one vector-KNN anchor: id, session_id, iso, parent, dist.
 type VecHit struct {
@@ -341,13 +334,10 @@ func VecKNN(con *sql.DB, qvec []float64, k int, includeSubagents bool) []VecHit 
 	return out
 }
 
-// Fuse merges keyword anchors + vector KNN + topic-layer hits via
-// RRF(k=RRFConstant) by message id, returning a merged anchor list ordered by
-// fused score (each row's Fused set). Keyword-only rows keep their fields;
-// vector-only and topic-only rows are synthesized (Cov=0). `query` drives the
-// topic-layer FTS; with no topic rows MatchTopics returns empty and behavior is
-// identical to the keyword+vector fusion.
-func Fuse(con *sql.DB, query string, kwRows []retrieve.Anchor, qvec []float64, knnK int, includeSubagents bool) []retrieve.Anchor {
+// Fuse merges keyword anchors + vector KNN via RRF(k=RRFConstant) by message id,
+// returning a merged anchor list ordered by fused score (each row's Fused set).
+// Keyword-only rows keep their fields; vector-only rows are synthesized (Cov=0).
+func Fuse(con *sql.DB, kwRows []retrieve.Anchor, qvec []float64, knnK int, includeSubagents bool) []retrieve.Anchor {
 	vhits := VecKNN(con, qvec, knnK, includeSubagents)
 
 	score := map[int]float64{}
@@ -369,23 +359,6 @@ func Fuse(con *sql.DB, query string, kwRows []retrieve.Anchor, qvec []float64, k
 				Cov:       0,
 			}
 		}
-	}
-
-	// Topic channel: a conservative RRF term (topicWeight < 1.0) so a topic match
-	// surfaces a buried segment without outranking an exact keyword top hit. Each
-	// hit's MsgID is the segment's START message; we attach the Topic to that id,
-	// synthesizing a minimal anchor when the id wasn't already present (like the
-	// vector-only path). MatchTopics swallows a missing table / bad query as empty,
-	// so the no-topic-rows path is identical to before.
-	thits, _ := index.MatchTopics(con, query, knnK)
-	for rank, h := range thits {
-		score[h.MsgID] += topicWeight * 1.0 / float64(RRFConstant+rank+1)
-		r, ok := rowmap[h.MsgID]
-		if !ok {
-			r = retrieve.Anchor{ID: h.MsgID, SessionID: h.SessionID, Cov: 0}
-		}
-		r.Topic = h.Topic
-		rowmap[h.MsgID] = r
 	}
 
 	// Order by fused score descending. Map iteration is unordered, so we tiebreak

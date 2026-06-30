@@ -343,7 +343,7 @@ func TestFuseRRF(t *testing.T) {
 		{ID: mShared, SessionID: "s1", Role: "user", ISO: "2026-06-18T10:00:00Z", Snip: "shared", Cov: 1},
 	}
 
-	merged := Fuse(con, "", kwRows, []float64{1, 0, 0}, 5, false)
+	merged := Fuse(con, kwRows, []float64{1, 0, 0}, 5, false)
 
 	// The shared id appears once, carrying BOTH RRF contributions → highest fused.
 	byID := map[int]retrieve.Anchor{}
@@ -389,90 +389,19 @@ func TestFuseRRF(t *testing.T) {
 	}
 }
 
-// TestFuseTopicChannel verifies the topic layer adds a CONSERVATIVE RRF term: a
-// topic match surfaces a buried segment's start message (synthesizing an anchor
-// + setting Topic) but, weighted below 1.0, does NOT outrank an exact keyword
-// top hit (the relevance floor).
-func TestFuseTopicChannel(t *testing.T) {
+// TestFuseKeywordOnly confirms Fuse with no vector rows returns the keyword
+// anchors unchanged (topics are NOT part of the search ranking — they live in the
+// separate on-demand `topics` command).
+func TestFuseKeywordOnly(t *testing.T) {
 	con := openTestDB(t)
-	if err := index.EnsureTopicSchema(con); err != nil {
-		t.Fatalf("EnsureTopicSchema: %v", err)
-	}
-
-	// A keyword top hit (id from a real message) and a separate message that is the
-	// START of a tagged topic segment but is NOT in the keyword results.
-	kwTop := addMessageUUID(t, con, "s1", "user", "exact keyword top hit text", "u-kw")
-	topicStart := addMessageUUID(t, con, "s1", "assistant", "some buried segment about deployment rollback", "u-topic")
-
-	if err := index.UpsertTopicSegment(con, "s1", "u-topic", "", "deployment rollback", "how we rolled back the bad deploy", 1.0); err != nil {
-		t.Fatalf("UpsertTopicSegment: %v", err)
-	}
-
-	kwRows := []retrieve.Anchor{
-		{ID: kwTop, SessionID: "s1", Role: "user", Snip: "exact", Cov: 2},
-	}
-
-	// No qvec match (empty vec store), query matches the topic.
-	merged := Fuse(con, "rollback", kwRows, []float64{1, 0, 0}, 5, false)
-
-	byID := map[int]retrieve.Anchor{}
-	for _, a := range merged {
-		byID[a.ID] = a
-	}
-	if _, ok := byID[topicStart]; !ok {
-		t.Fatal("topic segment start message missing from merged — topic channel did not surface it")
-	}
-	if byID[topicStart].Topic != "deployment rollback" {
-		t.Errorf("topic anchor Topic = %q, want deployment rollback", byID[topicStart].Topic)
-	}
-	// The conservative weight: the keyword top hit (1/61) must outrank the topic-only
-	// hit (0.5/61), so merged[0] is the keyword hit, not the topic segment.
-	if merged[0].ID != kwTop {
-		t.Fatalf("merged[0] = %d, want keyword top hit %d (topic must not outrank an exact keyword hit)", merged[0].ID, kwTop)
-	}
-	wantTopic := topicWeight * 1.0 / float64(RRFConstant+0+1)
-	if math.Abs(byID[topicStart].Fused-wantTopic) > 1e-12 {
-		t.Errorf("topic-only fused = %v, want %v (topicWeight * RRF)", byID[topicStart].Fused, wantTopic)
-	}
-}
-
-// TestFuseNoTopicRows confirms the no-topic-rows path is identical to the
-// keyword+vector fusion (MatchTopics returns empty → no extra terms).
-func TestFuseNoTopicRows(t *testing.T) {
-	con := openTestDB(t)
-	if err := index.EnsureTopicSchema(con); err != nil {
-		t.Fatalf("EnsureTopicSchema: %v", err)
-	}
 	kwRows := []retrieve.Anchor{{ID: 1, Snip: "a"}, {ID: 2, Snip: "b"}}
-	merged := Fuse(con, "anything", kwRows, []float64{1, 0, 0}, 5, false)
+	merged := Fuse(con, kwRows, []float64{1, 0, 0}, 5, false)
 	if len(merged) != 2 {
-		t.Fatalf("merged = %d, want 2 (no topic rows must not add anchors)", len(merged))
+		t.Fatalf("merged = %d, want 2", len(merged))
 	}
 	if merged[0].ID != 1 {
 		t.Fatalf("merged[0] = %d, want 1", merged[0].ID)
 	}
-}
-
-// addMessageUUID inserts a session (if new) + a message carrying a uuid, for the
-// topic-channel tests (topic helpers key off the message uuid). Returns the id.
-func addMessageUUID(t *testing.T, con *sql.DB, sid, role, content, uuid string) int {
-	t.Helper()
-	if _, err := con.Exec(
-		"INSERT OR IGNORE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id) VALUES(?,?,?,?,?,?)",
-		sid, 0.0, 0.0, 0, 0, nil); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	res, err := con.Exec(
-		"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
-		sid, role, content, 0.0, "", uuid)
-	if err != nil {
-		t.Fatalf("insert message: %v", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("last id: %v", err)
-	}
-	return int(id)
 }
 
 func TestFuseEmptyVectorPath(t *testing.T) {
@@ -481,7 +410,7 @@ func TestFuseEmptyVectorPath(t *testing.T) {
 		{ID: 1, Snip: "a"},
 		{ID: 2, Snip: "b"},
 	}
-	merged := Fuse(con, "", kwRows, []float64{1, 0, 0}, 5, false)
+	merged := Fuse(con, kwRows, []float64{1, 0, 0}, 5, false)
 	if len(merged) != 2 {
 		t.Fatalf("merged = %d, want 2 (keyword-only when no vectors)", len(merged))
 	}
