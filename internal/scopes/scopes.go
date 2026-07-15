@@ -6,6 +6,8 @@
 package scopes
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"log/slog"
 	"path/filepath"
 	"sort"
@@ -103,9 +105,23 @@ func CWD(sc view.Scope) string {
 // codexDBPath returns a cache db path for a Codex cwd group, prefixed "codex-"
 // so it never collides with the Claude project db for the same cwd. An empty
 // cwd groups under a stable "unknown" key.
+//
+// The readable slug from encodeCWD is lossy ('/', '.', '-' all fold to '-'), so
+// two distinct cwds can collapse onto one slug. That would put two cwd groups on
+// one db and violate index.EnsureIndexedContainers' complete-set contract — the
+// groups would cross-prune each other. We append a short hash of the FULL cwd so
+// the key stays human-readable but is injective (distinct cwd => distinct db).
 func codexDBPath(cwd string) string {
-	key := "codex-" + encodeCWD(cwd)
+	key := "codex-" + encodeCWD(cwd) + "-" + cwdHash(cwd)
 	return index.DBPath(key)
+}
+
+// cwdHash is a short, stable, collision-resistant tag of the full cwd, used to
+// disambiguate cwds that share a lossy encodeCWD slug. Deterministic across runs
+// so a cwd group keeps the same db.
+func cwdHash(cwd string) string {
+	sum := sha1.Sum([]byte(cwd))
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 // codexLabel is a friendly project label for a Codex cwd group.
