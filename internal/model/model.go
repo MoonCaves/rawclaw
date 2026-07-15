@@ -1,24 +1,20 @@
-// Package model defines the ingest PORT — the data contract a pluggable Source
-// adapter yields, for the planned bring-your-own-runtime feature. It is the
-// ingest-side parallel to embed.VectorStore (the vector port): defined ahead of
-// its adapters, ship-empty. No Source adapter is wired yet — the built-in
-// Claude-Code-transcript reader uses its own internal types today — so nothing
-// imports this package at present; it is the stable contract a future external
-// runtime adapter conforms to, not dead code.
+// Package model defines the normalized transcript message a Source adapter
+// yields for the index to ingest — the ingest-side data contract, parallel to
+// internal/embed's vector ports (defined ahead of its adapters, ship-empty).
+//
+// The fields mirror one row the index persists into the messages table
+// (role, content, ts, ts_iso, uuid) exactly, so an adapter's output maps to a
+// row with no lossy translation. Session-level attributes (id, cwd, subagent,
+// parent, resume) travel separately on source.Container, not here.
 package model
 
-// Message is the contract for one transcript message a Source adapter yields for
-// the index to ingest. Keep it stable: do not rename or drop a field, so an
-// external adapter compiled against it keeps working. Optional bools default to
-// their Go zero value (false).
+// Message is one normalized transcript message in transcript order. Keep it
+// aligned with the messages-table columns the index writes; a new field here
+// implies a schema change there.
 type Message struct {
-	SessionID  string
-	MsgID      int
-	ParentID   *int // nil = root message
-	Role       string
-	Text       string
-	TS         float64
-	IsTool     bool
-	IsSubagent bool
-	IsSummary  bool
+	Role  string  // "user" | "assistant" | "system" | "summary"
+	Text  string  // flattened, searchable content (tool/thinking markers baked in)
+	TS    float64 // epoch seconds, 0 if the record carried no parseable timestamp
+	TSISO string  // the original ISO-8601 timestamp string, "" if none
+	UUID  string  // stable per-message id the source assigns (drives <session8>:<uuid8> refs)
 }
