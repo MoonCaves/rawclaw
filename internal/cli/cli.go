@@ -41,6 +41,7 @@ type Options struct {
 	All              bool
 	List             bool
 	Role             string
+	Source           string
 	Sort             string
 	IncludeTools     bool
 	IncludeSubagents bool
@@ -144,6 +145,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.BoolVar(&opts.All, "all", false, "(default) search every project")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
 	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
+	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex); default searches all")
 	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
 	f.BoolVar(&opts.IncludeTools, "include-tools", false, "also match/show tool calls + tool-only hits")
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
@@ -388,6 +390,10 @@ func newOutlineCmd() *cobra.Command {
 func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	out := cmd.OutOrStdout()
 
+	if err := validateChoice("source", o.Source, "claude", "codex"); err != nil {
+		return err
+	}
+
 	if o.List {
 		ListProjects(out)
 		return nil
@@ -423,10 +429,11 @@ func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool)
 	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}, td, true
 }
 
-// allScope builds the search scope spanning every runtime — Claude projects and
-// Codex cwd-groups — via the scopes enumerator.
-func allScope() []view.Scope {
-	return scopes.All("", false)
+// allScope builds the search scope spanning the requested runtime(s) — Claude
+// projects and/or Codex cwd-groups — via the scopes enumerator. source ""
+// spans all; "claude"/"codex" narrows.
+func allScope(source string, reindex bool) []view.Scope {
+	return scopes.All(source, reindex)
 }
 
 // runReindexVectors builds/updates the semantic index for the scope.
@@ -450,7 +457,7 @@ func runReindexVectors(w io.Writer, o *Options) error {
 			scope = sc
 		}
 	} else {
-		scope = allScope()
+		scope = allScope(o.Source, o.Reindex)
 	}
 
 	total := 0
@@ -707,7 +714,7 @@ func runSearch(w io.Writer, o *Options, args []string) error {
 		scope = sc
 		label = "on " + paths.ProjectLabel(td)
 	} else {
-		scope = allScope()
+		scope = allScope(o.Source, o.Reindex)
 		label = "across all projects"
 	}
 	var emb embed.Embedder
