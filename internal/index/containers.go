@@ -20,6 +20,14 @@ type MessagesFunc func(source.Container) ([]model.Message, error)
 // EnsureIndexed's reindex + busy-lock semantics, but is source-agnostic: the
 // containers carry their own id, lineage, and backing path, replacing the
 // Claude-only directory walk of UpdateIndex.
+//
+// CONTRACT — cs MUST be the COMPLETE container set for dbp on every call. The
+// prune step (updateContainers) deletes any indexed session whose backing path
+// is absent from cs, exactly as UpdateIndex prunes against a fresh directory
+// walk. A partial cs would wrongly prune the omitted sessions. Corollary: never
+// point two sources (or two scopes) at the same dbp — give each its own,
+// distinctly-namespaced cache file, so one source's set is never "incomplete"
+// relative to another's rows.
 func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, msgs MessagesFunc) (nSessions int, status IndexStatus, err error) {
 	if reindex {
 		if _, statErr := os.Stat(dbp); statErr == nil {
