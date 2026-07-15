@@ -55,11 +55,18 @@ type BrowseRow struct {
 	Preview   string  `json:"preview"`
 }
 
-// Scope is a (project label, transcript dir) pair — the unit discovery/scroll
-// iterate over.
+// Scope is one searchable unit discovery/scroll iterate over. A Claude scope is
+// a (project label, transcript dir) pair whose db is resolved lazily from TDir.
+// A non-directory source (e.g. Codex) instead sets DBP (a pre-ensured db) and
+// CWD (for path filtering), leaving TDir empty. Source names the runtime
+// ("claude"/"codex") for the --source filter and display. Resolve/CWD in the
+// scopes package pick the right field, so consumers stay source-agnostic.
 type Scope struct {
 	Project string
-	TDir    string
+	TDir    string // Claude transcript dir; "" for a pre-resolved (DBP) scope
+	DBP     string // pre-ensured db path; "" means resolve lazily from TDir
+	CWD     string // working dir for path filtering; "" means derive from TDir
+	Source  string // "claude" | "codex"
 }
 
 // AnchoredViewOpts groups the optional tuning of AnchoredView (window radius,

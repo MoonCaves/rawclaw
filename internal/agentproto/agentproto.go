@@ -25,6 +25,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
+	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -224,14 +225,10 @@ func resolveRef(ref string) (string, string, error) {
 	return session8, uuidPrefix, nil
 }
 
-// allScope returns (label, tdir) pairs for every project.
+// allScope returns every search scope across all runtimes (Claude projects +
+// Codex cwd-groups), via the scopes enumerator.
 func allScope() []view.Scope {
-	dirs := paths.AllProjectDirs()
-	out := make([]view.Scope, 0, len(dirs))
-	for _, d := range dirs {
-		out = append(out, view.Scope{Project: paths.ProjectLabel(d), TDir: d})
-	}
-	return out
+	return scopes.All("", false)
 }
 
 // thisScope returns the single (label, tdir) pair for cwd's project, or nil if
@@ -512,7 +509,7 @@ func filterScopeByPath(scope []view.Scope, include, exclude string) []view.Scope
 	pred := query.PathPredicate(include, exclude)
 	out := make([]view.Scope, 0, len(scope))
 	for _, sc := range scope {
-		if pred(paths.ProjectCWD(sc.TDir)) {
+		if pred(scopes.CWD(sc)) {
 			out = append(out, sc)
 		}
 	}
@@ -547,7 +544,7 @@ func collectCandidates(
 	hitCeiling := false
 	for _, sc := range scope {
 		rep := ScopeReport{Project: sc.Project, Dir: sc.TDir}
-		dbp, _, status, err := index.EnsureIndexed(sc.TDir, false)
+		dbp, status, err := scopes.Resolve(sc, false)
 		if err != nil {
 			rep.Status = ScopeSkippedError
 			rep.Detail = err.Error()
@@ -914,7 +911,7 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 		}
 		var cs []sessionCand
 		for _, sc := range scope {
-			dbpC, _, _, ensureErr := index.EnsureIndexed(sc.TDir, false)
+			dbpC, _, ensureErr := scopes.Resolve(sc, false)
 			if ensureErr != nil {
 				continue
 			}
@@ -1361,7 +1358,7 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 	hits := []TopicHit{}
 	anyTopics := false
 	for _, sc := range scope {
-		dbp, _, _, err := index.EnsureIndexed(sc.TDir, false)
+		dbp, _, err := scopes.Resolve(sc, false)
 		if err != nil {
 			continue // a failing project is skipped (mirrors locateSession)
 		}

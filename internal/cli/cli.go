@@ -25,6 +25,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/render"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
+	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
 	"github.com/MoonCaves/rawclaw/internal/view"
 	"github.com/spf13/cobra"
@@ -422,14 +423,10 @@ func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool)
 	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}, td, true
 }
 
-// allScope builds the search scope spanning every known project.
+// allScope builds the search scope spanning every runtime — Claude projects and
+// Codex cwd-groups — via the scopes enumerator.
 func allScope() []view.Scope {
-	dirs := paths.AllProjectDirs()
-	scope := make([]view.Scope, 0, len(dirs))
-	for _, d := range dirs {
-		scope = append(scope, view.Scope{Project: paths.ProjectLabel(d), TDir: d})
-	}
-	return scope
+	return scopes.All("", false)
 }
 
 // runReindexVectors builds/updates the semantic index for the scope.
@@ -458,7 +455,7 @@ func runReindexVectors(w io.Writer, o *Options) error {
 
 	total := 0
 	for _, s := range scope {
-		n, err := reindexOne(s.TDir, emb)
+		n, err := reindexOne(s, emb)
 		if err != nil {
 			fmt.Fprintf(w, "  %s: skipped (%s)\n", s.Project, err)
 			continue
@@ -472,10 +469,11 @@ func runReindexVectors(w io.Writer, o *Options) error {
 	return nil
 }
 
-// reindexOne indexes a project then refreshes its vectors
-// (ensure-indexed → open read-write → vector index → close).
-func reindexOne(td string, emb embed.Embedder) (int, error) {
-	dbp, _, _, err := index.EnsureIndexed(td, false)
+// reindexOne indexes a scope then refreshes its vectors
+// (resolve db → open read-write → vector index → close). Works for any source:
+// a Claude scope ensures its TDir, a Codex scope uses its pre-built db.
+func reindexOne(sc view.Scope, emb embed.Embedder) (int, error) {
+	dbp, _, err := scopes.Resolve(sc, false)
 	if err != nil {
 		return 0, err
 	}
