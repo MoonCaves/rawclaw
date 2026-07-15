@@ -492,9 +492,16 @@ func reindexOne(sc view.Scope, emb embed.Embedder) (int, error) {
 	return semantic.VecIndex(con, emb, 0)
 }
 
-// runResume prints the paste-ready `claude --resume` command for a session id.
+// runResume prints the paste-ready resume command for a session id — `claude
+// --resume <id>` for a Claude session, `codex resume <id>` for a Codex one. It
+// resolves against Claude projects first, then falls back to the Codex scopes.
 func runResume(w io.Writer, o *Options) error {
 	hits := paths.ResolveSession(o.Resume)
+	src := "claude"
+	if len(hits) == 0 {
+		hits = codexResumeHits(o.Resume)
+		src = "codex"
+	}
 	if len(hits) == 0 {
 		fmt.Fprintf(w, "No session id starts with '%s'. Use the 8-char id from search output, e.g. [… · a1b2c3d4 · …].\n", o.Resume)
 		return nil
@@ -520,10 +527,7 @@ func runResume(w io.Writer, o *Options) error {
 	}
 
 	h := hits[0]
-	cmd := fmt.Sprintf("claude --resume %s", h.SessionID)
-	if h.CWD != "" {
-		cmd = fmt.Sprintf("cd %s && claude --resume %s", h.CWD, h.SessionID)
-	}
+	cmd := resumeCommand(src, h)
 	if o.JSON {
 		return EmitJSON(w, struct {
 			SessionID string `json:"session_id"`
@@ -534,6 +538,48 @@ func runResume(w io.Writer, o *Options) error {
 	}
 	fmt.Fprintf(w, "Resume this session (%s):\n\n  %s\n", h.Project, cmd)
 	return nil
+}
+
+// resumeCommand builds the paste-ready resume command for a session, per source:
+// Claude uses `claude --resume`, Codex uses `codex resume`; both prefix a `cd`
+// when the working dir is known.
+func resumeCommand(src string, h paths.SessionHit) string {
+	verb := "claude --resume " + h.SessionID
+	if src == "codex" {
+		verb = "codex resume " + h.SessionID
+	}
+	if h.CWD != "" {
+		return "cd " + h.CWD + " && " + verb
+	}
+	return verb
+}
+
+// codexResumeHits resolves a session-id prefix against the Codex scope dbs. A
+// Codex session's cwd is its scope's cwd. Only top-level sessions are offered
+// (is_subagent=0), matching ResolveSession's Claude behavior.
+func codexResumeHits(prefix string) []paths.SessionHit {
+	var out []paths.SessionHit
+	for _, sc := range scopes.Codex(false) {
+		con, err := index.ConnectRO(sc.DBP)
+		if err != nil {
+			continue
+		}
+		rows, qerr := con.Query(
+			"SELECT id FROM sessions WHERE id LIKE ? AND is_subagent=0 ORDER BY id LIMIT 3", prefix+"%")
+		if qerr != nil {
+			_ = con.Close()
+			continue
+		}
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) == nil {
+				out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
+			}
+		}
+		_ = rows.Close()
+		_ = con.Close()
+	}
+	return out
 }
 
 // statsJSON is one project's stats record, in emit order.
