@@ -605,7 +605,7 @@ func runStats(w io.Writer, o *Options) error {
 		return nil
 	}
 
-	if o.All && !o.ThisProject {
+	if (o.All || o.Source != "") && !o.ThisProject {
 		return runStatsFleet(w, o)
 	}
 
@@ -648,8 +648,8 @@ func runStatsFleet(w io.Writer, o *Options) error {
 	nProjects := 0
 	var per []projectStat
 
-	for _, d := range paths.AllProjectDirs() {
-		dbp, _, _, err := index.EnsureIndexed(d, false)
+	for _, sc := range allScope(o.Source, o.Reindex) {
+		dbp, _, err := scopes.Resolve(sc, o.Reindex)
 		if err != nil {
 			continue
 		}
@@ -669,7 +669,7 @@ func runStatsFleet(w io.Writer, o *Options) error {
 		if s.Last != "" && s.Last > tot.Last {
 			tot.Last = s.Last
 		}
-		per = append(per, projectStat{toStatsJSON(s), paths.ProjectLabel(d)})
+		per = append(per, projectStat{toStatsJSON(s), sc.Project})
 	}
 
 	if o.JSON {

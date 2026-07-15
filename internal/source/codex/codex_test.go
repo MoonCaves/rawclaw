@@ -72,6 +72,21 @@ func TestNormalize(t *testing.T) {
 			wantRole: "tool", wantText: "[TOOL_RESULT] file listing", wantOK: true,
 		},
 		{
+			name:     "web_search_call keeps the query",
+			json:     `{"type":"response_item","payload":{"type":"web_search_call","action":{"type":"search","query":"github foo bar"}}}`,
+			wantRole: "assistant", wantText: "[TOOL:web_search] github foo bar", wantOK: true,
+		},
+		{
+			name:     "tool_search_call arguments is an object, not a json string",
+			json:     `{"type":"response_item","payload":{"type":"tool_search_call","arguments":{"query":"grep app","limit":5}}}`,
+			wantRole: "assistant", wantText: "[TOOL:tool_search] grep app", wantOK: true,
+		},
+		{
+			name:     "tool_search_output marks result",
+			json:     `{"type":"response_item","payload":{"type":"tool_search_output","output":"3 results"}}`,
+			wantRole: "tool", wantText: "[TOOL_RESULT] 3 results", wantOK: true,
+		},
+		{
 			name:   "event_msg skipped",
 			json:   `{"type":"event_msg","payload":{"type":"token_count"}}`,
 			wantOK: false,

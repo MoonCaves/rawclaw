@@ -180,9 +180,46 @@ func normalize(rec map[string]any) (role, text string, ok bool) {
 		name, _ := p["name"].(string)
 		input, _ := p["input"].(string)
 		return "assistant", strings.TrimSpace(fmt.Sprintf("[TOOL:%s] %s", name, input)), true
+	case "web_search_call":
+		return "assistant", strings.TrimSpace("[TOOL:web_search] " + actionQuery(p["action"])), true
+	case "tool_search_call":
+		return "assistant", strings.TrimSpace("[TOOL:tool_search] " + argsText(p["arguments"])), true
+	case "tool_search_output":
+		return "tool", "[TOOL_RESULT] " + outputText(p["output"]), true
+	case "image_generation_call":
+		prompt, _ := p["prompt"].(string)
+		return "assistant", strings.TrimSpace("[TOOL:image_generation] " + prompt), true
 	default:
 		return "", "", false
 	}
+}
+
+// actionQuery extracts a web_search_call's query text (payload.action.query).
+func actionQuery(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	q, _ := m["query"].(string)
+	return q
+}
+
+// argsText renders a tool call's arguments, which may be a JSON string (like
+// function_call) OR an already-decoded object (like tool_search_call). Prefers a
+// "query" field, else the compact JSON.
+func argsText(v any) string {
+	switch a := v.(type) {
+	case string:
+		return a
+	case map[string]any:
+		if q, ok := a["query"].(string); ok && q != "" {
+			return q
+		}
+		if b, err := json.Marshal(a); err == nil {
+			return string(b)
+		}
+	}
+	return ""
 }
 
 // mapRole maps Codex roles onto the messages-table role vocabulary. "developer"
@@ -255,6 +292,12 @@ func outputText(v any) string {
 // mintUUID derives a stable per-message id from the session id + ordinal. Codex
 // message records carry no id; the ordinal is deterministic because the whole
 // file is reparsed in order on any change.
+//
+// FOOTGUN: the ordinal counts only records normalize() accepts, so adding or
+// removing a handled record type shifts every later ordinal in a session,
+// changing its minted uuids — invalidating existing <session8>:<uuid8> refs
+// (bookmarks, --around windows, prior citations) until a full reindex. If you
+// change the normalize() switch, treat it as a ref-breaking change.
 func mintUUID(sessionID string, ordinal int) string {
 	h := sha1.Sum([]byte(fmt.Sprintf("%s:%d", sessionID, ordinal)))
 	return hex.EncodeToString(h[:])[:16]
