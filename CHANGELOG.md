@@ -2,6 +2,32 @@
 
 All notable changes to RawClaw are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Multi-source recall via a pluggable `Source` port** — the index no longer knows a transcript's
+  on-disk format. A small port (enumerate sessions → stream ordered messages) feeds the FTS5 index,
+  and each agent CLI is an adapter behind it. Ships with two: **Claude Code** (`~/.claude/projects`)
+  and **Codex** (`~/.codex/sessions/**/rollout-*.jsonl`). `--source claude|codex` scopes a search to
+  one tool, or search across both at once; refs, `read`/`outline`, ranking, and the completeness
+  envelope are identical regardless of source.
+- **Codex-aware `--resume`** — prints the paste-ready `codex resume <id>` for a Codex hit (and the
+  `claude --resume` form for a Claude hit).
+- **Topic layer** — `rawclaw tag` records agent-supplied topic segments for a session (RawClaw itself
+  calls no model — the agent feeds the tags in), and `rawclaw topics` surfaces them on demand as a
+  delayed-disclosure fallback when an ambiguous keyword search buries the right segment. Topic tags
+  never pollute the primary search ranking.
+- **Drowning-steer** — when a query's terms are corpus-common (so relevance ranking is near-useless),
+  the agent envelope says so and steers toward a narrower query instead of returning a confident wrong
+  top hit.
+
+### Changed
+
+- **Agent-first is now the only surface.** The default output is the machine-readable agent envelope;
+  the separate human-formatted view and the bundled skill were removed — `read` / `outline` are
+  top-level verbs and `--help` is the documentation. `--json` remains for scripted use.
+
 ## [0.1.0] — 2026-06-20
 
 Initial release.
