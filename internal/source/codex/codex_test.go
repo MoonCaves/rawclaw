@@ -87,6 +87,66 @@ func TestNormalize(t *testing.T) {
 			wantRole: "tool", wantText: "[TOOL_RESULT] 3 results", wantOK: true,
 		},
 		{
+			name:     "custom_tool_call keeps name + input",
+			json:     `{"type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch"}}`,
+			wantRole: "assistant", wantText: "[TOOL:apply_patch] *** Begin Patch", wantOK: true,
+		},
+		{
+			name:     "custom_tool_call_output marks result",
+			json:     `{"type":"response_item","payload":{"type":"custom_tool_call_output","output":"patched"}}`,
+			wantRole: "tool", wantText: "[TOOL_RESULT] patched", wantOK: true,
+		},
+		{
+			name:     "image_generation_call keeps the prompt",
+			json:     `{"type":"response_item","payload":{"type":"image_generation_call","prompt":"a red cube"}}`,
+			wantRole: "assistant", wantText: "[TOOL:image_generation] a red cube", wantOK: true,
+		},
+		{
+			name:     "tool_search_call arguments as a json string still reads",
+			json:     `{"type":"response_item","payload":{"type":"tool_search_call","arguments":"grep app"}}`,
+			wantRole: "assistant", wantText: "[TOOL:tool_search] grep app", wantOK: true,
+		},
+		{
+			name:     "tool_search_call object without query falls back to compact json",
+			json:     `{"type":"response_item","payload":{"type":"tool_search_call","arguments":{"limit":5}}}`,
+			wantRole: "assistant", wantText: `[TOOL:tool_search] {"limit":5}`, wantOK: true,
+		},
+		{
+			name:     "web_search_call with a missing action yields no trailing space",
+			json:     `{"type":"response_item","payload":{"type":"web_search_call"}}`,
+			wantRole: "assistant", wantText: "[TOOL:web_search]", wantOK: true,
+		},
+		{
+			name:     "function_call_output object output shape",
+			json:     `{"type":"response_item","payload":{"type":"function_call_output","output":{"output":"nested"}}}`,
+			wantRole: "tool", wantText: "[TOOL_RESULT] nested", wantOK: true,
+		},
+		{
+			name:     "function_call_output content-block shape",
+			json:     `{"type":"response_item","payload":{"type":"function_call_output","output":{"content":[{"type":"output_text","text":"blk"}]}}}`,
+			wantRole: "tool", wantText: "[TOOL_RESULT] blk", wantOK: true,
+		},
+		{
+			name:     "reasoning array summary blocks join",
+			json:     `{"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"first"},{"type":"summary_text","text":"second"}]}}`,
+			wantRole: "assistant", wantText: "[THINKING] first\nsecond", wantOK: true,
+		},
+		{
+			name:   "reasoning with an empty summary is not indexable",
+			json:   `{"type":"response_item","payload":{"type":"reasoning","summary":""}}`,
+			wantOK: false,
+		},
+		{
+			name:     "message with empty content is ok but textless (dropped downstream)",
+			json:     `{"type":"response_item","payload":{"type":"message","role":"user","content":[]}}`,
+			wantRole: "user", wantText: "", wantOK: true,
+		},
+		{
+			name:     "unknown role passes through untouched",
+			json:     `{"type":"response_item","payload":{"type":"message","role":"tool","content":[{"type":"output_text","text":"t"}]}}`,
+			wantRole: "tool", wantText: "t", wantOK: true,
+		},
+		{
 			name:   "event_msg skipped",
 			json:   `{"type":"event_msg","payload":{"type":"token_count"}}`,
 			wantOK: false,
@@ -231,5 +291,75 @@ func TestDiscoverAbsentTreeIsNotError(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("want 0 containers for an empty tree, got %d", len(got))
+	}
+}
+
+// A rollout whose header is unreadable must be skipped without failing the walk:
+// its siblings still get discovered. Regression guard for a single corrupt file
+// silently blanking a whole day's corpus.
+func TestDiscoverSkipsUnreadableHeader(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	day := filepath.Join(home, "sessions", "2026", "07", "15")
+	writeJSONL(t, filepath.Join(day, "rollout-good.jsonl"),
+		`{"type":"session_meta","payload":{"id":"good1","cwd":"/repo","thread_source":"user"}}`,
+	)
+	// First line is not a decodable session_meta -> readMeta fails -> skipped.
+	writeJSONL(t, filepath.Join(day, "rollout-bad.jsonl"), `{not json at all`)
+	// A non-rollout file in the tree must be ignored entirely.
+	writeJSONL(t, filepath.Join(day, "notes.txt"), `ignore me`)
+
+	got, err := New().Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "good1" {
+		t.Fatalf("want only the good rollout, got %d: %+v", len(got), got)
+	}
+}
+
+// The minted-uuid ordinal counts only records normalize() indexes, so a record
+// it accepts-but-drops (empty text) must NOT consume an ordinal — otherwise every
+// later ref shifts. This locks the FOOTGUN documented on mintUUID.
+func TestMessagesEmptyContentDoesNotShiftOrdinals(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	f := filepath.Join(dir, "rollout-x.jsonl")
+	writeJSONL(t, f,
+		`{"type":"response_item","timestamp":"2026-07-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"q1"}]}}`,
+		`{"type":"response_item","timestamp":"2026-07-15T10:00:02Z","payload":{"type":"message","role":"assistant","content":[]}}`, // empty -> dropped, no ordinal
+		`{"type":"response_item","timestamp":"2026-07-15T10:00:03Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"q2"}]}}`,
+	)
+	got, err := New().Messages(source.Container{ID: "s1", Path: f})
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 messages, got %d: %+v", len(got), got)
+	}
+	if got[1].Text != "q2" || got[1].UUID != mintUUID("s1", 1) {
+		t.Errorf("q2 should hold ordinal 1, got text=%q uuid=%q (want uuid %q)", got[1].Text, got[1].UUID, mintUUID("s1", 1))
+	}
+}
+
+func TestDetect(t *testing.T) {
+	cases := []struct {
+		name     string
+		path     string
+		codexEnv string
+		want     bool
+	}{
+		{"default sessions path", "/home/u/.codex/sessions/2026/07/rollout-x.jsonl", "", true},
+		{"unrelated path", "/home/u/.claude/projects/foo/bar.jsonl", "", false},
+		{"custom CODEX_HOME sessions", "/data/codex/sessions/rollout-y.jsonl", "/data/codex", true},
+		{"custom home unset ignores sessions substring", "/data/codex/sessions/rollout-y.jsonl", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CODEX_HOME", tc.codexEnv)
+			if got := detect(tc.path); got != tc.want {
+				t.Errorf("detect(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
 	}
 }
