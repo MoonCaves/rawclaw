@@ -95,11 +95,11 @@ Read-only recall is the core, but lightweight scriptable session management belo
 
 ### Session recap — auto, background, out-of-band  **(planned — WANTED)**
 
-A cheap per-session recap so the *next* session (and the org) starts informed. Three nesting layers:
+A cheap per-session recap so the *next* session starts informed. Two nesting layers rawclaw owns:
 **title** (1 line) ⊂ **recap** (begin → middle transitions → final/current state + sidequests, via
-topic-section markers) ⊂ **central digest** (aggregator aggregates many recaps org-wide). rawclaw owns the
-per-session recap (its domain = transcripts); the recap **feeds** aggregator's central digest — rawclaw
-does not build the bulletin itself (single responsibility).
+topic-section markers). rawclaw owns the per-session recap (its domain = transcripts); the recap can
+**feed** an optional downstream aggregator, but rawclaw does not build that aggregator itself
+(single responsibility).
 
 - **We generate it ourselves.** Claude Code does NOT store a reusable session summary (compaction
   summaries are baked into history, not a clean field). So a background Haiku reads the transcript (via
