@@ -9,7 +9,6 @@
 # What it does:
 #   1. Detects your OS + CPU and downloads the matching prebuilt release binary.
 #   2. Installs `rawclaw` to ~/.local/bin (warns if that's not on your PATH).
-#   3. Installs the Claude Code skill to ~/.claude/skills/rawclaw-search/.
 #
 # No Go toolchain, no compiler, no root, no sudo.
 
@@ -20,7 +19,6 @@ set -eu
 
 REPO="MoonCaves/rawclaw"
 BIN_NAME="rawclaw"
-SKILL_NAME="rawclaw-search"
 
 # ── Output helpers (colour only on a real terminal) ───────────────────────────
 if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ -n "$(tput colors 2>/dev/null || echo)" ]; then
@@ -111,32 +109,6 @@ case ":${PATH:-}:" in
         warn "    export PATH=\"\$HOME/.local/bin:\$PATH\""
         ;;
 esac
-
-# ── Install the Claude Code skill ─────────────────────────────────────────────
-# Honour CLAUDE_CONFIG_DIR if set, else the default ~/.claude.
-CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-SKILL_DEST="$CLAUDE_DIR/skills/$SKILL_NAME"
-SKILL_REL="skills/$SKILL_NAME/SKILL.md"
-
-# When run from a checkout, copy the local SKILL.md; otherwise fetch the raw file.
-SCRIPT_SKILL=""
-if [ -n "${0:-}" ] && [ "$0" != "sh" ] && [ "$0" != "-sh" ] && [ "$0" != "bash" ]; then
-    _script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P || echo)"
-    if [ -n "$_script_dir" ] && [ -f "$_script_dir/$SKILL_REL" ]; then
-        SCRIPT_SKILL="$_script_dir/$SKILL_REL"
-    fi
-fi
-
-info "Installing Claude Code skill -> $SKILL_DEST"
-mkdir -p "$SKILL_DEST" || die "could not create $SKILL_DEST."
-
-if [ -n "$SCRIPT_SKILL" ]; then
-    cp "$SCRIPT_SKILL" "$SKILL_DEST/SKILL.md" || die "could not copy SKILL.md."
-else
-    SKILL_URL="https://raw.githubusercontent.com/${REPO}/main/$SKILL_REL"
-    fetch "$SKILL_URL" "$SKILL_DEST/SKILL.md"
-fi
-ok "Skill installed (use it from any Claude Code session)."
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 printf '\n%s%srawclaw is ready.%s\n\n' "${BOLD}" "${GREEN}" "${RESET}"
