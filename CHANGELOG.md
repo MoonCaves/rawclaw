@@ -4,6 +4,8 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-17
+
 ### Added
 
 - **Multi-source recall via a pluggable `Source` port** — the index no longer knows a transcript's
