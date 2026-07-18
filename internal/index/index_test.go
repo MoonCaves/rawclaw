@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // openTestDB opens a fresh writable db with the schema ensured, returning the
@@ -14,9 +16,9 @@ func openTestDB(t *testing.T) (*sql.DB, string) {
 	t.Helper()
 	dir := t.TempDir()
 	dbp := filepath.Join(dir, "test.db")
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
-		t.Fatalf("openRW: %v", err)
+		t.Fatalf("store.ConnectRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
 	if err := EnsureSchema(con, "claude"); err != nil {
@@ -31,9 +33,9 @@ func openTestDB(t *testing.T) (*sql.DB, string) {
 // real pre-v4 cache died with "no such column: uuid" instead of rebuilding.
 func TestEnsureSchemaMigratesPreV4DB(t *testing.T) {
 	dbp := filepath.Join(t.TempDir(), "old.db")
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
-		t.Fatalf("openRW: %v", err)
+		t.Fatalf("store.ConnectRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
 	// A pre-v4 cache: messages WITHOUT the uuid column, stamped at an old version.
@@ -65,80 +67,9 @@ func TestFTS5OK(t *testing.T) {
 	}
 }
 
-func TestSessionIDFor(t *testing.T) {
-	tests := []struct {
-		name       string
-		path       string
-		dir        string
-		wantSID    string
-		wantSub    int
-		wantParent string
-	}{
-		{"top level", "/p/abc.jsonl", "/p", "abc", 0, ""},
-		{"subagent with parent", "/p/parent/subagents/child.jsonl", "/p", "parent/child", 1, "parent"},
-		{"subagent no parent", "/p/subagents/child.jsonl", "/p", "subagents/child", 1, ""},
-		{"nested top level", "/p/sub/dir/x.jsonl", "/p", "x", 0, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sid, sub, parent := SessionIDFor(tt.path, tt.dir)
-			if sid != tt.wantSID || sub != tt.wantSub || parent != tt.wantParent {
-				t.Errorf("SessionIDFor(%q,%q) = (%q,%d,%q), want (%q,%d,%q)",
-					tt.path, tt.dir, sid, sub, parent, tt.wantSID, tt.wantSub, tt.wantParent)
-			}
-		})
-	}
-}
-
-func TestFileFingerprint(t *testing.T) {
-	dir := t.TempDir()
-
-	// Golden fingerprint vectors for known inputs, used to pin FileFingerprint.
-	small := filepath.Join(dir, "small.bin")
-	if err := os.WriteFile(small, []byte("hello world this is a test"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	large := filepath.Join(dir, "large.bin")
-	largeData := make([]byte, 0, 10240)
-	for i := 0; i < 40; i++ {
-		for b := 0; b < 256; b++ {
-			largeData = append(largeData, byte(b))
-		}
-	}
-	if err := os.WriteFile(large, largeData, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	empty := filepath.Join(dir, "empty.bin")
-	if err := os.WriteFile(empty, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	tests := []struct {
-		name string
-		path string
-		size int64
-		want string
-	}{
-		{"small (no tail)", small, 26, "2ed0803756881215"},
-		{"large (head+tail)", large, 10240, "ed6c8206f27a1fb4"},
-		{"empty", empty, 0, "3eb416223e9e69e6"},
-		{"missing file", filepath.Join(dir, "nope.bin"), 100, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := FileFingerprint(tt.path, tt.size); got != tt.want {
-				t.Errorf("FileFingerprint(%q,%d) = %q, want %q", tt.path, tt.size, got, tt.want)
-			}
-			if len(tt.want) > 0 && len(FileFingerprint(tt.path, tt.size)) != 16 {
-				t.Errorf("fingerprint must be 16 hex chars")
-			}
-		})
-	}
-}
-
 func TestDBPath(t *testing.T) {
 	got := DBPath("/Users/x/.claude/projects/-foo-bar")
-	want := filepath.Join(cacheHome(), "session-search", "-foo-bar.db")
+	want := filepath.Join(store.CacheDir(), "-foo-bar.db")
 	if got != want {
 		t.Errorf("DBPath = %q, want %q", got, want)
 	}
@@ -533,7 +464,7 @@ func TestConnectROIsReadOnly(t *testing.T) {
 	con, dbp := openTestDB(t)
 	con.Close()
 
-	ro, err := ConnectRO(dbp)
+	ro, err := store.ConnectRO(dbp)
 	if err != nil {
 		t.Fatalf("ConnectRO: %v", err)
 	}

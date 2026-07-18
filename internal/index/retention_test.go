@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/MoonCaves/rawclaw/internal/provenance"
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // TestRetentionPurgeSurvives is Test-plan #1: a session whose backing file is
@@ -206,9 +209,9 @@ func TestMigrationInPlaceAddsColumnsNoRebuild(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // isolate the machine-id file
 
 	dbp := filepath.Join(t.TempDir(), "old.db")
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
-		t.Fatalf("openRW: %v", err)
+		t.Fatalf("store.ConnectRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
 
@@ -265,8 +268,8 @@ func TestMigrationInPlaceAddsColumnsNoRebuild(t *testing.T) {
 		if err := rows.Scan(&id, &origin, &tool, &path); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if origin.String != MachineID() {
-			t.Errorf("%s origin_machine = %q, want this machine %q", id, origin.String, MachineID())
+		if origin.String != provenance.MachineID() {
+			t.Errorf("%s origin_machine = %q, want this machine %q", id, origin.String, provenance.MachineID())
 		}
 		if tool.String != "codex" {
 			t.Errorf("%s source_tool = %q, want codex (the scope's source)", id, tool.String)
@@ -293,9 +296,9 @@ func TestMigrationInterruptedBackfillResumes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // isolate the machine-id file
 
 	dbp := filepath.Join(t.TempDir(), "interrupted.db")
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
-		t.Fatalf("openRW: %v", err)
+		t.Fatalf("store.ConnectRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
 
@@ -348,8 +351,8 @@ func TestMigrationInterruptedBackfillResumes(t *testing.T) {
 		if err := rows.Scan(&id, &origin, &tool, &path); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if !origin.Valid || origin.String != MachineID() {
-			t.Errorf("%s origin_machine = %+v, want this machine %q (resumed backfill left it blank)", id, origin, MachineID())
+		if !origin.Valid || origin.String != provenance.MachineID() {
+			t.Errorf("%s origin_machine = %+v, want this machine %q (resumed backfill left it blank)", id, origin, provenance.MachineID())
 		}
 		if !tool.Valid || tool.String != "codex" {
 			t.Errorf("%s source_tool = %+v, want codex", id, tool)

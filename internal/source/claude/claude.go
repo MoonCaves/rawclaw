@@ -3,7 +3,7 @@
 // working dir, one *.jsonl per session, subagents under a subagents/ subdir.
 //
 // It is a thin lift of the reader that lived inline in internal/index: Discover
-// reuses internal/paths discovery and internal/index.SessionIDFor for lineage;
+// reuses internal/paths discovery and internal/provenance.SessionIDFor for lineage;
 // Messages reproduces the parseTranscript flatten byte-for-byte via
 // internal/parse, so ingesting through this adapter yields identical rows.
 package claude
@@ -15,10 +15,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/source"
 )
 
@@ -50,14 +50,14 @@ func detect(path string) bool {
 
 // Discover enumerates every Claude session: each *.jsonl (top-level or subagent)
 // under every project dir, tagged with the session id, subagent flag, and parent
-// that internal/index.SessionIDFor derives from the path. Returns (nil, nil) when
+// that internal/provenance.SessionIDFor derives from the path. Returns (nil, nil) when
 // no projects exist — an empty corpus is not an error.
 func (a *Adapter) Discover() ([]source.Container, error) {
 	var out []source.Container
 	for _, dir := range paths.AllProjectDirs() {
 		cwd := paths.ProjectCWD(dir)
 		for _, f := range paths.ContainedJSONL(dir) {
-			sid, isSub, parent := index.SessionIDFor(f, dir)
+			sid, isSub, parent := provenance.SessionIDFor(f, dir)
 			out = append(out, source.Container{
 				ID:         sid,
 				Path:       f,

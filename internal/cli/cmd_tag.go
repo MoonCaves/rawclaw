@@ -11,6 +11,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
+	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 	"github.com/spf13/cobra"
 )
@@ -168,7 +169,7 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 // Returns the number of rows written. taggedAt is passed in (the CLI uses
 // time.Now; a test pins it) so the populate logic stays free of a clock read.
 func runTagWrite(con *sql.DB, fullSID string, r io.Reader, taggedAt float64) (int, error) {
-	if err := index.EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		return 0, fmt.Errorf("ensure topic schema: %w", err)
 	}
 
@@ -201,7 +202,7 @@ func openSessionRO(session8 string, scope []view.Scope) (*sql.DB, string, error)
 	if err != nil {
 		return nil, "", err
 	}
-	con, err := index.ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return nil, "", fmt.Errorf("open %q read-only: %w", dbp, err)
 	}

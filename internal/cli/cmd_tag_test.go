@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/store"
 
 	_ "modernc.org/sqlite"
 )
@@ -25,7 +26,7 @@ func newTagTestDB(t *testing.T) *sql.DB {
 	if err := index.EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
-	if err := index.EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 	return con
