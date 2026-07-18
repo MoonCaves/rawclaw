@@ -8,6 +8,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/provenance"
+	"github.com/MoonCaves/rawclaw/internal/retention"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
@@ -120,7 +121,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 	// Retention pass (parallel of UpdateIndex): an absent own-source container is
 	// flagged missing_since and retained; only an explicit tombstone deletes; a
 	// foreign-origin row is never a candidate (D1/D2/D5).
-	if err := reconcileRetention(con, onDisk, tombstoned, nowEpoch(), RetentionMirror()); err != nil {
+	if err := retention.ReconcileRetention(con, onDisk, tombstoned, nowEpoch(), retention.RetentionMirror()); err != nil {
 		return err
 	}
 	return nil
