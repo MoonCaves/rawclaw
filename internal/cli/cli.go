@@ -5,7 +5,6 @@
 package cli
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -491,7 +490,7 @@ func reindexOne(sc view.Scope, emb embed.Embedder) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
 		return 0, err
 	}
@@ -571,20 +570,14 @@ func codexResumeHits(prefix string) []paths.SessionHit {
 		if err != nil {
 			continue
 		}
-		rows, qerr := con.Query(
-			"SELECT id FROM sessions WHERE id LIKE ? AND is_subagent=0 ORDER BY id LIMIT 3", prefix+"%")
+		ids, qerr := store.SessionsByPrefix(con, prefix, false, 3)
+		_ = con.Close()
 		if qerr != nil {
-			_ = con.Close()
 			continue
 		}
-		for rows.Next() {
-			var id string
-			if rows.Scan(&id) == nil {
-				out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
-			}
+		for _, id := range ids {
+			out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
 		}
-		_ = rows.Close()
-		_ = con.Close()
 	}
 	return out
 }
@@ -1039,14 +1032,4 @@ func realpathExpand(p string) string {
 func isDir(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && st.IsDir()
-}
-
-// openRW opens a read-write connection for the vector-index pass (single writer).
-func openRW(dbp string) (*sql.DB, error) {
-	con, err := sql.Open("sqlite", "file:"+dbp+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)")
-	if err != nil {
-		return nil, fmt.Errorf("open rw %s: %w", dbp, err)
-	}
-	con.SetMaxOpenConns(1)
-	return con, nil
 }
