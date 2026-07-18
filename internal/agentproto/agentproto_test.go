@@ -13,6 +13,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
+	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 
 	_ "modernc.org/sqlite"
@@ -854,7 +855,7 @@ func TestSearchNeverCarriesTopic(t *testing.T) {
 		t.Fatalf("EnsureIndexed: %v", err)
 	}
 	con := openCacheRW(t, dbp)
-	if err := index.EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 	if err := index.UpsertTopicSegment(con, "sessone",
@@ -887,7 +888,7 @@ func TestTopicsCommand(t *testing.T) {
 		t.Fatalf("EnsureIndexed: %v", err)
 	}
 	con := openCacheRW(t, dbp)
-	if err := index.EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 	if err := index.UpsertTopicSegment(con, "sessone",
@@ -979,7 +980,7 @@ func TestOutlineListsTopics(t *testing.T) {
 		t.Fatalf("EnsureIndexed: %v", err)
 	}
 	con := openCacheRW(t, dbp)
-	if err := index.EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 	if err := index.UpsertTopicSegment(con, "sesstwo",

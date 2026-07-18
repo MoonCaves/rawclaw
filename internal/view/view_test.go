@@ -383,7 +383,7 @@ func writeScrollSession(t *testing.T, proj, stem, content string) {
 
 // TestBrowseReturnsPreviewsWithoutDeadlock pins the browse deadlock fix. Browse
 // runs a per-session preview query for each row it returns, on the same
-// single-connection RO pool (index.ConnectRO sets SetMaxOpenConns(1)). The bug
+// single-connection RO pool (store.ConnectRO sets SetMaxOpenConns(1)). The bug
 // shipped in v0.1.0 was issuing that preview query from inside the still-open
 // session-rows cursor, which blocked forever waiting for a second connection.
 // The fix drains and closes the rows before previewing. This test exercises that

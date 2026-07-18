@@ -8,6 +8,7 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // TestEnsureIndexedContainers proves the source-agnostic ingestion path: two
@@ -51,7 +52,7 @@ func TestEnsureIndexedContainers(t *testing.T) {
 		t.Fatalf("sessions = %d, want 2", n)
 	}
 
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		t.Fatal(err)
 	}

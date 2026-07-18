@@ -11,6 +11,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
+	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
@@ -161,7 +162,7 @@ func TestClaudeUnionsOrphanedDBs(t *testing.T) {
 	}
 
 	// The retained orphan was stamped missing_since (own-source, source gone).
-	con, err := index.ConnectRO(orphanDBP)
+	con, err := store.ConnectRO(orphanDBP)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +255,7 @@ func TestCodexUnionsOrphanedDBs_TombstonedExcluded(t *testing.T) {
 		t.Fatalf("seed orphan db: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(index.CacheDir(), ".deleted"), []byte("deadsess\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(store.CacheDir(), ".deleted"), []byte("deadsess\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

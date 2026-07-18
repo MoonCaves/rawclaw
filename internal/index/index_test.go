@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // openTestDB opens a fresh writable db with the schema ensured, returning the
@@ -14,9 +16,9 @@ func openTestDB(t *testing.T) (*sql.DB, string) {
 	t.Helper()
 	dir := t.TempDir()
 	dbp := filepath.Join(dir, "test.db")
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
-		t.Fatalf("openRW: %v", err)
+		t.Fatalf("store.ConnectRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
 	if err := EnsureSchema(con, "claude"); err != nil {
@@ -31,9 +33,9 @@ func openTestDB(t *testing.T) (*sql.DB, string) {
 // real pre-v4 cache died with "no such column: uuid" instead of rebuilding.
 func TestEnsureSchemaMigratesPreV4DB(t *testing.T) {
 	dbp := filepath.Join(t.TempDir(), "old.db")
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
-		t.Fatalf("openRW: %v", err)
+		t.Fatalf("store.ConnectRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
 	// A pre-v4 cache: messages WITHOUT the uuid column, stamped at an old version.
@@ -138,7 +140,7 @@ func TestFileFingerprint(t *testing.T) {
 
 func TestDBPath(t *testing.T) {
 	got := DBPath("/Users/x/.claude/projects/-foo-bar")
-	want := filepath.Join(cacheHome(), "session-search", "-foo-bar.db")
+	want := filepath.Join(store.CacheDir(), "-foo-bar.db")
 	if got != want {
 		t.Errorf("DBPath = %q, want %q", got, want)
 	}
@@ -533,7 +535,7 @@ func TestConnectROIsReadOnly(t *testing.T) {
 	con, dbp := openTestDB(t)
 	con.Close()
 
-	ro, err := ConnectRO(dbp)
+	ro, err := store.ConnectRO(dbp)
 	if err != nil {
 		t.Fatalf("ConnectRO: %v", err)
 	}
