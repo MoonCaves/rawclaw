@@ -111,11 +111,7 @@ func TestVecIndexEmbedsPrunesAndRefreshes(t *testing.T) {
 
 	// Simulate a reindex that churns the message id but keeps the same text:
 	// delete + re-insert the long message under a new autoincrement id.
-	// (storetest gap: no message-delete helper — raw fixture SQL stays until one
-	// lands in storetest; D8 forbids adding it from here.)
-	if _, err := con.Exec("DELETE FROM messages WHERE id=?", id1); err != nil {
-		t.Fatalf("delete msg: %v", err)
-	}
+	storetest.DeleteMessage(t, con, id1)
 	newID := addMessage(t, con, "s1", "user", long, "2026-06-18T10:00:00Z", 0, "")
 	if newID == id1 {
 		t.Fatalf("expected a churned id; got the same %d", newID)
@@ -143,10 +139,7 @@ func TestVecIndexEmbedsPrunesAndRefreshes(t *testing.T) {
 	}
 
 	// Now remove the source text entirely → the vector must be pruned.
-	// (storetest gap: no message-delete helper, see above.)
-	if _, err := con.Exec("DELETE FROM messages WHERE id=?", newID); err != nil {
-		t.Fatalf("delete churned msg: %v", err)
-	}
+	storetest.DeleteMessage(t, con, newID)
 	if _, err := VecIndex(con, emb, 0); err != nil {
 		t.Fatalf("VecIndex (prune): %v", err)
 	}
@@ -250,10 +243,7 @@ func TestVecKNNExistenceCheck(t *testing.T) {
 		t.Fatalf("VecIndex: %v", err)
 	}
 	// Delete the message row but leave the vector orphaned (no reindex run).
-	// (storetest gap: no message-delete helper — see TestVecIndexEmbedsPrunesAndRefreshes.)
-	if _, err := con.Exec("DELETE FROM messages WHERE id=?", id); err != nil {
-		t.Fatalf("delete: %v", err)
-	}
+	storetest.DeleteMessage(t, con, id)
 	hits := VecKNN(con, []float64{1, 0, 0}, 5, false)
 	if len(hits) != 0 {
 		t.Fatalf("hits = %d, want 0 (orphan vector existence-checked out)", len(hits))
