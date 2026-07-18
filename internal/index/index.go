@@ -4,24 +4,19 @@
 package index
 
 import (
-	"crypto/rand"
-	"crypto/sha1"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/store"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (FTS5 + bm25 + snippet)
@@ -246,43 +241,6 @@ func DBPath(transcriptDir string) string {
 	return filepath.Join(store.CacheDir(), enc+".db")
 }
 
-// FileFingerprint is a cheap content fingerprint (sha1 of first 4KB + "|" + last
-// 4KB, hex[:16]) catching a same-mtime+same-size in-place rewrite at either end.
-// Returns "" on any I/O error.
-func FileFingerprint(path string, size int64) string {
-	fh, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer fh.Close()
-
-	head := make([]byte, 4096)
-	n, err := io.ReadFull(fh, head)
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return ""
-	}
-	head = head[:n]
-
-	var tail []byte
-	if size > 8192 {
-		if _, err := fh.Seek(-4096, io.SeekEnd); err != nil {
-			return ""
-		}
-		tail = make([]byte, 4096)
-		m, err := io.ReadFull(fh, tail)
-		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return ""
-		}
-		tail = tail[:m]
-	}
-
-	h := sha1.New()
-	h.Write(head)
-	h.Write([]byte("|"))
-	h.Write(tail)
-	return hex.EncodeToString(h.Sum(nil))[:16]
-}
-
 // EnsureSchema creates the base schema, the FTS table if missing, and rebuilds
 // on any SchemaVersion mismatch or missing marker. sourceID is the scope's source
 // ("claude"/"codex"), used only to backfill source_tool on an in-place durability
@@ -374,7 +332,7 @@ func migrateDurabilityColumns(con *sql.DB, sourceID string) error {
 		        source_tool = ?,
 		        source_path = (SELECT path FROM file_index WHERE file_index.session_id = sessions.id)
 		  WHERE origin_machine IS NULL`,
-		MachineID(), sourceID,
+		provenance.MachineID(), sourceID,
 	); err != nil {
 		return fmt.Errorf("backfill provenance: %w", err)
 	}
@@ -413,80 +371,6 @@ func sessionColumns(con *sql.DB) (map[string]struct{}, error) {
 // generalized container path injects its source id alongside its MessagesFunc.
 const sourceClaude = "claude"
 
-var (
-	machineIDOnce  sync.Once
-	machineIDValue string
-)
-
-// MachineID returns this machine's stable, self-minted id (D3): a persisted
-// 128-bit random hex value in rawclaw's state dir, NOT the (mutable, collision-
-// prone) hostname. Minted and persisted on first use, then cached for the
-// process. On any I/O failure it degrades to an in-memory random id so provenance
-// is still stamped and indexing never blocks.
-func MachineID() string {
-	machineIDOnce.Do(func() { machineIDValue = loadOrMintMachineID() })
-	return machineIDValue
-}
-
-// machineIDPath is <cacheHome>/session-search/machine-id — the same state dir
-// that holds the caches and the tombstone sidecar.
-func machineIDPath() string {
-	return filepath.Join(store.CacheDir(), "machine-id")
-}
-
-// loadOrMintMachineID reads the persisted id, or mints + persists a fresh one.
-func loadOrMintMachineID() string {
-	p := machineIDPath()
-	if b, err := os.ReadFile(p); err == nil {
-		if id := strings.TrimSpace(string(b)); id != "" {
-			return id
-		}
-	}
-	id := randomHex()
-	_ = os.WriteFile(p, []byte(id+"\n"), 0o644) // best-effort; re-mint next run on failure
-	return id
-}
-
-// randomHex returns 32 hex chars (128 bits) of crypto-random. On the (extremely
-// unlikely) entropy-source failure it falls back to a pid+time value — still
-// stable-enough for a single run to keep provenance stamped.
-func randomHex() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return hex.EncodeToString([]byte(fmt.Sprintf("pid%d-%d", os.Getpid(), time.Now().UnixNano())))
-	}
-	return hex.EncodeToString(b)
-}
-
-// SessionIDFor returns the unique session id for a transcript path, plus whether
-// it is a subagent (1/0) and its parent id. Top-level: filename stem. Subagent
-// (under a subagents/ subdir): "<parent>/<stem>".
-func SessionIDFor(path, transcriptDir string) (sid string, isSubagent int, parent string) {
-	stem := stemOf(path)
-	rel, err := filepath.Rel(transcriptDir, path)
-	if err != nil {
-		rel = path
-	}
-	parts := strings.Split(rel, string(os.PathSeparator))
-	for i, p := range parts {
-		if p == "subagents" {
-			if i > 0 {
-				par := parts[i-1]
-				return par + "/" + stem, 1, par
-			}
-			return "subagents/" + stem, 1, "" // empty parent -> SQL NULL
-		}
-	}
-	return stem, 0, ""
-}
-
-// stemOf returns the filename with its final extension stripped.
-func stemOf(path string) string {
-	base := filepath.Base(path)
-	ext := filepath.Ext(base)
-	return strings.TrimSuffix(base, ext)
-}
-
 // reindexRow is one parsed message ready for insertion.
 type reindexRow struct {
 	role    string
@@ -500,7 +384,7 @@ type reindexRow struct {
 // this session's rows (an I/O failure can't commit away existing data). Returns
 // true on success.
 func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
-	sid, isSub, parent := SessionIDFor(path, transcriptDir)
+	sid, isSub, parent := provenance.SessionIDFor(path, transcriptDir)
 
 	rows, started, last, ok := parseTranscript(path, sid)
 	if !ok {
@@ -530,7 +414,7 @@ func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
 	// session is present by definition, so a reappeared source file un-flags here.
 	if _, err := con.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
-		sid, started, last, len(rows), isSub, parentArg, MachineID(), sourceClaude, realpath(path),
+		sid, started, last, len(rows), isSub, parentArg, provenance.MachineID(), sourceClaude, realpath(path),
 	); err != nil {
 		return false
 	}
@@ -641,23 +525,23 @@ func UpdateIndex(con *sql.DB, transcriptDir string) error {
 		}
 		// Skip a tombstoned session: its file may have been re-created (or never
 		// removed from disk), but the user deleted it — honor that across reindex.
-		if sid, _, _ := SessionIDFor(f, transcriptDir); isMember(tombstoned, sid) {
+		if sid, _, _ := provenance.SessionIDFor(f, transcriptDir); isMember(tombstoned, sid) {
 			continue
 		}
 		mtime := mtimeOf(st)
 		size := st.Size()
 		if prev, found := cur[rp]; found {
 			if absDiff(prev.mtime, mtime) < 0.001 && prev.size == size {
-				if prev.fp == FileFingerprint(f, size) {
+				if prev.fp == provenance.FileFingerprint(f, size) {
 					continue // genuinely unchanged
 				}
 			}
 		}
 		if ReindexFile(con, f, transcriptDir) {
-			sid, _, _ := SessionIDFor(f, transcriptDir)
+			sid, _, _ := provenance.SessionIDFor(f, transcriptDir)
 			if _, err := con.Exec(
 				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-				rp, mtime, size, FileFingerprint(f, size), sid,
+				rp, mtime, size, provenance.FileFingerprint(f, size), sid,
 			); err != nil {
 				return fmt.Errorf("update file_index: %w", err)
 			}
@@ -725,7 +609,7 @@ func reconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 	}
 	rows.Close()
 
-	mid := MachineID()
+	mid := provenance.MachineID()
 	for _, r := range all {
 		_, present := onDisk[r.path]
 		own := !r.origin.Valid || r.origin.String == mid
@@ -895,7 +779,7 @@ func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool
 		return false, 0, fmt.Errorf("orphan probe scan: %w", err)
 	}
 	defer rows.Close()
-	mid := MachineID()
+	mid := provenance.MachineID()
 	for rows.Next() {
 		var id string
 		var origin sql.NullString

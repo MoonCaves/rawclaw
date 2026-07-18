@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -267,8 +268,8 @@ func TestMigrationInPlaceAddsColumnsNoRebuild(t *testing.T) {
 		if err := rows.Scan(&id, &origin, &tool, &path); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if origin.String != MachineID() {
-			t.Errorf("%s origin_machine = %q, want this machine %q", id, origin.String, MachineID())
+		if origin.String != provenance.MachineID() {
+			t.Errorf("%s origin_machine = %q, want this machine %q", id, origin.String, provenance.MachineID())
 		}
 		if tool.String != "codex" {
 			t.Errorf("%s source_tool = %q, want codex (the scope's source)", id, tool.String)
@@ -350,8 +351,8 @@ func TestMigrationInterruptedBackfillResumes(t *testing.T) {
 		if err := rows.Scan(&id, &origin, &tool, &path); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		if !origin.Valid || origin.String != MachineID() {
-			t.Errorf("%s origin_machine = %+v, want this machine %q (resumed backfill left it blank)", id, origin, MachineID())
+		if !origin.Valid || origin.String != provenance.MachineID() {
+			t.Errorf("%s origin_machine = %+v, want this machine %q (resumed backfill left it blank)", id, origin, provenance.MachineID())
 		}
 		if !tool.Valid || tool.String != "codex" {
 			t.Errorf("%s source_tool = %+v, want codex", id, tool)
