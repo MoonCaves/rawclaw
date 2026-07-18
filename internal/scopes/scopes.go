@@ -33,30 +33,94 @@ func All(sourceFilter string, reindex bool) []view.Scope {
 	return out
 }
 
-// Claude returns the lazy Claude project scopes: TDir set, db resolved on demand
-// by Resolve (preserving the original per-project, index-at-search-time timing).
+// Claude returns the union of (a) the lazy live Claude project scopes — TDir set,
+// db resolved on demand by Resolve (preserving the original per-project,
+// index-at-search-time timing) — and (b) EAGER read-only scopes for orphaned
+// index dbs whose source project dir has vanished (D8: the 30-day-purge case).
+// Discovery is store-driven, not only disk-driven — the retained rows stay
+// reachable even when AllProjectDirs no longer yields their project.
 func Claude() []view.Scope {
 	dirs := paths.AllProjectDirs()
 	out := make([]view.Scope, 0, len(dirs))
+	liveDBs := make(map[string]struct{}, len(dirs)) // db paths already covered by a live dir
 	for _, d := range dirs {
 		out = append(out, view.Scope{Project: paths.ProjectLabel(d), TDir: d, Source: "claude"})
+		liveDBs[index.DBPath(d)] = struct{}{}
+	}
+	out = append(out, orphanClaudeScopes(liveDBs)...)
+	return out
+}
+
+// orphanClaudeScopes discovers index dbs in the session-search cache dir whose
+// Claude source dir is gone and surfaces each as an eager read-only scope (DBP
+// set, like a Codex scope) so search/read/list reach the retained rows without
+// re-walking a source that no longer exists (D8). Prior art: Zoekt enumerates the
+// index shards themselves and reconciles them against the source listing
+// (cleanup.go:134-146) — the index is a first-class discovery surface.
+//
+// liveDBs is the set of db paths already covered by a live project scope; those
+// are skipped so a project is never listed twice. Each candidate is reconciled
+// against an empty live scan (stamping missing_since, deleting tombstoned rows)
+// and included only if it still holds >=1 non-tombstoned top-level session — so a
+// db whose only sessions were deleted still reads as deleted. Codex dbs (prefix
+// "codex-") are left to Codex(), which reindexes them from live discovery.
+func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
+	entries, _ := filepath.Glob(filepath.Join(index.CacheDir(), "*.db"))
+	sort.Strings(entries)
+
+	var out []view.Scope
+	for _, dbp := range entries {
+		base := filepath.Base(dbp)
+		if strings.HasPrefix(base, "codex-") {
+			continue // codex dbs are enumerated + reconciled by Codex()
+		}
+		if _, covered := liveDBs[dbp]; covered {
+			continue // already a live project scope — don't list it twice
+		}
+		n, err := index.EnsureOrphanReconciled(dbp)
+		if err != nil {
+			slog.Warn("scopes: orphan reconcile failed", "db", dbp, "err", err)
+			continue
+		}
+		if n <= 0 {
+			continue // only tombstoned/empty sessions — reads as deleted
+		}
+		out = append(out, view.Scope{Project: orphanLabel(base), DBP: dbp, Source: "claude"})
 	}
 	return out
+}
+
+// orphanLabel derives a friendly project label from an index db filename when the
+// source dir (whose recorded cwd ProjectLabel would read) is gone. The db name is
+// the encoded project dir (Claude's "/"→"-", "."→"-" encoding), so the last
+// non-empty "-" segment is the closest recoverable basename — e.g.
+// "-tmp-demoproj.db" → "demoproj". Falls back to the whole stem.
+func orphanLabel(dbFileName string) string {
+	enc := strings.TrimSuffix(dbFileName, ".db")
+	parts := strings.Split(enc, "-")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i] != "" {
+			return parts[i]
+		}
+	}
+	return enc
 }
 
 // Codex discovers Codex sessions, groups them by recorded cwd, ingests each
 // group into its OWN db (namespaced so it can never collide with a Claude db —
 // see index.EnsureIndexedContainers' complete-set contract), and returns eager
-// scopes carrying that db + cwd. Returns nil when Codex has no sessions.
+// scopes carrying that db + cwd — unioned with orphanCodexScopes (D8: the same
+// 30-day-purge store-driven discovery Claude() does via orphanClaudeScopes).
+// Discover erroring or finding zero live containers does NOT skip the orphan
+// scan: a cwd's rollouts can vanish entirely while its retained db still holds
+// searchable history, and that must stay reachable even when Discover comes
+// back empty.
 func Codex(reindex bool) []view.Scope {
 	a := codex.New()
 	containers, err := a.Discover()
 	if err != nil {
 		slog.Warn("scopes: codex discover failed", "err", err)
-		return nil
-	}
-	if len(containers) == 0 {
-		return nil
+		// containers is nil; fall through so the orphan scan below still runs.
 	}
 
 	byCWD := map[string][]source.Container{}
@@ -70,16 +134,83 @@ func Codex(reindex bool) []view.Scope {
 	sort.Strings(cwds)
 
 	out := make([]view.Scope, 0, len(cwds))
+	liveDBs := make(map[string]struct{}, len(cwds)) // db paths already covered by a live cwd group
 	for _, cwd := range cwds {
 		dbp := codexDBPath(cwd)
-		if _, _, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages); ierr != nil {
+		liveDBs[dbp] = struct{}{}
+		if _, _, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, codex.Registration().ID); ierr != nil {
 			slog.Warn("scopes: codex index failed", "cwd", cwd, "err", ierr)
 			// The db path may still hold a prior good index; include the scope so
 			// search can open it read-only and degrade gracefully.
 		}
 		out = append(out, view.Scope{Project: codexLabel(cwd), DBP: dbp, CWD: cwd, Source: "codex"})
 	}
+	out = append(out, orphanCodexScopes(liveDBs)...)
 	return out
+}
+
+// orphanCodexScopes discovers Codex index dbs in the cache dir whose live cwd
+// group has vanished entirely and surfaces each as an eager read-only scope,
+// mirroring orphanClaudeScopes: once every rollout for a cwd is purged, that
+// cwd drops out of Discover()'s byCWD grouping and Codex() would otherwise
+// never open its retained db again (the exact gap D8 closed for Claude).
+//
+// liveDBs is the set of db paths already covered by a live cwd group this
+// call; those are skipped so a cwd is never listed twice. Each candidate is
+// reconciled against an empty live scan (stamping missing_since, deleting
+// tombstoned rows) and included only if it still holds >=1 non-tombstoned
+// top-level session — so a db whose only sessions were deleted still reads as
+// deleted.
+func orphanCodexScopes(liveDBs map[string]struct{}) []view.Scope {
+	entries, _ := filepath.Glob(filepath.Join(index.CacheDir(), "codex-*.db"))
+	sort.Strings(entries)
+
+	var out []view.Scope
+	for _, dbp := range entries {
+		if _, covered := liveDBs[dbp]; covered {
+			continue // already a live cwd scope — don't list it twice
+		}
+		n, err := index.EnsureOrphanReconciled(dbp)
+		if err != nil {
+			slog.Warn("scopes: codex orphan reconcile failed", "db", dbp, "err", err)
+			continue
+		}
+		if n <= 0 {
+			continue // only tombstoned/empty sessions — reads as deleted
+		}
+		out = append(out, view.Scope{Project: codexOrphanLabel(filepath.Base(dbp)), DBP: dbp, Source: "codex"})
+	}
+	return out
+}
+
+// codexOrphanLabel derives a friendly label from a Codex db filename when the
+// live cwd (whose codexLabel would read) is gone. The stem is
+// "codex-<encodeCWD(cwd)>-<8-hex-hash>" (see codexDBPath): strip the "codex-"
+// prefix and the trailing injective hash, then reuse orphanLabel's
+// last-non-empty "-" segment logic on what's left — otherwise that logic
+// would return the opaque hash segment instead of a readable cwd fragment.
+func codexOrphanLabel(dbFileName string) string {
+	enc := strings.TrimSuffix(dbFileName, ".db")
+	enc = strings.TrimPrefix(enc, "codex-")
+	if i := strings.LastIndex(enc, "-"); i >= 0 && isHex8(enc[i+1:]) {
+		enc = enc[:i]
+	}
+	return orphanLabel(enc)
+}
+
+// isHex8 reports whether s is exactly 8 lowercase-hex characters — the shape
+// cwdHash always produces, used to detect and strip codexDBPath's
+// disambiguation suffix from a db filename.
+func isHex8(s string) bool {
+	if len(s) != 8 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope

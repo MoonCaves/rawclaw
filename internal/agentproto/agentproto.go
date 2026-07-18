@@ -58,6 +58,12 @@ type SearchRef struct {
 	Snippet   string `json:"snippet"`
 	ReadRef   string `json:"read_ref"`
 	Topic     string `json:"topic,omitempty"` // unused in search output (topics are a separate on-demand `topics` command); omitempty keeps JSON identical to pre-topic
+
+	// Missing is true when this conversation's backing source file is gone but its
+	// content was retained in the index (durable retention, D1). Surfaced so a
+	// retained-but-missing hit is not read as current state (D7). omitempty keeps
+	// the JSON byte-identical for the common present case.
+	Missing bool `json:"missing,omitempty"`
 }
 
 // Scope status values for incompleteness-as-data (#6).
@@ -355,6 +361,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			ISO:       r.ISO,
 			Snippet:   r.Snip,
 			ReadRef:   fmtRef(r.SessionID, r.UUID),
+			Missing:   r.MissingSince > 0,
 		})
 	}
 
@@ -1139,7 +1146,11 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		if iso == "" {
 			iso = "?"
 		}
-		fmt.Fprintf(w, "  ━━ %s · %s · %s\n", iso, sid8(r.SessionID), r.Project)
+		miss := ""
+		if r.Missing {
+			miss = " · source file gone — retained history"
+		}
+		fmt.Fprintf(w, "  ━━ %s · %s · %s%s\n", iso, sid8(r.SessionID), r.Project, miss)
 		fmt.Fprintf(w, "     …%s…\n", r.Snippet)
 		fmt.Fprintf(w, "     read ref=%s\n", r.ReadRef)
 		fmt.Fprintln(w)

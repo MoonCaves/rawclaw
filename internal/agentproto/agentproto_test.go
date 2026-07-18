@@ -12,6 +12,7 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/view"
 
 	_ "modernc.org/sqlite"
@@ -999,5 +1000,93 @@ func TestOutlineListsTopics(t *testing.T) {
 	renderOutline(&buf, res)
 	if !strings.Contains(buf.String(), "  topics: first topic\n") {
 		t.Errorf("renderOutline missing topics line:\n%s", buf.String())
+	}
+}
+
+// TestSearchFlagsRetainedMissing is the D7 surface check: once a session's
+// backing file is purged, it is retained (durable retention) but the search
+// envelope marks the ref Missing so an agent doesn't read it as current.
+func TestSearchFlagsRetainedMissing(t *testing.T) {
+	proj := t.TempDir()
+	scope := scopeFor(t, proj) // isolates HOME → db + machine-id land in a temp dir
+	writeSession(t, proj, "gone", "uuid-miss-0001", "retainedmissingbeacon token")
+
+	// First search indexes it while the file is present → not missing.
+	env := Search("retainedmissingbeacon", scope, SearchOpts{}, nil)
+	if len(env.Results) != 1 {
+		t.Fatalf("pass 1 results = %d, want 1", len(env.Results))
+	}
+	if env.Results[0].Missing {
+		t.Fatalf("present session wrongly flagged Missing")
+	}
+
+	// Purge the transcript, search again: still returned, now flagged Missing.
+	if err := os.Remove(filepath.Join(proj, "gone.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	env = Search("retainedmissingbeacon", scope, SearchOpts{}, nil)
+	if len(env.Results) != 1 {
+		t.Fatalf("pass 2 results = %d, want 1 (retained after purge)", len(env.Results))
+	}
+	if !env.Results[0].Missing {
+		t.Errorf("retained-but-missing result not flagged Missing in the envelope")
+	}
+	// The text renderer surfaces it too.
+	var buf bytes.Buffer
+	renderSearch(&buf, env, "retainedmissingbeacon", "across all projects")
+	if !strings.Contains(buf.String(), "source file gone") {
+		t.Errorf("renderSearch missing the retained-history marker:\n%s", buf.String())
+	}
+}
+
+// TestSearchDiscoversOrphanedProject is the D8 end-to-end guard, driven through
+// the REAL scope discovery (scopes.All), not an injected scope: after a project's
+// transcripts are purged (dir emptied → AllProjectDirs drops it), search and read
+// must STILL reach the retained session via the orphaned index db. The earlier
+// injected-scope tests passed while this exact path was broken end-to-end, so
+// this one goes through discovery on a real projects root.
+func TestSearchDiscoversOrphanedProject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+
+	projDir := filepath.Join(home, ".claude", "projects", "-tmp-orphanproj")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessFile := filepath.Join(projDir, "77777777-2222-3333-4444-555555555555.jsonl")
+	line := `{"type":"user","uuid":"aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee","timestamp":"2026-06-01T10:00:00Z","cwd":"/tmp/orphanproj","message":{"role":"user","content":"orphandiscoverybeacon token"}}`
+	if err := os.WriteFile(sessFile, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Discover from the real projects root; the first search builds the index db.
+	env := Search("orphandiscoverybeacon", scopes.All("", false), SearchOpts{}, nil)
+	if len(env.Results) != 1 {
+		t.Fatalf("pre-purge results = %d, want 1", len(env.Results))
+	}
+	ref := env.Results[0].ReadRef
+
+	// Purge: remove the transcript → the project dir is empty, so AllProjectDirs
+	// no longer yields it. Discovery must now come from the orphaned index db.
+	if err := os.Remove(sessFile); err != nil {
+		t.Fatal(err)
+	}
+
+	env = Search("orphandiscoverybeacon", scopes.All("", false), SearchOpts{}, nil)
+	if len(env.Results) != 1 {
+		t.Fatalf("post-purge results = %d, want 1 — orphaned-source db not discovered/searchable", len(env.Results))
+	}
+	if !env.Results[0].Missing {
+		t.Errorf("discovered orphan hit not flagged Missing")
+	}
+
+	// read resolves the retained content through the discovered scope.
+	rr, err := Read(ref, scopes.All("", false), ReadOpts{})
+	if err != nil {
+		t.Fatalf("read via discovered orphan scope: %v", err)
+	}
+	if rr == nil || rr.AnchoredView == nil {
+		t.Fatal("read returned no content for the retained orphan session")
 	}
 }

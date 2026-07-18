@@ -204,7 +204,7 @@ func TestTopicSurvivesBaseReindex(t *testing.T) {
 	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','1')"); err != nil {
 		t.Fatalf("stamp stale version: %v", err)
 	}
-	if err := EnsureSchema(con); err != nil {
+	if err := EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("EnsureSchema rebuild: %v", err)
 	}
 

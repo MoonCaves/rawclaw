@@ -4,6 +4,25 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Durable retention — your history outlives Claude Code's 30-day cleanup.** When a source tool
+  purges a transcript, RawClaw now keeps its indexed copy: still searchable and readable, labeled
+  `source file gone — retained history` in results (keyword and semantic paths both). Controlled by
+  `RAWCLAW_RETENTION` (`keep`, the default, or `mirror` for the old drop-on-purge behavior; mirror
+  governs live scans only — retained history is removed by `rawclaw delete` alone). Sessions carry
+  origin provenance (machine / source tool / source path), the groundwork for cross-machine search.
+- **`rawclaw delete` reaches retained sessions** — the plan lists them as
+  `(retained, source file already gone)` and a real delete tombstones them permanently.
+
+### Fixed
+
+- Search is read-only: retention bookkeeping happens at indexing, so repeated searches never write
+  to (or slow down on) archived project databases.
+- The one-time in-place database upgrade is kill-safe: interrupted at any instant, the next run
+  completes the provenance backfill with no rebuild and no lost rows.
+- Purged-source discovery now covers Codex session groups too, not only Claude projects.
+
 ## [0.2.0] — 2026-07-17
 
 ### Added

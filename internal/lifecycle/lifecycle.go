@@ -181,6 +181,20 @@ func TombstonePath(cacheDir string) string {
 	return filepath.Join(expandHome(cacheDir), ".deleted")
 }
 
+// TombstoneIDs appends each id in ids to the tombstone sidecar under cacheDir,
+// wrapping appendTombstones (same atomicity: create-dir, open-append, write).
+// Exported so the CLI can tombstone RETAINED sessions matched by
+// index.RetainedMatches — those have no backing file to os.Remove, so
+// Delete's normal remove-then-tombstone path does not apply; this is the
+// tombstone-only half for that case.
+func TombstoneIDs(cacheDir string, ids []string) error {
+	path := TombstonePath(cacheDir)
+	if err := appendTombstones(path, ids); err != nil {
+		return fmt.Errorf("write tombstone %q: %w", path, err)
+	}
+	return nil
+}
+
 // LoadTombstones reads the tombstone at <cacheDir>/.deleted and returns the set
 // of deleted session ids. A missing file is not an error — it yields an empty
 // set. Blank lines and surrounding whitespace are ignored.
