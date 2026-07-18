@@ -7,12 +7,10 @@
 package agentproto
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -22,7 +20,6 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
-	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
@@ -236,23 +233,6 @@ func resolveRef(ref string) (string, string, error) {
 // Codex cwd-groups), via the scopes enumerator.
 func allScope() []view.Scope {
 	return scopes.All("", false)
-}
-
-// thisScope returns the single (label, tdir) pair for cwd's project, or nil if
-// the directory has no transcript history.
-func thisScope() []view.Scope {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil
-	}
-	td := paths.FindTranscriptDir(cwd)
-	if td == "" {
-		return nil
-	}
-	if info, statErr := os.Stat(td); statErr != nil || !info.IsDir() {
-		return nil
-	}
-	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}
 }
 
 // runeLen counts code points in s.
@@ -750,25 +730,9 @@ func (e *ErrAmbiguousUUID) Error() string {
 // 0 matches → ErrMsgNotFound; ≥2 → ErrAmbiguousUUID (never silently pick one).
 // A real query/scan error is distinguished from "not found" per the DB rubric.
 func resolveUUID(con *sql.DB, fullSID, uuid8 string) (int, error) {
-	rows, err := con.QueryContext(
-		context.Background(),
-		"SELECT id FROM messages WHERE session_id=? AND uuid LIKE ? ORDER BY id LIMIT 2",
-		fullSID, uuid8+"%",
-	)
+	ids, err := store.ResolveMessageUUID(con, fullSID, uuid8, 2)
 	if err != nil {
 		return 0, fmt.Errorf("resolve message %q: %w", uuid8, err)
-	}
-	defer rows.Close()
-	var ids []int
-	for rows.Next() {
-		var id int
-		if scanErr := rows.Scan(&id); scanErr != nil {
-			return 0, fmt.Errorf("resolve message %q: %w", uuid8, scanErr)
-		}
-		ids = append(ids, id)
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return 0, fmt.Errorf("resolve message %q: %w", uuid8, rowsErr)
 	}
 	switch len(ids) {
 	case 0:
@@ -913,10 +877,6 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 	// session that spawned a subagent. Fall back to including sub-sessions only
 	// when nothing top-level matched, so a full "<parent>/agent-..." ref still resolves.
 	collect := func(excludeSub bool) []sessionCand {
-		q := "SELECT id FROM sessions WHERE id LIKE ? ORDER BY id LIMIT 2"
-		if excludeSub {
-			q = "SELECT id FROM sessions WHERE id LIKE ? AND is_subagent = 0 ORDER BY id LIMIT 2"
-		}
 		var cs []sessionCand
 		for _, sc := range scope {
 			dbpC, _, ensureErr := scopes.Resolve(sc, false)
@@ -929,20 +889,14 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 			}
 			// Fetch up to 2 per project: enough to detect an in-project collision;
 			// cross-project collisions surface in the aggregate below.
-			rows, qErr := con.QueryContext(context.Background(), q, session8+"%")
+			sids, qErr := store.SessionsByPrefix(con, session8, !excludeSub, 2)
+			_ = con.Close()
 			if qErr != nil {
-				_ = con.Close()
 				continue
 			}
-			for rows.Next() {
-				var sid string
-				if scanErr := rows.Scan(&sid); scanErr != nil {
-					break
-				}
+			for _, sid := range sids {
 				cs = append(cs, sessionCand{SessionID: sid, Project: sc.Project, dbp: dbpC})
 			}
-			_ = rows.Close()
-			_ = con.Close()
 		}
 		return cs
 	}
@@ -999,11 +953,11 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 
 	iso, nmsg := sessionMeta(con, fullSID)
 
-	startRows, err := bookendRows(con, fullSID, "ASC")
+	startRows, err := bookendRows(con, fullSID, true)
 	if err != nil {
 		return nil, fmt.Errorf("outline start rows: %w", err)
 	}
-	endRows, err := bookendRows(con, fullSID, "DESC")
+	endRows, err := bookendRows(con, fullSID, false)
 	if err != nil {
 		return nil, fmt.Errorf("outline end rows: %w", err)
 	}
@@ -1015,7 +969,7 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 
 	// endRows came back DESC; reverse to chronological, then drop any already
 	// present in the start bookend so the two ends don't overlap.
-	endMsgs := []rawRow{}
+	endMsgs := []store.Msg{}
 	for i := len(endRows) - 1; i >= 0; i-- {
 		if _, dup := startIDs[endRows[i].ID]; dup {
 			continue
@@ -1076,58 +1030,25 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 	}, nil
 }
 
-// rawRow is one (id, role, content) bookend row.
-type rawRow struct {
-	ID      int
-	Role    string
-	Content string
-}
 
 // sessionMeta reads last_ts + message_count and formats the local-time ISO.
 // A missing row → ("", 0); a missing/zero last_ts → "" iso. Uses local time at
 // seconds precision.
 func sessionMeta(con *sql.DB, fullSID string) (iso string, nmsg int) {
-	var lastTS sql.NullFloat64
-	var mc sql.NullInt64
-	row := con.QueryRowContext(
-		context.Background(),
-		"SELECT last_ts, message_count FROM sessions WHERE id=?",
-		fullSID,
-	)
-	if err := row.Scan(&lastTS, &mc); err != nil {
+	lastTS, mc, ok := store.SessionMeta(con, fullSID)
+	if !ok {
 		return "", 0
 	}
-	nmsg = int(mc.Int64)
-	if lastTS.Valid && lastTS.Float64 != 0 {
-		iso = time.Unix(int64(lastTS.Float64), 0).Local().Format("2006-01-02T15:04:05")
+	if lastTS != 0 {
+		iso = time.Unix(int64(lastTS), 0).Local().Format("2006-01-02T15:04:05")
 	}
-	return iso, nmsg
+	return iso, mc
 }
 
 // bookendRows reads up to OutlineBookend user/assistant messages with non-empty
-// content, ordered by id in the given direction.
-func bookendRows(con *sql.DB, fullSID, dir string) ([]rawRow, error) {
-	q := "SELECT id, role, content FROM messages " +
-		"WHERE session_id=? AND role IN ('user','assistant') AND length(content)>0 " +
-		"ORDER BY id " + dir + " LIMIT ?"
-	rows, err := con.QueryContext(context.Background(), q, fullSID, OutlineBookend)
-	if err != nil {
-		return nil, fmt.Errorf("query bookend rows: %w", err)
-	}
-	defer rows.Close()
-
-	out := []rawRow{}
-	for rows.Next() {
-		var r rawRow
-		if err := rows.Scan(&r.ID, &r.Role, &r.Content); err != nil {
-			return nil, fmt.Errorf("scan bookend row: %w", err)
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate bookend rows: %w", err)
-	}
-	return out, nil
+// content, ordered by id ascending (asc=true) or descending.
+func bookendRows(con *sql.DB, fullSID string, asc bool) ([]store.Msg, error) {
+	return store.BookendMessages(con, fullSID, 0, false, asc, OutlineBookend)
 }
 
 // ── text renderers ───────────────────────────────────────────────────────────
@@ -1382,12 +1303,12 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 			_ = con.Close()
 			continue
 		}
-		if topicRowsExist(con) {
+		if store.TopicRowsExist(con) {
 			anyTopics = true
 		}
 		thits, _ := store.MatchTopics(con, query, limit)
 		for _, h := range thits {
-			uuid := msgUUID(con, h.MsgID)
+			uuid := store.MessageUUID(con, h.MsgID)
 			if uuid == "" {
 				continue // can't build a read-ref without the message uuid
 			}
@@ -1405,25 +1326,6 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 		res.Note = topicsEmptyNote
 	}
 	return res, nil
-}
-
-// topicRowsExist reports whether the topic_segment table holds any row — used to
-// distinguish "query matched nothing" from "nothing is tagged yet". A missing
-// table / read error reads as false.
-func topicRowsExist(con *sql.DB) bool {
-	var one int
-	err := con.QueryRow("SELECT 1 FROM topic_segment LIMIT 1").Scan(&one)
-	return err == nil
-}
-
-// msgUUID resolves a message rowid to its uuid within an open db, for building a
-// read-ref from a TopicHit's start-message id. A missing row reads as "".
-func msgUUID(con *sql.DB, msgID int) string {
-	var uuid sql.NullString
-	if err := con.QueryRow("SELECT uuid FROM messages WHERE id=?", msgID).Scan(&uuid); err != nil {
-		return ""
-	}
-	return uuid.String
 }
 
 // TopicsAndRender runs Topics and writes the result to w (JSON when wantJSON, else
