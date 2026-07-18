@@ -1056,7 +1056,7 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 	// Topic layer: list the session's tagged segments (empty when untagged or the
 	// topic table is absent — a non-fatal "no topics").
 	var topics []string
-	if segs, terr := index.TopicsForSession(con, fullSID); terr == nil {
+	if segs, terr := store.TopicsForSession(con, fullSID); terr == nil {
 		for _, s := range segs {
 			if s.Topic != "" {
 				topics = append(topics, s.Topic)
@@ -1385,7 +1385,7 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 		if topicRowsExist(con) {
 			anyTopics = true
 		}
-		thits, _ := index.MatchTopics(con, query, limit)
+		thits, _ := store.MatchTopics(con, query, limit)
 		for _, h := range thits {
 			uuid := msgUUID(con, h.MsgID)
 			if uuid == "" {
