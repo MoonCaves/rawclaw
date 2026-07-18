@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/spf13/cobra"
 )
 
@@ -229,6 +230,86 @@ func TestDeleteCmd_YesShortFlag(t *testing.T) {
 	}
 	if _, err := os.Stat(thin); !os.IsNotExist(err) {
 		t.Errorf("session still present after -y delete (err=%v)", err)
+	}
+}
+
+// retainSession indexes a session, then removes its backing file and
+// reindexes so the store carries a RETAINED row (missing_since set) for it —
+// the state durable retention leaves behind when a source tool purges a
+// transcript, and the exact state `delete` must reach.
+func retainSession(t *testing.T, root, project, id string, nLines int) {
+	t.Helper()
+	path := writeSession(t, root, project, id, nLines)
+	dir := filepath.Dir(path)
+	if _, _, _, err := index.EnsureIndexed(dir, false); err != nil {
+		t.Fatalf("EnsureIndexed pass 1: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := index.EnsureIndexed(dir, false); err != nil {
+		t.Fatalf("EnsureIndexed pass 2 (after purge): %v", err)
+	}
+}
+
+// TestDeleteCmd_ReachesRetainedSession is the CLI-level proof:
+// a RETAINED session (source .jsonl already gone) has no live file for
+// matchSessions to find, yet `delete --project <label> --yes` must still
+// report it and tombstone it — the feature's contract is that explicit delete
+// is the only way retained history dies, so delete has to actually reach it.
+func TestDeleteCmd_ReachesRetainedSession(t *testing.T) {
+	root := newCfgRoot(t)
+	retainSession(t, root, "proj-retained", "abcret0001xyz", 2)
+
+	out, err := runCmd(t, newDeleteCmd(), "", "--project", "proj-retained", "--yes")
+	if err != nil {
+		t.Fatalf("delete --project proj-retained --yes: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, "(source file already gone)") {
+		t.Errorf("plan should label the retained match; out: %s", out)
+	}
+	// The plan renders trunc8(sessionID), same convention as a live match's row.
+	if !strings.Contains(out, trunc8("abcret0001xyz")) {
+		t.Errorf("plan should list the retained session id; out: %s", out)
+	}
+	if !strings.Contains(out, "Deleted 1 session(s) (1 retained)") {
+		t.Errorf("want a summary crediting the retained delete; out: %s", out)
+	}
+
+	// The tombstone sidecar (under the isolated HOME newCfgRoot set) now carries
+	// the retained session's full id, so a later reindex would skip resurrecting it.
+	tombPath := filepath.Join(root, "..", ".cache", "session-search", ".deleted")
+	b, rerr := os.ReadFile(tombPath)
+	if rerr != nil {
+		t.Fatalf("read tombstone %q: %v", tombPath, rerr)
+	}
+	if !strings.Contains(string(b), "abcret0001xyz") {
+		t.Errorf("tombstone %q missing retained session id; got %q", tombPath, string(b))
+	}
+}
+
+// TestDeleteCmd_DryRunReportsRetainedWithoutTombstoning: --dry-run must show
+// the retained match (so an operator can see what a real delete would reach)
+// without writing anything — same invariant the live-file dry run already
+// upholds.
+func TestDeleteCmd_DryRunReportsRetainedWithoutTombstoning(t *testing.T) {
+	root := newCfgRoot(t)
+	retainSession(t, root, "proj-retained-dry", "dryret0001xyz", 1)
+
+	out, err := runCmd(t, newDeleteCmd(), "", "--project", "proj-retained-dry", "--dry-run")
+	if err != nil {
+		t.Fatalf("delete --dry-run: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, trunc8("dryret0001xyz")) {
+		t.Errorf("dry-run plan should list the retained session; out: %s", out)
+	}
+	if strings.Contains(out, "Deleted") {
+		t.Errorf("dry-run must not report a deletion; out: %s", out)
+	}
+
+	tombPath := filepath.Join(root, "..", ".cache", "session-search", ".deleted")
+	if b, rerr := os.ReadFile(tombPath); rerr == nil && strings.Contains(string(b), "dryret0001xyz") {
+		t.Errorf("dry-run must not tombstone anything, but found the id in %q: %q", tombPath, string(b))
 	}
 }
 

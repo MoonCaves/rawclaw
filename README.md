@@ -25,6 +25,12 @@ rawclaw "where did we land on auth"
 
 ---
 
+## Claude Code deletes your history after 30 days
+
+Claude Code removes conversation files older than ~30 days (`cleanupPeriodDays`). RawClaw keeps its own copy: sessions stay searchable and readable after the original file is gone. Results mark them `source file gone — retained history`, and `rawclaw delete` removes them for good.
+
+Want RawClaw to track your Claude Code retention setting instead? Set `RAWCLAW_RETENTION=mirror` and sessions drop when their source file does.
+
 ## What it does
 
 Claude Code quietly saves every conversation you have with it as JSONL transcripts under `~/.claude/projects`. RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type.

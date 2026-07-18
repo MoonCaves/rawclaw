@@ -38,11 +38,12 @@ const RRFConstant = 60
 
 // VecHit is one vector-KNN anchor: id, session_id, iso, parent, dist.
 type VecHit struct {
-	ID        int
-	SessionID string
-	ISO       string
-	Parent    string
-	Dist      float64 // cosine similarity (higher = nearer)
+	ID           int
+	SessionID    string
+	ISO          string
+	Parent       string
+	MissingSince float64 // sessions.missing_since (0 when NULL); carried so a vector-only hit on a retained-but-missing session keeps the D7 flag
+	Dist         float64 // cosine similarity (higher = nearer)
 }
 
 // EnsureVecSchema creates the chunk_vec table (its own gate, separate from the
@@ -306,14 +307,15 @@ func VecKNN(con *sql.DB, qvec []float64, k int, includeSubagents bool) []VecHit 
 	out := []VecHit{}
 	for _, c := range cand {
 		var (
-			iso    sql.NullString
-			parent sql.NullString
-			isSub  int
+			iso     sql.NullString
+			parent  sql.NullString
+			isSub   int
+			missing sql.NullFloat64
 		)
 		err := con.QueryRowContext(ctx,
-			"SELECT m.ts_iso, s.parent_id, s.is_subagent FROM messages m "+
+			"SELECT m.ts_iso, s.parent_id, s.is_subagent, s.missing_since FROM messages m "+
 				"JOIN sessions s ON s.id=m.session_id WHERE m.id=?", c.msgID,
-		).Scan(&iso, &parent, &isSub)
+		).Scan(&iso, &parent, &isSub, &missing)
 		if err != nil { // churned / gone row
 			continue
 		}
@@ -321,11 +323,12 @@ func VecKNN(con *sql.DB, qvec []float64, k int, includeSubagents bool) []VecHit 
 			continue
 		}
 		out = append(out, VecHit{
-			ID:        c.msgID,
-			SessionID: c.sid,
-			ISO:       iso.String,
-			Parent:    parent.String,
-			Dist:      c.sim,
+			ID:           c.msgID,
+			SessionID:    c.sid,
+			ISO:          iso.String,
+			Parent:       parent.String,
+			MissingSince: missing.Float64, // 0 when NULL (present)
+			Dist:         c.sim,
 		})
 		if len(out) >= k {
 			break
@@ -351,12 +354,16 @@ func Fuse(con *sql.DB, kwRows []retrieve.Anchor, qvec []float64, knnK int, inclu
 		score[v.ID] += 1.0 / float64(RRFConstant+rank+1)
 		if _, ok := rowmap[v.ID]; !ok {
 			// Vector-only synthesized anchor (Role empty, Snip empty, Cov 0).
+			// Carry missing_since so a retained-but-missing session matched only by
+			// vector still surfaces the D7 flag (a keyword-also-hit keeps its own
+			// Anchor, which already carries it — that branch is untouched).
 			rowmap[v.ID] = retrieve.Anchor{
-				ID:        v.ID,
-				SessionID: v.SessionID,
-				ISO:       v.ISO,
-				Parent:    v.Parent,
-				Cov:       0,
+				ID:           v.ID,
+				SessionID:    v.SessionID,
+				ISO:          v.ISO,
+				Parent:       v.Parent,
+				MissingSince: v.MissingSince,
+				Cov:          0,
 			}
 		}
 	}

@@ -117,7 +117,12 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 			"  rawclaw read <sess8>:<uuid8>    bounded excerpt around a ref (--more to widen)\n" +
 			"  rawclaw outline <sess8>         a session's goal -> resolution arc\n\n" +
 			"Searches every project by default; --this-project (with --dir) or --include-path <regex> to scope. " +
-			"Add --json for structured output. Results are raw session history — verify against current state before acting.",
+			"Add --json for structured output. Results are raw session history — verify against current state before acting.\n\n" +
+			"Retention: when a source tool purges a transcript (e.g. Claude Code's ~30-day cleanup), rawclaw KEEPS its " +
+			"indexed copy — searchable and readable, labeled as retained history. `rawclaw delete` still removes a " +
+			"session permanently. Set RAWCLAW_RETENTION=mirror to instead drop sessions whose source file is gone. " +
+			"Mirror governs live project scans only; history already retained is removed by `rawclaw delete` alone, " +
+			"never as a side effect of a search.",
 		// Cobra wires a `--version` flag automatically when Version is non-empty,
 		// printing this template and exiting 0.
 		Version:       build.versionString(),
@@ -854,18 +859,31 @@ func PrintResults(w io.Writer, res []retrieve.Hit, nSessions int) {
 	}
 }
 
-// ListProjects prints the searchable-projects table (with session counts).
+// ListProjects prints the searchable-projects table (with session counts). It
+// enumerates the same Claude scopes search does — live project dirs PLUS orphaned
+// index dbs whose source dir was purged (D8) — so a retained-but-purged project
+// still shows, flagged so it doesn't read as a live source.
 func ListProjects(w io.Writer) {
 	root := paths.ProjectsRoot()
 	type row struct {
-		n     int
-		label string
-		enc   string
+		n       int
+		label   string
+		enc     string
+		missing bool // source dir gone; sessions retained from the index
 	}
 	var rows []row
-	for _, d := range paths.AllProjectDirs() {
-		matches, _ := filepath.Glob(filepath.Join(d, "*.jsonl"))
-		rows = append(rows, row{len(matches), paths.ProjectLabel(d), baseName(d)})
+	for _, sc := range scopes.Claude() {
+		if sc.TDir != "" { // live project: count from its transcripts (unchanged)
+			matches, _ := filepath.Glob(filepath.Join(sc.TDir, "*.jsonl"))
+			rows = append(rows, row{len(matches), paths.ProjectLabel(sc.TDir), baseName(sc.TDir), false})
+			continue
+		}
+		// Orphaned source: no jsonl on disk — count retained sessions from the db.
+		n := index.CountTopLevelSessions(sc.DBP)
+		if n < 0 {
+			n = 0
+		}
+		rows = append(rows, row{n, sc.Project, strings.TrimSuffix(filepath.Base(sc.DBP), ".db"), true})
 	}
 	if len(rows) == 0 {
 		fmt.Fprintf(w, "No transcript projects found under %s.\n", root)
@@ -880,7 +898,11 @@ func ListProjects(w io.Writer) {
 	})
 	fmt.Fprintf(w, "%d searchable projects under %s  (search one with --dir <working-dir>, or all with --all):\n\n", len(rows), root)
 	for _, r := range rows {
-		fmt.Fprintf(w, "  %4s sessions   %-34s (%s)\n", fmt.Sprintf("%d", r.n), r.label, r.enc)
+		tag := ""
+		if r.missing {
+			tag = "  [source purged — retained history]"
+		}
+		fmt.Fprintf(w, "  %4s sessions   %-34s (%s)%s\n", fmt.Sprintf("%d", r.n), r.label, r.enc, tag)
 	}
 }
 

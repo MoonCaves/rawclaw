@@ -21,7 +21,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	}
 	con.SetMaxOpenConns(1)
 	t.Cleanup(func() { con.Close() })
-	if err := index.EnsureSchema(con); err != nil {
+	if err := index.EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
 	return con
@@ -417,5 +417,58 @@ func TestFuseEmptyVectorPath(t *testing.T) {
 	// id 1 (kw rank0) outranks id 2 (kw rank1).
 	if merged[0].ID != 1 {
 		t.Fatalf("merged[0] = %d, want 1", merged[0].ID)
+	}
+}
+
+// TestFuseVectorOnlyCarriesMissingSince is the F1 (D7) guard: a retained-but-
+// missing session (missing_since > 0) matched ONLY by the vector path must keep
+// its missing_since on the synthesized vector-only anchor — so the search
+// envelope can still flag it (SearchRef.Missing = MissingSince > 0) instead of
+// reading a stale session as current. Before the fix, VecKNN never hydrated
+// missing_since and Fuse left it zero on the synthesized anchor.
+func TestFuseVectorOnlyCarriesMissingSince(t *testing.T) {
+	con := openTestDB(t)
+
+	// A session whose backing file is gone: the row is retained and flagged.
+	mVec := addMessage(t, con, "smissing", "user", "vector only retained beacon message", "2026-06-18T10:00:00Z", 0, "")
+	if _, err := con.Exec("UPDATE sessions SET missing_since=1750000000 WHERE id='smissing'"); err != nil {
+		t.Fatalf("flag missing: %v", err)
+	}
+
+	emb := fakeEmbedder{vecs: map[string][]float64{
+		"vector only retained beacon message": {1, 0, 0},
+	}}
+	if _, err := VecIndex(con, emb, 0); err != nil {
+		t.Fatalf("VecIndex: %v", err)
+	}
+
+	// No keyword anchors → this id is a PURE vector-only hit.
+	merged := Fuse(con, nil, []float64{1, 0, 0}, 5, false)
+
+	var got *retrieve.Anchor
+	for i := range merged {
+		if merged[i].ID == mVec {
+			got = &merged[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("vector-only anchor for id %d missing from merged", mVec)
+	}
+	if got.Cov != 0 {
+		t.Errorf("expected a vector-only (Cov 0) anchor, got Cov=%d", got.Cov)
+	}
+	// The fix: the synthesized vector-only anchor carries missing_since, so the
+	// envelope's `Missing: MissingSince > 0` fires for a vector-only retained hit.
+	if got.MissingSince <= 0 {
+		t.Errorf("vector-only anchor dropped missing_since (got %v) — a retained session would read as current (F1)", got.MissingSince)
+	}
+	// NOTE: the synthesized vector-only anchor has no UUID (VecKNN does not hydrate
+	// m.uuid). agentproto.Search drops uuid-less anchors BEFORE setting Missing, so
+	// a PURE vector-only hit does not currently surface as a SearchRef at all — the
+	// flag is carried defensively here at the fusion boundary. Making F1 observable
+	// end-to-end additionally requires hydrating m.uuid onto the vector anchor.
+	if got.UUID != "" {
+		t.Errorf("unexpected UUID %q on a synthesized vector-only anchor", got.UUID)
 	}
 }

@@ -83,6 +83,11 @@ type Anchor struct {
 	Snip      string
 	Cov       int
 
+	// MissingSince is the session's missing_since watermark: >0 when the backing
+	// source file is gone but the row is retained (durable retention, D1). Surfaced
+	// so a retained-but-missing hit doesn't read as current (D7). 0 = present.
+	MissingSince float64
+
 	// Attached by the fusion / discovery layers (zero until set):
 	Fused   float64 // RRF score (semantic.Fuse)
 	Topic   string  // topic-layer label for this anchor's segment (Fuse / TopicForMessage)
@@ -656,7 +661,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 	}
 	dateWhere(&where, &params, p.Since, p.Before)
 
-	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content,
+	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content, s.missing_since,
 	                   snippet(messages_fts,0,'>>>','<<<','…',16) AS snip
 	            FROM messages_fts JOIN messages m ON m.id=messages_fts.rowid
 	            JOIN sessions s ON s.id=m.session_id
@@ -680,9 +685,10 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			iso     sql.NullString
 			parent  sql.NullString
 			content sql.NullString
+			missing sql.NullFloat64
 			snip    sql.NullString
 		)
-		if err := rows.Scan(&mid, &sid, &uuid, &role, &iso, &parent, &content, &snip); err != nil {
+		if err := rows.Scan(&mid, &sid, &uuid, &role, &iso, &parent, &content, &missing, &snip); err != nil {
 			return []Anchor{}
 		}
 		var disp string
@@ -698,14 +704,15 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 		}
 		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, content.String)), multi)
 		out = append(out, Anchor{
-			ID:        mid,
-			SessionID: sid,
-			UUID:      uuid.String,
-			Role:      role.String,
-			ISO:       iso.String,
-			Parent:    parent.String,
-			Snip:      disp,
-			Cov:       cov,
+			ID:           mid,
+			SessionID:    sid,
+			UUID:         uuid.String,
+			Role:         role.String,
+			ISO:          iso.String,
+			Parent:       parent.String,
+			Snip:         disp,
+			Cov:          cov,
+			MissingSince: missing.Float64, // 0 when NULL (present)
 		})
 	}
 	if err := rows.Err(); err != nil {

@@ -40,7 +40,7 @@ func TestEnsureIndexedContainers(t *testing.T) {
 		return nil, nil
 	}
 
-	n, status, err := EnsureIndexedContainers(dbp, true, cs, msgs)
+	n, status, err := EnsureIndexedContainers(dbp, true, cs, msgs, "codex")
 	if err != nil {
 		t.Fatalf("EnsureIndexedContainers: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestEnsureIndexedContainers(t *testing.T) {
 	}
 
 	// Idempotent re-run: unchanged files reindex to the same 2 sessions.
-	n2, _, err := EnsureIndexedContainers(dbp, false, cs, msgs)
+	n2, _, err := EnsureIndexedContainers(dbp, false, cs, msgs, "codex")
 	if err != nil {
 		t.Fatalf("re-run: %v", err)
 	}

@@ -22,7 +22,7 @@ func newTagTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("openRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
-	if err := index.EnsureSchema(con); err != nil {
+	if err := index.EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
 	if err := index.EnsureTopicSchema(con); err != nil {

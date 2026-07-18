@@ -19,7 +19,7 @@ func openTestDB(t *testing.T) (*sql.DB, string) {
 		t.Fatalf("openRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
-	if err := EnsureSchema(con); err != nil {
+	if err := EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
 	return con, dbp
@@ -44,7 +44,7 @@ func TestEnsureSchemaMigratesPreV4DB(t *testing.T) {
 		INSERT INTO meta(key,value) VALUES('schema_version','3');`); err != nil {
 		t.Fatalf("seed pre-v4 schema: %v", err)
 	}
-	if err := EnsureSchema(con); err != nil {
+	if err := EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("EnsureSchema must migrate a pre-v4 db, got: %v", err)
 	}
 	if _, err := con.Exec("SELECT uuid FROM messages LIMIT 1"); err != nil {
@@ -158,7 +158,7 @@ func TestEnsureSchemaStampsVersion(t *testing.T) {
 		t.Errorf("messages_fts missing after EnsureSchema: %v", err)
 	}
 	// Re-running EnsureSchema must be idempotent (no rebuild, no error).
-	if err := EnsureSchema(con); err != nil {
+	if err := EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("second EnsureSchema: %v", err)
 	}
 }
@@ -172,7 +172,7 @@ func TestEnsureSchemaRebuildsOnVersionMismatch(t *testing.T) {
 	if _, err := con.Exec("UPDATE meta SET value='1' WHERE key='schema_version'"); err != nil {
 		t.Fatal(err)
 	}
-	if err := EnsureSchema(con); err != nil {
+	if err := EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("EnsureSchema rebuild: %v", err)
 	}
 	var n int
@@ -307,7 +307,9 @@ func TestReindexFileSubagentParent(t *testing.T) {
 
 func TestUpdateIndexIncrementalAndPrune(t *testing.T) {
 	// Lay out a project transcript dir; UpdateIndex must index it, skip an
-	// unchanged file on the second pass, and prune a deleted file's session.
+	// unchanged file on the second pass, and — under durable retention (D1) — a
+	// file that merely vanishes from the walk (no tombstone) is RETAINED with
+	// missing_since stamped, NOT pruned. Only an explicit tombstone deletes.
 	proj := t.TempDir()
 	a := filepath.Join(proj, "a.jsonl")
 	b := filepath.Join(proj, "b.jsonl")
@@ -338,7 +340,8 @@ func TestUpdateIndexIncrementalAndPrune(t *testing.T) {
 		t.Errorf("after idempotent pass got %d sessions, want 2", ns)
 	}
 
-	// Delete b, reindex: its session must be pruned.
+	// Remove b's backing file (no tombstone), reindex: durable retention keeps the
+	// session — both rows survive, and b is flagged missing_since (D1).
 	if err := os.Remove(b); err != nil {
 		t.Fatal(err)
 	}
@@ -346,17 +349,26 @@ func TestUpdateIndexIncrementalAndPrune(t *testing.T) {
 		t.Fatalf("UpdateIndex pass 3: %v", err)
 	}
 	con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&ns)
-	if ns != 1 {
-		t.Errorf("after prune got %d sessions, want 1", ns)
+	if ns != 2 {
+		t.Errorf("after a merely-missing file got %d sessions, want 2 (retained, not pruned)", ns)
 	}
 	var exists int
 	con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='b'").Scan(&exists)
-	if exists != 0 {
-		t.Errorf("session 'b' should be pruned")
+	if exists != 1 {
+		t.Errorf("session 'b' must be retained when its file merely vanishes (no tombstone)")
 	}
-	con.QueryRow("SELECT COUNT(*) FROM file_index WHERE session_id='b'").Scan(&exists)
-	if exists != 0 {
-		t.Errorf("file_index row for 'b' should be pruned")
+	var missing sql.NullFloat64
+	if err := con.QueryRow("SELECT missing_since FROM sessions WHERE id='b'").Scan(&missing); err != nil {
+		t.Fatalf("read b.missing_since: %v", err)
+	}
+	if !missing.Valid || missing.Float64 <= 0 {
+		t.Errorf("session 'b' missing_since = %+v, want a positive timestamp", missing)
+	}
+	// a is still present on disk → its missing_since stays NULL.
+	var aMissing sql.NullFloat64
+	con.QueryRow("SELECT missing_since FROM sessions WHERE id='a'").Scan(&aMissing)
+	if aMissing.Valid {
+		t.Errorf("session 'a' (present) should not be flagged missing, got %v", aMissing.Float64)
 	}
 }
 

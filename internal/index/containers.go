@@ -19,7 +19,9 @@ type MessagesFunc func(source.Container) ([]model.Message, error)
 // containers), pulling each container's messages via msgs. It mirrors
 // EnsureIndexed's reindex + busy-lock semantics, but is source-agnostic: the
 // containers carry their own id, lineage, and backing path, replacing the
-// Claude-only directory walk of UpdateIndex.
+// Claude-only directory walk of UpdateIndex. sourceID (the source's
+// Registration.ID, e.g. "codex") is stamped as each row's source_tool (D3),
+// injected alongside msgs so the index never imports the concrete adapters.
 //
 // CONTRACT — cs MUST be the COMPLETE container set for dbp on every call. The
 // prune step (updateContainers) deletes any indexed session whose backing path
@@ -28,7 +30,7 @@ type MessagesFunc func(source.Container) ([]model.Message, error)
 // point two sources (or two scopes) at the same dbp — give each its own,
 // distinctly-namespaced cache file, so one source's set is never "incomplete"
 // relative to another's rows.
-func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, msgs MessagesFunc) (nSessions int, status IndexStatus, err error) {
+func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, msgs MessagesFunc, sourceID string) (nSessions int, status IndexStatus, err error) {
 	if reindex {
 		if _, statErr := os.Stat(dbp); statErr == nil {
 			_ = os.Remove(dbp) // best-effort; ignore a remove error
@@ -40,13 +42,13 @@ func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 	}
 	defer con.Close()
 
-	if err := EnsureSchema(con); err != nil {
+	if err := EnsureSchema(con, sourceID); err != nil {
 		if isBusy(err) {
 			return CountSessions(dbp), IndexStale, nil
 		}
 		return 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
 	}
-	if err := updateContainers(con, cs, msgs); err != nil {
+	if err := updateContainers(con, cs, msgs, sourceID); err != nil {
 		if isBusy(err) {
 			return CountSessions(dbp), IndexStale, nil
 		}
@@ -65,7 +67,7 @@ func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 // changed ones, and prunes those whose file is gone — the container-driven
 // parallel of UpdateIndex. A container whose messages fail to load is left
 // untouched (existing rows + watermark preserved), never partially written.
-func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc) error {
+func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sourceID string) error {
 	onDisk := make(map[string]struct{}, len(cs))
 	for _, c := range cs {
 		onDisk[realpath(c.Path)] = struct{}{}
@@ -103,7 +105,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc) err
 		if mErr != nil {
 			continue // bad container: leave existing rows + watermark untouched
 		}
-		if reindexContainer(con, c, ms) {
+		if reindexContainer(con, c, ms, sourceID) {
 			if _, err := con.Exec(
 				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
 				rp, mtime, size, FileFingerprint(c.Path, size), c.ID,
@@ -113,20 +115,11 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc) err
 		}
 	}
 
-	stale, err := loadStaleFiles(con, onDisk)
-	if err != nil {
-		return fmt.Errorf("scan file_index for prune: %w", err)
-	}
-	for _, s := range stale {
-		if _, err := con.Exec("DELETE FROM messages WHERE session_id=?", s.sessionID); err != nil {
-			return fmt.Errorf("prune messages: %w", err)
-		}
-		if _, err := con.Exec("DELETE FROM sessions WHERE id=?", s.sessionID); err != nil {
-			return fmt.Errorf("prune sessions: %w", err)
-		}
-		if _, err := con.Exec("DELETE FROM file_index WHERE path=?", s.path); err != nil {
-			return fmt.Errorf("prune file_index: %w", err)
-		}
+	// Retention pass (parallel of UpdateIndex): an absent own-source container is
+	// flagged missing_since and retained; only an explicit tombstone deletes; a
+	// foreign-origin row is never a candidate (D1/D2/D5).
+	if err := reconcileRetention(con, onDisk, tombstoned, nowEpoch(), RetentionMirror()); err != nil {
+		return err
 	}
 	return nil
 }
@@ -134,8 +127,9 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc) err
 // reindexContainer atomically replaces one container's rows: the messages are
 // already parsed into ms, so a write failure can't commit away existing data
 // (delete + insert run under database/sql autocommit). Returns false on any
-// write error. Mirrors ReindexFile for the container path.
-func reindexContainer(con *sql.DB, c source.Container, ms []model.Message) bool {
+// write error. Mirrors ReindexFile for the container path. sourceID is stamped as
+// the row's source_tool (D3).
+func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID string) bool {
 	if _, err := con.Exec("DELETE FROM messages WHERE session_id=?", c.ID); err != nil {
 		return false
 	}
@@ -164,9 +158,10 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message) bool 
 	if c.ParentID != "" {
 		parentArg = c.ParentID
 	} // else nil → SQL NULL
+	// Stamp provenance (D3); missing_since NULL — a (re)indexed container is present.
 	if _, err := con.Exec(
-		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id) VALUES(?,?,?,?,?,?)",
-		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg,
+		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
+		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, MachineID(), sourceID, realpath(c.Path),
 	); err != nil {
 		return false
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/spf13/cobra"
@@ -112,13 +113,28 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 		return fmt.Errorf("plan delete: %w", err)
 	}
 
-	printPlan(out, plan)
+	// Delete must also reach RETAINED sessions — rows whose backing .jsonl the
+	// source tool already purged, but which still live in an index db
+	// (missing_since set). matchSessions above only walks the live projects
+	// tree, so without this union exactly the rows durable retention creates
+	// are undeletable. Filters are the same three the live plan
+	// just used, so a --project/--before/--max-messages that matched nothing
+	// live can still reach a retained row.
+	retained, err := index.RetainedMatches("", f.project, before, f.maxMessages)
+	if err != nil {
+		return fmt.Errorf("plan retained matches: %w", err)
+	}
 
-	// Dry run, or nothing matched: stop here without touching disk.
+	printPlan(out, plan)
+	printRetainedPlan(out, retained)
+	total := len(plan.Matched) + len(retained)
+
+	// Dry run, or nothing matched (live or retained): stop here without
+	// touching disk.
 	if f.dryRun {
 		return nil
 	}
-	if len(plan.Matched) == 0 {
+	if total == 0 {
 		fmt.Fprintln(out, "Nothing to delete.")
 		return nil
 	}
@@ -126,7 +142,7 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 	// --yes skips the interactive prompt for non-interactive/agent use. Without it
 	// we always prompt y/N; an EOF (non-tty / closed stdin) still aborts safely.
 	if !f.yes {
-		ok, err := confirm(cmd.InOrStdin(), out, len(plan.Matched))
+		ok, err := confirm(cmd.InOrStdin(), out, total)
 		if err != nil {
 			return fmt.Errorf("read confirmation: %w", err)
 		}
@@ -141,8 +157,23 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
-	fmt.Fprintf(out, "Deleted %d session(s), reclaimed %s. Tombstone: %s\n",
-		len(done.Matched), humanizeBytes(done.TotalBytes), done.TombstonePath)
+
+	// Retained rows have no file to remove: tombstone-only. The next reconcile
+	// pass (live UpdateIndex or the orphan-db discovery path) sees the
+	// tombstone and prunes the row for real — the same mechanism an explicit
+	// delete of a live session already relies on.
+	if len(retained) > 0 {
+		ids := make([]string, 0, len(retained))
+		for _, r := range retained {
+			ids = append(ids, r.SessionID)
+		}
+		if err := lifecycle.TombstoneIDs("", ids); err != nil {
+			return fmt.Errorf("tombstone retained sessions: %w", err)
+		}
+	}
+
+	fmt.Fprintf(out, "Deleted %d session(s) (%d retained), reclaimed %s. Tombstone: %s\n",
+		len(done.Matched)+len(retained), len(retained), humanizeBytes(done.TotalBytes), done.TombstonePath)
 	return nil
 }
 
@@ -171,6 +202,22 @@ func printPlan(w io.Writer, plan lifecycle.DeletePlan) {
 	for _, it := range plan.Matched {
 		fmt.Fprintf(w, "  %s · %s · %d msg · %s\n",
 			trunc8(it.SessionID), it.Project, it.Messages, humanizeBytes(it.Bytes))
+	}
+	fmt.Fprintln(w)
+}
+
+// printRetainedPlan renders the retained-session half of a delete plan: rows
+// whose backing .jsonl is already gone, so unlike printPlan there is no file
+// size to report — the label makes the distinct disk state explicit rather
+// than silently reporting 0 B as if it were a small live file.
+func printRetainedPlan(w io.Writer, retained []index.RetainedSession) {
+	if len(retained) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%d retained session(s) matched (source file already gone):\n\n", len(retained))
+	for _, r := range retained {
+		fmt.Fprintf(w, "  %s · %s · %d msg · 0 B (retained, source file already gone)\n",
+			trunc8(r.SessionID), r.Label, r.MessageCount)
 	}
 	fmt.Fprintln(w)
 }
