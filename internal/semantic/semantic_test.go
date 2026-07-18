@@ -5,25 +5,16 @@ import (
 	"math"
 	"testing"
 
-	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
-
-	_ "modernc.org/sqlite"
+	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/store/storetest"
 )
 
-// openTestDB opens a fresh writable db with the keyword schema ensured, so
+// openTestDB opens a fresh writable production-schema db (via storetest), so
 // chunk_vec can live alongside the messages/sessions tables semantic depends on.
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	con, err := sql.Open("sqlite", "file:"+t.TempDir()+"/test.db")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	con.SetMaxOpenConns(1)
-	t.Cleanup(func() { con.Close() })
-	if err := index.EnsureSchema(con, "claude"); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
+	con, _ := storetest.NewDB(t)
 	return con
 }
 
@@ -31,22 +22,8 @@ func openTestDB(t *testing.T) *sql.DB {
 // the indexer populates. Returns the message id.
 func addMessage(t *testing.T, con *sql.DB, sid, role, content, iso string, isSub int, parent string) int {
 	t.Helper()
-	if _, err := con.Exec(
-		"INSERT OR IGNORE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id) VALUES(?,?,?,?,?,?)",
-		sid, 0.0, 0.0, 0, isSub, parent); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	res, err := con.Exec(
-		"INSERT INTO messages(session_id,role,content,ts,ts_iso) VALUES(?,?,?,?,?)",
-		sid, role, content, 0.0, iso)
-	if err != nil {
-		t.Fatalf("insert message: %v", err)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		t.Fatalf("last id: %v", err)
-	}
-	return int(id)
+	storetest.InsertSession(t, con, storetest.Session{ID: sid, IsSubagent: isSub != 0, ParentID: parent})
+	return storetest.InsertMessage(t, con, storetest.Message{SessionID: sid, Role: role, Content: content, ISO: iso})
 }
 
 // fakeEmbedder returns a fixed vector per text (looked up by exact text), or nil
@@ -61,33 +38,6 @@ func (f fakeEmbedder) Embed(text string) []float64 { return f.vecs[text] }
 type nilEmbedder struct{}
 
 func (nilEmbedder) Embed(string) []float64 { return nil }
-
-func TestEnsureVecSchemaAndHasVectors(t *testing.T) {
-	con := openTestDB(t)
-
-	// Before the schema exists, HasVectors must be false (missing table swallow).
-	if HasVectors(con) {
-		t.Fatal("HasVectors = true before EnsureVecSchema")
-	}
-	if err := EnsureVecSchema(con); err != nil {
-		t.Fatalf("EnsureVecSchema: %v", err)
-	}
-	// Idempotent.
-	if err := EnsureVecSchema(con); err != nil {
-		t.Fatalf("EnsureVecSchema (2nd): %v", err)
-	}
-	if HasVectors(con) {
-		t.Fatal("HasVectors = true on empty chunk_vec")
-	}
-
-	var v string
-	if err := con.QueryRow("SELECT value FROM meta WHERE key='vec_schema_version'").Scan(&v); err != nil {
-		t.Fatalf("read vec_schema_version: %v", err)
-	}
-	if v != "1" {
-		t.Fatalf("vec_schema_version = %q, want \"1\"", v)
-	}
-}
 
 func TestPackUnpackRoundTrip(t *testing.T) {
 	cases := [][]float64{
@@ -146,7 +96,7 @@ func TestVecIndexEmbedsPrunesAndRefreshes(t *testing.T) {
 	if added != 1 {
 		t.Fatalf("added = %d, want 1 (short message skipped)", added)
 	}
-	if !HasVectors(con) {
+	if !store.HasVectors(con) {
 		t.Fatal("HasVectors = false after indexing one vector")
 	}
 
@@ -161,6 +111,8 @@ func TestVecIndexEmbedsPrunesAndRefreshes(t *testing.T) {
 
 	// Simulate a reindex that churns the message id but keeps the same text:
 	// delete + re-insert the long message under a new autoincrement id.
+	// (storetest gap: no message-delete helper — raw fixture SQL stays until one
+	// lands in storetest; D8 forbids adding it from here.)
 	if _, err := con.Exec("DELETE FROM messages WHERE id=?", id1); err != nil {
 		t.Fatalf("delete msg: %v", err)
 	}
@@ -176,22 +128,29 @@ func TestVecIndexEmbedsPrunesAndRefreshes(t *testing.T) {
 	if added3 != 0 {
 		t.Fatalf("added3 = %d, want 0 (id churn refreshes, does not re-embed)", added3)
 	}
-	var storedMID int
-	if err := con.QueryRow("SELECT msg_id FROM chunk_vec WHERE session_id='s1'").Scan(&storedMID); err != nil {
-		t.Fatalf("read msg_id: %v", err)
+	vrows, err := store.VecAll(con)
+	if err != nil {
+		t.Fatalf("read vectors: %v", err)
+	}
+	storedMID := -1
+	for _, r := range vrows {
+		if r.SessionID == "s1" {
+			storedMID = r.MsgID
+		}
 	}
 	if storedMID != newID {
 		t.Fatalf("chunk_vec.msg_id = %d, want refreshed %d", storedMID, newID)
 	}
 
 	// Now remove the source text entirely → the vector must be pruned.
+	// (storetest gap: no message-delete helper, see above.)
 	if _, err := con.Exec("DELETE FROM messages WHERE id=?", newID); err != nil {
 		t.Fatalf("delete churned msg: %v", err)
 	}
 	if _, err := VecIndex(con, emb, 0); err != nil {
 		t.Fatalf("VecIndex (prune): %v", err)
 	}
-	if HasVectors(con) {
+	if store.HasVectors(con) {
 		t.Fatal("stale vector not pruned after source text removed")
 	}
 }
@@ -207,7 +166,7 @@ func TestVecIndexNilEmbedderAddsNothing(t *testing.T) {
 	if added != 0 {
 		t.Fatalf("added = %d, want 0 with nil embedder", added)
 	}
-	if HasVectors(con) {
+	if store.HasVectors(con) {
 		t.Fatal("nil embedder must not write vectors")
 	}
 }
@@ -291,6 +250,7 @@ func TestVecKNNExistenceCheck(t *testing.T) {
 		t.Fatalf("VecIndex: %v", err)
 	}
 	// Delete the message row but leave the vector orphaned (no reindex run).
+	// (storetest gap: no message-delete helper — see TestVecIndexEmbedsPrunesAndRefreshes.)
 	if _, err := con.Exec("DELETE FROM messages WHERE id=?", id); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -431,9 +391,7 @@ func TestFuseVectorOnlyCarriesMissingSince(t *testing.T) {
 
 	// A session whose backing file is gone: the row is retained and flagged.
 	mVec := addMessage(t, con, "smissing", "user", "vector only retained beacon message", "2026-06-18T10:00:00Z", 0, "")
-	if _, err := con.Exec("UPDATE sessions SET missing_since=1750000000 WHERE id='smissing'"); err != nil {
-		t.Fatalf("flag missing: %v", err)
-	}
+	storetest.SetSessionField(t, con, "smissing", "missing_since", 1750000000)
 
 	emb := fakeEmbedder{vecs: map[string][]float64{
 		"vector only retained beacon message": {1, 0, 0},
