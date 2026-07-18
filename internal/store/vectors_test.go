@@ -27,6 +27,15 @@ func TestHasVectorsDegrade(t *testing.T) {
 		t.Error("HasVectors on empty table = true, want false")
 	}
 
+	// The meta stamp is the migration gate other code keys on — pin its value.
+	var v string
+	if err := con.QueryRow("SELECT value FROM meta WHERE key='vec_schema_version'").Scan(&v); err != nil {
+		t.Fatalf("read vec_schema_version: %v", err)
+	}
+	if v != "1" {
+		t.Errorf("vec_schema_version = %q, want %q", v, "1")
+	}
+
 	if err := store.VecUpsert(con, "s", "hash1", 1, 2, []byte{1, 0, 0, 0, 2, 0, 0, 0}); err != nil {
 		t.Fatalf("VecUpsert: %v", err)
 	}

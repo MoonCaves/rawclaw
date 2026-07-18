@@ -88,6 +88,16 @@ func InsertMessage(t testing.TB, con *sql.DB, m Message) int {
 	return int(id)
 }
 
+// DeleteMessage deletes one message row by rowid (the FTS sync triggers remove
+// the messages_fts entry automatically) — for churn/prune fixtures that need a
+// message to vanish between passes.
+func DeleteMessage(t testing.TB, con *sql.DB, id int) {
+	t.Helper()
+	if _, err := con.Exec("DELETE FROM messages WHERE id=?", id); err != nil {
+		t.Fatalf("storetest: delete message %d: %v", id, err)
+	}
+}
+
 // settableSessionFields is the allowlist for SetSessionField — the fixture
 // mutations the durable-retention and provenance tests need.
 var settableSessionFields = map[string]bool{
