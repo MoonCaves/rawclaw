@@ -342,6 +342,28 @@ func TestMessagesEmptyContentDoesNotShiftOrdinals(t *testing.T) {
 	}
 }
 
+// TestConfigDir: $CODEX_HOME wins when set; otherwise it falls back to
+// ~/.codex under the resolved user home. This locks the config-dir seam
+// `rawclaw setup` depends on (SessionsRoot is exercised separately by the
+// TestDiscover* cases above via its "sessions" subdirectory).
+func TestConfigDir(t *testing.T) {
+	t.Run("CODEX_HOME set", func(t *testing.T) {
+		t.Setenv("CODEX_HOME", "/data/codex")
+		if got := ConfigDir(); got != "/data/codex" {
+			t.Errorf("ConfigDir() = %q, want /data/codex", got)
+		}
+	})
+	t.Run("CODEX_HOME unset falls back to ~/.codex", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("CODEX_HOME", "")
+		t.Setenv("HOME", home)
+		want := filepath.Join(home, ".codex")
+		if got := ConfigDir(); got != want {
+			t.Errorf("ConfigDir() = %q, want %q", got, want)
+		}
+	})
+}
+
 func TestDetect(t *testing.T) {
 	cases := []struct {
 		name     string

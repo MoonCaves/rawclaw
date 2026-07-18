@@ -51,17 +51,30 @@ func detect(path string) bool {
 		(os.Getenv("CODEX_HOME") != "" && strings.Contains(path, "/sessions/"))
 }
 
-// SessionsRoot is $CODEX_HOME/sessions, or ~/.codex/sessions when CODEX_HOME is
-// unset. Returns "" only when the home directory cannot be resolved.
-func SessionsRoot() string {
+// ConfigDir is the Codex config dir: $CODEX_HOME if set, else ~/.codex. Returns
+// "" only when the home directory cannot be resolved (no CODEX_HOME and no
+// resolvable user home) — same "resolve the path, don't require it to exist"
+// contract as paths.ConfigDir for Claude Code, so a writer (e.g. `rawclaw
+// setup`) can compute the target path before anything is on disk yet.
+func ConfigDir() string {
 	if h := os.Getenv("CODEX_HOME"); h != "" {
-		return filepath.Join(h, "sessions")
+		return h
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".codex", "sessions")
+	return filepath.Join(home, ".codex")
+}
+
+// SessionsRoot is $CODEX_HOME/sessions, or ~/.codex/sessions when CODEX_HOME is
+// unset. Returns "" only when the home directory cannot be resolved.
+func SessionsRoot() string {
+	dir := ConfigDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "sessions")
 }
 
 // Discover walks the sessions tree and returns one Container per rollout file,

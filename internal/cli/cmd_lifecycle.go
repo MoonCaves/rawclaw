@@ -142,7 +142,8 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 	// --yes skips the interactive prompt for non-interactive/agent use. Without it
 	// we always prompt y/N; an EOF (non-tty / closed stdin) still aborts safely.
 	if !f.yes {
-		ok, err := confirm(cmd.InOrStdin(), out, total)
+		ok, err := confirm(cmd.InOrStdin(), out,
+			fmt.Sprintf("Delete %d session(s)? This is irreversible. [y/N]: ", total))
 		if err != nil {
 			return fmt.Errorf("read confirmation: %w", err)
 		}
@@ -224,9 +225,10 @@ func printRetainedPlan(w io.Writer, retained []index.RetainedSession) {
 
 // confirm prompts y/N on stdin and reports whether the user typed 'y'/'yes'.
 // EOF (non-tty / closed stdin) or anything else is a "no" — never an error path
-// that deletes by default.
-func confirm(in io.Reader, w io.Writer, n int) (bool, error) {
-	fmt.Fprintf(w, "Delete %d session(s)? This is irreversible. [y/N]: ", n)
+// that acts by default. Shared by every prompting command (delete, setup); the
+// caller supplies its own prompt text.
+func confirm(in io.Reader, w io.Writer, prompt string) (bool, error) {
+	fmt.Fprint(w, prompt)
 	sc := bufio.NewScanner(in)
 	if !sc.Scan() {
 		if err := sc.Err(); err != nil {
