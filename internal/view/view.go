@@ -40,14 +40,6 @@ type AnchoredView struct {
 	MessagesAfter  int       `json:"messages_after"`
 }
 
-// nullableStr maps a Go "" (what a NULL parent_id scans to) back to JSON null.
-func nullableStr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
 // BrowseRow is one recent-session preview row.
 type BrowseRow struct {
 	SessionID string  `json:"session_id"`
@@ -79,34 +71,23 @@ type AnchoredViewOpts struct {
 	IncludeTools bool
 }
 
-// rawMsg is the (id, role, content) triple read from the messages table.
-type rawMsg struct {
-	ID      int
-	Role    string
-	Content string
-}
-
 // BuildAnchoredView builds the ±window + bookends shape around anchorID in
 // session. Returns nil if the window is empty.
 // (Named BuildAnchoredView, not AnchoredView, to avoid colliding with the
 // AnchoredView result type.)
 func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts AnchoredViewOpts) *AnchoredView {
-	// before: id<=anchor ORDER BY id DESC LIMIT window+1 (then reversed to ASC).
-	before, err := readMsgs(con,
-		`SELECT id,role,content FROM messages WHERE session_id=? AND id<=? ORDER BY id DESC LIMIT ?`,
-		sessionID, anchorID, opts.Window+1)
+	// before: id<=anchor, nearest first (id DESC), then reversed to ASC below.
+	before, err := store.MessagesBefore(con, sessionID, anchorID, opts.Window+1)
 	if err != nil {
 		return nil
 	}
-	after, err := readMsgs(con,
-		`SELECT id,role,content FROM messages WHERE session_id=? AND id>? ORDER BY id ASC LIMIT ?`,
-		sessionID, anchorID, opts.Window)
+	after, err := store.MessagesAfter(con, sessionID, anchorID, opts.Window)
 	if err != nil {
 		return nil
 	}
 
 	// win = reversed(before) + after (both ascending by id).
-	win := make([]rawMsg, 0, len(before)+len(after))
+	win := make([]store.Msg, 0, len(before)+len(after))
 	for i := len(before) - 1; i >= 0; i-- {
 		win = append(win, before[i])
 	}
@@ -136,14 +117,12 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 		wmsgs = append(wmsgs, ViewMsg{ID: m.ID, Role: m.Role, Text: text, Anchor: isAnchor})
 	}
 
-	var bs, be []rawMsg
+	var bs, be []store.Msg
 	if opts.Bookend > 0 {
-		bs, _ = readMsgs(con,
-			`SELECT id,role,content FROM messages WHERE session_id=? AND id<? AND role IN ('user','assistant') AND length(content)>0 ORDER BY id ASC LIMIT ?`,
-			sessionID, winMin, opts.Bookend)
-		be, _ = readMsgs(con,
-			`SELECT id,role,content FROM messages WHERE session_id=? AND id>? AND role IN ('user','assistant') AND length(content)>0 ORDER BY id DESC LIMIT ?`,
-			sessionID, winMax, opts.Bookend)
+		// bookend_start: the run-up before the window (id<winMin, ASC).
+		bs, _ = store.BookendMessages(con, sessionID, winMin, true, true, opts.Bookend)
+		// bookend_end: the tail after the window (id>winMax, DESC — reversed below).
+		be, _ = store.BookendMessages(con, sessionID, winMax, true, false, opts.Bookend)
 	}
 
 	bookendStart := make([]ViewMsg, 0, len(bs))
@@ -168,24 +147,6 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 		MessagesBefore: messagesBefore,
 		MessagesAfter:  len(after),
 	}
-}
-
-// readMsgs runs a (id, role, content) query and scans the rows.
-func readMsgs(con *sql.DB, query string, args ...any) ([]rawMsg, error) {
-	rows, err := con.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []rawMsg
-	for rows.Next() {
-		var m rawMsg
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content); err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
 }
 
 // sortCandidates orders discovery candidates per the requested sort mode.
@@ -228,52 +189,19 @@ func Browse(tdir string, limit int, since, before string) []BrowseRow {
 	}
 	defer con.Close()
 
-	where := []string{"s.is_subagent=0"}
-	var args []any
-	if since != "" {
-		where = append(where, "date(s.last_ts,'unixepoch','localtime') >= ?")
-		args = append(args, since)
-	}
-	if before != "" {
-		where = append(where, "date(s.last_ts,'unixepoch','localtime') <= ?")
-		args = append(args, before)
-	}
-	args = append(args, limit)
-
-	whereSQL := where[0]
-	for _, w := range where[1:] {
-		whereSQL += " AND " + w
-	}
-	q := `SELECT s.id, s.last_ts, s.message_count
-	      FROM sessions s WHERE ` + whereSQL + ` ORDER BY s.last_ts DESC LIMIT ?`
-
-	rows, err := con.Query(q, args...)
+	// BrowseSessions drains and closes its rows before returning (D3), so the
+	// single connection (ConnectRO sets SetMaxOpenConns(1)) is free for the
+	// per-session preview queries below. Running a preview query while the
+	// session rows were still open was the v0.1.0 database/sql.(*DB).conn
+	// deadlock — sessions first, then previews, never interleaved.
+	sessions, err := store.BrowseSessions(con, since, before, limit)
 	if err != nil {
 		return nil
 	}
 
-	// Drain the session rows fully and CLOSE them before running any per-session
-	// preview query. ConnectRO is a single-connection pool (SetMaxOpenConns(1)), so
-	// calling sessionPreview (another con.Query) while these rows are still open
-	// blocks forever waiting for a second connection — database/sql.(*DB).conn
-	// deadlock. Collect first, release the connection, then preview.
-	var out []BrowseRow
-	for rows.Next() {
-		var (
-			id     string
-			lastTS sql.NullFloat64
-			n      sql.NullInt64
-		)
-		if err := rows.Scan(&id, &lastTS, &n); err != nil {
-			_ = rows.Close()
-			return nil
-		}
-		out = append(out, BrowseRow{SessionID: id, LastTS: lastTS.Float64, N: int(n.Int64)})
-	}
-	rowsErr := rows.Err()
-	_ = rows.Close() // release the single connection before the preview queries
-	if rowsErr != nil {
-		return nil
+	out := make([]BrowseRow, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, BrowseRow{SessionID: s.SessionID, LastTS: s.LastTS, N: s.MessageCount})
 	}
 
 	// Connection is now free — fill each preview with its own query.
@@ -294,30 +222,19 @@ const previewScan = 8
 // message is substantive, the first non-empty user message is shown as a
 // fallback so the row still previews something.
 func sessionPreview(con *sql.DB, sessionID string) string {
-	rows, err := con.Query(
-		`SELECT content FROM messages WHERE session_id=? AND role='user'
-		   AND length(content)>0 ORDER BY id ASC LIMIT ?`,
-		sessionID, previewScan)
+	contents, err := store.FirstUserMessages(con, sessionID, previewScan)
 	if err != nil {
 		return ""
 	}
-	defer rows.Close()
 
 	var fallback string
-	for rows.Next() {
-		var content sql.NullString
-		if err := rows.Scan(&content); err != nil {
-			return fallback
-		}
+	for _, content := range contents {
 		if fallback == "" {
-			fallback = parse.Disp(content.String, false, browsePreviewCap)
+			fallback = parse.Disp(content, false, browsePreviewCap)
 		}
-		if parse.IsSubstantive(content.String) {
-			return parse.Disp(content.String, false, browsePreviewCap)
+		if parse.IsSubstantive(content) {
+			return parse.Disp(content, false, browsePreviewCap)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return fallback
 	}
 	return fallback
 }
