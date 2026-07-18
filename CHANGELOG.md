@@ -4,6 +4,22 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-07-18
+
+### Added
+
+- **`rawclaw setup`** — one command to wire the discovery hook into your agent runtimes: a short
+  session-start note teaching agents rawclaw exists and how to call it. Targets Claude Code
+  (always) and Codex (when its config dir exists — never created for you). Global by default
+  (honors `$CLAUDE_CONFIG_DIR` / `$CODEX_HOME`); `--project` writes to the current project's own
+  config instead (Codex project installs print a trust-gating note). `--yes` for non-interactive
+  use. Sibling hooks in the same config files are never touched; re-running replaces rawclaw's
+  own entry, never duplicates it.
+- **`rawclaw setup --eject`** — symmetric removal: the hook script, rawclaw's config entries, and
+  any directories left truly empty; a config file that still holds anything else survives intact.
+  Known limitation: Codex may keep a stale per-hook trust-state row in its own config (its format
+  is undocumented and deliberately left alone).
+
 ## [0.3.0] — 2026-07-18
 
 ### Added

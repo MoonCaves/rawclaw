@@ -102,7 +102,7 @@ func (b BuildInfo) versionString() string {
 }
 
 // NewRootCmd builds the rawclaw cobra command tree (root + the `read`, `outline`,
-// `archive`, `delete`, `upgrade`, and `version` subcommands). The root RunE
+// `archive`, `delete`, `setup`, `upgrade`, and `version` subcommands). The root RunE
 // dispatches the shape (browse/discovery/stats/resume/reindex-vectors) per the
 // parsed flags. The build stamp feeds `--version` (cobra-native) and the
 // `version` subcommand.
@@ -198,6 +198,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root.AddCommand(newTagWriteCmd())
 	root.AddCommand(newArchiveCmd())
 	root.AddCommand(newDeleteCmd())
+	root.AddCommand(newSetupCmd())
 	root.AddCommand(newUpgradeCmd(build))
 	root.AddCommand(newVersionCmd(build))
 	return root

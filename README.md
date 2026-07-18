@@ -31,6 +31,21 @@ Claude Code removes conversation files older than ~30 days (`cleanupPeriodDays`)
 
 Want RawClaw to track your Claude Code retention setting instead? Set `RAWCLAW_RETENTION=mirror` and sessions drop when their source file does.
 
+## Setup: let your agents discover it
+
+Installing the binary gives *you* the tool; `rawclaw setup` tells your **agents** about it. One
+command wires a short session-start note into Claude Code (and Codex, when installed) so every
+new session knows rawclaw exists and how to search with it — no hand-editing config files.
+
+```bash
+rawclaw setup        # shows the plan, asks y/N
+rawclaw setup --yes  # non-interactive
+```
+
+Global by default (rawclaw searches every project); `--project` narrows the note to the current
+project only. Everything else already hooked into your configs is left untouched, and re-running
+never duplicates. `rawclaw setup --eject` removes exactly what setup installed — nothing more.
+
 ## What it does
 
 Claude Code quietly saves every conversation you have with it as JSONL transcripts under `~/.claude/projects`. RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type.

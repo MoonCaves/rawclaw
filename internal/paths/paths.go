@@ -35,6 +35,17 @@ func ProjectsRoot() string {
 	return expandHome("~/.claude/projects")
 }
 
+// ConfigDir returns the Claude Code config dir: $CLAUDE_CONFIG_DIR if set, else
+// ~/.claude. Unlike ProjectsRoot, this never requires the dir to already exist —
+// a writer (e.g. `rawclaw setup`, which creates settings.json and the hooks dir
+// on a fresh machine) needs the resolved path before anything is on disk yet.
+func ConfigDir() string {
+	if cc := os.Getenv("CLAUDE_CONFIG_DIR"); cc != "" {
+		return cc
+	}
+	return expandHome("~/.claude")
+}
+
 // FindTranscriptDir resolves the projects subdir for `cwd` by matching the cwd
 // recorded inside transcripts (authoritative), falling back to path encoding.
 // Returns "" if none found.
