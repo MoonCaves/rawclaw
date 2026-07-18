@@ -149,7 +149,7 @@ func TestSearchExplained(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			dbp := newTestDB(t, sessions, tt.msgs)
+			_, dbp := newTestDB(t, sessions, tt.msgs)
 			hits, ex := SearchExplained(dbp, tt.query, 10, tt.params)
 
 			if gotSIDs := sids(hits); !reflect.DeepEqual(gotSIDs, tt.wantSIDs) {
@@ -184,7 +184,7 @@ func TestSearchExplained(t *testing.T) {
 func TestSearchExplainedNoMatch(t *testing.T) {
 	t.Parallel()
 
-	dbp := newTestDB(t,
+	_, dbp := newTestDB(t,
 		[]testSession{{id: "alpha", msgCount: 5, lastTS: 100}},
 		[]testMsg{{sessionID: "alpha", role: "user", tsISO: "2026-06-01", ts: 1, content: "nothing relevant"}},
 	)
