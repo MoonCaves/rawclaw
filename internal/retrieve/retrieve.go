@@ -16,6 +16,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/query"
 )
 
@@ -481,7 +482,7 @@ func LinearFallback(transcriptDir, q string, limit int, p SearchParams) []Hit {
 	var hits []linHit
 
 	for _, f := range paths.ContainedJSONL(transcriptDir) {
-		sid, isSub, parent := index.SessionIDFor(f, transcriptDir)
+		sid, isSub, parent := provenance.SessionIDFor(f, transcriptDir)
 		if isSub != 0 && !p.IncludeSubagents {
 			continue
 		}
