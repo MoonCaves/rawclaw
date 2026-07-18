@@ -1,14 +1,10 @@
 package retrieve
 
 import (
-	"context"
 	"database/sql"
-	"path/filepath"
 	"testing"
 
-	"github.com/MoonCaves/rawclaw/internal/store"
-
-	_ "modernc.org/sqlite"
+	"github.com/MoonCaves/rawclaw/internal/store/storetest"
 )
 
 // testMsg is one row to seed into the in-test FTS5 db.
@@ -29,50 +25,33 @@ type testSession struct {
 	lastTS     float64
 }
 
-// newTestDB builds a real on-disk FTS5 db using the production index schema,
-// seeds sessions + messages, and returns the db path. Using the real schema
-// (triggers populate messages_fts) keeps the ranking identical to production.
-func newTestDB(t *testing.T, sessions []testSession, msgs []testMsg) string {
+// newTestDB builds a real on-disk FTS5 db using the production schema via
+// storetest (D7), seeds sessions + messages, and returns the open fixture
+// connection plus the db path. Using the real schema (triggers populate
+// messages_fts) keeps the ranking identical to production.
+func newTestDB(t *testing.T, sessions []testSession, msgs []testMsg) (*sql.DB, string) {
 	t.Helper()
-	dbp := filepath.Join(t.TempDir(), "test.db")
-
-	con, err := sql.Open("sqlite", "file:"+dbp)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer con.Close()
-	con.SetMaxOpenConns(1)
-	ctx := context.Background()
-
-	if _, err := con.ExecContext(ctx, store.Schema); err != nil {
-		t.Fatalf("schema: %v", err)
-	}
-	if _, err := con.ExecContext(ctx, store.FTSSQL); err != nil {
-		t.Fatalf("fts schema: %v", err)
-	}
+	con, dbp := storetest.NewDB(t)
 
 	for _, s := range sessions {
-		var parent any
-		if s.parentID != "" {
-			parent = s.parentID
-		}
-		_, err := con.ExecContext(ctx,
-			`INSERT INTO sessions(id, started_at, last_ts, message_count, is_subagent, parent_id)
-			 VALUES(?,?,?,?,?,?)`,
-			s.id, 0.0, s.lastTS, s.msgCount, s.isSubagent, parent)
-		if err != nil {
-			t.Fatalf("insert session: %v", err)
-		}
+		storetest.InsertSession(t, con, storetest.Session{
+			ID:           s.id,
+			LastTS:       s.lastTS,
+			MessageCount: s.msgCount,
+			IsSubagent:   s.isSubagent != 0,
+			ParentID:     s.parentID,
+		})
 	}
 	for _, m := range msgs {
-		_, err := con.ExecContext(ctx,
-			`INSERT INTO messages(session_id, role, content, ts, ts_iso) VALUES(?,?,?,?,?)`,
-			m.sessionID, m.role, m.content, m.ts, m.tsISO)
-		if err != nil {
-			t.Fatalf("insert message: %v", err)
-		}
+		storetest.InsertMessage(t, con, storetest.Message{
+			SessionID: m.sessionID,
+			Role:      m.role,
+			Content:   m.content,
+			TS:        m.ts,
+			ISO:       m.tsISO,
+		})
 	}
-	return dbp
+	return con, dbp
 }
 
 func sids(hits []Hit) []string {
@@ -273,7 +252,7 @@ func TestSearch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dbp := newTestDB(t, sessions, tt.msgs)
+			_, dbp := newTestDB(t, sessions, tt.msgs)
 			got := Search(dbp, tt.query, tt.limit, tt.params)
 
 			if tt.name == "limit caps results" {
@@ -299,7 +278,7 @@ func TestSearchSnippetHighlight(t *testing.T) {
 		{sessionID: "alpha", role: "user", tsISO: "2026-06-01", ts: 1,
 			content: "we should configure the kubernetes ingress today"},
 	}
-	dbp := newTestDB(t, sessions, msgs)
+	_, dbp := newTestDB(t, sessions, msgs)
 	got := Search(dbp, "kubernetes", 10, SearchParams{})
 	if len(got) != 1 {
 		t.Fatalf("got %d hits, want 1", len(got))
@@ -326,12 +305,7 @@ func TestMatchAnchors(t *testing.T) {
 		{sessionID: "alpha", role: "user", tsISO: "2026-06-01", ts: 1, content: "only kubernetes here"},
 		{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "kubernetes and redis together"},
 	}
-	dbp := newTestDB(t, sessions, msgs)
-	con, err := openRO(dbp)
-	if err != nil {
-		t.Fatalf("openRO: %v", err)
-	}
-	defer con.Close()
+	con, _ := newTestDB(t, sessions, msgs)
 
 	got := MatchAnchors(con, "kubernetes redis", 100, SearchParams{})
 	if len(got) != 2 {
@@ -357,12 +331,7 @@ func TestLineageRoot(t *testing.T) {
 		{id: "leaf", parentID: "mid", msgCount: 1, lastTS: 3},
 		{id: "selfcycle", parentID: "selfcycle", msgCount: 1, lastTS: 4},
 	}
-	dbp := newTestDB(t, sessions, nil)
-	con, err := openRO(dbp)
-	if err != nil {
-		t.Fatalf("openRO: %v", err)
-	}
-	defer con.Close()
+	con, _ := newTestDB(t, sessions, nil)
 
 	tests := []struct {
 		name string
