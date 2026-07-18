@@ -24,15 +24,6 @@ const condenseCap = 200
 // resolved by tag-write — mirrors the <uuid8> refs the search/read path uses.
 const uuid8Len = 8
 
-// tagMsg is one message row loaded for tagging: id + uuid + role + content, in
-// session order (id ascending).
-type tagMsg struct {
-	ID      int
-	UUID    string
-	Role    string
-	Content string
-}
-
 // rawSegment is one segment of the tag-write STDIN JSON: a uuid8 prefix marking
 // where the topic begins, plus the subagent's topic label and inconclusive
 // summary. Segments are expected in session order.
@@ -147,7 +138,7 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 		return err
 	}
 
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
 		return fmt.Errorf("open %q read-write: %w", dbp, err)
 	}
@@ -210,30 +201,18 @@ func openSessionRO(session8 string, scope []view.Scope) (*sql.DB, string, error)
 
 // loadSessionMessages reads a session's messages in id order (id ascending) — the
 // chronological spine the dump and the segment-range mapping both walk.
-func loadSessionMessages(con *sql.DB, fullSID string) ([]tagMsg, error) {
-	rows, err := con.Query(
-		"SELECT id, uuid, role, content FROM messages WHERE session_id=? ORDER BY id",
-		fullSID)
+func loadSessionMessages(con *sql.DB, fullSID string) ([]store.SessionMessage, error) {
+	msgs, err := store.SessionMessages(con, fullSID)
 	if err != nil {
 		return nil, fmt.Errorf("load session messages: %w", err)
 	}
-	defer rows.Close()
-
-	var out []tagMsg
-	for rows.Next() {
-		var m tagMsg
-		if err := rows.Scan(&m.ID, &m.UUID, &m.Role, &m.Content); err != nil {
-			return nil, fmt.Errorf("scan message: %w", err)
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return msgs, nil
 }
 
 // condensedLine renders one message as `<uuid8> [<role>] <text>`, collapsing the
 // content to a single capped line via parse.Disp (tools stripped). uuid8 is the
 // ref a tagging subagent echoes back in tag-write's start_uuid.
-func condensedLine(m tagMsg) string {
+func condensedLine(m store.SessionMessage) string {
 	text := parse.Disp(m.Content, false, condenseCap)
 	return fmt.Sprintf("%s [%s] %s", uuid8(m.UUID), m.Role, text)
 }
@@ -253,7 +232,7 @@ func uuid8(u string) string {
 // message for the final segment). A segment missing start_uuid/topic, or whose
 // start_uuid resolves to no/ambiguous message, returns a clear error. Returns the
 // number of rows written.
-func writeSegments(con *sql.DB, fullSID string, msgs []tagMsg, segs []rawSegment, taggedAt float64) (int, error) {
+func writeSegments(con *sql.DB, fullSID string, msgs []store.SessionMessage, segs []rawSegment, taggedAt float64) (int, error) {
 	if len(msgs) == 0 {
 		return 0, nil
 	}
@@ -303,7 +282,7 @@ func writeSegments(con *sql.DB, fullSID string, msgs []tagMsg, segs []rawSegment
 // mirroring the read path's uuid8 resolution: exactly one match wins; zero
 // matches and more-than-one match are both clear errors. Returns the matching
 // message's index in msgs.
-func resolveStartUUID(msgs []tagMsg, prefix string) (int, error) {
+func resolveStartUUID(msgs []store.SessionMessage, prefix string) (int, error) {
 	match := -1
 	for i, m := range msgs {
 		if strings.HasPrefix(m.UUID, prefix) {

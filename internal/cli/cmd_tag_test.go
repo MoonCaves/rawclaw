@@ -2,30 +2,19 @@ package cli
 
 import (
 	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/store"
-
-	_ "modernc.org/sqlite"
+	"github.com/MoonCaves/rawclaw/internal/store/storetest"
 )
 
 // newTagTestDB builds a fresh writable db with the base + topic schema, returning
-// the open connection. Uses the cli package's openRW (the same path the command
-// takes), so the test exercises a real on-disk SQLite db.
+// the open connection. Uses storetest.NewDB (store.ConnectRW — the same opener
+// the command takes), so the test exercises a real on-disk SQLite db.
 func newTagTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dbp := filepath.Join(t.TempDir(), "tag.db")
-	con, err := openRW(dbp)
-	if err != nil {
-		t.Fatalf("openRW: %v", err)
-	}
-	t.Cleanup(func() { con.Close() })
-	if err := index.EnsureSchema(con, "claude"); err != nil {
-		t.Fatalf("EnsureSchema: %v", err)
-	}
+	con, _ := storetest.NewDB(t)
 	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
@@ -36,19 +25,8 @@ func newTagTestDB(t *testing.T) *sql.DB {
 // returns its id.
 func addMsg(t *testing.T, con *sql.DB, sid, role, content, uuid string) int {
 	t.Helper()
-	if _, err := con.Exec(
-		"INSERT OR IGNORE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id) VALUES(?,?,?,?,?,?)",
-		sid, 0.0, 0.0, 0, 0, nil); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	res, err := con.Exec(
-		"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
-		sid, role, content, 0.0, "", uuid)
-	if err != nil {
-		t.Fatalf("insert message: %v", err)
-	}
-	id, _ := res.LastInsertId()
-	return int(id)
+	storetest.InsertSession(t, con, storetest.Session{ID: sid})
+	return storetest.InsertMessage(t, con, storetest.Message{SessionID: sid, Role: role, Content: content, UUID: uuid})
 }
 
 // TestRunTagPrepDumpsCondensed asserts tag-prep prints one line per message in
