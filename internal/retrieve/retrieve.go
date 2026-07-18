@@ -5,7 +5,6 @@ package retrieve
 
 import (
 	"bufio"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/query"
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // reBoolOps strips boolean operators (&& || !) down to spaces so the leftover
@@ -111,17 +111,26 @@ type SearchParams struct {
 	MinMessages      int    // 0 = no minimum
 }
 
-// dateWhere pushes inclusive YYYY-MM-DD bounds into the SQL WHERE so they filter
-// BEFORE the LIMIT/rank (a post-filter would pick the top-N first, then silently
-// under-return).
-func dateWhere(where *[]string, params *[]any, since, before string) {
-	if since != "" {
-		*where = append(*where, "substr(m.ts_iso,1,10) >= ?")
-		*params = append(*params, since)
+// storeFilterSort maps SearchParams onto the store's shared FTS Filter + Sort
+// (D5): the WHERE composition and ORDER BY live in store; the mapping is the
+// only translation retrieve owns. The date bounds ride into the SQL WHERE so
+// they filter BEFORE the LIMIT/rank (a post-filter would pick the top-N first,
+// then silently under-return).
+func storeFilterSort(p SearchParams) (store.Filter, store.Sort) {
+	f := store.Filter{
+		IncludeSubagents: p.IncludeSubagents,
+		Role:             p.Role,
+		MinMessages:      p.MinMessages,
+		SinceDate:        p.Since,
+		BeforeDate:       p.Before,
 	}
-	if before != "" {
-		*where = append(*where, "substr(m.ts_iso,1,10) <= ?")
-		*params = append(*params, before)
+	switch p.Sort {
+	case "newest":
+		return f, store.SortNewest
+	case "oldest":
+		return f, store.SortOldest
+	default:
+		return f, store.SortRelevance
 	}
 }
 
@@ -151,19 +160,6 @@ func buildMatch(q string, p SearchParams) (match string, terms []string, multi, 
 		quoted = append(quoted, `"`+strings.ReplaceAll(t, `"`, "")+`"`)
 	}
 	return strings.Join(quoted, " OR "), terms, true, true
-}
-
-// orderClause selects the SQL ORDER BY: rank, m.id (relevance) unless an
-// explicit sort is requested.
-func orderClause(sortMode string) string {
-	switch sortMode {
-	case "newest":
-		return "ORDER BY m.ts DESC, m.id DESC"
-	case "oldest":
-		return "ORDER BY m.ts ASC, m.id ASC"
-	default:
-		return "ORDER BY rank, m.id"
-	}
 }
 
 // lowerSet returns the distinct, non-empty lowercased terms used for coverage
@@ -342,7 +338,7 @@ func SearchExplained(dbp, q string, limit int, p SearchParams) (out []Hit, expla
 // slice (pre-limit) plus the ExplainInputs that describe the regime used. The
 // returned slice carries the real cov values the ranking consumed.
 func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, ExplainInputs) {
-	con, err := openRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return nil, ExplainInputs{}
 	}
@@ -352,21 +348,6 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 	if !ok {
 		return nil, ExplainInputs{}
 	}
-
-	where := []string{"messages_fts MATCH ?"}
-	params := []any{match}
-	if !p.IncludeSubagents {
-		where = append(where, "s.is_subagent=0")
-	}
-	if p.Role != "" {
-		where = append(where, "m.role=?")
-		params = append(params, p.Role)
-	}
-	if p.MinMessages != 0 {
-		where = append(where, "s.message_count >= ?")
-		params = append(params, p.MinMessages)
-	}
-	dateWhere(&where, &params, p.Since, p.Before)
 
 	// Overfetch so tool-only filtering + coverage re-rank still reach `limit`;
 	// wider for multi-term OR (base 8 vs 4, scaled per the cases below).
@@ -384,62 +365,40 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 		fetch = limit
 	}
 
-	sqlText := `SELECT m.session_id, m.role, m.ts_iso, s.is_subagent, s.parent_id, m.content,
-	                   snippet(messages_fts,0,'>>>','<<<','…',16) AS snip
-	            FROM messages_fts JOIN messages m ON m.id=messages_fts.rowid
-	            JOIN sessions s ON s.id=m.session_id
-	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(p.Sort) + " LIMIT ?"
-	params = append(params, fetch)
-
-	rows, err := con.QueryContext(context.Background(), sqlText, params...)
+	filt, srt := storeFilterSort(p)
+	hits, err := store.SearchHits(con, match, filt, srt, fetch)
 	if err != nil {
 		return nil, ExplainInputs{}
 	}
-	defer rows.Close()
 
 	lterms := lowerSet(terms)
-	scored := make([]scoredHit, 0, fetch)
-	for rows.Next() {
-		var (
-			sid     string
-			role    sql.NullString
-			iso     sql.NullString
-			isSub   int
-			parent  sql.NullString
-			content sql.NullString
-			snip    sql.NullString
-		)
-		if err := rows.Scan(&sid, &role, &iso, &isSub, &parent, &content, &snip); err != nil {
-			return nil, ExplainInputs{}
-		}
+	scored := make([]scoredHit, 0, len(hits))
+	for _, h := range hits {
 		var disp string
 		if p.IncludeTools {
-			disp = strings.TrimSpace(reWhitespace.ReplaceAllString(snip.String, " "))
+			disp = strings.TrimSpace(reWhitespace.ReplaceAllString(h.Snippet, " "))
 		} else {
 			// Rebuild the snippet from tool-stripped content; a tool-ONLY match
 			// (no human text) is excluded by default.
-			haystack := parse.StripTools(content.String)
+			haystack := parse.StripTools(h.Content)
 			s, present := query.MakeSnippet(haystack, terms)
 			if !present {
 				continue
 			}
 			disp = s
 		}
-		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, content.String)), multi)
+		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, h.Content)), multi)
 		scored = append(scored, scoredHit{
 			Hit: Hit{
-				ISO:        iso.String,
-				SessionID:  sid,
-				Role:       role.String,
-				IsSubagent: isSub != 0,
-				Parent:     parent.String,
+				ISO:        h.ISO,
+				SessionID:  h.SessionID,
+				Role:       h.Role,
+				IsSubagent: h.IsSubagent,
+				Parent:     h.Parent,
 				Snippet:    disp,
 			},
 			cov: cov,
 		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, ExplainInputs{}
 	}
 
 	// Coverage re-rank (relevance mode only): docs matching more distinct terms
@@ -627,13 +586,11 @@ func LineageRoot(con *sql.DB, sid string) string {
 			break
 		}
 		seen[cur] = struct{}{}
-		var parent sql.NullString
-		err := con.QueryRowContext(context.Background(),
-			"SELECT parent_id FROM sessions WHERE id=?", cur).Scan(&parent)
-		if err != nil || !parent.Valid || parent.String == "" {
+		parent := store.ParentOf(con, cur)
+		if parent == "" {
 			break
 		}
-		cur = parent.String
+		cur = parent
 	}
 	return cur
 }
@@ -647,77 +604,38 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 		return []Anchor{}
 	}
 
-	where := []string{"messages_fts MATCH ?"}
-	params := []any{match}
-	if !p.IncludeSubagents {
-		where = append(where, "s.is_subagent=0")
-	}
-	if p.Role != "" {
-		where = append(where, "m.role=?")
-		params = append(params, p.Role)
-	}
-	if p.MinMessages != 0 {
-		where = append(where, "s.message_count >= ?")
-		params = append(params, p.MinMessages)
-	}
-	dateWhere(&where, &params, p.Since, p.Before)
-
-	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content, s.missing_since,
-	                   snippet(messages_fts,0,'>>>','<<<','…',16) AS snip
-	            FROM messages_fts JOIN messages m ON m.id=messages_fts.rowid
-	            JOIN sessions s ON s.id=m.session_id
-	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(p.Sort) + " LIMIT ?"
-	params = append(params, fetch)
-
-	rows, err := con.QueryContext(context.Background(), sqlText, params...)
+	filt, srt := storeFilterSort(p)
+	anchors, err := store.SearchAnchors(con, match, filt, srt, fetch)
 	if err != nil {
 		return []Anchor{}
 	}
-	defer rows.Close()
 
 	lterms := lowerSet(terms)
 	out := []Anchor{}
-	for rows.Next() {
-		var (
-			mid     int
-			sid     string
-			uuid    sql.NullString
-			role    sql.NullString
-			iso     sql.NullString
-			parent  sql.NullString
-			content sql.NullString
-			missing sql.NullFloat64
-			snip    sql.NullString
-		)
-		if err := rows.Scan(&mid, &sid, &uuid, &role, &iso, &parent, &content, &missing, &snip); err != nil {
-			return []Anchor{}
-		}
+	for _, a := range anchors {
 		var disp string
 		if p.IncludeTools {
-			disp = strings.TrimSpace(reWhitespace.ReplaceAllString(snip.String, " "))
+			disp = strings.TrimSpace(reWhitespace.ReplaceAllString(a.Snippet, " "))
 		} else {
-			haystack := parse.StripTools(content.String)
+			haystack := parse.StripTools(a.Content)
 			s, present := query.MakeSnippet(haystack, terms)
 			if !present {
 				continue
 			}
 			disp = s
 		}
-		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, content.String)), multi)
+		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, a.Content)), multi)
 		out = append(out, Anchor{
-			ID:           mid,
-			SessionID:    sid,
-			UUID:         uuid.String,
-			Role:         role.String,
-			ISO:          iso.String,
-			Parent:       parent.String,
+			ID:           a.ID,
+			SessionID:    a.SessionID,
+			UUID:         a.UUID,
+			Role:         a.Role,
+			ISO:          a.ISO,
+			Parent:       a.Parent,
 			Snip:         disp,
 			Cov:          cov,
-			MissingSince: missing.Float64, // 0 when NULL (present)
+			MissingSince: a.MissingSince, // 0 when NULL (present)
 		})
-	}
-	if err := rows.Err(); err != nil {
-		return []Anchor{}
 	}
 
 	if multi && p.Sort == "" {
@@ -726,20 +644,6 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 		})
 	}
 	return out
-}
-
-// openRO opens dbp read-only with a single serialized connection, one handle per
-// call. Kept inline here so retrieve does not depend on the index package's
-// connection helper for its read path.
-func openRO(dbp string) (*sql.DB, error) {
-	con, err := sql.Open("sqlite", "file:"+dbp+"?mode=ro")
-	if err != nil {
-		return nil, err
-	}
-	// modernc serializes; one connection means a single SQLite handle and
-	// avoids "database is locked" against a concurrent indexer.
-	con.SetMaxOpenConns(1)
-	return con, nil
 }
 
 // isIndexableType reports whether a JSONL record type is one RawClaw indexes.
