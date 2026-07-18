@@ -23,204 +23,6 @@ import (
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (FTS5 + bm25 + snippet)
 )
 
-// TopicSegment is one tagged segment of a session, returned by TopicsForSession
-// for the outline view. Keyed externally by (session_id, start_uuid).
-type TopicSegment struct {
-	SessionID string
-	StartUUID string
-	EndUUID   string
-	Topic     string
-	Summary   string
-}
-
-// TopicHit is one topic_fts match resolved to the segment's START message id
-// (via a messages join on session_id+start_uuid). MsgID is the live rowid the
-// fusion layer scores; SessionID + Topic carry the context to attach to it.
-type TopicHit struct {
-	MsgID     int
-	SessionID string
-	Topic     string
-}
-
-// UpsertTopicSegment inserts or updates one topic segment, keyed by the stable
-// (session_id, start_uuid). The external-content FTS triggers keep topic_fts in
-// sync — except an ON CONFLICT UPDATE fires the AFTER UPDATE trigger, which
-// re-syncs the changed topic/summary.
-func UpsertTopicSegment(con *sql.DB, sessionID, startUUID, endUUID, topic, summary string, taggedAt float64) error {
-	_, err := con.Exec(`
-INSERT INTO topic_segment(session_id, start_uuid, end_uuid, topic, summary, tagged_at)
-VALUES(?,?,?,?,?,?)
-ON CONFLICT(session_id, start_uuid) DO UPDATE SET
-  end_uuid=excluded.end_uuid, topic=excluded.topic, summary=excluded.summary, tagged_at=excluded.tagged_at`,
-		sessionID, startUUID, endUUID, topic, summary, taggedAt)
-	if err != nil {
-		return fmt.Errorf("upsert topic segment: %w", err)
-	}
-	return nil
-}
-
-// TopicsForSession returns the topic segments for one session, ordered by id
-// (insertion order — roughly chronological as the tagger walks the session).
-// Used by the outline view. A missing topic table reads as "no topics".
-func TopicsForSession(con *sql.DB, sessionID string) ([]TopicSegment, error) {
-	rows, err := con.Query(
-		"SELECT session_id, start_uuid, end_uuid, topic, summary FROM topic_segment WHERE session_id=? ORDER BY id",
-		sessionID)
-	if err != nil {
-		return nil, nil // missing table / read error reads as no topics (non-fatal)
-	}
-	defer rows.Close()
-	var out []TopicSegment
-	for rows.Next() {
-		var (
-			seg     TopicSegment
-			endU    sql.NullString
-			topic   sql.NullString
-			summary sql.NullString
-		)
-		if err := rows.Scan(&seg.SessionID, &seg.StartUUID, &endU, &topic, &summary); err != nil {
-			return nil, fmt.Errorf("scan topic segment: %w", err)
-		}
-		seg.EndUUID = endU.String
-		seg.Topic = topic.String
-		seg.Summary = summary.String
-		out = append(out, seg)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate topic segments: %w", err)
-	}
-	return out, nil
-}
-
-// MatchTopics runs an FTS query over topic_fts and, for each matched segment,
-// resolves its START message to a live rowid (messages join on
-// session_id+start_uuid). A segment whose start message is gone (churned/never
-// indexed) is skipped — it has no anchor to surface. A missing topic table reads
-// as no hits. Ordered by FTS rank, capped at limit.
-func MatchTopics(con *sql.DB, query string, limit int) ([]TopicHit, error) {
-	if strings.TrimSpace(query) == "" || limit <= 0 {
-		return nil, nil
-	}
-	// OR the query terms (each quoted as a literal) so a query whose words don't ALL
-	// appear in a terse topic label still matches on the ones that do; FTS5 `rank`
-	// (bm25) then orders by term overlap + rarity. Topic rows are few per project, so
-	// OR cannot drown — and this is an on-demand disambiguation tool, recall > precision.
-	var terms []string
-	for _, t := range strings.Fields(query) {
-		t = strings.Trim(strings.ReplaceAll(t, `"`, ""), "*()-:^")
-		if t != "" {
-			terms = append(terms, `"`+t+`"`)
-		}
-	}
-	if len(terms) == 0 {
-		return nil, nil
-	}
-	match := strings.Join(terms, " OR ")
-	rows, err := con.Query(`
-SELECT m.id, ts.session_id, ts.topic
-FROM topic_fts
-JOIN topic_segment ts ON ts.id = topic_fts.rowid
-JOIN messages m ON m.session_id = ts.session_id AND m.uuid = ts.start_uuid
-WHERE topic_fts MATCH ?
-ORDER BY rank
-LIMIT ?`, match, limit)
-	if err != nil {
-		return nil, nil // missing table / malformed query reads as no hits (non-fatal)
-	}
-	defer rows.Close()
-	var out []TopicHit
-	for rows.Next() {
-		var (
-			h     TopicHit
-			topic sql.NullString
-		)
-		if err := rows.Scan(&h.MsgID, &h.SessionID, &topic); err != nil {
-			return nil, fmt.Errorf("scan topic hit: %w", err)
-		}
-		h.Topic = topic.String
-		out = append(out, h)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate topic hits: %w", err)
-	}
-	return out, nil
-}
-
-// TopicForMessage returns the topic of the segment whose [start_uuid, end_uuid]
-// range contains the given message uuid, for the non-fused (no embedder) path
-// where there is no FTS topic match to attach. It uses the message's id order:
-// the segment is the latest one in the session whose start message id is <= the
-// target message id, and (if end_uuid is set) whose end message id is >= the
-// target. When no range matches, it falls back to the session's single topic if
-// there is exactly one — otherwise "". Kept deliberately simple; a missing topic
-// table reads as "".
-func TopicForMessage(con *sql.DB, sessionID, msgUUID string) string {
-	// Resolve the target message's rowid (the ordering key within a session).
-	var targetID int
-	if err := con.QueryRow(
-		"SELECT id FROM messages WHERE session_id=? AND uuid=?", sessionID, msgUUID,
-	).Scan(&targetID); err != nil {
-		return ""
-	}
-	rows, err := con.Query(`
-SELECT ts.topic, sm.id AS start_id, em.id AS end_id
-FROM topic_segment ts
-JOIN messages sm ON sm.session_id = ts.session_id AND sm.uuid = ts.start_uuid
-LEFT JOIN messages em ON em.session_id = ts.session_id AND em.uuid = ts.end_uuid
-WHERE ts.session_id=?
-ORDER BY sm.id`, sessionID)
-	if err != nil {
-		return ""
-	}
-	defer rows.Close()
-	var (
-		segCount int
-		soleTop  string
-		bestTop  string
-		bestSt   = -1
-	)
-	for rows.Next() {
-		var (
-			topic   sql.NullString
-			startID int
-			endID   sql.NullInt64
-		)
-		if err := rows.Scan(&topic, &startID, &endID); err != nil {
-			return ""
-		}
-		segCount++
-		soleTop = topic.String
-		// Range containment: start <= target, and (no end OR end >= target).
-		if startID <= targetID && (!endID.Valid || int(endID.Int64) >= targetID) {
-			if startID > bestSt { // latest qualifying start wins
-				bestSt = startID
-				bestTop = topic.String
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return ""
-	}
-	if bestSt >= 0 {
-		return bestTop
-	}
-	if segCount == 1 {
-		return soleTop // session has a single topic — attach it
-	}
-	return ""
-}
-
-// CorpusStats is the aggregate-counts result for one indexed project's db.
-type CorpusStats struct {
-	Sessions  int // top-level sessions (is_subagent=0)
-	Subagents int // subagent threads (is_subagent=1)
-	Messages  int
-	User      int
-	Assistant int
-	First     string // earliest ts_iso[:10]
-	Last      string // latest ts_iso[:10]
-}
-
 // FTS5OK reports whether FTS5 is available on this build (always true for
 // modernc.org/sqlite v1.45.0; kept for graceful-degrade callers).
 func FTS5OK() bool {
@@ -574,13 +376,13 @@ func nowEpoch() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
 	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
-		return CountTopLevelSessions(dbp), nil // can't write — fall back to a read count
+		return store.CountTopLevelSessions(dbp), nil // can't write — fall back to a read count
 	}
 	defer con.Close()
 
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		if isBusy(err) {
-			return CountTopLevelSessions(dbp), nil
+			return store.CountTopLevelSessions(dbp), nil
 		}
 		return 0, fmt.Errorf("orphan ensure schema: %w", err)
 	}
@@ -594,14 +396,14 @@ func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
 	// search run with RAWCLAW_RETENTION=mirror must never wipe them.
 	if err := retention.ReconcileRetention(con, map[string]struct{}{}, tombstoned, nowEpoch(), false); err != nil {
 		if isBusy(err) {
-			return CountTopLevelSessions(dbp), nil
+			return store.CountTopLevelSessions(dbp), nil
 		}
 		return 0, fmt.Errorf("orphan reconcile: %w", err)
 	}
 	var n int
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE is_subagent=0").Scan(&n); err != nil {
 		if isBusy(err) {
-			return CountTopLevelSessions(dbp), nil
+			return store.CountTopLevelSessions(dbp), nil
 		}
 		return 0, fmt.Errorf("orphan count: %w", err)
 	}
@@ -686,38 +488,6 @@ func loadFileIndex(con *sql.DB) (map[string]fileMeta, error) {
 	return out, rows.Err()
 }
 
-// CountSessions opens dbp read-only and returns the session count, or -1 on
-// error (callers must treat <0 as unknown).
-func CountSessions(dbp string) int {
-	con, err := store.ConnectRO(dbp)
-	if err != nil {
-		return -1
-	}
-	defer con.Close()
-	var n int
-	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&n); err != nil {
-		return -1
-	}
-	return n
-}
-
-// CountTopLevelSessions returns the count of TOP-LEVEL sessions (is_subagent=0)
-// — what a user means by "this project's sessions". Use this for display; the
-// raw CountSessions above includes subagent threads and is internal bookkeeping.
-// Returns -1 on error.
-func CountTopLevelSessions(dbp string) int {
-	con, err := store.ConnectRO(dbp)
-	if err != nil {
-		return -1
-	}
-	defer con.Close()
-	var n int
-	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE is_subagent=0").Scan(&n); err != nil {
-		return -1
-	}
-	return n
-}
-
 // IndexStatus discriminates how EnsureIndexed obtained its result, so callers
 // can honestly report incompleteness (#6) instead of silently treating a stale
 // busy-lock fallback as a fresh index.
@@ -746,76 +516,29 @@ func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status
 	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
 		// Treat an open/lock failure as a fall-back to the existing index.
-		return dbp, CountSessions(dbp), IndexStale, nil
+		return dbp, store.CountSessions(dbp), IndexStale, nil
 	}
 	defer con.Close()
 
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		if isBusy(err) {
-			return dbp, CountSessions(dbp), IndexStale, nil
+			return dbp, store.CountSessions(dbp), IndexStale, nil
 		}
 		return dbp, 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
 	}
 	if err := UpdateIndex(con, tdir); err != nil {
 		if isBusy(err) {
-			return dbp, CountSessions(dbp), IndexStale, nil
+			return dbp, store.CountSessions(dbp), IndexStale, nil
 		}
 		return dbp, 0, IndexFresh, fmt.Errorf("update index: %w", err)
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&nSessions); err != nil {
 		if isBusy(err) {
-			return dbp, CountSessions(dbp), IndexStale, nil
+			return dbp, store.CountSessions(dbp), IndexStale, nil
 		}
 		return dbp, 0, IndexFresh, fmt.Errorf("count sessions: %w", err)
 	}
 	return dbp, nSessions, IndexFresh, nil
-}
-
-// GetCorpusStats returns aggregate counts for one indexed project's db
-// (read-only). On a query error it returns a zero-value CorpusStats and nil
-// error.
-func GetCorpusStats(dbp string) (CorpusStats, error) {
-	con, err := store.ConnectRO(dbp)
-	if err != nil {
-		return CorpusStats{}, fmt.Errorf("open corpus db: %w", err)
-	}
-	defer con.Close()
-
-	var cs CorpusStats
-	scan := func(q string, dest ...any) error {
-		return con.QueryRow(q).Scan(dest...)
-	}
-	if err := scan("SELECT COUNT(*) FROM sessions WHERE is_subagent=0", &cs.Sessions); err != nil {
-		return CorpusStats{}, nil // a query error -> zero stats
-	}
-	if err := scan("SELECT COUNT(*) FROM sessions WHERE is_subagent=1", &cs.Subagents); err != nil {
-		return CorpusStats{}, nil
-	}
-	if err := scan("SELECT COUNT(*) FROM messages", &cs.Messages); err != nil {
-		return CorpusStats{}, nil
-	}
-	if err := scan("SELECT COUNT(*) FROM messages WHERE role='user'", &cs.User); err != nil {
-		return CorpusStats{}, nil
-	}
-	if err := scan("SELECT COUNT(*) FROM messages WHERE role='assistant'", &cs.Assistant); err != nil {
-		return CorpusStats{}, nil
-	}
-	var first, last sql.NullString
-	if err := scan("SELECT MIN(ts_iso), MAX(ts_iso) FROM messages WHERE length(ts_iso)>0", &first, &last); err != nil {
-		return CorpusStats{}, nil
-	}
-	cs.First = first10(first.String)
-	cs.Last = first10(last.String)
-	return cs, nil
-}
-
-// first10 returns the first 10 runes of s (the date portion of an ISO string).
-func first10(s string) string {
-	r := []rune(s)
-	if len(r) > 10 {
-		return string(r[:10])
-	}
-	return string(r)
 }
 
 // isBusy reports whether err is a SQLite busy/locked condition.
