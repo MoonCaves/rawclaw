@@ -27,6 +27,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
+	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -566,7 +567,7 @@ func resumeCommand(src string, h paths.SessionHit) string {
 func codexResumeHits(prefix string) []paths.SessionHit {
 	var out []paths.SessionHit
 	for _, sc := range scopes.Codex(false) {
-		con, err := index.ConnectRO(sc.DBP)
+		con, err := store.ConnectRO(sc.DBP)
 		if err != nil {
 			continue
 		}

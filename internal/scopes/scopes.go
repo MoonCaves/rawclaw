@@ -17,6 +17,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
+	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
@@ -65,7 +66,7 @@ func Claude() []view.Scope {
 // db whose only sessions were deleted still reads as deleted. Codex dbs (prefix
 // "codex-") are left to Codex(), which reindexes them from live discovery.
 func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
-	entries, _ := filepath.Glob(filepath.Join(index.CacheDir(), "*.db"))
+	entries, _ := filepath.Glob(filepath.Join(store.CacheDir(), "*.db"))
 	sort.Strings(entries)
 
 	var out []view.Scope
@@ -162,7 +163,7 @@ func Codex(reindex bool) []view.Scope {
 // top-level session — so a db whose only sessions were deleted still reads as
 // deleted.
 func orphanCodexScopes(liveDBs map[string]struct{}) []view.Scope {
-	entries, _ := filepath.Glob(filepath.Join(index.CacheDir(), "codex-*.db"))
+	entries, _ := filepath.Glob(filepath.Join(store.CacheDir(), "codex-*.db"))
 	sort.Strings(entries)
 
 	var out []view.Scope

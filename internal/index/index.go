@@ -1,88 +1,27 @@
-// Package index owns the on-disk SQLite/FTS5 store: schema management, file
-// fingerprinting, incremental reindexing, the read-only connection helper, and
-// corpus stats. Pure-Go via modernc.org/sqlite (no cgo).
+// Package index owns ingest orchestration over the on-disk SQLite/FTS5 store:
+// schema ensuring (over internal/store's DDL), file fingerprinting, incremental
+// reindexing, and corpus stats. Pure-Go via modernc.org/sqlite (no cgo).
 package index
 
 import (
-	"crypto/rand"
-	"crypto/sha1"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/provenance"
+	"github.com/MoonCaves/rawclaw/internal/retention"
+	"github.com/MoonCaves/rawclaw/internal/store"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (FTS5 + bm25 + snippet)
 )
-
-// SchemaVersion gates a full rebuild on mismatch. It is deliberately NOT bumped
-// for the durable-retention columns (origin_machine/source_tool/source_path/
-// missing_since): a bump forces rebuild() to re-walk the live tree and re-prune
-// every already-retained session, defeating retention on the first upgrade. Those
-// columns are added in place by migrateDurabilityColumns (D6) instead.
-const SchemaVersion = 4
-
-// Schema is the base (non-FTS) DDL. The sessions provenance/retention columns
-// (origin_machine/source_tool/source_path/missing_since) are present here so a
-// fresh or rebuilt db carries them from the start; an existing current-version db
-// gets them via the in-place migrateDurabilityColumns migration (D6).
-const Schema = `
-CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY, started_at REAL, last_ts REAL,
-    message_count INTEGER DEFAULT 0, is_subagent INTEGER DEFAULT 0, parent_id TEXT,
-    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL
-);
-CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
-    role TEXT, content TEXT, ts REAL, ts_iso TEXT, uuid TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id);
-CREATE INDEX IF NOT EXISTS idx_msg_session_uuid ON messages(session_id, uuid);
-CREATE TABLE IF NOT EXISTS file_index (path TEXT PRIMARY KEY, mtime REAL, size INTEGER, fp TEXT, session_id TEXT);
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-`
-
-// FTSSQL is the FTS5 virtual table + sync triggers (contentful/inline + porter).
-const FTSSQL = `
-CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize='porter unicode61');
-CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-  INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-END;
-CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-  DELETE FROM messages_fts WHERE rowid = old.id;
-END;
-CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
-  DELETE FROM messages_fts WHERE rowid = old.id;
-  INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-END;
-`
-
-// dropSQL drops every schema object before a full rebuild.
-const dropSQL = `DROP TRIGGER IF EXISTS messages_ai;
-DROP TRIGGER IF EXISTS messages_ad;
-DROP TRIGGER IF EXISTS messages_au;
-DROP TABLE IF EXISTS messages_fts;
-DROP TABLE IF EXISTS messages;
-DROP TABLE IF EXISTS sessions;
-DROP TABLE IF EXISTS file_index;`
-
-// TopicSchemaVersion gates the topic sidecar tables separately from the keyword
-// schema — like VecSchemaVersion, it is its OWN gate and is NEVER in
-// Schema/FTSSQL/dropSQL, so a keyword reindex can't nuke topic rows. Topic rows
-// are keyed by the source-stable message uuid (start_uuid/end_uuid), so they
-// re-map losslessly after a base reindex churns the integer msg ids.
-const TopicSchemaVersion = 1
 
 // TopicSegment is one tagged segment of a session, returned by TopicsForSession
 // for the outline view. Keyed externally by (session_id, start_uuid).
@@ -101,47 +40,6 @@ type TopicHit struct {
 	MsgID     int
 	SessionID string
 	Topic     string
-}
-
-// EnsureTopicSchema creates the topic sidecar (its own gate, separate from the
-// keyword schema) and stamps the topic_schema_version meta key. Idempotent.
-// Mirrors EnsureVecSchema: every object is IF NOT EXISTS and lives outside the
-// rebuild() drop list, so a base reindex leaves it (and its rows) intact.
-func EnsureTopicSchema(con *sql.DB) error {
-	var version string
-	verr := con.QueryRow("SELECT value FROM meta WHERE key='topic_schema_version'").Scan(&version)
-	if verr == nil && version == strconv.Itoa(TopicSchemaVersion) {
-		return nil // already current — nothing to (re)create
-	}
-	const topicDDL = `
-CREATE TABLE IF NOT EXISTS topic_segment (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL, start_uuid TEXT NOT NULL, end_uuid TEXT,
-  topic TEXT, summary TEXT, tagged_at REAL,
-  UNIQUE(session_id, start_uuid)
-);
-CREATE INDEX IF NOT EXISTS idx_topic_session ON topic_segment(session_id);
-CREATE VIRTUAL TABLE IF NOT EXISTS topic_fts USING fts5(topic, summary, content='topic_segment', content_rowid='id', tokenize='porter unicode61');
-CREATE TRIGGER IF NOT EXISTS topic_ai AFTER INSERT ON topic_segment BEGIN
-  INSERT INTO topic_fts(rowid, topic, summary) VALUES (new.id, new.topic, new.summary);
-END;
-CREATE TRIGGER IF NOT EXISTS topic_ad AFTER DELETE ON topic_segment BEGIN
-  INSERT INTO topic_fts(topic_fts, rowid, topic, summary) VALUES ('delete', old.id, old.topic, old.summary);
-END;
-CREATE TRIGGER IF NOT EXISTS topic_au AFTER UPDATE ON topic_segment BEGIN
-  INSERT INTO topic_fts(topic_fts, rowid, topic, summary) VALUES ('delete', old.id, old.topic, old.summary);
-  INSERT INTO topic_fts(rowid, topic, summary) VALUES (new.id, new.topic, new.summary);
-END;`
-	if _, err := con.Exec(topicDDL); err != nil {
-		return fmt.Errorf("create topic schema: %w", err)
-	}
-	if _, err := con.Exec(
-		"INSERT OR REPLACE INTO meta(key,value) VALUES('topic_schema_version',?)",
-		strconv.Itoa(TopicSchemaVersion),
-	); err != nil {
-		return fmt.Errorf("stamp topic_schema_version: %w", err)
-	}
-	return nil
 }
 
 // UpsertTopicSegment inserts or updates one topic segment, keyed by the stable
@@ -337,84 +235,11 @@ func FTS5OK() bool {
 	return true
 }
 
-// CacheDir returns the session-search state dir (<cacheHome>/session-search),
-// creating it. It holds the per-project index dbs, the tombstone sidecar, and the
-// machine-id file — and is the discovery surface for orphaned-source dbs (D8).
-func CacheDir() string {
-	d := filepath.Join(cacheHome(), "session-search")
-	_ = os.MkdirAll(d, 0o755) // best-effort; ignore an existing dir
-	return d
-}
-
 // DBPath returns the cache db path for a transcript dir:
 // ~/.cache/session-search/<encoded-dir>.db (creating the dir).
 func DBPath(transcriptDir string) string {
 	enc := filepath.Base(filepath.Clean(transcriptDir))
-	return filepath.Join(CacheDir(), enc+".db")
-}
-
-// cacheHome resolves ~/.cache.
-func cacheHome() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ".cache" // degrade to a relative path rather than panic
-	}
-	return filepath.Join(home, ".cache")
-}
-
-// FileFingerprint is a cheap content fingerprint (sha1 of first 4KB + "|" + last
-// 4KB, hex[:16]) catching a same-mtime+same-size in-place rewrite at either end.
-// Returns "" on any I/O error.
-func FileFingerprint(path string, size int64) string {
-	fh, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer fh.Close()
-
-	head := make([]byte, 4096)
-	n, err := io.ReadFull(fh, head)
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return ""
-	}
-	head = head[:n]
-
-	var tail []byte
-	if size > 8192 {
-		if _, err := fh.Seek(-4096, io.SeekEnd); err != nil {
-			return ""
-		}
-		tail = make([]byte, 4096)
-		m, err := io.ReadFull(fh, tail)
-		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return ""
-		}
-		tail = tail[:m]
-	}
-
-	h := sha1.New()
-	h.Write(head)
-	h.Write([]byte("|"))
-	h.Write(tail)
-	return hex.EncodeToString(h.Sum(nil))[:16]
-}
-
-// rebuild drops and recreates the full schema + FTS, then stamps the version.
-func rebuild(con *sql.DB) error {
-	if _, err := con.Exec(dropSQL); err != nil {
-		return fmt.Errorf("rebuild drop: %w", err)
-	}
-	if _, err := con.Exec(Schema); err != nil {
-		return fmt.Errorf("rebuild schema: %w", err)
-	}
-	if _, err := con.Exec(FTSSQL); err != nil {
-		return fmt.Errorf("rebuild fts: %w", err)
-	}
-	_, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", strconv.Itoa(SchemaVersion))
-	if err != nil {
-		return fmt.Errorf("rebuild stamp version: %w", err)
-	}
-	return nil
+	return filepath.Join(store.CacheDir(), enc+".db")
 }
 
 // EnsureSchema creates the base schema, the FTS table if missing, and rebuilds
@@ -430,20 +255,20 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 	// needed: any read error — incl. a missing meta table — means rebuild.)
 	var version string
 	verr := con.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version)
-	if verr != nil || version != strconv.Itoa(SchemaVersion) {
+	if verr != nil || version != strconv.Itoa(store.SchemaVersion) {
 		// Missing meta table / missing marker / version mismatch / any read error
-		// → full rebuild. rebuild() drops every versioned object and recreates the
-		// current shape (incl. the durability columns), then stamps the version. The
-		// JSONL transcript is the source of truth, so a dropped cache is reindexed
+		// → full rebuild. store.Rebuild() drops every versioned object and recreates
+		// the current shape (incl. the durability columns), then stamps the version.
+		// The JSONL transcript is the source of truth, so a dropped cache is reindexed
 		// losslessly. This IS the migration path (e.g. v3 → v4 adds messages.uuid).
-		if rerr := rebuild(con); rerr != nil {
+		if rerr := store.Rebuild(con); rerr != nil {
 			return fmt.Errorf("ensure schema rebuild: %w", rerr)
 		}
 		return nil
 	}
 	// Version already current → ensure the base schema + FTS are present
 	// (idempotent; covers a current db that somehow lost its FTS table).
-	if _, err := con.Exec(Schema); err != nil {
+	if _, err := con.Exec(store.Schema); err != nil {
 		return fmt.Errorf("ensure base schema: %w", err)
 	}
 	// Add the durable-retention columns in place if a current-version db predates
@@ -452,7 +277,7 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 		return fmt.Errorf("ensure durability columns: %w", err)
 	}
 	if _, err := con.Exec("SELECT 1 FROM messages_fts LIMIT 1"); err != nil {
-		_, _ = con.Exec(FTSSQL) // best-effort; raced creation is acceptable
+		_, _ = con.Exec(store.FTSSQL) // best-effort; raced creation is acceptable
 	}
 	return nil
 }
@@ -508,7 +333,7 @@ func migrateDurabilityColumns(con *sql.DB, sourceID string) error {
 		        source_tool = ?,
 		        source_path = (SELECT path FROM file_index WHERE file_index.session_id = sessions.id)
 		  WHERE origin_machine IS NULL`,
-		MachineID(), sourceID,
+		provenance.MachineID(), sourceID,
 	); err != nil {
 		return fmt.Errorf("backfill provenance: %w", err)
 	}
@@ -547,80 +372,6 @@ func sessionColumns(con *sql.DB) (map[string]struct{}, error) {
 // generalized container path injects its source id alongside its MessagesFunc.
 const sourceClaude = "claude"
 
-var (
-	machineIDOnce  sync.Once
-	machineIDValue string
-)
-
-// MachineID returns this machine's stable, self-minted id (D3): a persisted
-// 128-bit random hex value in rawclaw's state dir, NOT the (mutable, collision-
-// prone) hostname. Minted and persisted on first use, then cached for the
-// process. On any I/O failure it degrades to an in-memory random id so provenance
-// is still stamped and indexing never blocks.
-func MachineID() string {
-	machineIDOnce.Do(func() { machineIDValue = loadOrMintMachineID() })
-	return machineIDValue
-}
-
-// machineIDPath is <cacheHome>/session-search/machine-id — the same state dir
-// that holds the caches and the tombstone sidecar.
-func machineIDPath() string {
-	return filepath.Join(CacheDir(), "machine-id")
-}
-
-// loadOrMintMachineID reads the persisted id, or mints + persists a fresh one.
-func loadOrMintMachineID() string {
-	p := machineIDPath()
-	if b, err := os.ReadFile(p); err == nil {
-		if id := strings.TrimSpace(string(b)); id != "" {
-			return id
-		}
-	}
-	id := randomHex()
-	_ = os.WriteFile(p, []byte(id+"\n"), 0o644) // best-effort; re-mint next run on failure
-	return id
-}
-
-// randomHex returns 32 hex chars (128 bits) of crypto-random. On the (extremely
-// unlikely) entropy-source failure it falls back to a pid+time value — still
-// stable-enough for a single run to keep provenance stamped.
-func randomHex() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return hex.EncodeToString([]byte(fmt.Sprintf("pid%d-%d", os.Getpid(), time.Now().UnixNano())))
-	}
-	return hex.EncodeToString(b)
-}
-
-// SessionIDFor returns the unique session id for a transcript path, plus whether
-// it is a subagent (1/0) and its parent id. Top-level: filename stem. Subagent
-// (under a subagents/ subdir): "<parent>/<stem>".
-func SessionIDFor(path, transcriptDir string) (sid string, isSubagent int, parent string) {
-	stem := stemOf(path)
-	rel, err := filepath.Rel(transcriptDir, path)
-	if err != nil {
-		rel = path
-	}
-	parts := strings.Split(rel, string(os.PathSeparator))
-	for i, p := range parts {
-		if p == "subagents" {
-			if i > 0 {
-				par := parts[i-1]
-				return par + "/" + stem, 1, par
-			}
-			return "subagents/" + stem, 1, "" // empty parent -> SQL NULL
-		}
-	}
-	return stem, 0, ""
-}
-
-// stemOf returns the filename with its final extension stripped.
-func stemOf(path string) string {
-	base := filepath.Base(path)
-	ext := filepath.Ext(base)
-	return strings.TrimSuffix(base, ext)
-}
-
 // reindexRow is one parsed message ready for insertion.
 type reindexRow struct {
 	role    string
@@ -634,7 +385,7 @@ type reindexRow struct {
 // this session's rows (an I/O failure can't commit away existing data). Returns
 // true on success.
 func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
-	sid, isSub, parent := SessionIDFor(path, transcriptDir)
+	sid, isSub, parent := provenance.SessionIDFor(path, transcriptDir)
 
 	rows, started, last, ok := parseTranscript(path, sid)
 	if !ok {
@@ -664,7 +415,7 @@ func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
 	// session is present by definition, so a reappeared source file un-flags here.
 	if _, err := con.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
-		sid, started, last, len(rows), isSub, parentArg, MachineID(), sourceClaude, realpath(path),
+		sid, started, last, len(rows), isSub, parentArg, provenance.MachineID(), sourceClaude, realpath(path),
 	); err != nil {
 		return false
 	}
@@ -775,23 +526,23 @@ func UpdateIndex(con *sql.DB, transcriptDir string) error {
 		}
 		// Skip a tombstoned session: its file may have been re-created (or never
 		// removed from disk), but the user deleted it — honor that across reindex.
-		if sid, _, _ := SessionIDFor(f, transcriptDir); isMember(tombstoned, sid) {
+		if sid, _, _ := provenance.SessionIDFor(f, transcriptDir); isMember(tombstoned, sid) {
 			continue
 		}
 		mtime := mtimeOf(st)
 		size := st.Size()
 		if prev, found := cur[rp]; found {
 			if absDiff(prev.mtime, mtime) < 0.001 && prev.size == size {
-				if prev.fp == FileFingerprint(f, size) {
+				if prev.fp == provenance.FileFingerprint(f, size) {
 					continue // genuinely unchanged
 				}
 			}
 		}
 		if ReindexFile(con, f, transcriptDir) {
-			sid, _, _ := SessionIDFor(f, transcriptDir)
+			sid, _, _ := provenance.SessionIDFor(f, transcriptDir)
 			if _, err := con.Exec(
 				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-				rp, mtime, size, FileFingerprint(f, size), sid,
+				rp, mtime, size, provenance.FileFingerprint(f, size), sid,
 			); err != nil {
 				return fmt.Errorf("update file_index: %w", err)
 			}
@@ -801,145 +552,10 @@ func UpdateIndex(con *sql.DB, transcriptDir string) error {
 	// Retention pass (replaces the old "absent from the walk → DELETE" prune): an
 	// absent own-source file is flagged missing_since and RETAINED; only an
 	// explicit tombstone deletes; a foreign-origin row is never a candidate (D1/D2/D5).
-	if err := reconcileRetention(con, onDisk, tombstoned, nowEpoch(), RetentionMirror()); err != nil {
+	if err := retention.ReconcileRetention(con, onDisk, tombstoned, nowEpoch(), retention.RetentionMirror()); err != nil {
 		return err
 	}
 	return nil
-}
-
-// reconcileRetention reconciles the indexed sessions against the live scan,
-// implementing durable retention (D1/D2/D5). It REPLACES the old prune that
-// deleted any session whose backing file was absent from the disk walk. For each
-// file_index row:
-//
-//   - file back on disk → clear any stale missing_since (the source reappeared,
-//     mirroring Zoekt restoring a repo from .trash).
-//   - file absent + session explicitly tombstoned (rawclaw delete) → really
-//     DELETE the row; an explicit user delete is the ONLY thing that prunes (D5).
-//   - file absent + foreign origin_machine (another machine's row in a shared
-//     store) → skip untouched: out of THIS scan's scope, not "missing" (D2).
-//   - file absent + this machine's own row → stamp missing_since and RETAIN it,
-//     so the content stays searchable/readable after the source tool purges its
-//     transcripts (D1). Idempotent: an existing timestamp is left as-is.
-//
-// onDisk is the realpath set of the live scan; tombstoned is the loaded delete
-// sidecar; both are computed once by the caller. mirror is passed in (not read
-// here) because the setting only governs LIVE-scope scans: an orphan reconcile
-// always passes false — already-retained history is removed by an explicit
-// tombstone alone, never as a side effect of a search run with the mirror
-// setting in the environment (live-verified data-loss footgun).
-func reconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now float64, mirror bool) error {
-	type fiRow struct {
-		path      string
-		sessionID string
-		origin    sql.NullString
-		missing   sql.NullFloat64
-	}
-	rows, err := con.Query(
-		`SELECT fi.path, fi.session_id, s.origin_machine, s.missing_since
-		   FROM file_index fi
-		   LEFT JOIN sessions s ON s.id = fi.session_id`)
-	if err != nil {
-		return fmt.Errorf("scan file_index for retention: %w", err)
-	}
-	// Read fully into memory first so the UPDATE/DELETEs below don't mutate a live
-	// cursor.
-	var all []fiRow
-	for rows.Next() {
-		var r fiRow
-		if err := rows.Scan(&r.path, &r.sessionID, &r.origin, &r.missing); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan retention row: %w", err)
-		}
-		all = append(all, r)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterate retention rows: %w", err)
-	}
-	rows.Close()
-
-	mid := MachineID()
-	for _, r := range all {
-		_, present := onDisk[r.path]
-		own := !r.origin.Valid || r.origin.String == mid
-		switch decideRetention(present, isMember(tombstoned, r.sessionID), own, r.missing.Valid, mirror) {
-		case actClear: // reappeared — un-flag
-			if _, err := con.Exec("UPDATE sessions SET missing_since=NULL WHERE id=?", r.sessionID); err != nil {
-				return fmt.Errorf("clear missing_since: %w", err)
-			}
-		case actPrune: // explicit tombstone, or own-source under the mirror setting
-			if err := pruneSession(con, r.sessionID, r.path); err != nil {
-				return err
-			}
-		case actStamp: // own-source, newly absent — retain + flag (D1)
-			if _, err := con.Exec("UPDATE sessions SET missing_since=? WHERE id=?", now, r.sessionID); err != nil {
-				return fmt.Errorf("mark missing_since: %w", err)
-			}
-		case actNone:
-		}
-	}
-	return nil
-}
-
-// retentionAction is the decision for one indexed row during a retention pass:
-// what an acting reconcile should do — and, equally, what the read-only orphan
-// probe predicts it WOULD do. One tree, two consumers, so precedence
-// (present → tombstone → foreign → mirror → stamp) can never silently diverge
-// between them.
-type retentionAction int
-
-const (
-	actNone  retentionAction = iota // present-and-unflagged, foreign-origin (D2), or already flagged
-	actClear                        // file reappeared — clear the stale missing_since (Zoekt .trash restore)
-	actPrune                        // explicit tombstone (D5), or own-source under the user's mirror setting
-	actStamp                        // own-source newly absent — retain + flag missing_since (D1)
-)
-
-// decideRetention is the single retention decision tree shared by
-// reconcileRetention (acts) and orphanWorkPending (predicts).
-func decideRetention(present, tombstoned, own, missingSet, mirror bool) retentionAction {
-	switch {
-	case present && missingSet:
-		return actClear
-	case present:
-		return actNone
-	case tombstoned:
-		return actPrune
-	case !own:
-		return actNone // foreign-origin — out of this scan's scope (D2)
-	case mirror:
-		return actPrune // v0.2.0 parity: the user opted out of retention
-	case !missingSet:
-		return actStamp
-	default:
-		return actNone // already flagged — idempotent
-	}
-}
-
-// pruneSession removes one session outright: messages, session row, and its
-// file_index watermark. Reached only by an explicit tombstone or by the user's
-// mirror setting — never by mere absence under the keep default.
-func pruneSession(con *sql.DB, sessionID, path string) error {
-	if _, err := con.Exec("DELETE FROM messages WHERE session_id=?", sessionID); err != nil {
-		return fmt.Errorf("prune messages: %w", err)
-	}
-	if _, err := con.Exec("DELETE FROM sessions WHERE id=?", sessionID); err != nil {
-		return fmt.Errorf("prune sessions: %w", err)
-	}
-	if _, err := con.Exec("DELETE FROM file_index WHERE path=?", path); err != nil {
-		return fmt.Errorf("prune file_index: %w", err)
-	}
-	return nil
-}
-
-// RetentionMirror reports whether RAWCLAW_RETENTION selects mirror mode: an
-// absent own-source file prunes its session at the next index pass, matching
-// the pre-retention releases. Every other value — including unset and typos —
-// is keep (the default): retention is the user's choice, and a typo must never
-// silently turn deletion on.
-func RetentionMirror() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("RAWCLAW_RETENTION")), "mirror")
 }
 
 // nowEpoch is the current time as fractional Unix seconds (the missing_since /
@@ -956,7 +572,7 @@ func nowEpoch() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 // db that reads as fully deleted. A busy/locked db is a soft no-op that degrades
 // to the current read count rather than erroring the whole discovery pass.
 func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
-	con, openErr := openRW(dbp)
+	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
 		return CountTopLevelSessions(dbp), nil // can't write — fall back to a read count
 	}
@@ -976,7 +592,7 @@ func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
 	// mirror=false ALWAYS: the mirror setting governs live scans; an orphaned
 	// archive's retained rows are removed only by explicit tombstone (D5) — a
 	// search run with RAWCLAW_RETENTION=mirror must never wipe them.
-	if err := reconcileRetention(con, map[string]struct{}{}, tombstoned, nowEpoch(), false); err != nil {
+	if err := retention.ReconcileRetention(con, map[string]struct{}{}, tombstoned, nowEpoch(), false); err != nil {
 		if isBusy(err) {
 			return CountTopLevelSessions(dbp), nil
 		}
@@ -1016,7 +632,7 @@ func EnsureOrphanReconciled(dbp string) (int, error) {
 // orphanWorkPending answers, from a read-only connection, whether a reconcile
 // pass would change this db, plus the current surviving top-level count.
 func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool, n int, err error) {
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return false, 0, err
 	}
@@ -1029,7 +645,7 @@ func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool
 		return false, 0, fmt.Errorf("orphan probe scan: %w", err)
 	}
 	defer rows.Close()
-	mid := MachineID()
+	mid := provenance.MachineID()
 	for rows.Next() {
 		var id string
 		var origin sql.NullString
@@ -1042,7 +658,7 @@ func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool
 		// ReconcileOrphanDB: retained rows die only by tombstone).
 		// Any predicted action is pending work.
 		own := !origin.Valid || origin.String == mid
-		if decideRetention(false, isMember(tombstoned, id), own, missing.Valid, false) != actNone {
+		if retention.DecideRetention(false, isMember(tombstoned, id), own, missing.Valid, false) != retention.ActNone {
 			return true, n, nil
 		}
 	}
@@ -1073,7 +689,7 @@ func loadFileIndex(con *sql.DB) (map[string]fileMeta, error) {
 // CountSessions opens dbp read-only and returns the session count, or -1 on
 // error (callers must treat <0 as unknown).
 func CountSessions(dbp string) int {
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return -1
 	}
@@ -1090,7 +706,7 @@ func CountSessions(dbp string) int {
 // raw CountSessions above includes subagent threads and is internal bookkeeping.
 // Returns -1 on error.
 func CountTopLevelSessions(dbp string) int {
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return -1
 	}
@@ -1127,7 +743,7 @@ func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status
 		}
 	}
 
-	con, openErr := openRW(dbp)
+	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
 		// Treat an open/lock failure as a fall-back to the existing index.
 		return dbp, CountSessions(dbp), IndexStale, nil
@@ -1159,7 +775,7 @@ func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status
 // (read-only). On a query error it returns a zero-value CorpusStats and nil
 // error.
 func GetCorpusStats(dbp string) (CorpusStats, error) {
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return CorpusStats{}, fmt.Errorf("open corpus db: %w", err)
 	}
@@ -1200,33 +816,6 @@ func first10(s string) string {
 		return string(r[:10])
 	}
 	return string(r)
-}
-
-// ConnectRO opens dbp in read-only mode (file:<dbp>?mode=ro). Exported so
-// sibling packages can reuse it.
-func ConnectRO(dbp string) (*sql.DB, error) {
-	dsn := "file:" + dbp + "?mode=ro&_pragma=busy_timeout(5000)"
-	con, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open read-only db: %w", err)
-	}
-	con.SetMaxOpenConns(1) // modernc serializes; readers stay single-conn
-	return con, nil
-}
-
-// openRW opens dbp read-write with WAL + a 5s busy timeout, single-writer.
-func openRW(dbp string) (*sql.DB, error) {
-	dsn := "file:" + dbp + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
-	con, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open db: %w", err)
-	}
-	con.SetMaxOpenConns(1) // SQLite single-writer
-	if err := con.Ping(); err != nil {
-		con.Close()
-		return nil, fmt.Errorf("ping db: %w", err)
-	}
-	return con, nil
 }
 
 // isBusy reports whether err is a SQLite busy/locked condition.

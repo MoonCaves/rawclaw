@@ -13,6 +13,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // dispCap is the default display-text cap used by anchored views and discovery.
@@ -221,7 +222,7 @@ func Browse(tdir string, limit int, since, before string) []BrowseRow {
 	if err != nil {
 		return nil
 	}
-	con, err := index.ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return nil
 	}

@@ -7,7 +7,10 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/model"
+	"github.com/MoonCaves/rawclaw/internal/provenance"
+	"github.com/MoonCaves/rawclaw/internal/retention"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // MessagesFunc yields one container's normalized messages — a source adapter's
@@ -36,7 +39,7 @@ func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 			_ = os.Remove(dbp) // best-effort; ignore a remove error
 		}
 	}
-	con, openErr := openRW(dbp)
+	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
 		return CountSessions(dbp), IndexStale, nil
 	}
@@ -96,7 +99,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		size := st.Size()
 		if prev, found := cur[rp]; found {
 			if absDiff(prev.mtime, mtime) < 0.001 && prev.size == size {
-				if prev.fp == FileFingerprint(c.Path, size) {
+				if prev.fp == provenance.FileFingerprint(c.Path, size) {
 					continue // genuinely unchanged
 				}
 			}
@@ -108,7 +111,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		if reindexContainer(con, c, ms, sourceID) {
 			if _, err := con.Exec(
 				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-				rp, mtime, size, FileFingerprint(c.Path, size), c.ID,
+				rp, mtime, size, provenance.FileFingerprint(c.Path, size), c.ID,
 			); err != nil {
 				return fmt.Errorf("update file_index: %w", err)
 			}
@@ -118,7 +121,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 	// Retention pass (parallel of UpdateIndex): an absent own-source container is
 	// flagged missing_since and retained; only an explicit tombstone deletes; a
 	// foreign-origin row is never a candidate (D1/D2/D5).
-	if err := reconcileRetention(con, onDisk, tombstoned, nowEpoch(), RetentionMirror()); err != nil {
+	if err := retention.ReconcileRetention(con, onDisk, tombstoned, nowEpoch(), retention.RetentionMirror()); err != nil {
 		return err
 	}
 	return nil
@@ -161,7 +164,7 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 	// Stamp provenance (D3); missing_since NULL — a (re)indexed container is present.
 	if _, err := con.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
-		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, MachineID(), sourceID, realpath(c.Path),
+		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, provenance.MachineID(), sourceID, realpath(c.Path),
 	); err != nil {
 		return false
 	}

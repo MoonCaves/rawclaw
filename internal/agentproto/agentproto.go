@@ -27,6 +27,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
+	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
@@ -558,7 +559,7 @@ func collectCandidates(
 			reports = append(reports, rep)
 			continue
 		}
-		con, openErr := index.ConnectRO(dbp)
+		con, openErr := store.ConnectRO(dbp)
 		if openErr != nil {
 			rep.Status = ScopeSkippedError
 			rep.Detail = openErr.Error()
@@ -673,7 +674,7 @@ func Read(ref string, scope []view.Scope, opts ReadOpts) (*ReadResult, error) {
 		return nil, locErr
 	}
 
-	con, err := index.ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return nil, fmt.Errorf("open %q: %w", dbp, err)
 	}
@@ -922,7 +923,7 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 			if ensureErr != nil {
 				continue
 			}
-			con, openErr := index.ConnectRO(dbpC)
+			con, openErr := store.ConnectRO(dbpC)
 			if openErr != nil {
 				continue
 			}
@@ -990,7 +991,7 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 		return nil, locErr
 	}
 
-	con, err := index.ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return nil, fmt.Errorf("open %q: %w", dbp, err)
 	}
@@ -1373,11 +1374,11 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 		if err != nil {
 			continue // a failing project is skipped (mirrors locateSession)
 		}
-		con, openErr := index.ConnectRO(dbp)
+		con, openErr := store.ConnectRO(dbp)
 		if openErr != nil {
 			continue
 		}
-		if err := index.EnsureTopicSchema(con); err != nil {
+		if err := store.EnsureTopicSchema(con); err != nil {
 			_ = con.Close()
 			continue
 		}
