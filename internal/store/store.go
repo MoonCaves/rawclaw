@@ -152,6 +152,12 @@ func Rebuild(con *sql.DB) error {
 
 // ConnectRO opens dbp in read-only mode (file:<dbp>?mode=ro). Exported so
 // sibling packages can reuse it.
+//
+// SINGLE-CONN DISCIPLINE (D3): the pool is capped at ONE connection, so a
+// caller MUST fully drain + close a result set (rows.Close) before issuing the
+// next query on the same *sql.DB. Interleaving — opening a second query while
+// rows from the first are still open — blocks forever waiting for a second
+// connection (the view.Browse / semantic.VecKNN deadlock class).
 func ConnectRO(dbp string) (*sql.DB, error) {
 	dsn := "file:" + dbp + "?mode=ro&_pragma=busy_timeout(5000)"
 	con, err := sql.Open("sqlite", dsn)
@@ -162,9 +168,16 @@ func ConnectRO(dbp string) (*sql.DB, error) {
 	return con, nil
 }
 
-// ConnectRW opens dbp read-write with WAL + a 5s busy timeout, single-writer.
+// ConnectRW opens dbp read-write with WAL + a 10s busy timeout, single-writer.
+// (10s is the D2 unification: the superset of index's old 5s and cli's 10s.)
+//
+// SINGLE-CONN DISCIPLINE (D3): the pool is capped at ONE connection, so a
+// caller MUST fully drain + close a result set (rows.Close) before issuing the
+// next query on the same *sql.DB. Interleaving — opening a second query while
+// rows from the first are still open — blocks forever waiting for a second
+// connection (the view.Browse / semantic.VecKNN deadlock class).
 func ConnectRW(dbp string) (*sql.DB, error) {
-	dsn := "file:" + dbp + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
+	dsn := "file:" + dbp + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)"
 	con, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)

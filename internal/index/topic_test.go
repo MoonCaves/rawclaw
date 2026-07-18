@@ -58,15 +58,15 @@ func TestUpsertAndTopicsForSession(t *testing.T) {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 
-	if err := UpsertTopicSegment(con, "sess1", "u-start", "u-end", "vector fusion", "RRF blends keyword and vector recall", 1.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sess1", "u-start", "u-end", "vector fusion", "RRF blends keyword and vector recall", 1.0); err != nil {
 		t.Fatalf("UpsertTopicSegment: %v", err)
 	}
 	// Second segment in the same session.
-	if err := UpsertTopicSegment(con, "sess1", "u-start2", "u-end2", "schema gating", "sidecar tables survive reindex", 2.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sess1", "u-start2", "u-end2", "schema gating", "sidecar tables survive reindex", 2.0); err != nil {
 		t.Fatalf("UpsertTopicSegment 2: %v", err)
 	}
 
-	segs, err := TopicsForSession(con, "sess1")
+	segs, err := store.TopicsForSession(con, "sess1")
 	if err != nil {
 		t.Fatalf("TopicsForSession: %v", err)
 	}
@@ -81,10 +81,10 @@ func TestUpsertAndTopicsForSession(t *testing.T) {
 	}
 
 	// Upsert on the same (session_id, start_uuid) updates in place, not a new row.
-	if err := UpsertTopicSegment(con, "sess1", "u-start", "u-end3", "vector fusion v2", "updated summary text", 3.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sess1", "u-start", "u-end3", "vector fusion v2", "updated summary text", 3.0); err != nil {
 		t.Fatalf("UpsertTopicSegment update: %v", err)
 	}
-	segs, _ = TopicsForSession(con, "sess1")
+	segs, _ = store.TopicsForSession(con, "sess1")
 	if len(segs) != 2 {
 		t.Fatalf("after update: %d segments, want 2 (upsert must not insert a dup)", len(segs))
 	}
@@ -103,11 +103,11 @@ func TestMatchTopicsResolvesStartMessage(t *testing.T) {
 	startID := addTopicMsg(t, con, "sess1", "user", "how do we blend rankings", "uuid-aaa")
 	addTopicMsg(t, con, "sess1", "assistant", "use reciprocal rank fusion", "uuid-bbb")
 
-	if err := UpsertTopicSegment(con, "sess1", "uuid-aaa", "uuid-bbb", "ranking fusion", "blending keyword and vector recall with RRF", 1.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sess1", "uuid-aaa", "uuid-bbb", "ranking fusion", "blending keyword and vector recall with RRF", 1.0); err != nil {
 		t.Fatalf("UpsertTopicSegment: %v", err)
 	}
 
-	hits, err := MatchTopics(con, "fusion", 10)
+	hits, err := store.MatchTopics(con, "fusion", 10)
 	if err != nil {
 		t.Fatalf("MatchTopics: %v", err)
 	}
@@ -122,20 +122,20 @@ func TestMatchTopicsResolvesStartMessage(t *testing.T) {
 	}
 
 	// A query matching the summary column also surfaces (porter stemming on "recall").
-	if h, _ := MatchTopics(con, "recall", 10); len(h) != 1 {
+	if h, _ := store.MatchTopics(con, "recall", 10); len(h) != 1 {
 		t.Errorf("MatchTopics(recall) over summary = %d, want 1", len(h))
 	}
 
 	// A non-matching query returns nothing (not an error).
-	if h, _ := MatchTopics(con, "kubernetes", 10); len(h) != 0 {
+	if h, _ := store.MatchTopics(con, "kubernetes", 10); len(h) != 0 {
 		t.Errorf("MatchTopics(kubernetes) = %d, want 0", len(h))
 	}
 
 	// A segment whose start message is missing has no anchor → skipped.
-	if err := UpsertTopicSegment(con, "sess1", "uuid-orphan", "", "orphan topic", "no backing message", 2.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sess1", "uuid-orphan", "", "orphan topic", "no backing message", 2.0); err != nil {
 		t.Fatalf("UpsertTopicSegment orphan: %v", err)
 	}
-	if h, _ := MatchTopics(con, "orphan", 10); len(h) != 0 {
+	if h, _ := store.MatchTopics(con, "orphan", 10); len(h) != 0 {
 		t.Errorf("MatchTopics(orphan) with no start message = %d, want 0", len(h))
 	}
 }
@@ -152,21 +152,21 @@ func TestTopicForMessageRangeContainment(t *testing.T) {
 	addTopicMsg(t, con, "sess1", "assistant", "m4", "u4")
 
 	// Segment A covers u1..u2, segment B covers u3..u4.
-	if err := UpsertTopicSegment(con, "sess1", "u1", "u2", "topic A", "", 1.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sess1", "u1", "u2", "topic A", "", 1.0); err != nil {
 		t.Fatalf("upsert A: %v", err)
 	}
-	if err := UpsertTopicSegment(con, "sess1", "u3", "u4", "topic B", "", 2.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sess1", "u3", "u4", "topic B", "", 2.0); err != nil {
 		t.Fatalf("upsert B: %v", err)
 	}
 
-	if got := TopicForMessage(con, "sess1", "u2"); got != "topic A" {
+	if got := store.TopicForMessage(con, "sess1", "u2"); got != "topic A" {
 		t.Errorf("TopicForMessage(u2) = %q, want topic A", got)
 	}
-	if got := TopicForMessage(con, "sess1", "u3"); got != "topic B" {
+	if got := store.TopicForMessage(con, "sess1", "u3"); got != "topic B" {
 		t.Errorf("TopicForMessage(u3) = %q, want topic B", got)
 	}
 	// A message uuid that doesn't exist → "".
-	if got := TopicForMessage(con, "sess1", "nope"); got != "" {
+	if got := store.TopicForMessage(con, "sess1", "nope"); got != "" {
 		t.Errorf("TopicForMessage(nope) = %q, want empty", got)
 	}
 }
@@ -180,10 +180,10 @@ func TestTopicForMessageSingleTopicFallback(t *testing.T) {
 	addTopicMsg(t, con, "sess1", "assistant", "m2", "u2")
 	// One segment covering only u1; u2 is outside the range. With a single session
 	// topic, the fallback attaches it anyway.
-	if err := UpsertTopicSegment(con, "sess1", "u1", "u1", "only topic", "", 1.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sess1", "u1", "u1", "only topic", "", 1.0); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if got := TopicForMessage(con, "sess1", "u2"); got != "only topic" {
+	if got := store.TopicForMessage(con, "sess1", "u2"); got != "only topic" {
 		t.Errorf("TopicForMessage(u2) single-topic fallback = %q, want only topic", got)
 	}
 }
@@ -197,7 +197,7 @@ func TestTopicSurvivesBaseReindex(t *testing.T) {
 	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
-	if err := UpsertTopicSegment(con, "sess1", "u1", "u2", "durable topic", "should survive a reindex", 1.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sess1", "u1", "u2", "durable topic", "should survive a reindex", 1.0); err != nil {
 		t.Fatalf("UpsertTopicSegment: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestTopicSurvivesBaseReindex(t *testing.T) {
 	}
 
 	// The base messages table was dropped+recreated, but topic_segment must persist.
-	segs, err := TopicsForSession(con, "sess1")
+	segs, err := store.TopicsForSession(con, "sess1")
 	if err != nil {
 		t.Fatalf("TopicsForSession after reindex: %v", err)
 	}
