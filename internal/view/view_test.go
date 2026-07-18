@@ -8,40 +8,31 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
-
-	_ "modernc.org/sqlite"
+	"github.com/MoonCaves/rawclaw/internal/store/storetest"
 )
 
 // seedMsg is one row to insert into the messages table for a test fixture.
+// id is the EXPECTED rowid: rows are inserted in slice order into a fresh
+// production-schema db, so ids must be contiguous from 1 — the helper fails
+// fast if an insert lands on a different rowid.
 type seedMsg struct {
 	id      int
 	role    string
 	content string
 }
 
-// newTestDB opens an in-memory SQLite db with a messages table and inserts
-// the given rows at explicit ids. The table carries the columns view reads:
-// id, session_id, role, content.
+// newTestDB opens a fresh production-schema db (via storetest) and inserts the
+// session row plus the given messages. The fixture ids in the test tables are
+// pinned by asserting each insert's rowid matches the seedMsg id.
 func newTestDB(t *testing.T, sessionID string, msgs []seedMsg) *sql.DB {
 	t.Helper()
-	con, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	con.SetMaxOpenConns(1) // :memory: lives on a single conn
-	t.Cleanup(func() { con.Close() })
-
-	_, err = con.Exec(`CREATE TABLE messages (
-		id INTEGER PRIMARY KEY, session_id TEXT NOT NULL,
-		role TEXT, content TEXT, ts REAL, ts_iso TEXT)`)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
+	con, _ := storetest.NewDB(t)
+	storetest.InsertSession(t, con, storetest.Session{ID: sessionID})
 	for _, m := range msgs {
-		if _, err := con.Exec(
-			`INSERT INTO messages (id, session_id, role, content) VALUES (?,?,?,?)`,
-			m.id, sessionID, m.role, m.content); err != nil {
-			t.Fatalf("insert id=%d: %v", m.id, err)
+		got := storetest.InsertMessage(t, con, storetest.Message{
+			SessionID: sessionID, Role: m.role, Content: m.content})
+		if got != m.id {
+			t.Fatalf("fixture rowid = %d, want %d (seedMsg ids must be contiguous from 1)", got, m.id)
 		}
 	}
 	return con
@@ -238,8 +229,8 @@ func TestBuildAnchoredViewAnchorAlwaysKept(t *testing.T) {
 	}
 }
 
-// newPreviewDB builds an in-memory db with the sessions + messages tables that
-// sessionPreview reads, seeding one session's worth of user messages.
+// newPreviewDB builds a production-schema db seeding one session's worth of
+// user messages for sessionPreview.
 func newPreviewDB(t *testing.T, sessionID string, msgs []seedMsg) *sql.DB {
 	t.Helper()
 	con := newTestDB(t, sessionID, msgs)
