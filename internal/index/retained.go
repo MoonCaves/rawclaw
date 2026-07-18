@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // RetainedSession is one RETAINED top-level session matched by RetainedMatches
@@ -34,7 +36,7 @@ type RetainedSession struct {
 // RetainedMatches enumerates every RETAINED top-level session (missing_since
 // IS NOT NULL, is_subagent=0) across every index db under cacheDir, applying
 // the same filter semantics lifecycle.DeleteOpts uses so a delete plan can
-// union live matches with retained ones. cacheDir defaults to CacheDir() when
+// union live matches with retained ones. cacheDir defaults to store.CacheDir() when
 // empty, mirroring lifecycle.TombstonePath's own-default convention.
 //
 // project, when non-empty, is a case-sensitive substring match against EITHER
@@ -53,7 +55,7 @@ type RetainedSession struct {
 // scopes.orphanClaudeScopes applies to its own db enumeration.
 func RetainedMatches(cacheDir string, project string, before time.Time, maxMessages int) ([]RetainedSession, error) {
 	if cacheDir == "" {
-		cacheDir = CacheDir()
+		cacheDir = store.CacheDir()
 	}
 	entries, _ := filepath.Glob(filepath.Join(cacheDir, "*.db"))
 	sort.Strings(entries)
@@ -72,7 +74,7 @@ func RetainedMatches(cacheDir string, project string, before time.Time, maxMessa
 // retainedInDB queries one index db read-only for its retained sessions
 // passing the filter.
 func retainedInDB(dbp, project string, before time.Time, maxMessages int) ([]RetainedSession, error) {
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return nil, fmt.Errorf("open %q: %w", dbp, err)
 	}

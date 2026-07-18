@@ -1,6 +1,6 @@
-// Package index owns the on-disk SQLite/FTS5 store: schema management, file
-// fingerprinting, incremental reindexing, the read-only connection helper, and
-// corpus stats. Pure-Go via modernc.org/sqlite (no cgo).
+// Package index owns ingest orchestration over the on-disk SQLite/FTS5 store:
+// schema ensuring (over internal/store's DDL), file fingerprinting, incremental
+// reindexing, and corpus stats. Pure-Go via modernc.org/sqlite (no cgo).
 package index
 
 import (
@@ -22,67 +22,10 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/store"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (FTS5 + bm25 + snippet)
 )
-
-// SchemaVersion gates a full rebuild on mismatch. It is deliberately NOT bumped
-// for the durable-retention columns (origin_machine/source_tool/source_path/
-// missing_since): a bump forces rebuild() to re-walk the live tree and re-prune
-// every already-retained session, defeating retention on the first upgrade. Those
-// columns are added in place by migrateDurabilityColumns (D6) instead.
-const SchemaVersion = 4
-
-// Schema is the base (non-FTS) DDL. The sessions provenance/retention columns
-// (origin_machine/source_tool/source_path/missing_since) are present here so a
-// fresh or rebuilt db carries them from the start; an existing current-version db
-// gets them via the in-place migrateDurabilityColumns migration (D6).
-const Schema = `
-CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY, started_at REAL, last_ts REAL,
-    message_count INTEGER DEFAULT 0, is_subagent INTEGER DEFAULT 0, parent_id TEXT,
-    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL
-);
-CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
-    role TEXT, content TEXT, ts REAL, ts_iso TEXT, uuid TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id);
-CREATE INDEX IF NOT EXISTS idx_msg_session_uuid ON messages(session_id, uuid);
-CREATE TABLE IF NOT EXISTS file_index (path TEXT PRIMARY KEY, mtime REAL, size INTEGER, fp TEXT, session_id TEXT);
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-`
-
-// FTSSQL is the FTS5 virtual table + sync triggers (contentful/inline + porter).
-const FTSSQL = `
-CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize='porter unicode61');
-CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-  INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-END;
-CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
-  DELETE FROM messages_fts WHERE rowid = old.id;
-END;
-CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
-  DELETE FROM messages_fts WHERE rowid = old.id;
-  INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-END;
-`
-
-// dropSQL drops every schema object before a full rebuild.
-const dropSQL = `DROP TRIGGER IF EXISTS messages_ai;
-DROP TRIGGER IF EXISTS messages_ad;
-DROP TRIGGER IF EXISTS messages_au;
-DROP TABLE IF EXISTS messages_fts;
-DROP TABLE IF EXISTS messages;
-DROP TABLE IF EXISTS sessions;
-DROP TABLE IF EXISTS file_index;`
-
-// TopicSchemaVersion gates the topic sidecar tables separately from the keyword
-// schema — like VecSchemaVersion, it is its OWN gate and is NEVER in
-// Schema/FTSSQL/dropSQL, so a keyword reindex can't nuke topic rows. Topic rows
-// are keyed by the source-stable message uuid (start_uuid/end_uuid), so they
-// re-map losslessly after a base reindex churns the integer msg ids.
-const TopicSchemaVersion = 1
 
 // TopicSegment is one tagged segment of a session, returned by TopicsForSession
 // for the outline view. Keyed externally by (session_id, start_uuid).
@@ -101,47 +44,6 @@ type TopicHit struct {
 	MsgID     int
 	SessionID string
 	Topic     string
-}
-
-// EnsureTopicSchema creates the topic sidecar (its own gate, separate from the
-// keyword schema) and stamps the topic_schema_version meta key. Idempotent.
-// Mirrors EnsureVecSchema: every object is IF NOT EXISTS and lives outside the
-// rebuild() drop list, so a base reindex leaves it (and its rows) intact.
-func EnsureTopicSchema(con *sql.DB) error {
-	var version string
-	verr := con.QueryRow("SELECT value FROM meta WHERE key='topic_schema_version'").Scan(&version)
-	if verr == nil && version == strconv.Itoa(TopicSchemaVersion) {
-		return nil // already current — nothing to (re)create
-	}
-	const topicDDL = `
-CREATE TABLE IF NOT EXISTS topic_segment (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL, start_uuid TEXT NOT NULL, end_uuid TEXT,
-  topic TEXT, summary TEXT, tagged_at REAL,
-  UNIQUE(session_id, start_uuid)
-);
-CREATE INDEX IF NOT EXISTS idx_topic_session ON topic_segment(session_id);
-CREATE VIRTUAL TABLE IF NOT EXISTS topic_fts USING fts5(topic, summary, content='topic_segment', content_rowid='id', tokenize='porter unicode61');
-CREATE TRIGGER IF NOT EXISTS topic_ai AFTER INSERT ON topic_segment BEGIN
-  INSERT INTO topic_fts(rowid, topic, summary) VALUES (new.id, new.topic, new.summary);
-END;
-CREATE TRIGGER IF NOT EXISTS topic_ad AFTER DELETE ON topic_segment BEGIN
-  INSERT INTO topic_fts(topic_fts, rowid, topic, summary) VALUES ('delete', old.id, old.topic, old.summary);
-END;
-CREATE TRIGGER IF NOT EXISTS topic_au AFTER UPDATE ON topic_segment BEGIN
-  INSERT INTO topic_fts(topic_fts, rowid, topic, summary) VALUES ('delete', old.id, old.topic, old.summary);
-  INSERT INTO topic_fts(rowid, topic, summary) VALUES (new.id, new.topic, new.summary);
-END;`
-	if _, err := con.Exec(topicDDL); err != nil {
-		return fmt.Errorf("create topic schema: %w", err)
-	}
-	if _, err := con.Exec(
-		"INSERT OR REPLACE INTO meta(key,value) VALUES('topic_schema_version',?)",
-		strconv.Itoa(TopicSchemaVersion),
-	); err != nil {
-		return fmt.Errorf("stamp topic_schema_version: %w", err)
-	}
-	return nil
 }
 
 // UpsertTopicSegment inserts or updates one topic segment, keyed by the stable
@@ -337,29 +239,11 @@ func FTS5OK() bool {
 	return true
 }
 
-// CacheDir returns the session-search state dir (<cacheHome>/session-search),
-// creating it. It holds the per-project index dbs, the tombstone sidecar, and the
-// machine-id file — and is the discovery surface for orphaned-source dbs (D8).
-func CacheDir() string {
-	d := filepath.Join(cacheHome(), "session-search")
-	_ = os.MkdirAll(d, 0o755) // best-effort; ignore an existing dir
-	return d
-}
-
 // DBPath returns the cache db path for a transcript dir:
 // ~/.cache/session-search/<encoded-dir>.db (creating the dir).
 func DBPath(transcriptDir string) string {
 	enc := filepath.Base(filepath.Clean(transcriptDir))
-	return filepath.Join(CacheDir(), enc+".db")
-}
-
-// cacheHome resolves ~/.cache.
-func cacheHome() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ".cache" // degrade to a relative path rather than panic
-	}
-	return filepath.Join(home, ".cache")
+	return filepath.Join(store.CacheDir(), enc+".db")
 }
 
 // FileFingerprint is a cheap content fingerprint (sha1 of first 4KB + "|" + last
@@ -399,24 +283,6 @@ func FileFingerprint(path string, size int64) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-// rebuild drops and recreates the full schema + FTS, then stamps the version.
-func rebuild(con *sql.DB) error {
-	if _, err := con.Exec(dropSQL); err != nil {
-		return fmt.Errorf("rebuild drop: %w", err)
-	}
-	if _, err := con.Exec(Schema); err != nil {
-		return fmt.Errorf("rebuild schema: %w", err)
-	}
-	if _, err := con.Exec(FTSSQL); err != nil {
-		return fmt.Errorf("rebuild fts: %w", err)
-	}
-	_, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", strconv.Itoa(SchemaVersion))
-	if err != nil {
-		return fmt.Errorf("rebuild stamp version: %w", err)
-	}
-	return nil
-}
-
 // EnsureSchema creates the base schema, the FTS table if missing, and rebuilds
 // on any SchemaVersion mismatch or missing marker. sourceID is the scope's source
 // ("claude"/"codex"), used only to backfill source_tool on an in-place durability
@@ -430,20 +296,20 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 	// needed: any read error — incl. a missing meta table — means rebuild.)
 	var version string
 	verr := con.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version)
-	if verr != nil || version != strconv.Itoa(SchemaVersion) {
+	if verr != nil || version != strconv.Itoa(store.SchemaVersion) {
 		// Missing meta table / missing marker / version mismatch / any read error
-		// → full rebuild. rebuild() drops every versioned object and recreates the
-		// current shape (incl. the durability columns), then stamps the version. The
-		// JSONL transcript is the source of truth, so a dropped cache is reindexed
+		// → full rebuild. store.Rebuild() drops every versioned object and recreates
+		// the current shape (incl. the durability columns), then stamps the version.
+		// The JSONL transcript is the source of truth, so a dropped cache is reindexed
 		// losslessly. This IS the migration path (e.g. v3 → v4 adds messages.uuid).
-		if rerr := rebuild(con); rerr != nil {
+		if rerr := store.Rebuild(con); rerr != nil {
 			return fmt.Errorf("ensure schema rebuild: %w", rerr)
 		}
 		return nil
 	}
 	// Version already current → ensure the base schema + FTS are present
 	// (idempotent; covers a current db that somehow lost its FTS table).
-	if _, err := con.Exec(Schema); err != nil {
+	if _, err := con.Exec(store.Schema); err != nil {
 		return fmt.Errorf("ensure base schema: %w", err)
 	}
 	// Add the durable-retention columns in place if a current-version db predates
@@ -452,7 +318,7 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 		return fmt.Errorf("ensure durability columns: %w", err)
 	}
 	if _, err := con.Exec("SELECT 1 FROM messages_fts LIMIT 1"); err != nil {
-		_, _ = con.Exec(FTSSQL) // best-effort; raced creation is acceptable
+		_, _ = con.Exec(store.FTSSQL) // best-effort; raced creation is acceptable
 	}
 	return nil
 }
@@ -565,7 +431,7 @@ func MachineID() string {
 // machineIDPath is <cacheHome>/session-search/machine-id — the same state dir
 // that holds the caches and the tombstone sidecar.
 func machineIDPath() string {
-	return filepath.Join(CacheDir(), "machine-id")
+	return filepath.Join(store.CacheDir(), "machine-id")
 }
 
 // loadOrMintMachineID reads the persisted id, or mints + persists a fresh one.
@@ -956,7 +822,7 @@ func nowEpoch() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 // db that reads as fully deleted. A busy/locked db is a soft no-op that degrades
 // to the current read count rather than erroring the whole discovery pass.
 func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
-	con, openErr := openRW(dbp)
+	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
 		return CountTopLevelSessions(dbp), nil // can't write — fall back to a read count
 	}
@@ -1016,7 +882,7 @@ func EnsureOrphanReconciled(dbp string) (int, error) {
 // orphanWorkPending answers, from a read-only connection, whether a reconcile
 // pass would change this db, plus the current surviving top-level count.
 func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool, n int, err error) {
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return false, 0, err
 	}
@@ -1073,7 +939,7 @@ func loadFileIndex(con *sql.DB) (map[string]fileMeta, error) {
 // CountSessions opens dbp read-only and returns the session count, or -1 on
 // error (callers must treat <0 as unknown).
 func CountSessions(dbp string) int {
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return -1
 	}
@@ -1090,7 +956,7 @@ func CountSessions(dbp string) int {
 // raw CountSessions above includes subagent threads and is internal bookkeeping.
 // Returns -1 on error.
 func CountTopLevelSessions(dbp string) int {
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return -1
 	}
@@ -1127,7 +993,7 @@ func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status
 		}
 	}
 
-	con, openErr := openRW(dbp)
+	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
 		// Treat an open/lock failure as a fall-back to the existing index.
 		return dbp, CountSessions(dbp), IndexStale, nil
@@ -1159,7 +1025,7 @@ func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status
 // (read-only). On a query error it returns a zero-value CorpusStats and nil
 // error.
 func GetCorpusStats(dbp string) (CorpusStats, error) {
-	con, err := ConnectRO(dbp)
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return CorpusStats{}, fmt.Errorf("open corpus db: %w", err)
 	}
@@ -1200,33 +1066,6 @@ func first10(s string) string {
 		return string(r[:10])
 	}
 	return string(r)
-}
-
-// ConnectRO opens dbp in read-only mode (file:<dbp>?mode=ro). Exported so
-// sibling packages can reuse it.
-func ConnectRO(dbp string) (*sql.DB, error) {
-	dsn := "file:" + dbp + "?mode=ro&_pragma=busy_timeout(5000)"
-	con, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open read-only db: %w", err)
-	}
-	con.SetMaxOpenConns(1) // modernc serializes; readers stay single-conn
-	return con, nil
-}
-
-// openRW opens dbp read-write with WAL + a 5s busy timeout, single-writer.
-func openRW(dbp string) (*sql.DB, error) {
-	dsn := "file:" + dbp + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
-	con, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open db: %w", err)
-	}
-	con.SetMaxOpenConns(1) // SQLite single-writer
-	if err := con.Ping(); err != nil {
-		con.Close()
-		return nil, fmt.Errorf("ping db: %w", err)
-	}
-	return con, nil
 }
 
 // isBusy reports whether err is a SQLite busy/locked condition.

@@ -8,6 +8,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // MessagesFunc yields one container's normalized messages — a source adapter's
@@ -36,7 +37,7 @@ func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 			_ = os.Remove(dbp) // best-effort; ignore a remove error
 		}
 	}
-	con, openErr := openRW(dbp)
+	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
 		return CountSessions(dbp), IndexStale, nil
 	}

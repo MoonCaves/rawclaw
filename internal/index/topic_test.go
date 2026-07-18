@@ -3,6 +3,8 @@ package index
 import (
 	"database/sql"
 	"testing"
+
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // addTopicMsg inserts a session (if new) + a message carrying a uuid, matching
@@ -30,15 +32,15 @@ func addTopicMsg(t *testing.T, con *sql.DB, sid, role, content, uuid string) int
 
 func TestEnsureTopicSchemaIdempotentAndStamped(t *testing.T) {
 	con, _ := openTestDB(t)
-	if err := EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 	// Idempotent: a second call (and a third, exercising the version-current path)
 	// must not error.
-	if err := EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema (2nd): %v", err)
 	}
-	if err := EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema (3rd): %v", err)
 	}
 	var v string
@@ -52,7 +54,7 @@ func TestEnsureTopicSchemaIdempotentAndStamped(t *testing.T) {
 
 func TestUpsertAndTopicsForSession(t *testing.T) {
 	con, _ := openTestDB(t)
-	if err := EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 
@@ -93,7 +95,7 @@ func TestUpsertAndTopicsForSession(t *testing.T) {
 
 func TestMatchTopicsResolvesStartMessage(t *testing.T) {
 	con, _ := openTestDB(t)
-	if err := EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 
@@ -140,7 +142,7 @@ func TestMatchTopicsResolvesStartMessage(t *testing.T) {
 
 func TestTopicForMessageRangeContainment(t *testing.T) {
 	con, _ := openTestDB(t)
-	if err := EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 
@@ -171,7 +173,7 @@ func TestTopicForMessageRangeContainment(t *testing.T) {
 
 func TestTopicForMessageSingleTopicFallback(t *testing.T) {
 	con, _ := openTestDB(t)
-	if err := EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 	addTopicMsg(t, con, "sess1", "user", "m1", "u1")
@@ -192,7 +194,7 @@ func TestTopicForMessageSingleTopicFallback(t *testing.T) {
 // tables), and confirm topic_segment still holds the row.
 func TestTopicSurvivesBaseReindex(t *testing.T) {
 	con, _ := openTestDB(t)
-	if err := EnsureTopicSchema(con); err != nil {
+	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 	if err := UpsertTopicSegment(con, "sess1", "u1", "u2", "durable topic", "should survive a reindex", 1.0); err != nil {

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/store"
 
 	_ "modernc.org/sqlite"
 )
@@ -44,10 +44,10 @@ func newTestDB(t *testing.T, sessions []testSession, msgs []testMsg) string {
 	con.SetMaxOpenConns(1)
 	ctx := context.Background()
 
-	if _, err := con.ExecContext(ctx, index.Schema); err != nil {
+	if _, err := con.ExecContext(ctx, store.Schema); err != nil {
 		t.Fatalf("schema: %v", err)
 	}
-	if _, err := con.ExecContext(ctx, index.FTSSQL); err != nil {
+	if _, err := con.ExecContext(ctx, store.FTSSQL); err != nil {
 		t.Fatalf("fts schema: %v", err)
 	}
 

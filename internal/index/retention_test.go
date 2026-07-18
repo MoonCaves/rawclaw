@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // TestRetentionPurgeSurvives is Test-plan #1: a session whose backing file is
@@ -206,9 +208,9 @@ func TestMigrationInPlaceAddsColumnsNoRebuild(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // isolate the machine-id file
 
 	dbp := filepath.Join(t.TempDir(), "old.db")
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
-		t.Fatalf("openRW: %v", err)
+		t.Fatalf("store.ConnectRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
 
@@ -293,9 +295,9 @@ func TestMigrationInterruptedBackfillResumes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // isolate the machine-id file
 
 	dbp := filepath.Join(t.TempDir(), "interrupted.db")
-	con, err := openRW(dbp)
+	con, err := store.ConnectRW(dbp)
 	if err != nil {
-		t.Fatalf("openRW: %v", err)
+		t.Fatalf("store.ConnectRW: %v", err)
 	}
 	t.Cleanup(func() { con.Close() })
 
