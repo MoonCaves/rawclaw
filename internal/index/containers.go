@@ -41,25 +41,25 @@ func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 	}
 	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
-		return CountSessions(dbp), IndexStale, nil
+		return store.CountSessions(dbp), IndexStale, nil
 	}
 	defer con.Close()
 
 	if err := EnsureSchema(con, sourceID); err != nil {
 		if isBusy(err) {
-			return CountSessions(dbp), IndexStale, nil
+			return store.CountSessions(dbp), IndexStale, nil
 		}
 		return 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
 	}
 	if err := updateContainers(con, cs, msgs, sourceID); err != nil {
 		if isBusy(err) {
-			return CountSessions(dbp), IndexStale, nil
+			return store.CountSessions(dbp), IndexStale, nil
 		}
 		return 0, IndexFresh, fmt.Errorf("update containers: %w", err)
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&nSessions); err != nil {
 		if isBusy(err) {
-			return CountSessions(dbp), IndexStale, nil
+			return store.CountSessions(dbp), IndexStale, nil
 		}
 		return 0, IndexFresh, fmt.Errorf("count sessions: %w", err)
 	}

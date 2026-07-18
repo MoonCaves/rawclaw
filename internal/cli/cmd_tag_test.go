@@ -123,7 +123,7 @@ func TestRunTagWritePopulatesSegments(t *testing.T) {
 		t.Fatalf("wrote %d segments, want 2", n)
 	}
 
-	segs, err := index.TopicsForSession(con, sid)
+	segs, err := store.TopicsForSession(con, sid)
 	if err != nil {
 		t.Fatalf("TopicsForSession: %v", err)
 	}

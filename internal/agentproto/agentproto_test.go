@@ -858,7 +858,7 @@ func TestSearchNeverCarriesTopic(t *testing.T) {
 	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
-	if err := index.UpsertTopicSegment(con, "sessone",
+	if err := store.UpsertTopicSegment(con, "sessone",
 		"11111111-aaaa-bbbb-cccc-000000000001", "", "deployment rollback", "how we rolled back", 1.0); err != nil {
 		t.Fatalf("UpsertTopicSegment: %v", err)
 	}
@@ -891,7 +891,7 @@ func TestTopicsCommand(t *testing.T) {
 	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
-	if err := index.UpsertTopicSegment(con, "sessone",
+	if err := store.UpsertTopicSegment(con, "sessone",
 		uuid, "", "deployment rollback", "how we rolled back", 1.0); err != nil {
 		t.Fatalf("UpsertTopicSegment: %v", err)
 	}
@@ -983,7 +983,7 @@ func TestOutlineListsTopics(t *testing.T) {
 	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
-	if err := index.UpsertTopicSegment(con, "sesstwo",
+	if err := store.UpsertTopicSegment(con, "sesstwo",
 		"22222222-aaaa-bbbb-cccc-000000000002", "", "first topic", "", 1.0); err != nil {
 		t.Fatalf("UpsertTopicSegment: %v", err)
 	}

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
-	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -292,7 +291,7 @@ func writeSegments(con *sql.DB, fullSID string, msgs []tagMsg, segs []rawSegment
 			}
 		}
 
-		if err := index.UpsertTopicSegment(con, fullSID, startUUID, endUUID, seg.Topic, seg.Summary, taggedAt); err != nil {
+		if err := store.UpsertTopicSegment(con, fullSID, startUUID, endUUID, seg.Topic, seg.Summary, taggedAt); err != nil {
 			return written, err
 		}
 		written++

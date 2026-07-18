@@ -415,12 +415,12 @@ func TestEnsureIndexedEndToEnd(t *testing.T) {
 	}
 
 	// CountSessions on the same db agrees.
-	if got := CountSessions(dbp); got != 1 {
+	if got := store.CountSessions(dbp); got != 1 {
 		t.Errorf("CountSessions = %d, want 1", got)
 	}
 
 	// CorpusStats reflects the single user message.
-	cs, err := GetCorpusStats(dbp)
+	cs, err := store.GetCorpusStats(dbp)
 	if err != nil {
 		t.Fatalf("GetCorpusStats: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestEnsureIndexedReindexWipes(t *testing.T) {
 }
 
 func TestCountSessionsMissingDB(t *testing.T) {
-	if got := CountSessions(filepath.Join(t.TempDir(), "nope.db")); got != -1 {
+	if got := store.CountSessions(filepath.Join(t.TempDir(), "nope.db")); got != -1 {
 		t.Errorf("CountSessions on missing db = %d, want -1 (unknown sentinel)", got)
 	}
 }
@@ -488,11 +488,11 @@ func TestGetCorpusStatsMissingDB(t *testing.T) {
 	if err := os.WriteFile(dbp, []byte("not a db"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cs, err := GetCorpusStats(dbp)
+	cs, err := store.GetCorpusStats(dbp)
 	if err != nil {
 		t.Fatalf("GetCorpusStats should not error on a bad db, got %v", err)
 	}
-	if cs != (CorpusStats{}) {
+	if cs != (store.CorpusStats{}) {
 		t.Errorf("expected zero CorpusStats, got %+v", cs)
 	}
 }

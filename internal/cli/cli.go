@@ -600,7 +600,7 @@ type statsJSON struct {
 	Last      string `json:"last"`
 }
 
-func toStatsJSON(s index.CorpusStats) statsJSON {
+func toStatsJSON(s store.CorpusStats) statsJSON {
 	return statsJSON{s.Sessions, s.Subagents, s.Messages, s.User, s.Assistant, s.First, s.Last}
 }
 
@@ -625,7 +625,7 @@ func runStats(w io.Writer, o *Options) error {
 	if err != nil {
 		return fmt.Errorf("stats ensure-indexed: %w", err)
 	}
-	s, err := index.GetCorpusStats(dbp)
+	s, err := store.GetCorpusStats(dbp)
 	if err != nil {
 		return fmt.Errorf("stats corpus: %w", err)
 	}
@@ -651,7 +651,7 @@ type projectStat struct {
 
 // runStatsFleet computes and prints the --all stats aggregate across all projects.
 func runStatsFleet(w io.Writer, o *Options) error {
-	tot := index.CorpusStats{}
+	tot := store.CorpusStats{}
 	nProjects := 0
 	var per []projectStat
 
@@ -660,7 +660,7 @@ func runStatsFleet(w io.Writer, o *Options) error {
 		if err != nil {
 			continue
 		}
-		s, err := index.GetCorpusStats(dbp)
+		s, err := store.GetCorpusStats(dbp)
 		if err != nil {
 			continue
 		}
@@ -881,7 +881,7 @@ func ListProjects(w io.Writer) {
 			continue
 		}
 		// Orphaned source: no jsonl on disk — count retained sessions from the db.
-		n := index.CountTopLevelSessions(sc.DBP)
+		n := store.CountTopLevelSessions(sc.DBP)
 		if n < 0 {
 			n = 0
 		}
