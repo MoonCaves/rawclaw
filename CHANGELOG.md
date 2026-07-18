@@ -4,6 +4,8 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-07-18
+
 ### Added
 
 - **Durable retention — your history outlives Claude Code's 30-day cleanup.** When a source tool
