@@ -3,7 +3,6 @@ package archive
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -54,11 +53,12 @@ func (a *Archive) Status(ctx context.Context) (StatusReport, error) {
 	now := time.Now()
 	st.PushOverdue = overdueAt(st.LastPush, now)
 	st.PullOverdue = overdueAt(st.LastPull, now)
-	// Same marker ensureClone trusts: no sentinel → not a VERIFIED clone, so
-	// status won't vouch for it. (A structurally complete pre-sentinel clone
-	// gets adopted — stamped — by the next push/pull; status is an offline
-	// read and never probes git to make that call itself.)
-	if _, err := os.Stat(filepath.Join(a.clone, ".git", cloneSentinel)); err != nil {
+	// Same marker ensureClone stamps and scope enumeration trusts: no
+	// sentinel → not a VERIFIED clone, so status won't vouch for it. (A
+	// structurally complete pre-sentinel clone gets adopted — stamped — by
+	// the next push/pull; status is an offline read and never probes git to
+	// make that call itself.)
+	if !a.cloneUsable() {
 		return st, nil
 	}
 	st.CloneOK = true
@@ -101,12 +101,6 @@ func (a *Archive) dirLastCommit(ctx context.Context, name string) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(ct, 0).UTC()
-}
-
-// staleAt applies the shared staleness window: unknown freshness (zero time)
-// is reported stale, never silently passed off as fresh.
-func staleAt(lastCommit, now time.Time) bool {
-	return lastCommit.IsZero() || now.Sub(lastCommit) > staleAfter
 }
 
 // stampTime reads a stamp file's mtime; zero when the stamp does not exist.

@@ -29,12 +29,13 @@ type MessagesFunc func(source.Container) ([]model.Message, error)
 // tree's containers carry their owner's identity.
 //
 // CONTRACT — cs MUST be the COMPLETE container set for dbp on every call. The
-// prune step (updateContainers) deletes any indexed session whose backing path
-// is absent from cs, exactly as UpdateIndex prunes against a fresh directory
-// walk. A partial cs would wrongly prune the omitted sessions. Corollary: never
-// point two sources (or two scopes) at the same dbp — give each its own,
-// distinctly-namespaced cache file, so one source's set is never "incomplete"
-// relative to another's rows.
+// retention pass (updateContainers) reconciles indexed sessions against cs as
+// the full live scan: in a REPLICA scope (origin set) an omitted session is
+// pruned outright; in a local scope it is stamped missing_since — either way
+// a partial cs corrupts the outcome for the omitted sessions. Corollary:
+// never point two sources (or two scopes) at the same dbp — give each its
+// own, distinctly-namespaced cache file, so one source's set is never
+// "incomplete" relative to another's rows.
 func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, msgs MessagesFunc, sourceID, origin string) (nSessions int, status IndexStatus, err error) {
 	if reindex {
 		if _, statErr := os.Stat(dbp); statErr == nil {
@@ -68,10 +69,12 @@ func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 	return nSessions, IndexFresh, nil
 }
 
-// updateContainers watermarks each container by its backing file, reindexes the
-// changed ones, and prunes those whose file is gone — the container-driven
-// parallel of UpdateIndex. A container whose messages fail to load is left
-// untouched (existing rows + watermark preserved), never partially written.
+// updateContainers watermarks each container by its backing file, reindexes
+// the changed ones, and runs the retention pass over the rest (replica-scope
+// absence prunes; local-scope absence retains-and-flags) — the container-
+// driven parallel of UpdateIndex. A container whose messages fail to load is
+// left untouched (existing rows + watermark preserved), never partially
+// written.
 func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sourceID, origin string) error {
 	onDisk := make(map[string]struct{}, len(cs))
 	for _, c := range cs {

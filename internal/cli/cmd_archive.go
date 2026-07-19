@@ -56,7 +56,8 @@ func newArchivePullCmd() *cobra.Command {
 		Short: "Pull other machines' transcripts from the archive",
 		Long: "Refresh the local archive clone from the remote, so sessions pushed by your " +
 			"other machines become searchable here. A plain `rawclaw \"query\"` then covers " +
-			"them automatically. A deleted or corrupt clone is re-cloned.",
+			"them automatically. A deleted or corrupt clone is re-cloned — unless it still " +
+			"holds unpushed commits, which are never destroyed (the error names the recovery).",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -155,13 +156,13 @@ func removalNote(removed int) string {
 }
 
 // newArchiveStatusCmd wires `rawclaw archive status`: an offline report of
-// where the archive lives, when this machine last pushed/pulled, and how
-// fresh each machine's dir is in the local clone. Unconfigured is a clean
-// no-op, not an error.
+// where the archive lives, when this machine last pushed/pulled (with an
+// overdue warning on aged own-sync stamps), and when each machine's dir last
+// received new content. Unconfigured is a clean no-op, not an error.
 func newArchiveStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:           "status",
-		Short:         "Report archive freshness: remote, clone, last sync per machine",
+		Short:         "Report archive state: remote, clone, last push/pull, last new content per machine",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
