@@ -63,6 +63,35 @@ func TestLiveServeSession(t *testing.T) {
 	}
 }
 
+// TestLiveServeSession_ToolPosture: the serve render follows the same default
+// display posture as read/outline — tool calls stripped unless --include-tools
+// asks for them.
+func TestLiveServeSession_ToolPosture(t *testing.T) {
+	home := newArchiveHome(t)
+	root := filepath.Join(home, ".claude", "projects")
+	writeLiveSession(t, root, "-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"/home/u/proj-a", `working [TOOL:Bash] \"command\" \"go vet\" [TOOL_RESULT] clean`)
+
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "live", "--serve", "aaaa1111")
+	if err != nil {
+		t.Fatalf("live --serve <prefix>: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "[TOOL") || strings.Contains(out, "go vet") {
+		t.Errorf("default serve render leaked tool content:\n%s", out)
+	}
+	if !strings.Contains(out, "working") {
+		t.Errorf("default serve render dropped conversation text:\n%s", out)
+	}
+
+	out, err = runCmd(t, NewRootCmd(BuildInfo{}), "", "live", "--serve", "--include-tools", "aaaa1111")
+	if err != nil {
+		t.Fatalf("live --serve --include-tools <prefix>: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "[TOOL:Bash]") || !strings.Contains(out, "go vet") {
+		t.Errorf("--include-tools serve render missing tool content:\n%s", out)
+	}
+}
+
 // TestLiveArgs: client mode needs a machine (1-2 args); serve mode takes at
 // most a prefix.
 func TestLiveArgs(t *testing.T) {
@@ -89,5 +118,11 @@ func TestLiveCrossModeFlags(t *testing.T) {
 	}
 	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "live", "--serve", "somepfx", "--limit", "5"); err == nil {
 		t.Error("--limit on a session peek should be a usage error")
+	}
+	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "live", "--serve", "--include-tools"); err == nil {
+		t.Error("--include-tools on a list should be a usage error")
+	}
+	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "live", "some-machine", "--include-tools"); err == nil {
+		t.Error("--include-tools on a client list should be a usage error")
 	}
 }

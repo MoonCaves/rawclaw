@@ -45,9 +45,11 @@ type messageJSON struct {
 // ServeSession renders the current transcript of the top-level session whose
 // id starts with prefix: a one-shot read of the live file, so messages written
 // seconds ago are included. tail caps the rendered messages (<=0 = default);
-// jsonOut switches to the machine shape. An unmatched or ambiguous prefix is a
-// distinct, actionable error.
-func ServeSession(w io.Writer, prefix string, tail int, jsonOut bool) error {
+// includeTools opts the human render into tool calls (stripped by default,
+// matching the display posture of every other surface); jsonOut switches to
+// the machine shape, which always carries the raw text. An unmatched or
+// ambiguous prefix is a distinct, actionable error.
+func ServeSession(w io.Writer, prefix string, tail int, includeTools, jsonOut bool) error {
 	if tail <= 0 {
 		tail = DefaultSessionTail
 	}
@@ -99,7 +101,7 @@ func ServeSession(w io.Writer, prefix string, tail int, jsonOut bool) error {
 		c.ID, orUnknown(projectName(c.CWD)), reg.ID, FormatAge(age))
 	for _, m := range msgs {
 		fmt.Fprintf(w, "[%s %s] %s\n", clockOf(m), m.Role,
-			parse.Disp(m.Text, true, sessionDispCap))
+			parse.Disp(m.Text, includeTools, sessionDispCap))
 	}
 	if total > len(msgs) {
 		fmt.Fprintf(w, "\n(showing the last %d of %d messages)\n", len(msgs), total)
