@@ -25,6 +25,8 @@ type MessagesFunc func(source.Container) ([]model.Message, error)
 // Claude-only directory walk of UpdateIndex. sourceID (the source's
 // Registration.ID, e.g. "codex") is stamped as each row's source_tool (D3),
 // injected alongside msgs so the index never imports the concrete adapters.
+// origin is the origin_machine to stamp ("" = this machine) — a replicated
+// tree's containers carry their owner's identity.
 //
 // CONTRACT — cs MUST be the COMPLETE container set for dbp on every call. The
 // prune step (updateContainers) deletes any indexed session whose backing path
@@ -33,7 +35,7 @@ type MessagesFunc func(source.Container) ([]model.Message, error)
 // point two sources (or two scopes) at the same dbp — give each its own,
 // distinctly-namespaced cache file, so one source's set is never "incomplete"
 // relative to another's rows.
-func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, msgs MessagesFunc, sourceID string) (nSessions int, status IndexStatus, err error) {
+func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, msgs MessagesFunc, sourceID, origin string) (nSessions int, status IndexStatus, err error) {
 	if reindex {
 		if _, statErr := os.Stat(dbp); statErr == nil {
 			_ = os.Remove(dbp) // best-effort; ignore a remove error
@@ -51,7 +53,7 @@ func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 		}
 		return 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
 	}
-	if err := updateContainers(con, cs, msgs, sourceID); err != nil {
+	if err := updateContainers(con, cs, msgs, sourceID, origin); err != nil {
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
@@ -70,7 +72,7 @@ func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 // changed ones, and prunes those whose file is gone — the container-driven
 // parallel of UpdateIndex. A container whose messages fail to load is left
 // untouched (existing rows + watermark preserved), never partially written.
-func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sourceID string) error {
+func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sourceID, origin string) error {
 	onDisk := make(map[string]struct{}, len(cs))
 	for _, c := range cs {
 		onDisk[realpath(c.Path)] = struct{}{}
@@ -108,7 +110,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		if mErr != nil {
 			continue // bad container: leave existing rows + watermark untouched
 		}
-		if reindexContainer(con, c, ms, sourceID) {
+		if reindexContainer(con, c, ms, sourceID, origin) {
 			if _, err := con.Exec(
 				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
 				rp, mtime, size, provenance.FileFingerprint(c.Path, size), c.ID,
@@ -131,8 +133,8 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 // already parsed into ms, so a write failure can't commit away existing data
 // (delete + insert run under database/sql autocommit). Returns false on any
 // write error. Mirrors ReindexFile for the container path. sourceID is stamped as
-// the row's source_tool (D3).
-func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID string) bool {
+// the row's source_tool (D3); origin as its origin_machine ("" = this machine).
+func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin string) bool {
 	if _, err := con.Exec("DELETE FROM messages WHERE session_id=?", c.ID); err != nil {
 		return false
 	}
@@ -164,7 +166,7 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 	// Stamp provenance (D3); missing_since NULL — a (re)indexed container is present.
 	if _, err := con.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
-		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, provenance.MachineID(), sourceID, realpath(c.Path),
+		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, originOr(origin), sourceID, realpath(c.Path),
 	); err != nil {
 		return false
 	}

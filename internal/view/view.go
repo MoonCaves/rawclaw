@@ -54,12 +54,22 @@ type BrowseRow struct {
 // CWD (for path filtering), leaving TDir empty. Source names the runtime
 // ("claude"/"codex") for the --source filter and display. Resolve/CWD in the
 // scopes package pick the right field, so consumers stay source-agnostic.
+//
+// A scope replicated from ANOTHER machine (a transcript archive dir) also
+// carries its origin: Origin is the owning machine's stable id (what its rows
+// stamp as origin_machine) and OriginName its human-readable machine dir name.
+// Both empty = a local scope. Stale marks a replica whose last sync is old —
+// the search layer reports it through the stale-fallback posture while still
+// serving its results.
 type Scope struct {
-	Project string
-	TDir    string // Claude transcript dir; "" for a pre-resolved (DBP) scope
-	DBP     string // pre-ensured db path; "" means resolve lazily from TDir
-	CWD     string // working dir for path filtering; "" means derive from TDir
-	Source  string // "claude" | "codex"
+	Project    string
+	TDir       string // Claude transcript dir; "" for a pre-resolved (DBP) scope
+	DBP        string // pre-ensured db path; "" means resolve lazily from TDir
+	CWD        string // working dir for path filtering; "" means derive from TDir
+	Source     string // "claude" | "codex"
+	Origin     string // owning machine id for a replicated scope; "" = local
+	OriginName string // owning machine display name; "" = local
+	Stale      bool   // replica may lag its origin — report, still serve
 }
 
 // AnchoredViewOpts groups the optional tuning of AnchoredView (window radius,
