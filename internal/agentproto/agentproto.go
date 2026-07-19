@@ -26,6 +26,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
@@ -1037,16 +1038,17 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 }
 
 
-// sessionMeta reads last_ts + message_count and formats the local-time ISO.
-// A missing row → ("", 0); a missing/zero last_ts → "" iso. Uses local time at
-// seconds precision.
+// sessionMeta reads last_ts + message_count and formats the ISO through the
+// timefmt seam: the outline header is an agent-parsed surface, so the instant
+// is marked UTC (RFC3339 "Z") — never an unmarked local time. A missing row →
+// ("", 0); a missing/zero last_ts → "" iso.
 func sessionMeta(con *sql.DB, fullSID string) (iso string, nmsg int) {
 	lastTS, mc, ok := store.SessionMeta(con, fullSID)
 	if !ok {
 		return "", 0
 	}
 	if lastTS != 0 {
-		iso = time.Unix(int64(lastTS), 0).Local().Format("2006-01-02T15:04:05")
+		iso = timefmt.UTC(time.Unix(int64(lastTS), 0))
 	}
 	return iso, mc
 }
@@ -1070,7 +1072,9 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 	}
 	fmt.Fprintf(w, "%d conversation(s) matching '%s' %s:\n\n", len(env.Results), query, scopeLabel)
 	for _, r := range env.Results {
-		iso := r.ISO
+		// timefmt seam: search results are agent-parsed — render the stored ISO
+		// as marked UTC (unparseable stamps pass through verbatim).
+		iso := timefmt.UTCFromISO(r.ISO)
 		if iso == "" {
 			iso = "?"
 		}
