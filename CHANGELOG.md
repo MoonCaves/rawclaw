@@ -4,6 +4,20 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Transcript archive (tracer): `rawclaw archive init <remote-url>` + `rawclaw archive push`.**
+  Any private git remote becomes durable, multi-machine storage for raw transcripts: init clones
+  the repo (an empty remote works — it is born on the first push), registers the machine under a
+  human-readable top-level dir (`--name`, default the sanitized hostname; a committed manifest
+  maps the dir to a stable machine id, and init refuses a dir already claimed by a different
+  machine), and prints a hard the-remote-must-be-PRIVATE warning. Push mirrors the Claude + Codex
+  transcript trees into `<machine>/<source>/...`, copying only changed files (size + mtime +
+  content-fingerprint quick check); nothing changed = no commit. Concurrent pushes from other
+  machines are absorbed by a bounded pull-rebase-and-retry loop (never a force-push, never a
+  clone left mid-rebase). Unconfigured, the feature is off: `archive push` is a clean no-op
+  pointing at init.
+
 ## [0.4.0] — 2026-07-18
 
 ### Added

@@ -146,6 +146,19 @@ rawclaw "monthly billing for the paid tier"   # now lexical + semantic, fused
 
 Vectors live as BLOBs in the same on-disk index; cosine scoring and fusion run in pure Go — no LLM, no extra service, no numpy, no GPU. Unset the env (or pass `--no-vector`) and you're back to byte-identical keyword search.
 
+### Optional transcript archive — a git remote as durable, multi-machine storage
+
+Raw transcripts die upstream (Claude Code's ~30-day purge) and live on only one machine until they don't. The archive gives them one durable home: any private git remote (GitHub, Gitea, a bare repo over SSH — no rawclaw-specific server).
+
+```bash
+rawclaw archive init git@github.com:you/my-transcripts.git   # clone + register this machine (--name to pick the dir name)
+rawclaw archive push                                          # upload this machine's Claude + Codex transcripts
+```
+
+Each machine gets a top-level directory in the repo (`<machine>/<source>/...`), so pushes from different machines never conflict on content; concurrent pushes are resolved with a bounded pull-rebase-and-retry. A second push moves only changed files. The local clone lives in the state dir and is a rebuildable cache — deleting it just forces a re-clone.
+
+> **The remote MUST be a private repository.** Transcripts contain whatever you and your agents pasted into sessions — API keys, tokens, private code. RawClaw prints this warning at `archive init` and cannot verify a host's visibility settings for you.
+
 ---
 
 ## Roadmap
