@@ -221,9 +221,9 @@ func Execute(root *cobra.Command, args []string) error {
 	ctx, stop := startWatchdog(to, root.ErrOrStderr(), osExit)
 	defer stop()
 	root.SetArgs(args)
-	// The watchdog's context is the run's context: every command (and any child
-	// process it starts via exec.CommandContext) is cancelled when the deadline
-	// fires, so nothing outlives the exit(124).
+	// The watchdog's context is the run's context: when the deadline fires it
+	// cancels every command — and kills any child started for the run via
+	// exec.CommandContext — so a child doesn't outlive the exit(124).
 	return root.ExecuteContext(ctx)
 }
 

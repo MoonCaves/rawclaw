@@ -1,3 +1,5 @@
+//go:build unix
+
 package cli
 
 import (
@@ -19,6 +21,9 @@ import (
 // survive as an orphan holding the remote session open. The helper process
 // below wires a child exactly the way production does and lets the watchdog
 // fire; the child must be gone once the helper has exited.
+//
+// Deliberately not parallel: the helper's deadline is wall-clock, and a loaded
+// runner racing sibling tests could delay the child's Start past it.
 func TestWatchdog_ChildDoesNotOutliveDeadline(t *testing.T) {
 	if os.Getenv("RAWCLAW_TEST_WATCHDOG_CHILD") == "1" {
 		watchdogChildHelper()
@@ -64,7 +69,7 @@ func watchdogChildHelper() {
 	// Shaped like Execute: the run returns through the deferred stop(), which on
 	// a fired deadline blocks until the watchdog's exit(124) takes the process.
 	code := func() int {
-		ctx, stop := startWatchdog(300*time.Millisecond, os.Stderr, os.Exit)
+		ctx, stop := startWatchdog(time.Second, os.Stderr, os.Exit)
 		defer stop()
 
 		// ctx is what cmd.Context() resolves to in production (Execute threads
