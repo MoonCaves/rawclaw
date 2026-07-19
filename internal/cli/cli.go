@@ -200,6 +200,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	archiveCmd.AddCommand(newArchiveInitCmd())
 	archiveCmd.AddCommand(newArchivePushCmd())
 	archiveCmd.AddCommand(newArchivePullCmd())
+	archiveCmd.AddCommand(newArchiveStatusCmd())
 	archiveCmd.AddCommand(newArchiveAutosyncCmd())
 	archiveCmd.AddCommand(newArchiveEnableTimerCmd())
 	root.AddCommand(archiveCmd)

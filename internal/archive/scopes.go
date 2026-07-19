@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -112,20 +111,10 @@ func (a *Archive) foreignMachines() []manifest {
 }
 
 // dirStale reports whether name's history in the clone is older than
-// staleAfter, judged by its last commit time — the local clone's knowledge of
-// that machine IS what search serves, so an un-pulled clone and a silent
-// machine both (correctly) read as stale. An unreadable probe counts as stale:
-// unknown freshness is reported, never silently passed off as fresh.
+// staleAfter — the same probe and window `archive status` reports, so search's
+// stale-fallback and status can never disagree on what "stale" means.
 func (a *Archive) dirStale(ctx context.Context, name string, now time.Time) bool {
-	out, err := a.run(ctx, a.clone, "log", "-1", "--format=%ct", "--", name)
-	if err != nil {
-		return true
-	}
-	ct, perr := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
-	if perr != nil {
-		return true
-	}
-	return now.Sub(time.Unix(ct, 0)) > staleAfter
+	return staleAt(a.dirLastCommit(ctx, name), now)
 }
 
 // claudeScopes enumerates one foreign machine's Claude project dirs
@@ -255,7 +244,7 @@ func codexGroupLabel(cwd string) string {
 // injective even though the readable segment is lossy and capped.
 func archiveScopeDBPath(machine, sourceID, key string) string {
 	sum := sha1.Sum([]byte(machine + "\x00" + sourceID + "\x00" + key))
-	name := "archive-" + machine + "-" + sourceID + "-" + sanitizeDBSegment(key) +
+	name := index.ArchiveDBPrefix + machine + "-" + sourceID + "-" + sanitizeDBSegment(key) +
 		"-" + hex.EncodeToString(sum[:])[:8]
 	return index.DBPath(name)
 }
