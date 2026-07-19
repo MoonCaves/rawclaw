@@ -218,10 +218,13 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 // root.Execute() directly.
 func Execute(root *cobra.Command, args []string) error {
 	to := resolveTimeoutFromArgs(args, os.Getenv("RAWCLAW_TIMEOUT"))
-	stop := startWatchdog(to, root.ErrOrStderr(), osExit)
+	ctx, stop := startWatchdog(to, root.ErrOrStderr(), osExit)
 	defer stop()
 	root.SetArgs(args)
-	return root.Execute()
+	// The watchdog's context is the run's context: every command (and any child
+	// process it starts via exec.CommandContext) is cancelled when the deadline
+	// fires, so nothing outlives the exit(124).
+	return root.ExecuteContext(ctx)
 }
 
 // resolveTimeoutFromArgs leniently parses just the --timeout value out of args
