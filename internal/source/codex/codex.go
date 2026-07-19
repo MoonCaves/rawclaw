@@ -82,7 +82,13 @@ func SessionsRoot() string {
 // header is unreadable is skipped (logged, grouped). Returns (nil, nil) when the
 // tree is absent — an empty corpus is not an error.
 func (a *Adapter) Discover() ([]source.Container, error) {
-	root := SessionsRoot()
+	return a.DiscoverRoot(SessionsRoot())
+}
+
+// DiscoverRoot is Discover against an EXPLICIT sessions tree — the same walk,
+// pointed at a replicated tree (another machine's rollouts synced onto this
+// disk) instead of this machine's $CODEX_HOME. "" yields (nil, nil).
+func (a *Adapter) DiscoverRoot(root string) ([]source.Container, error) {
 	if root == "" {
 		return nil, nil
 	}

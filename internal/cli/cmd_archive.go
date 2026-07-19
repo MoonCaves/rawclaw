@@ -40,6 +40,49 @@ func newArchiveInitCmd() *cobra.Command {
 	return cmd
 }
 
+// newArchivePullCmd wires `rawclaw archive pull`: refresh the clone so other
+// machines' pushed sessions become searchable here. The explicit verb always
+// pulls; --throttle honors the stamp-file window (the variant background
+// callers use, so a burst of invocations costs one network round-trip).
+// Unconfigured is a clean no-op, not an error.
+func newArchivePullCmd() *cobra.Command {
+	var throttle bool
+	cmd := &cobra.Command{
+		Use:   "pull",
+		Short: "Pull other machines' transcripts from the archive",
+		Long: "Refresh the local archive clone from the remote, so sessions pushed by your " +
+			"other machines become searchable here. A plain `rawclaw \"query\"` then covers " +
+			"them automatically. A deleted or corrupt clone is re-cloned.",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := archive.Load()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if a == nil {
+				fmt.Fprintln(out, "Archive not configured; run `rawclaw archive init <remote-url>` first. Nothing to do.")
+				return nil
+			}
+			pulled, err := a.Pull(cmd.Context(), throttle)
+			if err != nil {
+				return fmt.Errorf("archive pull: %w", err)
+			}
+			if pulled {
+				fmt.Fprintf(out, "Archive refreshed from %s.\n", a.Remote())
+			} else {
+				fmt.Fprintln(out, "Archive pull skipped (pulled recently; --throttle honors the sync window).")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&throttle, "throttle", false,
+		"skip the pull when one ran recently (for background/scripted callers; an explicit pull never needs this)")
+	return cmd
+}
+
 // newArchivePushCmd wires `rawclaw archive push`: copy this machine's
 // transcript trees into the clone, commit, and push (rebase-retry on
 // concurrent pushers). Unconfigured is a clean no-op, not an error.

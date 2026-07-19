@@ -183,10 +183,27 @@ type reindexRow struct {
 	uuid    string
 }
 
+// originOr resolves the origin_machine to stamp: an explicit origin (a
+// replicated tree owned by another machine) wins; "" means this machine.
+func originOr(origin string) string {
+	if origin == "" {
+		return provenance.MachineID()
+	}
+	return origin
+}
+
 // ReindexFile parses the whole file into memory FIRST, then atomically replaces
 // this session's rows (an I/O failure can't commit away existing data). Returns
-// true on success.
+// true on success. Rows are stamped with this machine's identity; a replicated
+// tree goes through reindexFileWithOrigin instead.
 func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
+	return reindexFileWithOrigin(con, path, transcriptDir, "")
+}
+
+// reindexFileWithOrigin is ReindexFile with an explicit origin_machine ("" = this
+// machine) — the provenance seam the archive-scope ingest stamps foreign
+// machine ids through.
+func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string) bool {
 	sid, isSub, parent := provenance.SessionIDFor(path, transcriptDir)
 
 	rows, started, last, ok := parseTranscript(path, sid)
@@ -217,7 +234,7 @@ func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
 	// session is present by definition, so a reappeared source file un-flags here.
 	if _, err := con.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
-		sid, started, last, len(rows), isSub, parentArg, provenance.MachineID(), sourceClaude, realpath(path),
+		sid, started, last, len(rows), isSub, parentArg, originOr(origin), sourceClaude, realpath(path),
 	); err != nil {
 		return false
 	}
@@ -296,6 +313,12 @@ type fileMeta struct {
 // each contained file, reindex changed ones, prune deleted sessions. Writes
 // commit under database/sql autocommit.
 func UpdateIndex(con *sql.DB, transcriptDir string) error {
+	return updateIndexWithOrigin(con, transcriptDir, "")
+}
+
+// updateIndexWithOrigin is UpdateIndex with an explicit origin_machine ("" = this
+// machine) stamped onto every (re)indexed session — the archive-scope path.
+func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 	files := paths.ContainedJSONL(transcriptDir)
 
 	onDisk := make(map[string]struct{}, len(files))
@@ -340,7 +363,7 @@ func UpdateIndex(con *sql.DB, transcriptDir string) error {
 				}
 			}
 		}
-		if ReindexFile(con, f, transcriptDir) {
+		if reindexFileWithOrigin(con, f, transcriptDir, origin) {
 			sid, _, _ := provenance.SessionIDFor(f, transcriptDir)
 			if _, err := con.Exec(
 				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
@@ -507,6 +530,18 @@ const (
 // exists, it is removed first.
 func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status IndexStatus, err error) {
 	dbp = DBPath(tdir)
+	nSessions, status, err = EnsureIndexedTree(dbp, tdir, reindex, "")
+	return dbp, nSessions, status, err
+}
+
+// EnsureIndexedTree builds/updates the FTS index for one Claude-shaped
+// transcript tree at an EXPLICIT db path, stamping origin as every row's
+// origin_machine ("" = this machine). This is EnsureIndexed with both halves of
+// the identity made injectable: a replicated tree (another machine's transcripts
+// synced onto this disk) indexes into its own namespaced db and carries its
+// owner's identity, while the local path keeps its derived db and local stamp.
+// Reindex + busy-lock semantics are identical to EnsureIndexed.
+func EnsureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions int, status IndexStatus, err error) {
 	if reindex {
 		if _, statErr := os.Stat(dbp); statErr == nil {
 			_ = os.Remove(dbp) // best-effort; ignore a remove error
@@ -516,29 +551,29 @@ func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status
 	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
 		// Treat an open/lock failure as a fall-back to the existing index.
-		return dbp, store.CountSessions(dbp), IndexStale, nil
+		return store.CountSessions(dbp), IndexStale, nil
 	}
 	defer con.Close()
 
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		if isBusy(err) {
-			return dbp, store.CountSessions(dbp), IndexStale, nil
+			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return dbp, 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
+		return 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
 	}
-	if err := UpdateIndex(con, tdir); err != nil {
+	if err := updateIndexWithOrigin(con, tdir, origin); err != nil {
 		if isBusy(err) {
-			return dbp, store.CountSessions(dbp), IndexStale, nil
+			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return dbp, 0, IndexFresh, fmt.Errorf("update index: %w", err)
+		return 0, IndexFresh, fmt.Errorf("update index: %w", err)
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&nSessions); err != nil {
 		if isBusy(err) {
-			return dbp, store.CountSessions(dbp), IndexStale, nil
+			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return dbp, 0, IndexFresh, fmt.Errorf("count sessions: %w", err)
+		return 0, IndexFresh, fmt.Errorf("count sessions: %w", err)
 	}
-	return dbp, nSessions, IndexFresh, nil
+	return nSessions, IndexFresh, nil
 }
 
 // isBusy reports whether err is a SQLite busy/locked condition.
