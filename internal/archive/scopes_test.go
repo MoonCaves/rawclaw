@@ -307,6 +307,158 @@ func TestScopes_StaleDirFlagged(t *testing.T) {
 	}
 }
 
+// countSessionRows returns how many rows in dbp's sessions (and messages)
+// tables carry the given session id.
+func countSessionRows(t *testing.T, dbp, sessionID string) (sessions, messages int) {
+	t.Helper()
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("open %s: %v", dbp, err)
+	}
+	defer con.Close()
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id=?", sessionID).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id=?", sessionID).Scan(&messages); err != nil {
+		t.Fatal(err)
+	}
+	return sessions, messages
+}
+
+// TestScopes_OwnerDeletePropagatesToReplicaIndex: machine B deletes one of its
+// own sessions and pushes (E5 — the file leaves the archive); after this
+// machine pulls and reindexes, the replica scope db must drop the session too.
+// For ARCHIVE scopes the clone IS the source of truth and the replica db is a
+// rebuildable cache — absence from the clone is authoritative. Durable
+// retention (D1/D2) protects LOCAL sources from upstream purges; it must not
+// resurrect a session its owner explicitly deleted.
+func TestScopes_OwnerDeletePropagatesToReplicaIndex(t *testing.T) {
+	const foreignID = "beefbeefbeefbeefbeefbeefbeefbeef"
+	a := initArchiveWithForeign(t, "machine-b", foreignID)
+
+	// Machine B pushes a SECOND session per source into the same project /
+	// cwd group, so each scope survives the later single-session delete (a
+	// scope with zero sessions left stops being enumerated at all).
+	cloneB := filepath.Join(t.TempDir(), "clone-b2")
+	gitT(t, "", "clone", a.cfg.Remote, cloneB)
+	writeTranscript(t, cloneB, "machine-b/claude/-remote-proj/sess-keep.jsonl",
+		`{"type":"user","timestamp":"2026-06-03T10:00:00Z","cwd":"/remote/proj","message":{"role":"user","content":"foreign keeper"}}`+"\n")
+	writeTranscript(t, cloneB, "machine-b/codex/2026/07/rollout-keep.jsonl",
+		`{"type":"session_meta","timestamp":"2026-06-03T10:00:00Z","payload":{"id":"rollout-keep","cwd":"/remote/proj"}}`+"\n"+
+			`{"type":"response_item","timestamp":"2026-06-03T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"foreign codex keeper"}]}}`+"\n")
+	gitT(t, cloneB, "add", "-A")
+	gitT(t, cloneB, "commit", "-m", "machine-b: sync transcripts")
+	gitT(t, cloneB, "push", "origin", "HEAD")
+	if _, err := a.Pull(context.Background(), false); err != nil {
+		t.Fatalf("pull second foreign sessions: %v", err)
+	}
+
+	// First search-time ingest: all four foreign sessions land in the replica dbs.
+	dbps := map[string]string{} // source → db path
+	scs := a.Scopes(t.Context(), false)
+	if len(scs) != 2 {
+		t.Fatalf("Scopes = %d, want exactly 2 (one per source; the source→db map below assumes it)", len(scs))
+	}
+	for _, sc := range scs {
+		dbps[sc.Source] = sc.DBP
+	}
+	for src, sids := range map[string][]string{
+		"claude": {"sess-bbbb", "sess-keep"},
+		"codex":  {"rollout-ffff", "rollout-keep"},
+	} {
+		for _, sid := range sids {
+			if s, m := countSessionRows(t, dbps[src], sid); s == 0 || m == 0 {
+				t.Fatalf("pre-delete %s session %s not ingested (sessions=%d messages=%d)", src, sid, s, m)
+			}
+		}
+	}
+
+	// Machine B deletes one session per source and pushes the removal (delete
+	// propagation is git-level: the files leave the archive).
+	for _, rel := range []string{
+		"machine-b/claude/-remote-proj/sess-bbbb.jsonl",
+		"machine-b/codex/2026/07/rollout-ffff.jsonl",
+	} {
+		if err := os.Remove(filepath.Join(cloneB, rel)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitT(t, cloneB, "add", "-A")
+	gitT(t, cloneB, "commit", "-m", "machine-b: sync transcripts")
+	gitT(t, cloneB, "push", "origin", "HEAD")
+
+	if _, err := a.Pull(context.Background(), false); err != nil {
+		t.Fatalf("pull after owner delete: %v", err)
+	}
+
+	// Reindex via the normal search-time path: the deleted sessions must be
+	// gone from the replica dbs — not retained as searchable ghosts — while
+	// the surviving sessions stay indexed.
+	a.Scopes(t.Context(), false)
+	for src, sid := range map[string]string{"claude": "sess-bbbb", "codex": "rollout-ffff"} {
+		if s, m := countSessionRows(t, dbps[src], sid); s != 0 || m != 0 {
+			t.Errorf("owner-deleted %s session %s resurrected by the replica index (sessions=%d messages=%d)",
+				src, sid, s, m)
+		}
+	}
+	for src, sid := range map[string]string{"claude": "sess-keep", "codex": "rollout-keep"} {
+		if s, m := countSessionRows(t, dbps[src], sid); s == 0 || m == 0 {
+			t.Errorf("surviving %s session %s lost by the replica reconcile (sessions=%d messages=%d)",
+				src, sid, s, m)
+		}
+	}
+}
+
+// TestScopes_BusySyncSkipsIngest: while a sibling sync holds the machine-wide
+// lock (a pull may be mid-rebase, tearing the worktree down file-by-file),
+// scope enumeration must NOT ingest — replica reconciliation would read the
+// half-rewritten tree as authoritative absence and prune live foreign
+// sessions. Scopes still enumerates (existing dbs keep serving); once the
+// lock frees, the next pass ingests normally.
+func TestScopes_BusySyncSkipsIngest(t *testing.T) {
+	a := initArchiveWithForeign(t, "machine-b", "beefbeefbeefbeefbeefbeefbeefbeef")
+
+	release, ok := tryAcquireSyncLock()
+	if !ok {
+		t.Fatal("could not take the sync lock in an idle fixture")
+	}
+	scs := a.Scopes(t.Context(), false)
+	if len(scs) != 2 {
+		t.Fatalf("Scopes under a held sync lock = %d scopes, want 2 (enumeration must survive)", len(scs))
+	}
+	for _, sc := range scs {
+		if _, err := os.Stat(sc.DBP); err == nil {
+			t.Errorf("scope %q ingested %s while a sync held the lock", sc.Project, sc.DBP)
+		}
+	}
+	release()
+
+	a.Scopes(t.Context(), false)
+	for _, sc := range scs {
+		if _, err := os.Stat(sc.DBP); err != nil {
+			t.Errorf("scope %q not ingested after the lock freed: %v", sc.Project, err)
+		}
+	}
+}
+
+// TestScopes_UnverifiedCloneNotEnumerated: a clone without the completed-
+// clone sentinel (torn mid-clone, or pre-sentinel and not yet adopted) is
+// not enumerated by Scopes OR LookupScopes — its partial tree must never
+// feed replica reconciliation, where absence is authoritative.
+func TestScopes_UnverifiedCloneNotEnumerated(t *testing.T) {
+	a := initArchiveWithForeign(t, "machine-b", "beefbeefbeefbeefbeefbeefbeefbeef")
+
+	if err := os.Remove(filepath.Join(a.ClonePath(), ".git", cloneSentinel)); err != nil {
+		t.Fatal(err)
+	}
+	if scs := a.Scopes(t.Context(), false); len(scs) != 0 {
+		t.Errorf("Scopes on an unverified clone = %d scopes, want 0", len(scs))
+	}
+	if scs := a.LookupScopes(); len(scs) != 0 {
+		t.Errorf("LookupScopes on an unverified clone = %d scopes, want 0", len(scs))
+	}
+}
+
 // gitEnvCommit stages everything and commits with a pinned author+committer
 // date, so a test can plant history at an arbitrary age.
 func gitEnvCommit(t *testing.T, dir, isoDate, msg string) {

@@ -18,12 +18,15 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
-// staleAfter is the staleness window for a foreign machine dir: a dir whose
-// last archive commit is older than this is enumerated with Stale set, so the
-// search layer reports it through the existing stale-fallback posture while
-// still serving its results. Machines sync at least hourly when the timer is
-// on, so a day of silence means genuinely off/asleep — though an idle machine
-// with nothing new to push looks identical from here (inherent to any window).
+// staleAfter is the possibly-out-of-date window for a foreign machine dir: a
+// dir whose last archive commit is older than this is enumerated with Stale
+// set, so the search layer reports its results MAY miss recent activity
+// (the existing stale-fallback posture) while still serving them. An idle
+// machine with nothing new to push looks identical to an off one from here
+// (inherent to any commit-age window) — which is why `archive status` never
+// renders this as a per-machine verdict, only as "last new content"; the
+// same window instead bounds the own-sync overdue flags there, the one
+// freshness fact this machine knows first-hand.
 const staleAfter = 24 * time.Hour
 
 // Scopes enumerates the clone's FOREIGN machine dirs as ready-to-search scopes:
@@ -37,17 +40,41 @@ const staleAfter = 24 * time.Hour
 // bounds the per-machine staleness git probes (dirStale), so they die with
 // the caller's watchdog like every other git child.
 func (a *Archive) Scopes(ctx context.Context, reindex bool) []view.Scope {
-	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err != nil {
-		return nil // no clone yet: local-only until `archive pull`
+	if !a.cloneUsable() {
+		return nil // no verified clone yet: local-only until `archive pull`
+	}
+	// Replica ingest only from a QUIESCENT clone: a concurrent pull's rebase
+	// tears the worktree down and rebuilds it file-by-file, and replica
+	// reconciliation treats absence from the tree as authoritative — an
+	// ingest racing that rewrite would transiently prune foreign sessions
+	// from search. If a sibling sync holds the machine-wide lock, enumerate
+	// WITHOUT ingesting: the previously built dbs keep serving, the same
+	// degraded posture as LookupScopes and the busy-lock index fallback.
+	ingest := true
+	if release, ok := tryAcquireSyncLock(); ok {
+		defer release()
+	} else {
+		ingest = false
 	}
 	now := time.Now()
 	var out []view.Scope
 	for _, m := range a.foreignMachines() {
 		stale := a.dirStale(ctx, m.Name, now)
-		out = append(out, a.claudeScopes(m, stale, reindex, true)...)
-		out = append(out, a.codexScopes(m, stale, reindex, true)...)
+		out = append(out, a.claudeScopes(m, stale, reindex, ingest)...)
+		out = append(out, a.codexScopes(m, stale, reindex, ingest)...)
 	}
 	return out
+}
+
+// cloneUsable reports whether a VERIFIED clone exists — the completed-clone
+// sentinel, the same predicate ensureClone stamps and `archive status`
+// trusts. A torn or not-yet-adopted clone is never enumerated: replica
+// reconciliation would read its partial tree as authoritative absence. (A
+// pre-sentinel-era clone goes local-only for one cycle until the next
+// push/pull adopts and stamps it.)
+func (a *Archive) cloneUsable() bool {
+	_, err := os.Stat(filepath.Join(a.clone, ".git", cloneSentinel))
+	return err == nil
 }
 
 // LookupScopes enumerates the same foreign scopes as Scopes WITHOUT ingesting
@@ -59,8 +86,8 @@ func (a *Archive) Scopes(ctx context.Context, reindex bool) []view.Scope {
 // don't report freshness), which keeps this path free of child processes, so
 // it needs no watchdog ctx.
 func (a *Archive) LookupScopes() []view.Scope {
-	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err != nil {
-		return nil // no clone yet: local-only until `archive pull`
+	if !a.cloneUsable() {
+		return nil // no verified clone yet: local-only until `archive pull`
 	}
 	var out []view.Scope
 	for _, m := range a.foreignMachines() {
@@ -132,10 +159,18 @@ func (a *Archive) foreignMachines() []manifest {
 }
 
 // dirStale reports whether name's history in the clone is older than
-// staleAfter — the same probe and window `archive status` reports, so search's
-// stale-fallback and status can never disagree on what "stale" means.
+// staleAfter — the search-side possibly-out-of-date flag. `archive status`
+// deliberately renders no such per-machine verdict (idle and dead are
+// indistinguishable here); it shares only the raw last-commit probe
+// (dirLastCommit) and the window constant, for its own-sync overdue flags.
 func (a *Archive) dirStale(ctx context.Context, name string, now time.Time) bool {
 	return staleAt(a.dirLastCommit(ctx, name), now)
+}
+
+// staleAt applies the shared window to a last-commit time: unknown freshness
+// (zero time) reads stale, never silently fresh.
+func staleAt(lastCommit, now time.Time) bool {
+	return lastCommit.IsZero() || now.Sub(lastCommit) > staleAfter
 }
 
 // claudeScopes enumerates one foreign machine's Claude project dirs

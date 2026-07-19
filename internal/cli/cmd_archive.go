@@ -56,7 +56,8 @@ func newArchivePullCmd() *cobra.Command {
 		Short: "Pull other machines' transcripts from the archive",
 		Long: "Refresh the local archive clone from the remote, so sessions pushed by your " +
 			"other machines become searchable here. A plain `rawclaw \"query\"` then covers " +
-			"them automatically. A deleted or corrupt clone is re-cloned.",
+			"them automatically. A deleted or corrupt clone is re-cloned — unless it still " +
+			"holds unpushed commits, which are never destroyed (the error names the recovery).",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -155,13 +156,13 @@ func removalNote(removed int) string {
 }
 
 // newArchiveStatusCmd wires `rawclaw archive status`: an offline report of
-// where the archive lives, when this machine last pushed/pulled, and how
-// fresh each machine's dir is in the local clone. Unconfigured is a clean
-// no-op, not an error.
+// where the archive lives, when this machine last pushed/pulled (with an
+// overdue warning on aged own-sync stamps), and when each machine's dir last
+// received new content. Unconfigured is a clean no-op, not an error.
 func newArchiveStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:           "status",
-		Short:         "Report archive freshness: remote, clone, last sync per machine",
+		Short:         "Report archive state: remote, clone, last push/pull, last new content per machine",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -185,14 +186,20 @@ func newArchiveStatusCmd() *cobra.Command {
 	}
 }
 
-// printArchiveStatus renders one StatusReport.
+// printArchiveStatus renders one StatusReport. Wording is deliberate: a
+// machine dir's git history only says when NEW CONTENT last arrived — an
+// idle-but-healthy machine and a dead one look identical from here — so
+// per-machine lines report "last new content" with no staleness verdict. The
+// overdue warning is reserved for this machine's OWN sync stamps, the one
+// freshness fact known first-hand.
 func printArchiveStatus(w io.Writer, st archive.StatusReport) {
 	fmt.Fprintf(w, "Archive status\n  remote:      %s\n  local clone: %s", st.Remote, st.Clone)
 	if !st.CloneOK {
 		fmt.Fprint(w, " (missing; run `rawclaw archive pull`)")
 	}
-	fmt.Fprintf(w, "\n  last push:   %s\n  last pull:   %s\n",
-		stampLabel(st.LastPush), stampLabel(st.LastPull))
+	fmt.Fprintf(w, "\n  last push:   %s%s\n  last pull:   %s%s\n",
+		stampLabel(st.LastPush), overdueNote(st.PushOverdue),
+		stampLabel(st.LastPull), overdueNote(st.PullOverdue))
 	if len(st.Machines) == 0 {
 		return
 	}
@@ -202,12 +209,17 @@ func printArchiveStatus(w io.Writer, st archive.StatusReport) {
 		if m.Own {
 			name += " (this machine)"
 		}
-		line := fmt.Sprintf("  %-32s last sync %s", name, stampLabel(m.LastCommit))
-		if m.Stale {
-			line += "  STALE"
-		}
-		fmt.Fprintln(w, line)
+		fmt.Fprintf(w, "  %-32s last new content %s\n", name, stampLabel(m.LastCommit))
 	}
+}
+
+// overdueNote renders the own-sync overdue warning — empty when the stamp is
+// fresh (or was never written; "never" is its own honest state).
+func overdueNote(overdue bool) string {
+	if !overdue {
+		return ""
+	}
+	return "  (overdue: no successful sync in over a day — is the timer/autosync running?)"
 }
 
 // stampLabel renders a recorded time for status output; the zero time reads

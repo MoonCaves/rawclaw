@@ -21,8 +21,13 @@ import (
 //
 //   - file back on disk → clear any stale missing_since (the source reappeared,
 //     mirroring Zoekt restoring a repo from .trash).
+//   - file absent + REPLICA scope → DELETE the row: the scanned tree is the
+//     synced archive clone, whose only file-removal mechanism is the owner's
+//     explicit delete propagating (E5) — so this is still a user delete
+//     acting, one hop removed, never mere local absence.
 //   - file absent + session explicitly tombstoned (rawclaw delete) → really
-//     DELETE the row; an explicit user delete is the ONLY thing that prunes (D5).
+//     DELETE the row; in a LOCAL scope an explicit user delete is the ONLY
+//     thing that prunes (D5).
 //   - file absent + foreign origin_machine (another machine's row in a shared
 //     store) → skip untouched: out of THIS scan's scope, not "missing" (D2).
 //   - file absent + this machine's own row → stamp missing_since and RETAIN it,
@@ -34,8 +39,11 @@ import (
 // here) because the setting only governs LIVE-scope scans: an orphan reconcile
 // always passes false — already-retained history is removed by an explicit
 // tombstone alone, never as a side effect of a search run with the mirror
-// setting in the environment (a live-verified data-loss footgun).
-func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now float64, mirror bool) error {
+// setting in the environment (a live-verified data-loss footgun). replica
+// marks an ARCHIVE-replica scope (the scanned tree is a synced copy of
+// another machine's data inside the archive clone): there, absence from the
+// scan is authoritative — see DecideRetention.
+func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now float64, mirror, replica bool) error {
 	type fiRow struct {
 		path      string
 		sessionID string
@@ -70,12 +78,12 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 	for _, r := range all {
 		_, present := onDisk[r.path]
 		own := !r.origin.Valid || r.origin.String == mid
-		switch DecideRetention(present, isMember(tombstoned, r.sessionID), own, r.missing.Valid, mirror) {
+		switch DecideRetention(present, isMember(tombstoned, r.sessionID), own, r.missing.Valid, mirror, replica) {
 		case ActClear: // reappeared — un-flag
 			if _, err := con.Exec("UPDATE sessions SET missing_since=NULL WHERE id=?", r.sessionID); err != nil {
 				return fmt.Errorf("clear missing_since: %w", err)
 			}
-		case ActPrune: // explicit tombstone, or own-source under the mirror setting
+		case ActPrune: // replica absence, explicit tombstone, or own-source under mirror
 			if err := pruneSession(con, r.sessionID, r.path); err != nil {
 				return err
 			}
@@ -92,25 +100,33 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 // RetentionAction is the decision for one indexed row during a retention pass:
 // what an acting reconcile should do — and, equally, what the read-only orphan
 // probe predicts it WOULD do. One tree, two consumers, so precedence
-// (present → tombstone → foreign → mirror → stamp) can never silently diverge
-// between them.
+// (present → replica → tombstone → foreign → mirror → stamp) can never
+// silently diverge between them.
 type RetentionAction int
 
 const (
 	ActNone  RetentionAction = iota // present-and-unflagged, foreign-origin (D2), or already flagged
 	ActClear                        // file reappeared — clear the stale missing_since (Zoekt .trash restore)
-	ActPrune                        // explicit tombstone (D5), or own-source under the user's mirror setting
+	ActPrune                        // replica absence (propagated E5 delete), explicit tombstone (D5), or own-source under the user's mirror setting
 	ActStamp                        // own-source newly absent — retain + flag missing_since (D1)
 )
 
 // DecideRetention is the single retention decision tree shared by
 // ReconcileRetention (acts) and index's orphanWorkPending (predicts).
-func DecideRetention(present, tombstoned, own, missingSet, mirror bool) RetentionAction {
+// replica marks an ARCHIVE-replica scope: the scanned tree is the local copy
+// of the archive clone — the source of truth for its foreign sessions — and
+// the db is a rebuildable cache of it, so a file absent from the scan means
+// the owner's delete propagated through the archive (E5) and the rows die
+// here too. Durable retention (D1) protects LOCAL sources from upstream
+// purges; it must never let a replica resurrect a session its owner deleted.
+func DecideRetention(present, tombstoned, own, missingSet, mirror, replica bool) RetentionAction {
 	switch {
 	case present && missingSet:
 		return ActClear
 	case present:
 		return ActNone
+	case replica:
+		return ActPrune // absent from the replica tree: propagated delete (E5)
 	case tombstoned:
 		return ActPrune
 	case !own:
@@ -125,8 +141,10 @@ func DecideRetention(present, tombstoned, own, missingSet, mirror bool) Retentio
 }
 
 // pruneSession removes one session outright: messages, session row, and its
-// file_index watermark. Reached only by an explicit tombstone or by the user's
-// mirror setting — never by mere absence under the keep default.
+// file_index watermark. Reached by an explicit tombstone, the user's mirror
+// setting, or replica-scope absence (an owner's delete propagated through the
+// archive — E5). In a LOCAL scope under the keep default, mere absence never
+// reaches here.
 func pruneSession(con *sql.DB, sessionID, path string) error {
 	if _, err := con.Exec("DELETE FROM messages WHERE session_id=?", sessionID); err != nil {
 		return fmt.Errorf("prune messages: %w", err)
