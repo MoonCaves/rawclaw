@@ -63,7 +63,9 @@ func TestDeleteCmd_PositionalFullID(t *testing.T) {
 	if _, serr := os.Stat(target); !os.IsNotExist(serr) {
 		t.Errorf("target session still present (err=%v)", serr)
 	}
-	_ = out
+	if !strings.Contains(out, "Deleted 1 session") {
+		t.Errorf("want deletion summary; out: %s", out)
+	}
 }
 
 // TestDeleteCmd_PositionalPromptsAndAborts: without --yes the same y/N prompt
