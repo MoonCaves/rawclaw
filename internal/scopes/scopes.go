@@ -102,7 +102,7 @@ func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 		if strings.HasPrefix(base, "codex-") {
 			continue // codex dbs are enumerated + reconciled by Codex()
 		}
-		if strings.HasPrefix(base, "archive-") {
+		if strings.HasPrefix(base, index.ArchiveDBPrefix) {
 			continue // archive-replica dbs are enumerated by Archive(); their
 			// live source is the clone's machine dir, never an orphaned project
 		}

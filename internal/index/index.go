@@ -37,6 +37,14 @@ func FTS5OK() bool {
 	return true
 }
 
+// ArchiveDBPrefix namespaces the cache dbs of ARCHIVE-replica scopes (foreign
+// machines' sessions pulled through the transcript archive). The prefix is
+// what keeps those read-only replicas out of the local orphan-db discovery
+// and out of the delete path's retained-row scan; local db names are
+// path-encodings of absolute dirs (or "codex-..."), so no local scope can
+// collide with it.
+const ArchiveDBPrefix = "archive-"
+
 // DBPath returns the cache db path for a transcript dir:
 // ~/.cache/session-search/<encoded-dir>.db (creating the dir).
 func DBPath(transcriptDir string) string {

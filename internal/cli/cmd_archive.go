@@ -3,6 +3,8 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/archive"
 	"github.com/spf13/cobra"
@@ -123,15 +125,95 @@ func newArchivePushCmd() *cobra.Command {
 				return fmt.Errorf("archive push: %w", err)
 			}
 			switch {
+			case !rep.Committed && rep.Pushed:
+				// The stranded-commit recovery path: a previous run committed
+				// and then died before its push landed. Say so — this run DID
+				// change the remote.
+				fmt.Fprintf(out, "Pushed a previously stranded sync to %s.\n", a.Remote())
 			case !rep.Committed:
 				fmt.Fprintln(out, "Archive up to date; nothing to push.")
 			case rep.Retries > 0:
-				fmt.Fprintf(out, "Pushed %d file(s) to %s (rebased over %d concurrent push(es)).\n",
-					rep.Copied, a.Remote(), rep.Retries)
+				fmt.Fprintf(out, "Pushed %d file(s)%s to %s (rebased over %d concurrent push(es)).\n",
+					rep.Copied, removalNote(rep.Removed), a.Remote(), rep.Retries)
 			default:
-				fmt.Fprintf(out, "Pushed %d file(s) to %s.\n", rep.Copied, a.Remote())
+				fmt.Fprintf(out, "Pushed %d file(s)%s to %s.\n",
+					rep.Copied, removalNote(rep.Removed), a.Remote())
 			}
 			return nil
 		},
 	}
+}
+
+// removalNote renders the delete-propagation half of a push report — empty
+// when nothing was removed, so the common no-delete output stays unchanged.
+func removalNote(removed int) string {
+	if removed == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", removed %d deleted session(s)", removed)
+}
+
+// newArchiveStatusCmd wires `rawclaw archive status`: an offline report of
+// where the archive lives, when this machine last pushed/pulled, and how
+// fresh each machine's dir is in the local clone. Unconfigured is a clean
+// no-op, not an error.
+func newArchiveStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:           "status",
+		Short:         "Report archive freshness: remote, clone, last sync per machine",
+		Args:          cobra.NoArgs,
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := archive.Load()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if a == nil {
+				fmt.Fprintln(out, "Archive not configured; run `rawclaw archive init <remote-url>` first. Nothing to do.")
+				return nil
+			}
+			st, err := a.Status(cmd.Context())
+			if err != nil {
+				return fmt.Errorf("archive status: %w", err)
+			}
+			printArchiveStatus(out, st)
+			return nil
+		},
+	}
+}
+
+// printArchiveStatus renders one StatusReport.
+func printArchiveStatus(w io.Writer, st archive.StatusReport) {
+	fmt.Fprintf(w, "Archive status\n  remote:      %s\n  local clone: %s", st.Remote, st.Clone)
+	if !st.CloneOK {
+		fmt.Fprint(w, " (missing; run `rawclaw archive pull`)")
+	}
+	fmt.Fprintf(w, "\n  last push:   %s\n  last pull:   %s\n",
+		stampLabel(st.LastPush), stampLabel(st.LastPull))
+	if len(st.Machines) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "Machines:")
+	for _, m := range st.Machines {
+		name := m.Name
+		if m.Own {
+			name += " (this machine)"
+		}
+		line := fmt.Sprintf("  %-32s last sync %s", name, stampLabel(m.LastCommit))
+		if m.Stale {
+			line += "  STALE"
+		}
+		fmt.Fprintln(w, line)
+	}
+}
+
+// stampLabel renders a recorded time for status output; the zero time reads
+// "never" (no stamp / no history yet).
+func stampLabel(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return t.Local().Format("2006-01-02 15:04")
 }

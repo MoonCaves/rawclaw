@@ -33,6 +33,7 @@ type Archive struct {
 // PushReport summarizes one PushLocal run for status output and logging.
 type PushReport struct {
 	Copied    int  // files copied into the clone this push
+	Removed   int  // tombstoned own sessions removed from the clone this push
 	Committed bool // a commit was created (false = nothing changed)
 	Pushed    bool // the commit reached the remote
 	Retries   int  // rebase-retry rounds needed before the push landed

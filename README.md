@@ -154,9 +154,12 @@ Raw transcripts die upstream (Claude Code's ~30-day purge) and live on only one 
 rawclaw archive init git@github.com:you/my-transcripts.git   # clone + register this machine (--name to pick the dir name)
 rawclaw archive push                                          # upload this machine's Claude + Codex transcripts
 rawclaw archive pull                                          # fetch the other machines' transcripts
+rawclaw archive status                                        # remote, clone, last push/pull, per-machine freshness
 ```
 
-Each machine gets a top-level directory in the repo (`<machine>/<source>/...`), so pushes from different machines never conflict on content; concurrent pushes are resolved with a bounded pull-rebase-and-retry. A second push moves only changed files. The local clone lives in the state dir and is a rebuildable cache — deleting it just forces a re-clone (`archive pull` rebuilds everything).
+Each machine gets a top-level directory in the repo (`<machine>/<source>/...`), so pushes from different machines never conflict on content; concurrent pushes are resolved with a bounded pull-rebase-and-retry. A second push moves only changed files. The local clone lives in the state dir and is a rebuildable cache — deleting it just forces a re-clone (`archive pull` rebuilds everything); a clone left broken by a kill at any point (mid-clone, mid-rebase, even a stale git lock after a power loss) is detected and rebuilt automatically on the next push or pull.
+
+**Deletes propagate — but only your own, and only explicit ones.** A session removed with `rawclaw delete` is also removed from the archive on this machine's next push, so an explicit delete is never resurrected by a later pull. Nothing else ever deletes from the archive: transcripts purged upstream (or pruned locally by `RAWCLAW_RETENTION=mirror`) keep their archive copies — the archive is the durable mirror. Other machines' directories are read-only from here; a delete filter that matches another machine's sessions is refused with a pointer at the origin machine.
 
 **Cross-machine search is automatic.** After a pull, a plain `rawclaw "query"` covers every other machine's pushed sessions like local hits — labeled `<machine>/<project>`, provenance-stamped with the owning machine's id, readable and outlinable by ref. Your own machine's directory in the clone is ignored (the live local tree is fresher), so nothing ever double-counts. `--resume` on a foreign session tells you which machine it lives on and the command to run there. A machine that hasn't pushed in over a day shows up in search output as possibly stale — its results are still served.
 

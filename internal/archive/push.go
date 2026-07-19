@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/provenance"
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // maxPushAttempts bounds the push → pull-rebase → push loop. Machine dirs are
@@ -42,11 +44,22 @@ func (a *Archive) PushLocal(ctx context.Context) (PushReport, error) {
 		return rep, err
 	}
 
-	copied, err := a.syncTrees(ctx)
+	tombs, err := lifecycle.LoadTombstones("")
+	if err != nil {
+		return rep, fmt.Errorf("read delete tombstones: %w", err)
+	}
+
+	copied, err := a.syncTrees(ctx, tombs)
 	if err != nil {
 		return rep, err
 	}
 	rep.Copied = copied
+
+	removed, err := a.removeTombstoned(ctx, tombs)
+	if err != nil {
+		return rep, err
+	}
+	rep.Removed = removed
 
 	changed, err := a.stageMachineDir(ctx)
 	if err != nil {
@@ -70,6 +83,7 @@ func (a *Archive) PushLocal(ctx context.Context) (PushReport, error) {
 			return rep, err
 		}
 		rep.Pushed = true
+		stampPush()
 		return rep, nil
 	}
 	if err := a.commit(ctx, fmt.Sprintf("%s: sync transcripts", a.cfg.Name)); err != nil {
@@ -83,6 +97,7 @@ func (a *Archive) PushLocal(ctx context.Context) (PushReport, error) {
 		return rep, err
 	}
 	rep.Pushed = true
+	stampPush()
 	return rep, nil
 }
 
@@ -91,15 +106,41 @@ func (a *Archive) machineDir() string {
 	return filepath.Join(a.clone, a.cfg.Name)
 }
 
-// ensureClone guarantees a usable local clone: an existing one is used after
-// verifying it still points at the configured remote (a silently-edited config
-// must not keep pushing to the old remote); otherwise the remote is cloned
-// fresh (a leftover half-created dir is cleared first). The clone is a
-// rebuildable cache — deleting it is always safe.
+// cloneSentinel is the completed-clone marker, written under .git (never
+// staged) immediately after `git clone` succeeds. A `.git` dir WITHOUT the
+// sentinel is a clone interrupted mid-creation — git sets up `.git` and the
+// origin remote early, so a killed clone passes every cheap "is this a repo"
+// probe forever while missing objects or a checkout. Sentinel-missing ⇒ torn
+// ⇒ rebuild.
+const cloneSentinel = "rawclaw-clone-ok"
+
+// lockGracePeriod ages out `.git/index.lock` left behind when git itself dies
+// holding it (process-group SIGKILL, power loss). Younger locks are honored —
+// a concurrent healthy push may own them; no git operation on this small
+// clone legitimately runs this long.
+const lockGracePeriod = 15 * time.Minute
+
+// ensureClone guarantees a usable local clone. An existing COMPLETED one
+// (sentinel present) is kept: it must point at the configured remote (a
+// silently-edited config must not keep pushing to the old remote), stale
+// operation state left by a kill (mid-rebase/mid-merge markers, an aged
+// index.lock) is cleared, and HEAD must resolve to a branch afterwards.
+// Rebuild (wipe + re-clone) happens only on POSITIVE evidence of a torn or
+// wedged clone — a sentinel-less .git (killed mid-clone) or a detached/
+// unreadable HEAD that recovery could not reattach. Transient failures
+// (unreadable config, exec errors, a dying ctx) surface as hard errors
+// instead: a rebuild discards any locally-committed-but-unpushed sync, so
+// destruction needs evidence, not absence of proof.
 func (a *Archive) ensureClone(ctx context.Context) error {
-	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err == nil {
+	gitDir := filepath.Join(a.clone, ".git")
+	_, gitErr := os.Stat(gitDir)
+	_, okErr := os.Stat(filepath.Join(gitDir, cloneSentinel))
+	if gitErr == nil && okErr == nil {
 		out, err := a.run(ctx, a.clone, "remote", "get-url", "origin")
 		if err != nil {
+			// Environmental, not positive torn-state evidence (the sentinel
+			// says the clone completed): fail loudly rather than destroy a
+			// clone that may hold a stranded unpushed commit.
 			return fmt.Errorf("read clone remote: %w", err)
 		}
 		if got := strings.TrimSpace(out); got != a.cfg.Remote {
@@ -107,9 +148,18 @@ func (a *Archive) ensureClone(ctx context.Context) error {
 				"local clone %s points at %s but the config says %s; delete the clone dir to re-clone",
 				a.clone, got, a.cfg.Remote)
 		}
-		a.abortStaleRebase(ctx)
-		return nil
+		a.recoverStaleOps(ctx)
+		if _, err := a.run(ctx, a.clone, "symbolic-ref", "--short", "HEAD"); err == nil {
+			return nil // healthy (or recovered) clone
+		} else if headAttached(gitDir) {
+			// The HEAD file itself still names a branch, so the symbolic-ref
+			// failure was environmental — same posture as get-url above.
+			return fmt.Errorf("resolve clone HEAD: %w", err)
+		}
+		// Positive wedge evidence: HEAD detached (or unreadable) even after
+		// recovery — fall through to rebuild.
 	}
+
 	parent := filepath.Dir(a.clone)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("create archive state dir: %w", err)
@@ -122,21 +172,51 @@ func (a *Archive) ensureClone(ctx context.Context) error {
 			"clone archive remote (the repository must already exist on your git host — create it, PRIVATE, then retry): %w",
 			err)
 	}
+	if err := os.WriteFile(filepath.Join(gitDir, cloneSentinel), nil, 0o644); err != nil {
+		return fmt.Errorf("mark clone complete: %w", err)
+	}
 	return nil
 }
 
-// abortStaleRebase recovers a clone left mid-rebase by a kill (the process,
-// or rawclaw's own watchdog, dying between `pull --rebase` starting and its
-// abort handler running). A wedged rebase detaches HEAD, which breaks
-// currentBranch and with it every later push AND pull — so any verb that
-// found an existing clone aborts the leftover first. Best-effort: a clone
-// with no rebase in progress is untouched.
-func (a *Archive) abortStaleRebase(ctx context.Context) {
+// headAttached reports whether the clone's HEAD file names a branch ("ref: "
+// symref). Read directly from disk so a git that cannot even exec is not
+// mistaken for a detached HEAD. Unreadable/raw-SHA HEAD = not attached.
+func headAttached(gitDir string) bool {
+	b, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(string(b)), "ref: ")
+}
+
+// recoverStaleOps clears operation state a kill can leave in the clone:
+// a mid-rebase marker (the process, or rawclaw's own watchdog, dying between
+// `pull --rebase` starting and its abort handler running — a wedged rebase
+// detaches HEAD, which breaks currentBranch and with it every later push AND
+// pull), a mid-merge marker (belt-and-suspenders; our verbs only rebase), and
+// an index.lock older than lockGracePeriod (git itself died holding it).
+// Best-effort: ensureClone's HEAD check decides whether recovery sufficed.
+//
+// Markers are aborted without an age gate, deliberately: the machine-wide
+// sync flock serializes live rawclaw writers, so by the time we run, marker
+// state can only belong to a DEAD holder — or to its orphaned git child,
+// which was already ctx-cancelled (SIGTERM) as its parent died and is at
+// worst finishing its last writes. Aborting under that race converges: the
+// abort or the orphan wins, and either end state is one the HEAD check plus
+// the next run recover from (interleave-tested).
+func (a *Archive) recoverStaleOps(ctx context.Context) {
 	for _, marker := range []string{"rebase-merge", "rebase-apply"} {
 		if _, err := os.Stat(filepath.Join(a.clone, ".git", marker)); err == nil {
 			_, _ = a.run(ctx, a.clone, "rebase", "--abort")
-			return
+			break
 		}
+	}
+	if _, err := os.Stat(filepath.Join(a.clone, ".git", "MERGE_HEAD")); err == nil {
+		_, _ = a.run(ctx, a.clone, "merge", "--abort")
+	}
+	lock := filepath.Join(a.clone, ".git", "index.lock")
+	if st, err := os.Stat(lock); err == nil && time.Since(st.ModTime()) > lockGracePeriod {
+		_ = os.Remove(lock)
 	}
 }
 
@@ -144,7 +224,10 @@ func (a *Archive) abortStaleRebase(ctx context.Context) {
 // machine dir, preserving relative paths (<machine>/<source>/<rel>), and
 // returns how many files were copied. Files are only ever added or updated —
 // the archive never prunes, and foreign machine dirs are never touched.
-func (a *Archive) syncTrees(ctx context.Context) (int, error) {
+// Tombstoned sessions are skipped at the copy: a deleted session whose local
+// file survives (restored backup, delete race) must neither resurrect in the
+// archive nor be re-copied-and-re-removed on every later push.
+func (a *Archive) syncTrees(ctx context.Context, tombs map[string]struct{}) (int, error) {
 	// Copies stage through a temp dir under .git: same filesystem (rename
 	// stays atomic) but invisible to `git add`, so a temp file orphaned by a
 	// kill can never be committed to the archive. Stale orphans are cleared.
@@ -161,10 +244,14 @@ func (a *Archive) syncTrees(ctx context.Context) (int, error) {
 		if tree.root == "" || !isDir(tree.root) {
 			continue // absent runtime: nothing to push
 		}
+		skip := tombstonedSources(tree, tombs)
 		destRoot := filepath.Join(a.machineDir(), tree.id)
 		for _, src := range paths.ContainedJSONL(tree.root) {
 			if err := ctx.Err(); err != nil {
 				return copied, err // honor cancellation between files
+			}
+			if _, dead := skip[src]; dead {
+				continue // explicitly deleted: never (re)enters the archive
 			}
 			rel, err := filepath.Rel(tree.root, src)
 			if err != nil || strings.HasPrefix(rel, "..") {
@@ -365,4 +452,20 @@ func isRejectedPush(out string) bool {
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// pushStampPath is <state-dir>/archive/last-push — the last-successful-push
+// record. Like the pull stamp, its MTIME is the record (the body stays empty).
+func pushStampPath() string {
+	return filepath.Join(store.CacheDir(), "archive", "last-push")
+}
+
+// stampPush records a successful push by (re)writing the stamp file.
+// Best-effort: a failed stamp only under-reports `archive status`.
+func stampPush() {
+	p := pushStampPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(p, nil, 0o644)
 }
