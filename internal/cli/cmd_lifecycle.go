@@ -163,6 +163,26 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 	if err != nil {
 		return fmt.Errorf("plan retained matches: %w", err)
 	}
+
+	// De-duplicate: a session can transiently match BOTH halves (file back on
+	// disk while its retained row still carries missing_since from an earlier
+	// purge). Counting it twice would trip the positional ambiguity guard on a
+	// single session — making it undeletable — and double-credit the summary.
+	// The live delete + tombstone covers the row, so the retained copy is
+	// dropped from the plan.
+	if len(plan.Matched) > 0 && len(retained) > 0 {
+		live := make(map[string]struct{}, len(plan.Matched))
+		for _, it := range plan.Matched {
+			live[it.SessionID] = struct{}{}
+		}
+		kept := retained[:0]
+		for _, r := range retained {
+			if _, dup := live[r.SessionID]; !dup {
+				kept = append(kept, r)
+			}
+		}
+		retained = kept
+	}
 	total := len(plan.Matched) + len(retained)
 
 	// Foreign guard: a --project (or a positional session id) that reaches
