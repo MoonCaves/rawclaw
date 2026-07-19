@@ -28,6 +28,19 @@ All notable changes to RawClaw are documented in this file.
   serve. `--json` for agents; `--tail N` to widen the transcript window; raw bytes rendered, no
   summarization.
 
+- **Cross-machine search: `rawclaw archive pull` + transparent foreign scopes.**
+  Pull refreshes the local clone (a deleted/corrupt clone is simply re-cloned; `--throttle`
+  honors a 5-minute stamp-file window for background callers, an explicit pull always runs).
+  From then on a plain `rawclaw "query"` covers every other machine's pushed sessions like
+  local hits: each foreign machine dir is enumerated as extra search scopes (own dir excluded,
+  so local sessions never double-count), indexed through the existing ingest paths into
+  archive-namespaced cache dbs, and provenance-stamped with the owning machine's id from the
+  dir's committed manifest. Hits are labeled `<machine>/<project>`; `read`/`outline` resolve
+  foreign refs like any local ref; `--resume` on a foreign session degrades to a clear
+  run-it-there hint naming the machine. A machine silent for over a day is reported through the
+  existing stale-scope posture ("N stale — results may be incomplete") with its results still
+  served.
+
 ## [0.4.0] — 2026-07-18
 
 ### Added
