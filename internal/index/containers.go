@@ -122,8 +122,10 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 
 	// Retention pass (parallel of UpdateIndex): an absent own-source container is
 	// flagged missing_since and retained; only an explicit tombstone deletes; a
-	// foreign-origin row is never a candidate (D1/D2/D5).
-	if err := retention.ReconcileRetention(con, onDisk, tombstoned, nowEpoch(), retention.RetentionMirror()); err != nil {
+	// foreign-origin row is never a candidate (D1/D2/D5). An ARCHIVE-replica
+	// scan (origin set) instead treats absence as authoritative — the owner's
+	// delete propagated through the archive (E5); see DecideRetention.
+	if err := retention.ReconcileRetention(con, onDisk, tombstoned, nowEpoch(), retention.RetentionMirror(), origin != ""); err != nil {
 		return err
 	}
 	return nil

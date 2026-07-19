@@ -18,12 +18,15 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
-// staleAfter is the staleness window for a foreign machine dir: a dir whose
-// last archive commit is older than this is enumerated with Stale set, so the
-// search layer reports it through the existing stale-fallback posture while
-// still serving its results. Machines sync at least hourly when the timer is
-// on, so a day of silence means genuinely off/asleep — though an idle machine
-// with nothing new to push looks identical from here (inherent to any window).
+// staleAfter is the possibly-out-of-date window for a foreign machine dir: a
+// dir whose last archive commit is older than this is enumerated with Stale
+// set, so the search layer reports its results MAY miss recent activity
+// (the existing stale-fallback posture) while still serving them. An idle
+// machine with nothing new to push looks identical to an off one from here
+// (inherent to any commit-age window) — which is why `archive status` never
+// renders this as a per-machine verdict, only as "last new content"; the
+// same window instead bounds the own-sync overdue flags there, the one
+// freshness fact this machine knows first-hand.
 const staleAfter = 24 * time.Hour
 
 // Scopes enumerates the clone's FOREIGN machine dirs as ready-to-search scopes:

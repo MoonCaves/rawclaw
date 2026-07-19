@@ -101,11 +101,14 @@ func TestStatus_ReportsMachinesAndStaleness(t *testing.T) {
 	if !own.Own {
 		t.Error("own machine not flagged Own")
 	}
-	if own.Stale {
-		t.Error("own dir flagged stale right after a push")
-	}
 	if own.LastCommit.IsZero() {
 		t.Error("own LastCommit is zero, want the sync commit time")
+	}
+	if st.PushOverdue {
+		t.Error("PushOverdue right after a successful push")
+	}
+	if st.PullOverdue {
+		t.Error("PullOverdue right after a successful pull")
 	}
 
 	foreign, ok := byName["machine-b"]
@@ -115,15 +118,91 @@ func TestStatus_ReportsMachinesAndStaleness(t *testing.T) {
 	if foreign.Own {
 		t.Error("foreign machine flagged Own")
 	}
-	if !foreign.Stale {
-		t.Error("foreign dir with an old commit not flagged stale")
-	}
 	wantT, _ := time.Parse(time.RFC3339, oldDate)
 	if !foreign.LastCommit.Equal(wantT) {
 		t.Errorf("foreign LastCommit = %v, want the pinned fixture time %v", foreign.LastCommit, wantT)
 	}
 	if foreign.MachineID != "beefbeefbeefbeefbeefbeefbeefbeef" {
 		t.Errorf("foreign MachineID = %q, want the manifest id", foreign.MachineID)
+	}
+}
+
+// TestStatus_OverdueOwnSyncStamps: the only staleness status may assert is
+// what this machine knows first-hand — its own last successful push/pull.
+// Aged stamps read overdue; a stamp that never existed reads "never" (zero
+// time) WITHOUT the overdue flag — "never pulled" is its own honest state,
+// not a broken sync loop.
+func TestStatus_OverdueOwnSyncStamps(t *testing.T) {
+	home := newTestHome(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if _, err := a.PushLocal(context.Background()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	// Age the push stamp beyond the window; leave the pull stamp absent.
+	old := time.Now().Add(-2 * staleAfter)
+	if err := os.Chtimes(pushStampPath(), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(pullStampPath()); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	st, err := a.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !st.PushOverdue {
+		t.Error("PushOverdue = false for a push stamp older than the window")
+	}
+	if !st.LastPull.IsZero() {
+		t.Errorf("LastPull = %v, want zero with no stamp", st.LastPull)
+	}
+	if st.PullOverdue {
+		t.Error("PullOverdue = true for a never-pulled machine; never is not overdue")
+	}
+}
+
+// TestPushLocal_UpToDateStampsSync: a successful PushLocal that verified
+// there is nothing to push is still a successful sync — the stamp must
+// advance, or an idle-but-healthy machine's own sync reads as overdue/dead.
+func TestPushLocal_UpToDateStampsSync(t *testing.T) {
+	home := newTestHome(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if _, err := a.PushLocal(context.Background()); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+
+	old := time.Now().Add(-2 * staleAfter)
+	if err := os.Chtimes(pushStampPath(), old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := a.PushLocal(context.Background())
+	if err != nil {
+		t.Fatalf("no-op push: %v", err)
+	}
+	if rep.Committed || rep.Pushed {
+		t.Fatalf("second push not a no-op: %+v", rep)
+	}
+	st, err := os.Stat(pushStampPath())
+	if err != nil {
+		t.Fatalf("push stamp missing after no-op sync: %v", err)
+	}
+	if time.Since(st.ModTime()) > time.Minute {
+		t.Errorf("push stamp not refreshed by a verified-up-to-date sync (mtime %v)", st.ModTime())
 	}
 }
 
