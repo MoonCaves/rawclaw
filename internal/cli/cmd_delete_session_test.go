@@ -196,6 +196,48 @@ func TestDeleteCmd_PositionalForeignRefused(t *testing.T) {
 	}
 }
 
+// TestDeleteCmd_PositionalLivePlusStaleRetainedRow: a session whose file is
+// back on disk while its retained row still carries missing_since (purged,
+// then restored, not yet reconciled) is ONE session, not an ambiguous pair —
+// the delete proceeds, removing the file and tombstoning the id once.
+func TestDeleteCmd_PositionalLivePlusStaleRetainedRow(t *testing.T) {
+	root := newCfgRoot(t)
+	// Retain it (index → purge → reindex marks missing_since)…
+	retainSession(t, root, "proj-a", "cafe0012-0000-0000-0000-000000000013", 2)
+	// …then the file comes back, with no reconcile pass in between.
+	restored := writeSession(t, root, "proj-a", "cafe0012-0000-0000-0000-000000000013", 2)
+
+	out, err := runCmd(t, newDeleteCmd(), "", "--yes", "cafe0012")
+	if err != nil {
+		t.Fatalf("delete of live+stale-retained session: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, "Deleted 1 session(s) (0 retained)") {
+		t.Errorf("want a single live delete, not a double-count; out: %s", out)
+	}
+	if _, serr := os.Stat(restored); !os.IsNotExist(serr) {
+		t.Errorf("restored file still present after delete (err=%v)", serr)
+	}
+	if tomb := readTombstone(t, root); strings.Count(tomb, "cafe0012-0000-0000-0000-000000000013") != 1 {
+		t.Errorf("id should be tombstoned exactly once; got %q", tomb)
+	}
+}
+
+// TestBrowseThisProjectWinsOverAll: --this-project beats --all on bare browse,
+// the same precedence --stats applies.
+func TestBrowseThisProjectWinsOverAll(t *testing.T) {
+	newCfgRoot(t)
+
+	// A history-less --dir under --this-project must show the no-history hint
+	// even with --all also set.
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--all", "--this-project", "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("browse --all --this-project: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "No transcript history") {
+		t.Errorf("--this-project should win over --all on browse:\n%s", out)
+	}
+}
+
 // TestDeleteCmd_ProvenanceNoteLive: after a real delete of a live session the
 // provenance note states what was removed — the transcript file plus
 // rawclaw's copy.

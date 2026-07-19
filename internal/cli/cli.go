@@ -830,8 +830,9 @@ func runStatsFleet(ctx context.Context, w io.Writer, o *Options) error {
 
 // runBrowse handles the no-query case: list recent sessions for this project,
 // or — under --all — for every project (same scope enumeration search uses).
+// An explicit --this-project wins over --all, same precedence runStats applies.
 func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
-	if o.All {
+	if o.All && !o.ThisProject {
 		return runBrowseAll(ctx, w, o)
 	}
 	sc, td, ok := thisScope(w, o)
@@ -854,7 +855,7 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 // across every project (Claude + Codex + retained scopes — the same
 // enumeration search uses), merged newest-first and capped at --limit.
 func runBrowseAll(ctx context.Context, w io.Writer, o *Options) error {
-	var rows []view.BrowseAllRow
+	rows := []view.BrowseAllRow{} // non-nil so --json emits [] rather than null
 	for _, sc := range allScope(ctx, o.Source, o.Reindex) {
 		dbp, _, err := scopes.Resolve(sc, o.Reindex)
 		if err != nil {
