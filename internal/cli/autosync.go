@@ -15,8 +15,9 @@ import (
 // the hourly timer) runs under: the 30s default watchdog would kill a
 // legitimate first big push mid-transfer, while a hard cap must still exist —
 // a hung push dies at the deadline instead of lingering forever. Carried in
-// argv so the cap is visible in the receipt log and to ps(1).
-const autosyncChildTimeout = "10m"
+// argv (as its String() form) so the cap is visible in the receipt log and to
+// ps(1).
+const autosyncChildTimeout = 10 * time.Minute
 
 // autosyncLogMax caps the receipt log's growth: above it the log is rotated
 // (one .old generation kept) before the next child is spawned, so years of
@@ -72,7 +73,7 @@ func spawnAutosyncChild() {
 	}
 	defer logf.Close() // parent's handle only; the child holds its own
 
-	cmd := exec.Command(exe, "archive", "autosync", "--timeout", autosyncChildTimeout)
+	cmd := exec.Command(exe, "archive", "autosync", "--timeout", autosyncChildTimeout.String())
 	detach(cmd)
 	cmd.Stdin = nil
 	cmd.Stdout = logf

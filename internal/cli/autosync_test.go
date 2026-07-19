@@ -120,7 +120,7 @@ func TestSpawnAutosyncChild_DetachedChildRunsWithLog(t *testing.T) {
 	spawnAutosyncChild()
 
 	deadline := time.Now().Add(5 * time.Second)
-	want := "child-argv archive autosync --timeout " + autosyncChildTimeout
+	want := "child-argv archive autosync --timeout " + autosyncChildTimeout.String()
 	for {
 		b, _ := os.ReadFile(archive.AutosyncLogPath())
 		if strings.Contains(string(b), want) {

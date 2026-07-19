@@ -41,11 +41,9 @@ func runAutosyncChild(ctx context.Context, w io.Writer) error {
 	// the watchdog's hard exit releases the sync flock as the process dies,
 	// but only a dying ctx actually kills a hung git — without this margin an
 	// orphaned git could outlive the lock and overlap the next sync's writer.
-	if d, perr := time.ParseDuration(autosyncChildTimeout); perr == nil && d > time.Minute {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, d-30*time.Second)
-		defer cancel()
-	}
+	var cancel context.CancelFunc
+	ctx, cancel = context.WithTimeout(ctx, autosyncChildTimeout-30*time.Second)
+	defer cancel()
 
 	a, err := archive.Load()
 	if err != nil {

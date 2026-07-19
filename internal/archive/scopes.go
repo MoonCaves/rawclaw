@@ -33,18 +33,39 @@ const staleAfter = 24 * time.Hour
 // live local tree is fresher and already indexed; that exclusion is what makes
 // cross-machine dedup a non-event. A missing clone yields nil (enumeration
 // never touches the network; `archive pull` is the refresh path). reindex
-// forces a full rebuild of the scope dbs, mirroring the local scopes.
-func (a *Archive) Scopes(reindex bool) []view.Scope {
+// forces a full rebuild of the scope dbs, mirroring the local scopes. ctx
+// bounds the per-machine staleness git probes (dirStale), so they die with
+// the caller's watchdog like every other git child.
+func (a *Archive) Scopes(ctx context.Context, reindex bool) []view.Scope {
 	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err != nil {
 		return nil // no clone yet: local-only until `archive pull`
 	}
-	ctx := context.Background()
 	now := time.Now()
 	var out []view.Scope
 	for _, m := range a.foreignMachines() {
 		stale := a.dirStale(ctx, m.Name, now)
-		out = append(out, a.claudeScopes(m, stale, reindex)...)
-		out = append(out, a.codexScopes(m, stale, reindex)...)
+		out = append(out, a.claudeScopes(m, stale, reindex, true)...)
+		out = append(out, a.codexScopes(m, stale, reindex, true)...)
+	}
+	return out
+}
+
+// LookupScopes enumerates the same foreign scopes as Scopes WITHOUT ingesting
+// anything: each scope's DBP names the cache db a previous search-time ingest
+// would have built; a scope never ingested simply fails to open read-only at
+// the caller. This is the cheap path for point lookups (e.g. resolving a
+// --resume prefix) where walking and indexing every foreign tree would be far
+// too heavy. No staleness git probe runs either (Stale stays false — lookups
+// don't report freshness), which keeps this path free of child processes, so
+// it needs no watchdog ctx.
+func (a *Archive) LookupScopes() []view.Scope {
+	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err != nil {
+		return nil // no clone yet: local-only until `archive pull`
+	}
+	var out []view.Scope
+	for _, m := range a.foreignMachines() {
+		out = append(out, a.claudeScopes(m, false, false, false)...)
+		out = append(out, a.codexScopes(m, false, false, false)...)
 	}
 	return out
 }
@@ -124,8 +145,9 @@ func (a *Archive) dirStale(ctx context.Context, name string, now time.Time) bool
 // not Glob: the path segments come from another machine's push, and a glob
 // metachar in a dir name must not silently vanish that machine's scopes. An
 // ingest failure keeps the scope: search opens the db read-only and reports
-// the degradation itself.
-func (a *Archive) claudeScopes(m manifest, stale, reindex bool) []view.Scope {
+// the degradation itself. ingest=false (LookupScopes) enumerates without
+// touching the dbs at all.
+func (a *Archive) claudeScopes(m manifest, stale, reindex, ingest bool) []view.Scope {
 	root := filepath.Join(a.clone, m.Name, "claude")
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -145,9 +167,11 @@ func (a *Archive) claudeScopes(m manifest, stale, reindex bool) []view.Scope {
 			continue
 		}
 		dbp := archiveScopeDBPath(m.Name, "claude", e.Name())
-		if _, _, err := index.EnsureIndexedTree(dbp, d, reindex, m.MachineID); err != nil {
-			slog.Warn("archive: foreign claude scope index failed",
-				"machine", m.Name, "dir", d, "err", err)
+		if ingest {
+			if _, _, err := index.EnsureIndexedTree(dbp, d, reindex, m.MachineID); err != nil {
+				slog.Warn("archive: foreign claude scope index failed",
+					"machine", m.Name, "dir", d, "err", err)
+			}
 		}
 		out = append(out, view.Scope{
 			Project:    m.Name + "/" + paths.ProjectLabel(d),
@@ -165,8 +189,10 @@ func (a *Archive) claudeScopes(m manifest, stale, reindex bool) []view.Scope {
 // codexScopes enumerates one foreign machine's Codex rollouts
 // (<machine>/codex/...), groups them by recorded cwd, and ingests each group
 // into its own namespaced db with the machine's identity as origin — the same
-// per-cwd-group shape the local Codex enumeration builds.
-func (a *Archive) codexScopes(m manifest, stale, reindex bool) []view.Scope {
+// per-cwd-group shape the local Codex enumeration builds. ingest=false
+// (LookupScopes) still discovers the cwd groups (that read is layout-only)
+// but never writes their dbs.
+func (a *Archive) codexScopes(m manifest, stale, reindex, ingest bool) []view.Scope {
 	root := filepath.Join(a.clone, m.Name, "codex")
 	if !isDir(root) {
 		return nil
@@ -191,11 +217,13 @@ func (a *Archive) codexScopes(m manifest, stale, reindex bool) []view.Scope {
 	out := make([]view.Scope, 0, len(cwds))
 	for _, cwd := range cwds {
 		dbp := archiveScopeDBPath(m.Name, "codex", cwd)
-		if _, _, ierr := index.EnsureIndexedContainers(
-			dbp, reindex, byCWD[cwd], ad.Messages, codex.Registration().ID, m.MachineID,
-		); ierr != nil {
-			slog.Warn("archive: foreign codex scope index failed",
-				"machine", m.Name, "cwd", cwd, "err", ierr)
+		if ingest {
+			if _, _, ierr := index.EnsureIndexedContainers(
+				dbp, reindex, byCWD[cwd], ad.Messages, codex.Registration().ID, m.MachineID,
+			); ierr != nil {
+				slog.Warn("archive: foreign codex scope index failed",
+					"machine", m.Name, "cwd", cwd, "err", ierr)
+			}
 		}
 		out = append(out, view.Scope{
 			Project:    m.Name + "/" + codexGroupLabel(cwd),

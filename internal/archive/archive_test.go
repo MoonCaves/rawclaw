@@ -14,6 +14,10 @@ func newTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows (HOME everywhere else) —
+	// set both so the isolation holds on every OS instead of touching real
+	// user state.
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("RAWCLAW_ARCHIVE", "")

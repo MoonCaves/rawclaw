@@ -16,7 +16,7 @@ import (
 func TestAll_SplicesArchiveScopes(t *testing.T) {
 	archivetest.Setup(t, "")
 
-	scs := All("", false)
+	scs := All(t.Context(), "", false)
 	var local, foreign *view.Scope
 	for i := range scs {
 		sc := &scs[i]
@@ -59,10 +59,10 @@ func TestAll_SourceFilterAppliesToArchiveScopes(t *testing.T) {
 		}
 		return n
 	}
-	if n := foreignCount(All("claude", false)); n != 1 {
+	if n := foreignCount(All(t.Context(), "claude", false)); n != 1 {
 		t.Errorf("--source claude foreign scopes = %d, want 1", n)
 	}
-	if n := foreignCount(All("codex", false)); n != 0 {
+	if n := foreignCount(All(t.Context(), "codex", false)); n != 0 {
 		t.Errorf("--source codex foreign scopes = %d, want 0 (no foreign codex tree)", n)
 	}
 }
@@ -88,7 +88,7 @@ func TestResolve_StaleArchiveScope(t *testing.T) {
 // live source; double-listing it would duplicate every foreign hit.
 func TestOrphanScanSkipsArchiveDBs(t *testing.T) {
 	archivetest.Setup(t, "")
-	_ = All("", false) // the splice creates archive-*.db files in the cache dir
+	_ = All(t.Context(), "", false) // the splice creates archive-*.db files in the cache dir
 
 	// Claude() (live + orphan scan, NO archive splice) must not surface them.
 	for _, sc := range Claude() {
