@@ -176,6 +176,67 @@ func TestScopes_RenamedOwnDirExcluded(t *testing.T) {
 	}
 }
 
+// TestScopes_RenamedForeignDirDeduped: a FOREIGN machine that re-registered
+// under a new name leaves its old dir in the archive forever (the archive
+// never prunes) — both dirs claim the same machine id and hold the identical
+// pre-rename sessions. Only ONE of them (the newer registration) may be
+// enumerated, or every pre-rename session would double-list under an
+// identical, never-disambiguable session id.
+func TestScopes_RenamedForeignDirDeduped(t *testing.T) {
+	const foreignID = "beefbeefbeefbeefbeefbeefbeefbeef"
+	a := initArchiveWithForeign(t, "machine-b", foreignID) // UpdatedAt 2026-01-01
+
+	// The same machine's OLD dir: same id, older registration, same session.
+	old := filepath.Join(a.ClonePath(), "machine-b-old")
+	if err := writeManifest(old, manifest{
+		MachineID: foreignID, Name: "machine-b-old", Hostname: "b-host",
+		UpdatedAt: "2025-06-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeTranscript(t, old, "claude/-remote-proj/sess-bbbb.jsonl",
+		`{"type":"user","message":{"role":"user","content":"foreign hello"}}`+"\n")
+	gitT(t, a.ClonePath(), "add", "-A")
+	gitT(t, a.ClonePath(), "commit", "-m", "machine-b-old: leftover pre-rename dir")
+
+	var names []string
+	for _, sc := range a.Scopes(false) {
+		if sc.Origin == foreignID {
+			names = append(names, sc.Project)
+		}
+		if strings.HasPrefix(sc.Project, "machine-b-old/") {
+			t.Errorf("stale pre-rename dir enumerated: %q", sc.Project)
+		}
+	}
+	if len(names) != 2 { // claude + codex scopes of the CURRENT dir only
+		t.Errorf("foreign scopes = %v, want exactly the current dir's two", names)
+	}
+}
+
+// TestScopes_EmptyMachineIDSkipped: a manifest without a machine_id is
+// malformed — enumerating it would stamp its rows with the LOCAL machine id
+// (empty origin falls through to the local stamp), corrupting provenance.
+func TestScopes_EmptyMachineIDSkipped(t *testing.T) {
+	a := initArchiveWithForeign(t, "machine-b", "beefbeefbeefbeefbeefbeefbeefbeef")
+
+	bad := filepath.Join(a.ClonePath(), "machine-x")
+	if err := writeManifest(bad, manifest{
+		MachineID: "", Name: "machine-x", Hostname: "x-host", UpdatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeTranscript(t, bad, "claude/-x-proj/sess-x.jsonl",
+		`{"type":"user","message":{"role":"user","content":"x"}}`+"\n")
+	gitT(t, a.ClonePath(), "add", "-A")
+	gitT(t, a.ClonePath(), "commit", "-m", "machine-x: malformed manifest")
+
+	for _, sc := range a.Scopes(false) {
+		if strings.HasPrefix(sc.Project, "machine-x/") {
+			t.Errorf("empty-machine_id dir enumerated: %q", sc.Project)
+		}
+	}
+}
+
 // TestScopes_ManifestlessDirSkipped: a top-level dir without a manifest is not
 // a machine dir (a stray README dir, a half-pushed registration) — skipped.
 func TestScopes_ManifestlessDirSkipped(t *testing.T) {

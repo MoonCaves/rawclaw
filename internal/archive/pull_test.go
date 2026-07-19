@@ -156,6 +156,48 @@ func TestPull_EmptyRemoteSucceeds(t *testing.T) {
 	}
 }
 
+// TestPull_RecoversWedgedRebase: a clone left mid-rebase by a kill (marker
+// dir present, HEAD detached) must be aborted by the next verb touching the
+// clone — otherwise every later pull AND push fails at branch resolution
+// until the user hand-deletes the clone.
+func TestPull_RecoversWedgedRebase(t *testing.T) {
+	newTestHome(t)
+
+	var calls []string
+	clone := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(clone, ".git", "rebase-merge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := &Archive{
+		cfg:   Config{Remote: "example.invalid/archive.git", Name: "machine-a"},
+		clone: clone,
+		run: func(ctx context.Context, dir string, args ...string) (string, error) {
+			calls = append(calls, strings.Join(args, " "))
+			switch args[0] {
+			case "remote":
+				return "example.invalid/archive.git\n", nil
+			case "symbolic-ref":
+				return "main\n", nil
+			default:
+				return "", nil
+			}
+		},
+	}
+
+	if _, err := a.Pull(context.Background(), false); err != nil {
+		t.Fatalf("Pull over a wedged clone: %v", err)
+	}
+	aborted := false
+	for _, c := range calls {
+		if c == "rebase --abort" {
+			aborted = true
+		}
+	}
+	if !aborted {
+		t.Errorf("stale rebase not aborted before pulling; calls: %v", calls)
+	}
+}
+
 // TestPull_NetworkFailureSurfaces: a pull that fails for a non-empty-remote
 // reason returns the error (the caller decides how to degrade) and aborts any
 // half-applied rebase.

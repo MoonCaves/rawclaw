@@ -38,7 +38,9 @@ func (a *Archive) Pull(ctx context.Context, throttle bool) (pulled bool, err err
 	}
 	out, err := a.run(ctx, a.clone, "pull", "--rebase", "origin", branch)
 	if err != nil && !isMissingRemoteRef(out) {
-		_, _ = a.run(ctx, a.clone, "rebase", "--abort") // never leave a wedged clone
+		// Never leave a wedged clone — and abort on a FRESH context, since the
+		// failure above may BE this ctx's cancellation.
+		_, _ = a.run(context.Background(), a.clone, "rebase", "--abort")
 		return false, fmt.Errorf("pull archive: %w", err)
 	}
 	stampPull()
