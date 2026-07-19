@@ -38,7 +38,7 @@ func TestRetainedMatches_SkipsArchiveReplicaDBs(t *testing.T) {
 	newRetainedDB(t, cacheDir, "local-proj.db", "sess-local")
 	newRetainedDB(t, cacheDir, "archive-machine-b-claude-remote-proj-deadbeef.db", "sess-foreign")
 
-	got, err := RetainedMatches(cacheDir, "", time.Time{}, 0)
+	got, err := RetainedMatches(cacheDir, "", time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("RetainedMatches: %v", err)
 	}

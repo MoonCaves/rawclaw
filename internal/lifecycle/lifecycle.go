@@ -48,6 +48,10 @@ type DeleteOpts struct {
 	// MaxMessages, when > 0, matches sessions with at most this many messages
 	// (JSONL lines). Use it to prune short/low-signal sessions.
 	MaxMessages int
+	// SessionID, when non-empty, matches the one session whose id equals it —
+	// or starts with it when it is at least 8 characters (the search-output
+	// session8 form). See MatchesSessionID for the exact rule.
+	SessionID string
 	// DryRun, when true, computes and returns the plan WITHOUT deleting anything
 	// or writing a tombstone.
 	DryRun bool
@@ -56,7 +60,23 @@ type DeleteOpts struct {
 // any reports whether at least one filter is set. A bare DeleteOpts (only DryRun
 // set, or nothing) is "no filter" and is refused.
 func (o DeleteOpts) any() bool {
-	return !o.Before.IsZero() || o.Project != "" || o.MaxMessages > 0
+	return !o.Before.IsZero() || o.Project != "" || o.MaxMessages > 0 || o.SessionID != ""
+}
+
+// MatchesSessionID reports whether a session id (a .jsonl stem) is addressed
+// by id: exact equality always, prefix only from 8 characters up (the
+// session8 form search output prints). Anything shorter must match exactly —
+// a 3-char prefix silently fanning out to many sessions is how a targeted
+// delete becomes a massacre. Shared by the live walk, the retained scan, and
+// the archive's foreign-session probe so all three answer alike.
+func MatchesSessionID(stem, id string) bool {
+	if id == "" {
+		return false
+	}
+	if stem == id {
+		return true
+	}
+	return len(id) >= 8 && strings.HasPrefix(stem, id)
 }
 
 // PlanItem is one session matched by a Delete pass.
@@ -277,6 +297,10 @@ func matchInDir(dir string, opts DeleteOpts) ([]PlanItem, error) {
 		info, err := os.Stat(f)
 		if err != nil || info.IsDir() {
 			continue // skip vanished / non-regular entries
+		}
+		if opts.SessionID != "" &&
+			!MatchesSessionID(strings.TrimSuffix(filepath.Base(f), ".jsonl"), opts.SessionID) {
+			continue
 		}
 		if !opts.Before.IsZero() && !info.ModTime().Before(opts.Before) {
 			continue

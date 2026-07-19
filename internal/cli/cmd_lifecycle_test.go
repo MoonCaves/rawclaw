@@ -175,21 +175,49 @@ func TestDeleteCmd_ConfirmYesDeletes(t *testing.T) {
 }
 
 // TestDeleteCmd_ConfirmNoAborts: a 'n' (or non-tty EOF) on stdin aborts; the file
-// survives.
+// survives, the abort message prints, and the exit code is 1 (silent — the
+// message already printed) so a script can distinguish "aborted" from "deleted".
 func TestDeleteCmd_ConfirmNoAborts(t *testing.T) {
 	root := newCfgRoot(t)
 	thin := writeSession(t, root, "proj-a", "thin2222dddd", 1)
 
 	out, err := runCmd(t, newDeleteCmd(), "n\n", "--max-messages", "5")
-	if err != nil {
-		t.Fatalf("delete confirm-no: %v\nout: %s", err, out)
+	if err == nil {
+		t.Fatalf("aborted delete should exit non-zero; out: %s", out)
 	}
-	if !strings.Contains(out, "Aborted") {
+	var ee ExitError
+	if !asExit(err, &ee) || ee.Code != 1 {
+		t.Fatalf("want ExitError code 1, got %T: %v", err, err)
+	}
+	if ee.Msg != "" {
+		t.Errorf("abort ExitError should carry no message (already printed), got %q", ee.Msg)
+	}
+	if !strings.Contains(out, "Aborted; nothing deleted.") {
 		t.Errorf("want abort message; out: %s", out)
 	}
 	if _, err := os.Stat(thin); err != nil {
 		t.Errorf("session deleted despite 'n' answer: %v", err)
 	}
+}
+
+// TestDeleteCmd_EOFAbortExitsOne: the EOF abort (non-tty / closed stdin, no
+// --yes) takes the same exit-1 path as an explicit 'n'.
+func TestDeleteCmd_EOFAbortExitsOne(t *testing.T) {
+	root := newCfgRoot(t)
+	thin := writeSession(t, root, "proj-a", "thin5555aaaa", 1)
+
+	out, err := runCmd(t, newDeleteCmd(), "", "--max-messages", "5")
+	if err == nil {
+		t.Fatalf("EOF-aborted delete should exit non-zero; out: %s", out)
+	}
+	var ee ExitError
+	if !asExit(err, &ee) || ee.Code != 1 {
+		t.Fatalf("want ExitError code 1, got %T: %v", err, err)
+	}
+	if _, serr := os.Stat(thin); serr != nil {
+		t.Errorf("session deleted despite EOF abort: %v", serr)
+	}
+	_ = out
 }
 
 // TestDeleteCmd_YesSkipsPrompt: --yes deletes without consulting stdin. With
