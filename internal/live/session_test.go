@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestServeSession_RendersTranscript(t *testing.T) {
 		"first question", "working on it", "written seconds ago")
 
 	var buf bytes.Buffer
-	if err := ServeSession(&buf, "aaaa1111", 0, false); err != nil {
+	if err := ServeSession(&buf, "aaaa1111", 0, false, false); err != nil {
 		t.Fatalf("ServeSession: %v", err)
 	}
 	out := buf.String()
@@ -46,7 +47,7 @@ func TestServeSession_TailCapsMessages(t *testing.T) {
 		"msg-one", "msg-two", "msg-three", "msg-four")
 
 	var buf bytes.Buffer
-	if err := ServeSession(&buf, "aaaa1111", 2, false); err != nil {
+	if err := ServeSession(&buf, "aaaa1111", 2, false, false); err != nil {
 		t.Fatalf("ServeSession: %v", err)
 	}
 	out := buf.String()
@@ -61,6 +62,132 @@ func TestServeSession_TailCapsMessages(t *testing.T) {
 	}
 }
 
+// TestServeSession_StripsToolsByDefault: the default render matches the
+// display posture of every other surface (read/outline/search snippets) —
+// conversation only, tool calls stripped. includeTools is the explicit opt-in.
+func TestServeSession_StripsToolsByDefault(t *testing.T) {
+	claudeRoot, _ := newServeHome(t)
+	writeClaudeSession(t, claudeRoot, "-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"/home/u/proj-a", time.Now(),
+		"please check the tests",
+		`on it [TOOL:Bash] "command" "go test ./..." [TOOL_RESULT] all packages pass`)
+
+	var buf bytes.Buffer
+	if err := ServeSession(&buf, "aaaa1111", 0, false, false); err != nil {
+		t.Fatalf("ServeSession: %v", err)
+	}
+	out := buf.String()
+	for _, leaked := range []string{"[TOOL", "go test ./...", "all packages pass"} {
+		if strings.Contains(out, leaked) {
+			t.Errorf("default render leaked tool content %q:\n%s", leaked, out)
+		}
+	}
+	for _, want := range []string{"please check the tests", "on it"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("default render dropped conversation text %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestServeSession_ToolOnlyTurnsHidden: a turn that is nothing but tool calls
+// strips to empty — the render skips it (no blank timestamped lines, the same
+// empty-turn posture read takes) and says how many it hid, so a tool-heavy
+// tail never reads as a dead session.
+func TestServeSession_ToolOnlyTurnsHidden(t *testing.T) {
+	claudeRoot, _ := newServeHome(t)
+	writeClaudeSession(t, claudeRoot, "-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"/home/u/proj-a", time.Now(),
+		"please check the tests",
+		`[TOOL:Bash] "command" "go test ./..."`,
+		`[TOOL_RESULT] ok all pass`,
+		"all green")
+
+	var buf bytes.Buffer
+	if err := ServeSession(&buf, "aaaa1111", 0, false, false); err != nil {
+		t.Fatalf("ServeSession: %v", err)
+	}
+	out := buf.String()
+	if blankTurn.MatchString(out) {
+		t.Errorf("default render printed a blank timestamped line for a tool-only turn:\n%s", out)
+	}
+	if !strings.Contains(out, "please check the tests") || !strings.Contains(out, "all green") {
+		t.Errorf("default render dropped conversation text:\n%s", out)
+	}
+	if !strings.Contains(out, "2 tool-only turns hidden") {
+		t.Errorf("default render should say how many tool-only turns it hid:\n%s", out)
+	}
+	if !strings.Contains(out, "--include-tools") {
+		t.Errorf("hidden-turns note should name the opt-in flag:\n%s", out)
+	}
+
+	// The opt-in renders those same turns and drops the note.
+	buf.Reset()
+	if err := ServeSession(&buf, "aaaa1111", 0, true, false); err != nil {
+		t.Fatalf("ServeSession includeTools: %v", err)
+	}
+	out = buf.String()
+	if !strings.Contains(out, "[TOOL:Bash]") || !strings.Contains(out, "[TOOL_RESULT]") {
+		t.Errorf("includeTools render missing the tool turns:\n%s", out)
+	}
+	if strings.Contains(out, "hidden") {
+		t.Errorf("includeTools render should not claim hidden turns:\n%s", out)
+	}
+}
+
+// blankTurn matches a rendered message line with no text after the role — the
+// shape an unskipped empty turn would leak as.
+var blankTurn = regexp.MustCompile(`(?m)^\[\S+ (user|assistant)\] *$`)
+
+// TestServeSession_IncludeTools: includeTools=true renders the tool calls too
+// — the same opt-in read/outline honor.
+func TestServeSession_IncludeTools(t *testing.T) {
+	claudeRoot, _ := newServeHome(t)
+	writeClaudeSession(t, claudeRoot, "-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"/home/u/proj-a", time.Now(),
+		"please check the tests",
+		`on it [TOOL:Bash] "command" "go test ./..." [TOOL_RESULT] all packages pass`)
+
+	var buf bytes.Buffer
+	if err := ServeSession(&buf, "aaaa1111", 0, true, false); err != nil {
+		t.Fatalf("ServeSession includeTools: %v", err)
+	}
+	out := buf.String()
+	for _, want := range []string{"[TOOL:Bash]", "go test ./...", "[TOOL_RESULT]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("includeTools render missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestServeSession_JSONKeepsRawText: the JSON shape carries the raw message
+// text — tool markers and all — regardless of the human-render default; JSON
+// consumers filter for themselves.
+func TestServeSession_JSONKeepsRawText(t *testing.T) {
+	claudeRoot, _ := newServeHome(t)
+	writeClaudeSession(t, claudeRoot, "-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"/home/u/proj-a", time.Now(),
+		"q", `on it [TOOL:Bash] "command" "go test" [TOOL_RESULT] pass`)
+
+	var buf bytes.Buffer
+	if err := ServeSession(&buf, "aaaa1111", 0, false, true); err != nil {
+		t.Fatalf("ServeSession --json: %v", err)
+	}
+	var got struct {
+		Messages []struct {
+			Text string `json:"text"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, buf.String())
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(got.Messages))
+	}
+	if !strings.Contains(got.Messages[1].Text, "[TOOL:Bash]") {
+		t.Errorf("json text lost the raw tool content: %q", got.Messages[1].Text)
+	}
+}
+
 // TestServeSession_JSON: --json emits the session + message tail as one JSON
 // object for machine consumers.
 func TestServeSession_JSON(t *testing.T) {
@@ -69,7 +196,7 @@ func TestServeSession_JSON(t *testing.T) {
 		"/home/u/proj-a", time.Now(), "hello", "hi there")
 
 	var buf bytes.Buffer
-	if err := ServeSession(&buf, "aaaa1111", 0, true); err != nil {
+	if err := ServeSession(&buf, "aaaa1111", 0, false, true); err != nil {
 		t.Fatalf("ServeSession --json: %v", err)
 	}
 	var got struct {
@@ -101,7 +228,7 @@ func TestServeSession_JSON(t *testing.T) {
 func TestServeSession_NoMatch(t *testing.T) {
 	newServeHome(t)
 	var buf bytes.Buffer
-	err := ServeSession(&buf, "deadbeef", 0, false)
+	err := ServeSession(&buf, "deadbeef", 0, false, false)
 	if err == nil {
 		t.Fatal("ServeSession on unknown prefix: want error, got nil")
 	}
@@ -118,7 +245,7 @@ func TestServeSession_EmptyPrefix(t *testing.T) {
 		"/home/u/p", time.Now(), "m")
 
 	var buf bytes.Buffer
-	if err := ServeSession(&buf, "", 0, false); err == nil {
+	if err := ServeSession(&buf, "", 0, false, false); err == nil {
 		t.Fatal("empty prefix: want error, got nil")
 	}
 }
@@ -133,7 +260,7 @@ func TestServeSession_AmbiguousCapped(t *testing.T) {
 			"/home/u/p", time.Now(), "m")
 	}
 	var buf bytes.Buffer
-	err := ServeSession(&buf, "aaaa1111", 0, false)
+	err := ServeSession(&buf, "aaaa1111", 0, false, false)
 	if err == nil {
 		t.Fatal("ambiguous prefix: want error, got nil")
 	}
@@ -155,7 +282,7 @@ func TestServeSession_Ambiguous(t *testing.T) {
 		"/home/u/p", time.Now(), "m")
 
 	var buf bytes.Buffer
-	err := ServeSession(&buf, "aaaa1111", 0, false)
+	err := ServeSession(&buf, "aaaa1111", 0, false, false)
 	if err == nil {
 		t.Fatal("ambiguous prefix: want error, got nil")
 	}
@@ -174,7 +301,7 @@ func TestServeSession_Codex(t *testing.T) {
 		"/home/u/proj-c", time.Now())
 
 	var buf bytes.Buffer
-	if err := ServeSession(&buf, "cccc3333", 0, false); err != nil {
+	if err := ServeSession(&buf, "cccc3333", 0, false, false); err != nil {
 		t.Fatalf("ServeSession codex: %v", err)
 	}
 	if !strings.Contains(buf.String(), "codex hello") {

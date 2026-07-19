@@ -171,7 +171,7 @@ rawclaw live box-a               # list box-a's recent sessions, newest first
 rawclaw live box-a 3f2a91c0      # render that session's current transcript (messages written seconds ago included)
 ```
 
-The machine name doubles as the ssh destination — an `~/.ssh/config` Host alias just works — or map it explicitly in the archive config (`"ssh": {"box-a": "user@10.0.0.5"}`). The far end needs sshd plus a rawclaw on its non-interactive PATH; without that, `live` fails with a pointed error and your freshness is whatever the last `archive push` uploaded. `--json` gives agents the structured form; `--tail N` widens the transcript window. Live peek renders the raw session bytes — no summarizing, no interpretation.
+The machine name doubles as the ssh destination — an `~/.ssh/config` Host alias just works — or map it explicitly in the archive config (`"ssh": {"box-a": "user@10.0.0.5"}`). The far end needs sshd plus a rawclaw on its non-interactive PATH; without that, `live` fails with a pointed error and your freshness is whatever the last `archive push` uploaded. `--json` gives agents the structured form (raw message text, tool calls and all); `--tail N` widens the transcript window. The rendered transcript follows the same display posture as `read` and `outline` — tool calls stripped unless `--include-tools` asks for them. No summarizing, no interpretation.
 
 ---
 
