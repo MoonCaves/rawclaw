@@ -210,11 +210,37 @@ var reNumericRef = regexp.MustCompile(`^[0-9]+$`)
 // reHexPrefix matches a valid uuid8 prefix: 1+ lowercase hex chars.
 var reHexPrefix = regexp.MustCompile(`^[0-9a-f]+$`)
 
+// normalizeRefArg drops a leading "ref=" from a pasted ref argument. Search,
+// read, and topics output print every ref as `read ref=<session8>:<uuid8>`;
+// agents copy that token verbatim, so the verbs must accept exactly what the
+// output printed.
+func normalizeRefArg(ref string) string {
+	return strings.TrimPrefix(ref, "ref=")
+}
+
+// normalizeSessionArg normalizes a pasted session argument for the
+// session-taking verbs (outline, tag): a leading "ref=" is dropped, and a full
+// pasted read-ref keeps only its <session8> half (no real session id contains
+// a colon). A paste that normalizes to nothing is returned verbatim, so the
+// not-found error names what the user actually typed instead of matching
+// every session on an empty prefix.
+func normalizeSessionArg(s string) string {
+	out := normalizeRefArg(s)
+	if i := strings.IndexByte(out, ':'); i >= 0 {
+		out = out[:i]
+	}
+	if out == "" {
+		return s
+	}
+	return out
+}
+
 // resolveRef parses "<session8>:<uuid8>" → (session8, uuid8). The second half is
 // now an opaque hex prefix (the message uuid), not an integer rowid. A purely
 // numeric second half is a pre-migration ref and returns a migration hint.
+// A leading "ref=" — the form search output prints — is accepted and dropped.
 func resolveRef(ref string) (string, string, error) {
-	parts := strings.Split(ref, ":")
+	parts := strings.Split(normalizeRefArg(ref), ":")
 	if len(parts) != 2 {
 		return "", "", fmt.Errorf("bad ref %q — expected <session8>:<uuid8> (e.g. a1b2c3d4:9f3e1c20)", ref)
 	}
@@ -934,18 +960,20 @@ func LocateSession(session8 string, scope []view.Scope) (dbPath, fullSID string,
 	if scope == nil {
 		scope = allScope()
 	}
-	dbp, sid, _, err := locateSession(scope, session8)
+	dbp, sid, _, err := locateSession(scope, normalizeSessionArg(session8))
 	return dbp, sid, err
 }
 
 // ── verb: outline ────────────────────────────────────────────────────────────
 
 // Outline returns a session's bookend arc (first/last N user+assistant messages).
-// Returns an error if the session is not found.
+// Returns an error if the session is not found. A pasted read-ref token
+// ("ref=<session8>:<uuid8>" or "<session8>:<uuid8>") resolves via its session half.
 func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineResult, error) {
 	if scope == nil {
 		scope = allScope()
 	}
+	session8 = normalizeSessionArg(session8)
 
 	dbp, fullSID, proj, locErr := locateSession(scope, session8)
 	if locErr != nil {

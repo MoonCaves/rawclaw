@@ -72,6 +72,21 @@ func coreSSHCommandSet(ctx context.Context, dir string) bool {
 	return err == nil && strings.TrimSpace(string(out)) != ""
 }
 
+// withCommitIdentity prefixes args with the pinned synthetic identity for any
+// git child that can CREATE commits: `commit` itself, and `pull --rebase`,
+// whose rebase RE-CREATES every replayed local commit with the current
+// committer. Unpinned, either one dies exit-128 "Committer identity unknown"
+// on a machine with no git identity configured — for the rebase, exactly on
+// the concurrent-push retry and stranded-commit pull paths. Pinned rather
+// than read from config, so the archive's synthetic authorship stays uniform
+// and no machine needs git setup to sync.
+func withCommitIdentity(args ...string) []string {
+	return append([]string{
+		"-c", "user.name=rawclaw",
+		"-c", "user.email=rawclaw@localhost",
+	}, args...)
+}
+
 // gitCommand builds the exec.Cmd runGit runs: the stall-detection -c configs
 // prepended to args, and the keepalive GIT_SSH_COMMAND layered over the
 // environment when the user's transport allows it (os/exec keeps the LAST
@@ -97,9 +112,17 @@ func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
 const localOpTimeout = 10 * time.Minute
 
 // transferOp reports whether args invoke a remote-talking git verb — the ones
-// stall detection bounds and a wall-clock cap must not touch.
+// stall detection bounds and a wall-clock cap must not touch. A "-c" config
+// flag takes its VALUE as a separate arg (withCommitIdentity prepends such
+// pairs); both are skipped so the value is never misread as the verb — which
+// would demote an identity-pinned pull to a wall-clock-capped local op.
 func transferOp(args []string) bool {
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-c" {
+			i++ // skip the -c value too
+			continue
+		}
 		if strings.HasPrefix(a, "-") {
 			continue
 		}

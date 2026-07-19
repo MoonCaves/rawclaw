@@ -128,6 +128,11 @@ func TestTransferOp(t *testing.T) {
 		{[]string{"status", "--porcelain"}, false},
 		{[]string{"rebase", "--abort"}, false},
 		{nil, false},
+		// withCommitIdentity prepends "-c k=v" pairs; the -c VALUE is its own
+		// arg and must not be misread as the verb — an identity-pinned pull is
+		// still a transfer (stall-bounded, never wall-clock-capped).
+		{withCommitIdentity("pull", "--rebase", "origin", "main"), true},
+		{withCommitIdentity("commit", "-m", "x"), false},
 	}
 	for _, tc := range tests {
 		if got := transferOp(tc.args); got != tc.want {
