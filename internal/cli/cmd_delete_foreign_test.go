@@ -52,7 +52,7 @@ func TestDeleteCmd_ForeignMatchesNotedLocalStillDeletes(t *testing.T) {
 	// "proj" substring-matches the local "-local-proj" AND the foreign
 	// "-remote-proj" scopes.
 	root := NewRootCmd(BuildInfo{})
-	out, err := runCmd(t, root, "", "delete", "--project", "proj", "--yes")
+	out, err := runCmd(t, root, "", "delete", "--project", "proj", "--yes", "--files")
 	if err != nil {
 		t.Fatalf("delete with mixed matches: %v\n%s", err, out)
 	}

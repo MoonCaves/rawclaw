@@ -11,13 +11,14 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/archive"
 )
 
-// autosyncChildTimeout is the explicit --timeout the detached sync child (and
-// the hourly timer) runs under: the 30s default watchdog would kill a
-// legitimate first big push mid-transfer, while a hard cap must still exist —
-// a hung push dies at the deadline instead of lingering forever. Carried in
-// argv (as its String() form) so the cap is visible in the receipt log and to
-// ps(1).
-const autosyncChildTimeout = 10 * time.Minute
+// autosyncChildTimeoutArg is the --timeout value the detached sync child (and
+// the hourly timer's push) runs under. `0` disables the wall-clock watchdog
+// explicitly — no cap fits both a hung transfer and a legitimate slow
+// multi-GB first push; a hang dies on STALL instead, via the git children's
+// stall detection (http.lowSpeedLimit/Time + ssh keepalives in the archive
+// git runner). Carried in argv so the posture is visible in the receipt log
+// and to ps(1).
+const autosyncChildTimeoutArg = "0"
 
 // autosyncLogMax caps the receipt log's growth: above it the log is rotated
 // (one .old generation kept) before the next child is spawned, so years of
@@ -60,8 +61,9 @@ func maybeAutosync() {
 // in the state dir — the child may outlive the parent, so it must never hold
 // open a pipe the parent's caller is draining. Started with a bare
 // exec.Command (never CommandContext: the parent exiting is the design, not a
-// reason to kill the child); the child self-bounds via its own --timeout
-// watchdog. Start-and-release — the parent never waits.
+// reason to kill the child); the child's transfers are stall-bounded by the
+// archive git runner, not wall-clock-capped. Start-and-release — the parent
+// never waits.
 func spawnAutosyncChild() {
 	exe, err := selfExe()
 	if err != nil {
@@ -73,7 +75,7 @@ func spawnAutosyncChild() {
 	}
 	defer logf.Close() // parent's handle only; the child holds its own
 
-	cmd := exec.Command(exe, "archive", "autosync", "--timeout", autosyncChildTimeout.String())
+	cmd := exec.Command(exe, "archive", "autosync", "--timeout", autosyncChildTimeoutArg)
 	detach(cmd)
 	cmd.Stdin = nil
 	cmd.Stdout = logf

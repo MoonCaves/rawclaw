@@ -73,6 +73,20 @@ All notable changes to RawClaw are documented in this file.
 
 ### Changed
 
+- **The delete confirmation says which copy dies — and `--yes` alone no longer removes
+  original files.** A delete reaching live sessions (original transcript files still on disk)
+  prompts with "This removes rawclaw's copy (index and archive) and the original session
+  transcript files. Confirm with your user." and the receipt matches; retained-only deletes
+  keep the rawclaw's-copy-only prompt and receipt. Non-interactively, `--yes` alone now covers
+  retained-only deletes only — a delete that removes original files errors (exit 2) unless
+  `--yes --files` authorizes it. `--dry-run` is unchanged.
+- **Archive transfers are stall-bounded, not wall-clock-capped.** `archive init/push/pull`
+  (and the background autosync) now run with the wall-clock watchdog off by default and catch
+  hangs the way rsync/curl do — stall detection: `http.lowSpeedLimit/lowSpeedTime` for HTTP(S)
+  remotes and ssh keepalives (`ServerAliveInterval`/`CountMax`, layered onto any existing
+  `GIT_SSH_COMMAND`) for SSH remotes. A hung transfer dies in ~30–60s; a slow-but-moving
+  multi-GB first push runs to completion. An explicit `--timeout` / `RAWCLAW_TIMEOUT` still
+  applies a hard cap.
 - **One seam for user-facing time.** All user-facing timestamps now render through a single
   policy package: agent-parsed surfaces (search results, the outline header, the live list and
   stream, `--json` fields) are marked UTC — RFC3339 `Z`, or `HH:MM:SSZ` for bare clocks — and
@@ -87,6 +101,16 @@ All notable changes to RawClaw are documented in this file.
 
 ### Fixed
 
+- **Timer install/eject hardening.** A launchd reinstall whose registration fails now restores
+  the previous working timer instead of leaving none; eject checks by CONTENT that the
+  plist/units were written by rawclaw before disabling or deleting a same-named file; on Linux,
+  install records where the systemd units landed so a later `XDG_CONFIG_HOME` change can't
+  strand them at eject time.
+- **Folder guard: a directory merely holding loose `.jsonl` files is no longer treated as a
+  transcripts dir by implicit discovery.** A bare `rawclaw` run from a folder like `/tmp` used
+  to index that folder itself into the cache. Location-based discovery (the known Claude Code /
+  Codex dirs and recorded cwds) is untouched; indexing an arbitrary jsonl-bearing folder now
+  requires the explicit `--dir` opt-in.
 - **Kill-safety across the whole push sequence.** A push killed at any point — mid-copy, before
   the commit, before the push, during the rebase, even mid-`git clone` — now leaves a clone the
   next push fully recovers on its own: a clone interrupted mid-creation is detected

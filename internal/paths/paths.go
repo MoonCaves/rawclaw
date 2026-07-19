@@ -49,20 +49,21 @@ func ConfigDir() string {
 // FindTranscriptDir resolves the projects subdir for `cwd` by matching the cwd
 // recorded inside transcripts (authoritative), falling back to path encoding.
 // Returns "" if none found.
+//
+// Discovery is location-based only: the known projects root and the cwds its
+// transcripts record. A directory that merely holds loose *.jsonl files is NOT
+// treated as a transcripts dir here — that fallback once let a bare run from a
+// folder like /tmp index the folder itself into the cache. Arbitrary-folder
+// indexing is the explicit --dir opt-in: FindTranscriptDirExplicit.
 func FindTranscriptDir(cwd string) string {
 	target := realpath(expandHome(cwd))
 	root := ProjectsRoot()
 
 	// Footgun guard: if the caller already passed a transcripts dir (a child of
-	// projects/, or any dir that directly holds *.jsonl), use it verbatim — don't
-	// re-encode an already-encoded path into nothing.
-	if isDir(target) {
-		if realpath(filepath.Dir(target)) == realpath(root) {
-			return target
-		}
-		if hits, _ := filepath.Glob(filepath.Join(target, "*.jsonl")); len(hits) > 0 {
-			return target
-		}
+	// projects/), use it verbatim — don't re-encode an already-encoded path
+	// into nothing.
+	if isDir(target) && realpath(filepath.Dir(target)) == realpath(root) {
+		return target
 	}
 
 	if isDir(root) {
@@ -86,6 +87,24 @@ func FindTranscriptDir(cwd string) string {
 	cand := filepath.Join(root, encodePath(target))
 	if isDir(cand) {
 		return cand
+	}
+	return ""
+}
+
+// FindTranscriptDirExplicit resolves `dir` like FindTranscriptDir, additionally
+// accepting ANY directory that directly holds *.jsonl files. This is the
+// explicit --dir opt-in for indexing an arbitrary transcript folder; the
+// ordinary resolution runs first, so a working dir that happens to carry stray
+// .jsonl data files still resolves to its recorded transcripts dir.
+func FindTranscriptDirExplicit(dir string) string {
+	if td := FindTranscriptDir(dir); td != "" {
+		return td
+	}
+	target := realpath(expandHome(dir))
+	if isDir(target) {
+		if hits, _ := filepath.Glob(filepath.Join(target, "*.jsonl")); len(hits) > 0 {
+			return target
+		}
 	}
 	return ""
 }
