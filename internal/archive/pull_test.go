@@ -111,6 +111,56 @@ func TestPull_ExplicitBypassesThrottle(t *testing.T) {
 	}
 }
 
+// TestPull_RebaseReplaysStrandedCommitWithoutGitIdentity: Pull's own
+// `pull --rebase` replays any stranded local commit (one whose push died) onto
+// the updated remote — re-creating it, which needs a committer identity. On a
+// machine with NO git identity configured that replay must still succeed, same
+// pinned synthetic identity as commit() itself.
+func TestPull_RebaseReplaysStrandedCommitWithoutGitIdentity(t *testing.T) {
+	home := newTestHome(t)
+	withoutGitIdentity(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// Strand a commit: the sync commit lands locally, its push dies.
+	real := a.run
+	a.run = func(ctx context.Context, dir string, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "push" {
+			return "fatal: unable to access remote", errors.New("exit status 128")
+		}
+		return real(ctx, dir, args...)
+	}
+	if _, err := a.PushLocal(context.Background()); err == nil {
+		t.Fatal("first push should have failed")
+	}
+	a.run = real
+
+	// A foreign machine advances the remote, so the pull must rebase-replay
+	// our stranded commit instead of fast-forwarding.
+	cloneB := filepath.Join(t.TempDir(), "clone-b")
+	gitT(t, "", "clone", bare, cloneB)
+	writeTranscript(t, cloneB, "machine-b/claude/-proj/sess-b.jsonl", "{}\n")
+	gitT(t, cloneB, "add", "-A")
+	gitT(t, cloneB, "commit", "-m", "machine-b: sync transcripts")
+	gitT(t, cloneB, "push", "origin", "HEAD")
+
+	pulled, err := a.Pull(context.Background(), false)
+	if err != nil {
+		t.Fatalf("Pull replaying stranded commit on identity-less machine: %v", err)
+	}
+	if !pulled {
+		t.Error("pulled = false, want a real pull")
+	}
+	if _, err := os.Stat(filepath.Join(a.ClonePath(), "machine-b", "claude", "-proj", "sess-b.jsonl")); err != nil {
+		t.Errorf("foreign commit missing after pull: %v", err)
+	}
+}
+
 // TestPull_RecreatesDeletedClone: deleting the clone dir and pulling re-clones
 // — corrupt-clone recovery, holding the invariant that every local artifact
 // is a rebuildable cache.
@@ -216,7 +266,7 @@ func TestPull_NetworkFailureSurfaces(t *testing.T) {
 		clone: clone,
 		run: func(ctx context.Context, dir string, args ...string) (string, error) {
 			calls = append(calls, strings.Join(args, " "))
-			switch args[0] {
+			switch gitVerb(args) {
 			case "remote":
 				return "example.invalid/archive.git\n", nil
 			case "symbolic-ref":

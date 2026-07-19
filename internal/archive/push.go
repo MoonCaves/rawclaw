@@ -476,13 +476,25 @@ func (a *Archive) stageMachineDir(ctx context.Context) (bool, error) {
 	return strings.TrimSpace(out) != "", nil
 }
 
+// withCommitIdentity prefixes args with the pinned synthetic identity for any
+// git child that can CREATE commits: `commit` itself, and `pull --rebase`,
+// whose rebase RE-CREATES every replayed local commit with the current
+// committer. Unpinned, either one dies exit-128 "Committer identity unknown"
+// on a machine with no git identity configured — for the rebase, exactly on
+// the concurrent-push retry and stranded-commit pull paths. Pinned rather
+// than read from config, so the archive's synthetic authorship stays uniform
+// and no machine needs git setup to sync.
+func withCommitIdentity(args ...string) []string {
+	return append([]string{
+		"-c", "user.name=rawclaw",
+		"-c", "user.email=rawclaw@localhost",
+	}, args...)
+}
+
 // commit creates a commit with a pinned identity, so pushes work on machines
 // with no global git identity configured.
 func (a *Archive) commit(ctx context.Context, msg string) error {
-	_, err := a.run(ctx, a.clone,
-		"-c", "user.name=rawclaw",
-		"-c", "user.email=rawclaw@localhost",
-		"commit", "-m", msg)
+	_, err := a.run(ctx, a.clone, withCommitIdentity("commit", "-m", msg)...)
 	if err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
@@ -548,7 +560,7 @@ func (a *Archive) pushWithRetry(ctx context.Context) (int, error) {
 		if attempt == maxPushAttempts {
 			break
 		}
-		if _, rerr := a.run(ctx, a.clone, "pull", "--rebase", "origin", branch); rerr != nil {
+		if _, rerr := a.run(ctx, a.clone, withCommitIdentity("pull", "--rebase", "origin", branch)...); rerr != nil {
 			// Abort on a FRESH bounded context: if the failure above was this
 			// ctx being canceled, the same ctx could never start the abort —
 			// and the whole point is never leaving a wedged clone.

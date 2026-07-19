@@ -49,7 +49,9 @@ func (a *Archive) Pull(ctx context.Context, throttle bool) (pulled bool, err err
 	if err != nil {
 		return false, err
 	}
-	out, err := a.run(ctx, a.clone, "pull", "--rebase", "origin", branch)
+	// Identity-pinned: the rebase re-creates any replayed stranded local
+	// commit, which needs a committer even on a machine with no git identity.
+	out, err := a.run(ctx, a.clone, withCommitIdentity("pull", "--rebase", "origin", branch)...)
 	if err != nil && !isMissingRemoteRef(out) {
 		// Never leave a wedged clone — and abort on a FRESH bounded context,
 		// since the failure above may BE this ctx's cancellation.
