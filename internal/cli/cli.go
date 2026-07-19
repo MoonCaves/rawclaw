@@ -279,63 +279,59 @@ func resolveTimeoutFromArgs(args []string, env string) time.Duration {
 	return resolved
 }
 
-// isUpgradeInvocation reports whether args target the `upgrade` (alias `update`)
-// subcommand — the first non-flag token. A lenient scan: it skips flags and the
-// values of known value-taking persistent flags so `--timeout 5s upgrade` still
-// resolves to the upgrade command. Flags with `=` carry their own value.
-func isUpgradeInvocation(args []string) bool {
-	for i := 0; i < len(args); i++ {
+// rootValueFlags are the root command's value-taking flags whose
+// space-separated value could precede the subcommand token — the lenient
+// pre-parse scanners must consume the value so it isn't mistaken for a
+// subcommand (`--dir archive pull` is a search, not `archive pull`). Flags
+// with `=` carry their own value. Keep in sync with the root flag set.
+var rootValueFlags = map[string]bool{
+	"--timeout": true, "--dir": true, "--limit": true, "--role": true,
+	"--source": true, "--sort": true, "--resume": true, "--since": true,
+	"--before": true, "--include-path": true, "--exclude-path": true,
+	"--min-messages": true,
+}
+
+// leadingSubcommandTokens returns up to n leading non-flag tokens of args —
+// the (sub)command path a cobra dispatch would see. Flags are skipped, the
+// values of rootValueFlags consumed, and scanning STOPS at `--`: cobra treats
+// everything after it as positional args, never as a subcommand, so a token
+// there must not steer the watchdog.
+func leadingSubcommandTokens(args []string, n int) []string {
+	out := []string{}
+	for i := 0; i < len(args) && len(out) < n; i++ {
 		a := args[i]
 		if a == "--" {
-			// Everything after is positional; the next token is the (sub)command.
-			if i+1 < len(args) {
-				return args[i+1] == "upgrade" || args[i+1] == "update"
-			}
-			return false
+			break
 		}
 		if strings.HasPrefix(a, "-") {
-			// A space-separated value for --timeout (the only persistent value flag
-			// that could precede the subcommand) is consumed here so it isn't mistaken
-			// for the command token.
-			if (a == "--timeout") && i+1 < len(args) {
-				i++
+			if rootValueFlags[a] && i+1 < len(args) {
+				i++ // consume the flag's space-separated value
 			}
 			continue
 		}
-		return a == "upgrade" || a == "update"
+		out = append(out, a)
 	}
-	return false
+	return out
+}
+
+// isUpgradeInvocation reports whether args target the `upgrade` (alias
+// `update`) subcommand — the first non-flag token.
+func isUpgradeInvocation(args []string) bool {
+	w := leadingSubcommandTokens(args, 1)
+	return len(w) == 1 && (w[0] == "upgrade" || w[0] == "update")
 }
 
 // isArchiveSyncInvocation reports whether args target a SYNCING archive verb —
 // `archive init|push|pull|autosync` — the ones that talk to the git remote and
 // run stall-bounded instead of wall-clock-bounded. `archive
 // status`/`enable-timer`/`archive <session>` (the local move) keep the
-// default watchdog. Same lenient scan as isUpgradeInvocation: flags are
-// skipped, a space-separated --timeout value is consumed, and the first two
-// non-flag tokens decide.
+// default watchdog.
 func isArchiveSyncInvocation(args []string) bool {
-	words := []string{}
-	for i := 0; i < len(args) && len(words) < 2; i++ {
-		a := args[i]
-		if a == "--" {
-			for j := i + 1; j < len(args) && len(words) < 2; j++ {
-				words = append(words, args[j])
-			}
-			break
-		}
-		if strings.HasPrefix(a, "-") {
-			if a == "--timeout" && i+1 < len(args) {
-				i++ // consume the flag's space-separated value
-			}
-			continue
-		}
-		words = append(words, a)
-	}
-	if len(words) < 2 || words[0] != "archive" {
+	w := leadingSubcommandTokens(args, 2)
+	if len(w) < 2 || w[0] != "archive" {
 		return false
 	}
-	switch words[1] {
+	switch w[1] {
 	case "init", "push", "pull", "autosync":
 		return true
 	}

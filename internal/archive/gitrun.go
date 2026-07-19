@@ -45,20 +45,71 @@ func gitSSHCommand(existing string) string {
 	return base + " " + sshKeepalives
 }
 
+// sshStallEnv returns the GIT_SSH_COMMAND env entry carrying the keepalives,
+// or "" when it must not be set at all: GIT_SSH_COMMAND outranks both the
+// legacy GIT_SSH var and core.sshCommand in git config, so forcing it would
+// silently replace a transport the user configured there (wrong key, lost
+// ProxyCommand). Those users keep their transport untouched — and supply
+// their own stall story.
+func sshStallEnv(ctx context.Context, dir string) string {
+	if v := strings.TrimSpace(os.Getenv("GIT_SSH_COMMAND")); v != "" {
+		return "GIT_SSH_COMMAND=" + gitSSHCommand(v)
+	}
+	if os.Getenv("GIT_SSH") != "" || coreSSHCommandSet(ctx, dir) {
+		return ""
+	}
+	return "GIT_SSH_COMMAND=" + gitSSHCommand("")
+}
+
+// coreSSHCommandSet probes `git config core.sshCommand` (all layers, resolved
+// from dir) — the config-file transport GIT_SSH_COMMAND would outrank. A probe
+// failure reads as "not set": the keepalives then apply, which is the safe
+// default for the common unconfigured machine.
+func coreSSHCommandSet(ctx context.Context, dir string) bool {
+	probe := exec.CommandContext(ctx, "git", "config", "--get", "core.sshCommand")
+	probe.Dir = dir
+	out, err := probe.Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
 // gitCommand builds the exec.Cmd runGit runs: the stall-detection -c configs
 // prepended to args, and the keepalive GIT_SSH_COMMAND layered over the
-// environment (os/exec keeps the LAST duplicate env entry, so appending
-// overrides an inherited value while gitSSHCommand preserves its content).
+// environment when the user's transport allows it (os/exec keeps the LAST
+// duplicate env entry, so appending overrides an inherited value while
+// sshStallEnv preserves its content).
 func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	full := append([]string{"-c", gitLowSpeedLimit, "-c", gitLowSpeedTime}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"LC_ALL=C",
-		"GIT_SSH_COMMAND="+gitSSHCommand(os.Getenv("GIT_SSH_COMMAND")),
-	)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+	if e := sshStallEnv(ctx, dir); e != "" {
+		cmd.Env = append(cmd.Env, e)
+	}
 	return cmd
+}
+
+// localOpTimeout bounds NON-transfer git children (add/commit/status/rebase…)
+// when the caller's ctx carries no deadline of its own. The stall posture
+// disables the wall-clock watchdog for the TRANSFER phase — but a local op has
+// no stall detector, and one that wedges (hung disk, stale mount) would hold
+// the sync flock forever, silently killing every later sync. Far above any
+// legitimate local op, far below forever.
+const localOpTimeout = 10 * time.Minute
+
+// transferOp reports whether args invoke a remote-talking git verb — the ones
+// stall detection bounds and a wall-clock cap must not touch.
+func transferOp(args []string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		switch a {
+		case "clone", "fetch", "push", "pull", "ls-remote":
+			return true
+		}
+		return false
+	}
+	return false
 }
 
 // runGit is the real adapter: the system git binary via exec. Terminal
@@ -67,6 +118,11 @@ func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
 // pins git's message locale so output classification (rejected pushes,
 // missing remote refs) never breaks on a translated message.
 func runGit(ctx context.Context, dir string, args ...string) (string, error) {
+	if _, bounded := ctx.Deadline(); !bounded && !transferOp(args) {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, localOpTimeout)
+		defer cancel()
+	}
 	cmd := gitCommand(ctx, dir, args...)
 	// Context cancellation delivers SIGTERM, not the default SIGKILL: git's
 	// signal handler removes its lock files (.git/index.lock) on the way out,

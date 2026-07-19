@@ -274,6 +274,13 @@ func TestIsArchiveSyncInvocation(t *testing.T) {
 		{[]string{"upgrade"}, false},
 		{[]string{"push"}, false},
 		{nil, false},
+		// "archive" as a FLAG VALUE is not a subcommand: `--dir archive pull`
+		// is a search for "pull" scoped to a folder named archive/.
+		{[]string{"--dir", "archive", "pull"}, false},
+		{[]string{"--include-path", "archive", "push"}, false},
+		// Tokens after `--` are positional args to the ROOT (cobra never
+		// dispatches a subcommand there) — a search, so the watchdog stays.
+		{[]string{"--", "archive", "push"}, false},
 	}
 	for _, tc := range tests {
 		if got := isArchiveSyncInvocation(tc.args); got != tc.want {

@@ -84,6 +84,10 @@ func TestIsUpgradeInvocation(t *testing.T) {
 		{[]string{"some", "search", "terms"}, false},
 		{nil, false},
 		{[]string{"--json"}, false},
+		// "upgrade" as a flag VALUE, or after `--` (a root positional to
+		// cobra, never a subcommand dispatch), is not the upgrade command.
+		{[]string{"--dir", "upgrade"}, false},
+		{[]string{"--", "upgrade"}, false},
 	}
 	for _, tc := range tests {
 		if got := isUpgradeInvocation(tc.args); got != tc.want {
