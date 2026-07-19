@@ -72,6 +72,21 @@ func coreSSHCommandSet(ctx context.Context, dir string) bool {
 	return err == nil && strings.TrimSpace(string(out)) != ""
 }
 
+// withCommitIdentity prefixes args with the pinned synthetic identity for any
+// git child that can CREATE commits: `commit` itself, and `pull --rebase`,
+// whose rebase RE-CREATES every replayed local commit with the current
+// committer. Unpinned, either one dies exit-128 "Committer identity unknown"
+// on a machine with no git identity configured — for the rebase, exactly on
+// the concurrent-push retry and stranded-commit pull paths. Pinned rather
+// than read from config, so the archive's synthetic authorship stays uniform
+// and no machine needs git setup to sync.
+func withCommitIdentity(args ...string) []string {
+	return append([]string{
+		"-c", "user.name=rawclaw",
+		"-c", "user.email=rawclaw@localhost",
+	}, args...)
+}
+
 // gitCommand builds the exec.Cmd runGit runs: the stall-detection -c configs
 // prepended to args, and the keepalive GIT_SSH_COMMAND layered over the
 // environment when the user's transport allows it (os/exec keeps the LAST
