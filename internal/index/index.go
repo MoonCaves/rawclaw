@@ -384,8 +384,12 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 
 	// Retention pass (replaces the old "absent from the walk → DELETE" prune): an
 	// absent own-source file is flagged missing_since and RETAINED; only an
-	// explicit tombstone deletes; a foreign-origin row is never a candidate (D1/D2/D5).
-	if err := retention.ReconcileRetention(con, onDisk, tombstoned, nowEpoch(), retention.RetentionMirror()); err != nil {
+	// explicit tombstone deletes; a foreign-origin row is never a candidate
+	// (D1/D2/D5). An ARCHIVE-replica scan (origin set — the tree is a synced
+	// copy inside the archive clone) instead treats absence as authoritative:
+	// the owner's delete propagated through the archive (E5), so the replica
+	// rows die rather than resurrect the session in search.
+	if err := retention.ReconcileRetention(con, onDisk, tombstoned, nowEpoch(), retention.RetentionMirror(), origin != ""); err != nil {
 		return err
 	}
 	return nil
@@ -425,7 +429,10 @@ func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
 	// mirror=false ALWAYS: the mirror setting governs live scans; an orphaned
 	// archive's retained rows are removed only by explicit tombstone (D5) — a
 	// search run with RAWCLAW_RETENTION=mirror must never wipe them.
-	if err := retention.ReconcileRetention(con, map[string]struct{}{}, tombstoned, nowEpoch(), false); err != nil {
+	// replica=false too: this pass covers LOCAL orphaned dbs (archive-replica
+	// dbs are excluded from orphan discovery by their name prefix), and an
+	// empty scan under replica semantics would wipe the db wholesale.
+	if err := retention.ReconcileRetention(con, map[string]struct{}{}, tombstoned, nowEpoch(), false, false); err != nil {
 		if isBusy(err) {
 			return store.CountTopLevelSessions(dbp), nil
 		}
@@ -487,11 +494,11 @@ func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool
 			return false, 0, fmt.Errorf("orphan probe row: %w", err)
 		}
 		// Same tree as the acting reconcile, against an empty live scan
-		// (present=false — the whole source is gone) with mirror=false (matching
-		// ReconcileOrphanDB: retained rows die only by tombstone).
-		// Any predicted action is pending work.
+		// (present=false — the whole source is gone) with mirror=false and
+		// replica=false (matching ReconcileOrphanDB: retained rows die only
+		// by tombstone). Any predicted action is pending work.
 		own := !origin.Valid || origin.String == mid
-		if retention.DecideRetention(false, isMember(tombstoned, id), own, missing.Valid, false) != retention.ActNone {
+		if retention.DecideRetention(false, isMember(tombstoned, id), own, missing.Valid, false, false) != retention.ActNone {
 			return true, n, nil
 		}
 	}

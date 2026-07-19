@@ -34,8 +34,11 @@ import (
 // here) because the setting only governs LIVE-scope scans: an orphan reconcile
 // always passes false — already-retained history is removed by an explicit
 // tombstone alone, never as a side effect of a search run with the mirror
-// setting in the environment (a live-verified data-loss footgun).
-func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now float64, mirror bool) error {
+// setting in the environment (a live-verified data-loss footgun). replica
+// marks an ARCHIVE-replica scope (the scanned tree is a synced copy of
+// another machine's data inside the archive clone): there, absence from the
+// scan is authoritative — see DecideRetention.
+func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now float64, mirror, replica bool) error {
 	type fiRow struct {
 		path      string
 		sessionID string
@@ -70,7 +73,7 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 	for _, r := range all {
 		_, present := onDisk[r.path]
 		own := !r.origin.Valid || r.origin.String == mid
-		switch DecideRetention(present, isMember(tombstoned, r.sessionID), own, r.missing.Valid, mirror) {
+		switch DecideRetention(present, isMember(tombstoned, r.sessionID), own, r.missing.Valid, mirror, replica) {
 		case ActClear: // reappeared — un-flag
 			if _, err := con.Exec("UPDATE sessions SET missing_since=NULL WHERE id=?", r.sessionID); err != nil {
 				return fmt.Errorf("clear missing_since: %w", err)
@@ -105,12 +108,20 @@ const (
 
 // DecideRetention is the single retention decision tree shared by
 // ReconcileRetention (acts) and index's orphanWorkPending (predicts).
-func DecideRetention(present, tombstoned, own, missingSet, mirror bool) RetentionAction {
+// replica marks an ARCHIVE-replica scope: the scanned tree is the local copy
+// of the archive clone — the source of truth for its foreign sessions — and
+// the db is a rebuildable cache of it, so a file absent from the scan means
+// the owner's delete propagated through the archive (E5) and the rows die
+// here too. Durable retention (D1) protects LOCAL sources from upstream
+// purges; it must never let a replica resurrect a session its owner deleted.
+func DecideRetention(present, tombstoned, own, missingSet, mirror, replica bool) RetentionAction {
 	switch {
 	case present && missingSet:
 		return ActClear
 	case present:
 		return ActNone
+	case replica:
+		return ActPrune // absent from the replica tree: propagated delete (E5)
 	case tombstoned:
 		return ActPrune
 	case !own:
