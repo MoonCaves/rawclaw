@@ -32,7 +32,12 @@ func AcquireAutosyncToken(now time.Time) bool {
 	p := autosyncTokenPath()
 	st, err := os.Stat(p)
 	if err == nil {
-		if now.Sub(st.ModTime()) < autosyncWindow {
+		// Refuse only within one window of the mtime, either side: a slightly
+		// negative age is just clock/mtime granularity around a fresh token,
+		// but a FAR-future mtime (beyond the window — a clock stepped back)
+		// counts as due rather than silently muting syncs until wall-clock
+		// catches up.
+		if age := now.Sub(st.ModTime()); age > -autosyncWindow && age < autosyncWindow {
 			return false
 		}
 		_ = os.Remove(p)

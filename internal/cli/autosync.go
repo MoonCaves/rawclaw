@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,9 +23,10 @@ const autosyncChildTimeout = "10m"
 // background syncs can't grow an unbounded file in the state dir.
 const autosyncLogMax = 512 * 1024
 
-// autosyncExe resolves the binary to self-invoke — a seam so tests can point
-// the spawn at a fake instead of the test binary.
-var autosyncExe = os.Executable
+// selfExe resolves the running rawclaw binary for self-referential wiring
+// (the autosync spawn, the timer's ProgramArguments) — a seam so tests can
+// point at a fake instead of the test binary.
+var selfExe = os.Executable
 
 // spawnAutosync launches the detached sync child — a seam so unit tests can
 // count spawn decisions without forking processes.
@@ -60,7 +62,7 @@ func maybeAutosync() {
 // reason to kill the child); the child self-bounds via its own --timeout
 // watchdog. Start-and-release — the parent never waits.
 func spawnAutosyncChild() {
-	exe, err := autosyncExe()
+	exe, err := selfExe()
 	if err != nil {
 		return
 	}
@@ -86,10 +88,14 @@ func spawnAutosyncChild() {
 func openAutosyncLog() (*os.File, error) {
 	p := archive.AutosyncLogPath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create %s: %w", filepath.Dir(p), err)
 	}
 	if st, err := os.Stat(p); err == nil && st.Size() > autosyncLogMax {
 		_ = os.Rename(p, p+".old")
 	}
-	return os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", p, err)
+	}
+	return f, nil
 }

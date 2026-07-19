@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -27,11 +28,13 @@ const (
 	timerIntervalSec = 3600
 )
 
-// runTimerTool executes a system tool (launchctl / systemctl) and returns its
-// combined output — a seam faked by unit tests, which assert the exact
-// invocation sequence without touching the live service manager.
-var runTimerTool = func(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).CombinedOutput()
+// runTimerTool executes a system tool (launchctl / systemctl) under the
+// caller's ctx — a wedged tool dies with the deadline, same posture as the
+// git seam — and returns its combined output. A seam faked by unit tests,
+// which assert the exact invocation sequence without touching the live
+// service manager.
+var runTimerTool = func(ctx context.Context, name string, args ...string) (string, error) {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -107,8 +110,14 @@ func systemdUnitPaths(home string) (service, timer string) {
 		filepath.Join(dir, systemdUnitName+".timer")
 }
 
+// systemdEscape renders a path safely inside a double-quoted systemd
+// ExecStart value: backslash and double-quote escaped per systemd's quoting
+// rules, and % doubled — systemd expands % specifiers even inside quotes.
+var systemdEscape = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "%", "%%").Replace
+
 // systemdServiceUnit renders the oneshot service the timer fires. The exe path
-// is double-quoted (systemd's own quoting) so a path with spaces survives.
+// is double-quoted (systemd's own quoting) and escaped so spaces, quotes, and
+// % specifiers in the install path all survive.
 func systemdServiceUnit(exe string) string {
 	return fmt.Sprintf(`[Unit]
 Description=rawclaw archive push
@@ -116,7 +125,7 @@ Description=rawclaw archive push
 [Service]
 Type=oneshot
 ExecStart="%s" archive push --timeout %s
-`, exe, autosyncChildTimeout)
+`, systemdEscape(exe), autosyncChildTimeout)
 }
 
 // systemdTimerUnit renders the hourly timer. Persistent=true catches up after
@@ -137,8 +146,8 @@ WantedBy=timers.target
 // installTimer installs the hourly push for goos, writing the platform's
 // artifacts and registering them with the live service manager. Idempotent:
 // re-running replaces rawclaw's own artifacts in place.
-func installTimer(w io.Writer, goos, home string) error {
-	exe, err := autosyncExe()
+func installTimer(ctx context.Context, w io.Writer, goos, home string) error {
+	exe, err := selfExe()
 	if err != nil {
 		return fmt.Errorf("resolve rawclaw binary path: %w", err)
 	}
@@ -153,9 +162,13 @@ func installTimer(w io.Writer, goos, home string) error {
 		}
 		// Unload any previous registration first (ignore "not loaded"), so a
 		// re-run picks up the fresh plist instead of erroring on a live job.
-		_, _ = runTimerTool("launchctl", "bootout", launchdDomain()+"/"+launchdLabel)
-		if _, err := runTimerTool("launchctl", "bootstrap", launchdDomain(), p); err != nil {
-			return fmt.Errorf("register launchd agent (plist written at %s): %w", p, err)
+		_, _ = runTimerTool(ctx, "launchctl", "bootout", launchdDomain()+"/"+launchdLabel)
+		if _, err := runTimerTool(ctx, "launchctl", "bootstrap", launchdDomain(), p); err != nil {
+			// launchd loads everything under LaunchAgents at the next GUI
+			// login — a plist left behind by a FAILED registration would
+			// become a delayed silent install. Take it back out.
+			_ = os.Remove(p)
+			return fmt.Errorf("register launchd agent %s: %w", launchdLabel, err)
 		}
 		fmt.Fprintf(w, "Hourly archive push installed.\n  launchd agent: %s\n  log:           %s\nRemove it any time with `rawclaw archive enable-timer --eject`.\n",
 			p, timerLogPath())
@@ -171,10 +184,10 @@ func installTimer(w io.Writer, goos, home string) error {
 		if err := os.WriteFile(timerPath, []byte(systemdTimerUnit()), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", timerPath, err)
 		}
-		if _, err := runTimerTool("systemctl", "--user", "daemon-reload"); err != nil {
+		if _, err := runTimerTool(ctx, "systemctl", "--user", "daemon-reload"); err != nil {
 			return fmt.Errorf("reload systemd user units (units written at %s): %w", filepath.Dir(servicePath), err)
 		}
-		if _, err := runTimerTool("systemctl", "--user", "enable", "--now", systemdUnitName+".timer"); err != nil {
+		if _, err := runTimerTool(ctx, "systemctl", "--user", "enable", "--now", systemdUnitName+".timer"); err != nil {
 			return fmt.Errorf("enable systemd user timer: %w", err)
 		}
 		fmt.Fprintf(w, "Hourly archive push installed.\n  systemd user units: %s + %s\n  logs:               journalctl --user -u %s\nRemove it any time with `rawclaw archive enable-timer --eject`.\n",
@@ -188,12 +201,12 @@ func installTimer(w io.Writer, goos, home string) error {
 // ejectTimer removes exactly what installTimer added — the registration and
 // rawclaw's own files, nothing else. Every step tolerates the thing already
 // being gone: ejecting twice, or with nothing installed, is a clean no-op.
-func ejectTimer(w io.Writer, goos, home string) error {
+func ejectTimer(ctx context.Context, w io.Writer, goos, home string) error {
 	switch goos {
 	case "darwin":
 		// Ignore bootout failure: "not loaded" is the normal already-ejected
 		// state, and a stale registration with no plist must not block eject.
-		_, _ = runTimerTool("launchctl", "bootout", launchdDomain()+"/"+launchdLabel)
+		_, _ = runTimerTool(ctx, "launchctl", "bootout", launchdDomain()+"/"+launchdLabel)
 		p := launchdPlistPath(home)
 		removed, err := removeOwn(p)
 		if err != nil {
@@ -206,7 +219,7 @@ func ejectTimer(w io.Writer, goos, home string) error {
 		}
 		return nil
 	case "linux":
-		_, _ = runTimerTool("systemctl", "--user", "disable", "--now", systemdUnitName+".timer")
+		_, _ = runTimerTool(ctx, "systemctl", "--user", "disable", "--now", systemdUnitName+".timer")
 		servicePath, timerPath := systemdUnitPaths(home)
 		removedTimer, err := removeOwn(timerPath)
 		if err != nil {
@@ -216,7 +229,7 @@ func ejectTimer(w io.Writer, goos, home string) error {
 		if err != nil {
 			return err
 		}
-		_, _ = runTimerTool("systemctl", "--user", "daemon-reload")
+		_, _ = runTimerTool(ctx, "systemctl", "--user", "daemon-reload")
 		if removedTimer || removedService {
 			fmt.Fprintf(w, "Hourly archive push removed (disabled %s.timer, deleted its units).\n", systemdUnitName)
 		} else {

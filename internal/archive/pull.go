@@ -72,14 +72,19 @@ func pullStampPath() string {
 	return filepath.Join(store.CacheDir(), "archive", "last-pull")
 }
 
-// pullDue reports whether a throttled pull should run: no stamp yet, or the
-// stamp is at least pullThrottleWindow old.
+// pullDue reports whether a throttled pull should run: no stamp yet, the
+// stamp at least pullThrottleWindow old — or the stamp sitting more than a
+// window in the FUTURE (a clock stepped backwards), which counts as due
+// rather than silently muting pulls until wall-clock catches back up. Within
+// a window either side is fresh: a slightly negative age is just clock/mtime
+// granularity around a fresh stamp.
 func pullDue(now time.Time) bool {
 	st, err := os.Stat(pullStampPath())
 	if err != nil {
 		return true
 	}
-	return now.Sub(st.ModTime()) >= pullThrottleWindow
+	age := now.Sub(st.ModTime())
+	return age <= -pullThrottleWindow || age >= pullThrottleWindow
 }
 
 // stampPull records a successful pull by (re)writing the stamp file, updating

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +16,7 @@ func fakeTimerTool(t *testing.T, failOn string) *[]string {
 	t.Helper()
 	var calls []string
 	old := runTimerTool
-	runTimerTool = func(name string, args ...string) (string, error) {
+	runTimerTool = func(ctx context.Context, name string, args ...string) (string, error) {
 		line := name + " " + strings.Join(args, " ")
 		calls = append(calls, line)
 		if failOn != "" && strings.Contains(line, failOn) {
@@ -30,9 +31,9 @@ func fakeTimerTool(t *testing.T, failOn string) *[]string {
 // fakeExe pins the self-binary path the timer artifacts embed.
 func fakeExe(t *testing.T, path string) {
 	t.Helper()
-	old := autosyncExe
-	autosyncExe = func() (string, error) { return path, nil }
-	t.Cleanup(func() { autosyncExe = old })
+	old := selfExe
+	selfExe = func() (string, error) { return path, nil }
+	t.Cleanup(func() { selfExe = old })
 }
 
 // TestLaunchdPlist_Content: the agent runs `<exe> archive push` hourly with
@@ -74,6 +75,16 @@ func TestSystemdUnits_Content(t *testing.T) {
 	}
 }
 
+// TestSystemdServiceUnit_EscapesHostilePaths: %, ", and \ in the install path
+// survive systemd's quoting AND specifier expansion.
+func TestSystemdServiceUnit_EscapesHostilePaths(t *testing.T) {
+	t.Parallel()
+	svc := systemdServiceUnit(`/home/50%off/my "bin"\rawclaw`)
+	if !strings.Contains(svc, `ExecStart="/home/50%%off/my \"bin\"\\rawclaw" archive push`) {
+		t.Errorf("hostile path not escaped:\n%s", svc)
+	}
+}
+
 // TestInstallTimer_Darwin: plist written under ~/Library/LaunchAgents, then
 // bootout (stale registration) + bootstrap — in that order.
 func TestInstallTimer_Darwin(t *testing.T) {
@@ -82,7 +93,7 @@ func TestInstallTimer_Darwin(t *testing.T) {
 	fakeExe(t, "/opt/rawclaw")
 
 	var out bytes.Buffer
-	if err := installTimer(&out, "darwin", home); err != nil {
+	if err := installTimer(context.Background(), &out, "darwin", home); err != nil {
 		t.Fatalf("installTimer: %v", err)
 	}
 
@@ -107,16 +118,20 @@ func TestInstallTimer_Darwin(t *testing.T) {
 }
 
 // TestInstallTimer_DarwinBootstrapFailure: a failed bootstrap surfaces as an
-// error naming the plist that WAS written (fail-closed, no silent half-state).
+// error AND takes the written plist back out — launchd loads everything under
+// LaunchAgents at next login, so leaving it would be a delayed silent install.
 func TestInstallTimer_DarwinBootstrapFailure(t *testing.T) {
 	home := t.TempDir()
 	fakeTimerTool(t, "bootstrap")
 	fakeExe(t, "/opt/rawclaw")
 
 	var out bytes.Buffer
-	err := installTimer(&out, "darwin", home)
-	if err == nil || !strings.Contains(err.Error(), launchdPlistPath(home)) {
-		t.Fatalf("err = %v, want a bootstrap failure naming the plist", err)
+	err := installTimer(context.Background(), &out, "darwin", home)
+	if err == nil || !strings.Contains(err.Error(), launchdLabel) {
+		t.Fatalf("err = %v, want a bootstrap failure naming the agent", err)
+	}
+	if _, serr := os.Stat(launchdPlistPath(home)); !os.IsNotExist(serr) {
+		t.Errorf("plist left behind after failed bootstrap: %v", serr)
 	}
 }
 
@@ -129,7 +144,7 @@ func TestInstallTimer_Linux(t *testing.T) {
 	fakeExe(t, "/opt/rawclaw")
 
 	var out bytes.Buffer
-	if err := installTimer(&out, "linux", home); err != nil {
+	if err := installTimer(context.Background(), &out, "linux", home); err != nil {
 		t.Fatalf("installTimer: %v", err)
 	}
 
@@ -157,7 +172,7 @@ func TestInstallTimer_LinuxHonorsXDG(t *testing.T) {
 	fakeExe(t, "/opt/rawclaw")
 
 	var out bytes.Buffer
-	if err := installTimer(&out, "linux", home); err != nil {
+	if err := installTimer(context.Background(), &out, "linux", home); err != nil {
 		t.Fatalf("installTimer: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(xdg, "systemd", "user", systemdUnitName+".timer")); err != nil {
@@ -173,7 +188,7 @@ func TestEjectTimer_DarwinRoundTrip(t *testing.T) {
 	fakeExe(t, "/opt/rawclaw")
 
 	var out bytes.Buffer
-	if err := installTimer(&out, "darwin", home); err != nil {
+	if err := installTimer(context.Background(), &out, "darwin", home); err != nil {
 		t.Fatalf("installTimer: %v", err)
 	}
 	sibling := filepath.Join(home, "Library", "LaunchAgents", "com.example.other.plist")
@@ -182,7 +197,7 @@ func TestEjectTimer_DarwinRoundTrip(t *testing.T) {
 	}
 
 	calls := fakeTimerTool(t, "") // fresh recorder for the eject half
-	if err := ejectTimer(&out, "darwin", home); err != nil {
+	if err := ejectTimer(context.Background(), &out, "darwin", home); err != nil {
 		t.Fatalf("ejectTimer: %v", err)
 	}
 	if _, err := os.Stat(launchdPlistPath(home)); !os.IsNotExist(err) {
@@ -204,11 +219,11 @@ func TestEjectTimer_LinuxRoundTrip(t *testing.T) {
 	fakeExe(t, "/opt/rawclaw")
 
 	var out bytes.Buffer
-	if err := installTimer(&out, "linux", home); err != nil {
+	if err := installTimer(context.Background(), &out, "linux", home); err != nil {
 		t.Fatalf("installTimer: %v", err)
 	}
 	calls := fakeTimerTool(t, "")
-	if err := ejectTimer(&out, "linux", home); err != nil {
+	if err := ejectTimer(context.Background(), &out, "linux", home); err != nil {
 		t.Fatalf("ejectTimer: %v", err)
 	}
 	servicePath, timerPath := systemdUnitPaths(home)
@@ -234,7 +249,7 @@ func TestEjectTimer_NothingInstalledIsCleanNoOp(t *testing.T) {
 
 	for _, goos := range []string{"darwin", "linux"} {
 		var out bytes.Buffer
-		if err := ejectTimer(&out, goos, home); err != nil {
+		if err := ejectTimer(context.Background(), &out, goos, home); err != nil {
 			t.Errorf("%s eject on clean machine: %v", goos, err)
 		}
 		if !strings.Contains(out.String(), "nothing to remove") {
@@ -249,7 +264,7 @@ func TestInstallTimer_UnsupportedGOOS(t *testing.T) {
 	fakeTimerTool(t, "")
 	fakeExe(t, "/opt/rawclaw")
 	var out bytes.Buffer
-	if err := installTimer(&out, "plan9", t.TempDir()); err == nil {
+	if err := installTimer(context.Background(), &out, "plan9", t.TempDir()); err == nil {
 		t.Fatal("installTimer on plan9 succeeded; want a no-backend error")
 	}
 }

@@ -37,7 +37,7 @@ func newArchiveEnableTimerCmd() *cobra.Command {
 				return fmt.Errorf("resolve home dir: %w", err)
 			}
 			if eject {
-				return ejectTimer(out, runtime.GOOS, home)
+				return ejectTimer(cmd.Context(), out, runtime.GOOS, home)
 			}
 			// An hourly push with no archive behind it would tick forever as a
 			// no-op — refuse with the pointer instead of half-installing.
@@ -51,7 +51,7 @@ func newArchiveEnableTimerCmd() *cobra.Command {
 				fmt.Fprintln(out, "Archive not configured; run `rawclaw archive init <remote-url>` first, then enable the timer.")
 				return nil
 			}
-			return installTimer(out, runtime.GOOS, home)
+			return installTimer(cmd.Context(), out, runtime.GOOS, home)
 		},
 	}
 	cmd.Flags().BoolVar(&eject, "eject", false,
