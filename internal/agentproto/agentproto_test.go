@@ -55,6 +55,10 @@ func TestResolveRef(t *testing.T) {
 		{name: "empty uuid", ref: "abc:", wantErr: "expected <session8>"},
 		{name: "old numeric ref", ref: "a1b2c3d4:42", wantErr: "old numeric ref"},
 		{name: "non-hex uuid", ref: "abc:xyz", wantErr: "must be hex"},
+		// Search output prints refs as `read ref=<session8>:<uuid8>` — agents
+		// paste that token verbatim, so the parser must accept it.
+		{name: "ref= prefix as printed", ref: "ref=a1b2c3d4:9f3e1c20", wantSID: "a1b2c3d4", wantUUID: "9f3e1c20"},
+		{name: "bare ref= still bad", ref: "ref=", wantErr: "expected <session8>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -72,6 +76,44 @@ func TestResolveRef(t *testing.T) {
 				t.Fatalf("resolveRef(%q) = (%q, %q), want (%q, %q)", tt.ref, sid, uuid, tt.wantSID, tt.wantUUID)
 			}
 		})
+	}
+}
+
+// TestSearchPrintedRefRoundTrips: the EXACT token search output prints after
+// "read " must be accepted by the read verb's ref parser — an agent copies the
+// printed `ref=<session8>:<uuid8>` verbatim.
+func TestSearchPrintedRefRoundTrips(t *testing.T) {
+	env := SearchEnvelope{
+		Results: []SearchRef{{
+			Project:   "p",
+			SessionID: "a1b2c3d4eeee",
+			ISO:       "2026-06-01T10:00:00Z",
+			Snippet:   "snippet",
+			ReadRef:   "a1b2c3d4:9f3e1c20",
+		}},
+		Complete: true,
+		Count:    1,
+	}
+	var buf bytes.Buffer
+	renderSearch(&buf, env, "q", "")
+
+	token := ""
+	for _, line := range strings.Split(buf.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "read "); ok {
+			token = rest
+			break
+		}
+	}
+	if token == "" {
+		t.Fatalf("no `read <token>` line in search output:\n%s", buf.String())
+	}
+	sid, uuid, err := resolveRef(token)
+	if err != nil {
+		t.Fatalf("resolveRef(%q) — the token search itself printed — err: %v", token, err)
+	}
+	if sid != "a1b2c3d4" || uuid != "9f3e1c20" {
+		t.Fatalf("resolveRef(%q) = (%q, %q), want (a1b2c3d4, 9f3e1c20)", token, sid, uuid)
 	}
 }
 
@@ -570,6 +612,40 @@ func TestLocateSessionNotFound(t *testing.T) {
 	var nf *ErrSessionNotFound
 	if !errors.As(err, &nf) {
 		t.Fatalf("want *ErrSessionNotFound, got %T: %v", err, err)
+	}
+}
+
+// TestNormalizeSessionArg: the session-taking verbs (outline, tag) accept a
+// pasted read-ref token — leading "ref=" dropped, and a full
+// <session8>:<uuid8> paste keeps only the session half.
+func TestNormalizeSessionArg(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"a1b2c3d4", "a1b2c3d4"},              // plain sid8 untouched
+		{"ref=a1b2c3d4", "a1b2c3d4"},          // pasted with the printed prefix
+		{"ref=a1b2c3d4:9f3e1c20", "a1b2c3d4"}, // full printed read-ref token
+		{"a1b2c3d4:9f3e1c20", "a1b2c3d4"},     // read-ref without the prefix
+		{"ref=", "ref="},                      // degenerate paste stays verbatim for an honest not-found
+	}
+	for _, tt := range tests {
+		if got := normalizeSessionArg(tt.in); got != tt.want {
+			t.Errorf("normalizeSessionArg(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestLocateSessionAcceptsPastedRef: the exported LocateSession (tag verb) and
+// Outline path resolve a session from the full pasted `ref=...` token.
+func TestLocateSessionAcceptsPastedRef(t *testing.T) {
+	proj := t.TempDir()
+	writeSession(t, proj, "a1b2c3d4eeee", "uuid-a-1", "first session")
+	scope := scopeFor(t, proj)
+
+	_, fullSID, err := LocateSession("ref=a1b2c3d4:9f3e1c20", scope)
+	if err != nil {
+		t.Fatalf("LocateSession with pasted ref token: %v", err)
+	}
+	if fullSID != "a1b2c3d4eeee" {
+		t.Fatalf("fullSID = %q, want a1b2c3d4eeee", fullSID)
 	}
 }
 
