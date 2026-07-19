@@ -112,8 +112,8 @@ func TestPull_ExplicitBypassesThrottle(t *testing.T) {
 }
 
 // TestPull_RecreatesDeletedClone: deleting the clone dir and pulling re-clones
-// — corrupt-clone recovery ("every local artifact is a rebuildable
-// cache").
+// — corrupt-clone recovery, holding the invariant that every local artifact
+// is a rebuildable cache.
 func TestPull_RecreatesDeletedClone(t *testing.T) {
 	a := initArchiveWithForeign(t, "machine-b", "beefbeefbeefbeefbeefbeefbeefbeef")
 

@@ -441,7 +441,7 @@ func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
 	return n, nil
 }
 
-// EnsureOrphanReconciled reconciles an orphaned index db read-MOSTLY (F2/F4):
+// EnsureOrphanReconciled reconciles an orphaned index db read-MOSTLY:
 // a read-only probe first decides whether a reconcile would change anything —
 // a tombstoned session still present, an own-source row not yet stamped
 // missing_since, or (mirror mode) an own-source row awaiting the prune. Only
