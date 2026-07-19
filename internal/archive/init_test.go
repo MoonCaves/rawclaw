@@ -135,7 +135,9 @@ func TestInit_RefusesClaimedName(t *testing.T) {
 }
 
 // TestInit_SameMachineReclaims: re-init by the SAME machine (same machine_id,
-// e.g. after state loss) is not a conflict.
+// e.g. after config loss) is not a conflict. (The id here comes from the
+// process-wide MachineID cache — the machine-id file's own persistence is
+// provenance's contract, tested there.)
 func TestInit_SameMachineReclaims(t *testing.T) {
 	newTestHome(t)
 	bare := initBareRepo(t)
@@ -189,6 +191,7 @@ func TestInit_RejectsBadName(t *testing.T) {
 		{"glob bracket", "ma[ch]ine"},
 		{"pathspec magic colon", ":top"},
 		{"space", "my machine"},
+		{"uppercase collides on case-insensitive fs", "Mac"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
