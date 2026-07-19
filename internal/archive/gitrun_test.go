@@ -16,9 +16,9 @@ func TestGitCommand_StallDetectionConfig(t *testing.T) {
 	cmd := gitCommand(context.Background(), t.TempDir(), "push", "origin", "HEAD")
 
 	got := strings.Join(cmd.Args, " ")
-	wantPrefix := "git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 push origin HEAD"
-	if got != wantPrefix {
-		t.Errorf("git argv = %q, want %q", got, wantPrefix)
+	want := "git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 push origin HEAD"
+	if got != want {
+		t.Errorf("git argv = %q, want %q", got, want)
 	}
 
 	// os/exec keeps the LAST duplicate env entry, so ours must be last.
@@ -28,7 +28,7 @@ func TestGitCommand_StallDetectionConfig(t *testing.T) {
 			ssh = strings.TrimPrefix(e, "GIT_SSH_COMMAND=")
 		}
 	}
-	want := "ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+	want = "ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 	if ssh != want {
 		t.Errorf("GIT_SSH_COMMAND = %q, want %q", ssh, want)
 	}

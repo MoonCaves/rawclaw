@@ -101,6 +101,11 @@ All notable changes to RawClaw are documented in this file.
 
 ### Fixed
 
+- **Timer install/eject hardening.** A launchd reinstall whose registration fails now restores
+  the previous working timer instead of leaving none; eject checks by CONTENT that the
+  plist/units were written by rawclaw before disabling or deleting a same-named file; on Linux,
+  install records where the systemd units landed so a later `XDG_CONFIG_HOME` change can't
+  strand them at eject time.
 - **Folder guard: a directory merely holding loose `.jsonl` files is no longer treated as a
   transcripts dir by implicit discovery.** A bare `rawclaw` run from a folder like `/tmp` used
   to index that folder itself into the cache. Location-based discovery (the known Claude Code /

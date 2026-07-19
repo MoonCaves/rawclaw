@@ -35,7 +35,8 @@ const (
 // gitSSHCommand builds the GIT_SSH_COMMAND carrying the keepalive options. A
 // user's own GIT_SSH_COMMAND is respected: the keepalives are appended to it,
 // and ssh's first-obtained-value-wins rule keeps any option the user already
-// set authoritative over ours.
+// set authoritative over ours. Assumes an OpenSSH-compatible CLI (-o syntax) —
+// git's own default; an exotic transport wrapper may need its own stall story.
 func gitSSHCommand(existing string) string {
 	base := strings.TrimSpace(existing)
 	if base == "" {

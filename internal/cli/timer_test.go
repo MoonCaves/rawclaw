@@ -135,9 +135,39 @@ func TestInstallTimer_DarwinBootstrapFailure(t *testing.T) {
 	}
 }
 
+// TestInstallTimer_DarwinReinstallBootstrapFailureRestoresPrior: a REINSTALL
+// whose bootstrap fails must not destroy the working timer it replaced — the
+// prior plist is restored (and best-effort re-registered) instead of deleted.
+func TestInstallTimer_DarwinReinstallBootstrapFailureRestoresPrior(t *testing.T) {
+	home := t.TempDir()
+	fakeTimerTool(t, "")
+	fakeExe(t, "/opt/rawclaw-v1")
+
+	var out bytes.Buffer
+	if err := installTimer(context.Background(), &out, "darwin", home); err != nil {
+		t.Fatalf("first install: %v", err)
+	}
+
+	// Second install: new exe path, bootstrap fails.
+	fakeTimerTool(t, "bootstrap")
+	fakeExe(t, "/opt/rawclaw-v2")
+	err := installTimer(context.Background(), &out, "darwin", home)
+	if err == nil {
+		t.Fatal("failed reinstall bootstrap should surface an error")
+	}
+	b, rerr := os.ReadFile(launchdPlistPath(home))
+	if rerr != nil {
+		t.Fatalf("prior plist gone after failed reinstall: %v", rerr)
+	}
+	if !strings.Contains(string(b), "/opt/rawclaw-v1") || strings.Contains(string(b), "/opt/rawclaw-v2") {
+		t.Errorf("plist should be the RESTORED prior artifact:\n%s", b)
+	}
+}
+
 // TestInstallTimer_Linux: both units written, then daemon-reload and
 // enable --now on the timer.
 func TestInstallTimer_Linux(t *testing.T) {
+	newArchiveHome(t) // isolate the state dir (install records unit paths there)
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
 	calls := fakeTimerTool(t, "")
@@ -165,6 +195,7 @@ func TestInstallTimer_Linux(t *testing.T) {
 
 // TestInstallTimer_LinuxHonorsXDG: units land under $XDG_CONFIG_HOME when set.
 func TestInstallTimer_LinuxHonorsXDG(t *testing.T) {
+	newArchiveHome(t) // isolate the state dir (install records unit paths there)
 	home := t.TempDir()
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
@@ -213,6 +244,7 @@ func TestEjectTimer_DarwinRoundTrip(t *testing.T) {
 
 // TestEjectTimer_LinuxRoundTrip: disable --now, both units removed, reload.
 func TestEjectTimer_LinuxRoundTrip(t *testing.T) {
+	newArchiveHome(t) // isolate the state dir (install records unit paths there)
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
 	fakeTimerTool(t, "")
@@ -241,9 +273,102 @@ func TestEjectTimer_LinuxRoundTrip(t *testing.T) {
 	}
 }
 
+// TestEjectTimer_DarwinForeignPlistUntouched: a same-named plist NOT written by
+// rawclaw is neither unloaded nor deleted — eject removes exactly what
+// enable-timer added, and ownership is checked by content, not filename.
+func TestEjectTimer_DarwinForeignPlistUntouched(t *testing.T) {
+	home := t.TempDir()
+	calls := fakeTimerTool(t, "")
+
+	p := launchdPlistPath(home)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("<plist>someone else's job</plist>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := ejectTimer(context.Background(), &out, "darwin", home); err != nil {
+		t.Fatalf("ejectTimer: %v", err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Errorf("foreign plist deleted by eject: %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("foreign plist should not be booted out; calls = %q", *calls)
+	}
+	if !strings.Contains(out.String(), "not written by rawclaw") {
+		t.Errorf("output should say why nothing was removed:\n%s", out.String())
+	}
+}
+
+// TestEjectTimer_LinuxForeignUnitsUntouched: same ownership rule for the
+// systemd units — foreign same-named files are neither disabled nor deleted.
+func TestEjectTimer_LinuxForeignUnitsUntouched(t *testing.T) {
+	newArchiveHome(t)
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	calls := fakeTimerTool(t, "")
+
+	servicePath, timerPath := systemdUnitPaths(home)
+	if err := os.MkdirAll(filepath.Dir(servicePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{servicePath, timerPath} {
+		if err := os.WriteFile(p, []byte("[Unit]\nDescription=someone else's job\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var out bytes.Buffer
+	if err := ejectTimer(context.Background(), &out, "linux", home); err != nil {
+		t.Fatalf("ejectTimer: %v", err)
+	}
+	for _, p := range []string{servicePath, timerPath} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("foreign unit %s deleted by eject: %v", p, err)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Errorf("foreign units should not be disabled; calls = %q", *calls)
+	}
+}
+
+// TestEjectTimer_LinuxUsesRecordedPathsAfterXDGChange: install records where
+// the units landed; an eject after XDG_CONFIG_HOME changed still removes them
+// from the RECORDED location instead of leaving them behind.
+func TestEjectTimer_LinuxUsesRecordedPathsAfterXDGChange(t *testing.T) {
+	newArchiveHome(t) // isolates the state dir the record lives in
+	home := t.TempDir()
+	oldXDG := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", oldXDG)
+	fakeTimerTool(t, "")
+	fakeExe(t, "/opt/rawclaw")
+
+	var out bytes.Buffer
+	if err := installTimer(context.Background(), &out, "linux", home); err != nil {
+		t.Fatalf("installTimer: %v", err)
+	}
+	installedService, installedTimer := systemdUnitPaths(home)
+
+	// The environment moves on; eject must still find the old artifacts.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	fakeTimerTool(t, "")
+	if err := ejectTimer(context.Background(), &out, "linux", home); err != nil {
+		t.Fatalf("ejectTimer: %v", err)
+	}
+	for _, p := range []string{installedService, installedTimer} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s left behind after eject under a new XDG_CONFIG_HOME: %v", p, err)
+		}
+	}
+}
+
 // TestEjectTimer_NothingInstalledIsCleanNoOp: ejecting twice (or never having
 // installed) reports the no-op and errors nothing.
 func TestEjectTimer_NothingInstalledIsCleanNoOp(t *testing.T) {
+	newArchiveHome(t) // isolate the state dir (install records unit paths there)
 	home := t.TempDir()
 	fakeTimerTool(t, "")
 
