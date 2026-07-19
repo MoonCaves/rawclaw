@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/MoonCaves/rawclaw/internal/archive"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source"
@@ -21,8 +22,12 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
-// All returns Claude ∪ Codex scopes, filtered by sourceFilter ("" = all,
-// "claude", or "codex"). reindex forces a fresh rebuild of Codex dbs.
+// All returns Claude ∪ Codex ∪ archive scopes, filtered by sourceFilter
+// ("" = all, "claude", or "codex"). reindex forces a fresh rebuild of the
+// eager (Codex + archive) dbs. Archive scopes are the FOREIGN machine dirs of
+// the transcript-archive clone, spliced in so a plain search transparently
+// covers other machines' pushed sessions; each carries its Source, so the
+// runtime filter applies to them exactly as to local scopes.
 func All(sourceFilter string, reindex bool) []view.Scope {
 	var out []view.Scope
 	if sourceFilter == "" || sourceFilter == "claude" {
@@ -31,7 +36,29 @@ func All(sourceFilter string, reindex bool) []view.Scope {
 	if sourceFilter == "" || sourceFilter == "codex" {
 		out = append(out, Codex(reindex)...)
 	}
+	for _, sc := range Archive(reindex) {
+		if sourceFilter == "" || sc.Source == sourceFilter {
+			out = append(out, sc)
+		}
+	}
 	return out
+}
+
+// Archive returns the transcript-archive scopes: every foreign machine dir in
+// the archive clone, ready to search (see archive.Scopes). An unconfigured
+// archive (or one whose clone is absent) yields nil — the zero state costs one
+// nil-check. A broken archive config is warned and degrades to local-only
+// rather than failing the whole enumeration.
+func Archive(reindex bool) []view.Scope {
+	a, err := archive.Load()
+	if err != nil {
+		slog.Warn("scopes: archive config unreadable; searching local scopes only", "err", err)
+		return nil
+	}
+	if a == nil {
+		return nil // feature off
+	}
+	return a.Scopes(reindex)
 }
 
 // Claude returns the union of (a) the lazy live Claude project scopes — TDir set,
@@ -74,6 +101,10 @@ func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 		base := filepath.Base(dbp)
 		if strings.HasPrefix(base, "codex-") {
 			continue // codex dbs are enumerated + reconciled by Codex()
+		}
+		if strings.HasPrefix(base, "archive-") {
+			continue // archive-replica dbs are enumerated by Archive(); their
+			// live source is the clone's machine dir, never an orphaned project
 		}
 		if _, covered := liveDBs[dbp]; covered {
 			continue // already a live project scope — don't list it twice
@@ -217,7 +248,13 @@ func isHex8(s string) bool {
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope
 // (DBP set, e.g. Codex) is (DBP, IndexFresh, nil); a lazy Claude scope ensures
 // its TDir now, exactly as the old inline index.EnsureIndexed(sc.TDir) did.
+// A scope flagged Stale (a replica lagging its origin machine) resolves to its
+// db with IndexStale, feeding the existing stale-fallback posture: searched,
+// served, and reported as possibly incomplete.
 func Resolve(sc view.Scope, reindex bool) (string, index.IndexStatus, error) {
+	if sc.Stale && sc.DBP != "" {
+		return sc.DBP, index.IndexStale, nil
+	}
 	if sc.DBP != "" {
 		return sc.DBP, index.IndexFresh, nil
 	}
