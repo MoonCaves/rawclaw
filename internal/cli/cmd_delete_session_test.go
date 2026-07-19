@@ -25,17 +25,18 @@ func readTombstone(t *testing.T, root string) string {
 }
 
 // TestDeleteCmd_PositionalPrefixYes is the README example, verbatim shape:
-// `rawclaw delete --yes <session8>` deletes exactly that session — file gone,
-// id tombstoned, same receipts as a filter delete.
+// `rawclaw delete --yes --files <session8>` deletes exactly that session —
+// file gone, id tombstoned, same receipts as a filter delete. (--files because
+// the original transcript file dies; --yes alone refuses live deletes.)
 func TestDeleteCmd_PositionalPrefixYes(t *testing.T) {
 	root := newCfgRoot(t)
 	target := writeSession(t, root, "proj-a", "cafe0001-0000-0000-0000-000000000001", 3)
 	other := writeSession(t, root, "proj-a", "beef0002-0000-0000-0000-000000000002", 3)
 
 	// Through the ROOT command tree — proving the README invocation verbatim.
-	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "delete", "--yes", "cafe0001")
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "delete", "--yes", "--files", "cafe0001")
 	if err != nil {
-		t.Fatalf("delete --yes <session8>: %v\nout: %s", err, out)
+		t.Fatalf("delete --yes --files <session8>: %v\nout: %s", err, out)
 	}
 	if !strings.Contains(out, "Deleted 1 session") {
 		t.Errorf("want deletion summary; out: %s", out)
@@ -57,7 +58,7 @@ func TestDeleteCmd_PositionalFullID(t *testing.T) {
 	root := newCfgRoot(t)
 	target := writeSession(t, root, "proj-a", "cafe0003-0000-0000-0000-000000000003", 2)
 
-	out, err := runCmd(t, newDeleteCmd(), "", "--yes", "cafe0003-0000-0000-0000-000000000003")
+	out, err := runCmd(t, newDeleteCmd(), "", "--yes", "--files", "cafe0003-0000-0000-0000-000000000003")
 	if err != nil {
 		t.Fatalf("delete full id: %v\nout: %s", err, out)
 	}
@@ -210,7 +211,7 @@ func TestDeleteCmd_PositionalLivePlusStaleRetainedRow(t *testing.T) {
 	// …then the file comes back, with no reconcile pass in between.
 	restored := writeSession(t, root, "proj-a", "cafe0012-0000-0000-0000-000000000013", 2)
 
-	out, err := runCmd(t, newDeleteCmd(), "", "--yes", "cafe0012")
+	out, err := runCmd(t, newDeleteCmd(), "", "--yes", "--files", "cafe0012")
 	if err != nil {
 		t.Fatalf("delete of live+stale-retained session: %v\nout: %s", err, out)
 	}
@@ -318,11 +319,11 @@ func TestDeleteCmd_ProvenanceNoteLive(t *testing.T) {
 	root := newCfgRoot(t)
 	writeSession(t, root, "proj-a", "cafe0009-0000-0000-0000-000000000010", 2)
 
-	out, err := runCmd(t, newDeleteCmd(), "", "--yes", "cafe0009")
+	out, err := runCmd(t, newDeleteCmd(), "", "--yes", "--files", "cafe0009")
 	if err != nil {
 		t.Fatalf("delete: %v\nout: %s", err, out)
 	}
-	if !strings.Contains(out, "Removed the session transcript file(s) and rawclaw's copy (index + archive).") {
+	if !strings.Contains(out, "Removed rawclaw's copy (index and archive) and the original session transcript files.") {
 		t.Errorf("missing live-delete provenance note; out: %s", out)
 	}
 }

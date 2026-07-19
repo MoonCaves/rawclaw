@@ -31,6 +31,12 @@ import (
 // runtime filter applies to them exactly as to local scopes. ctx bounds the
 // archive enumeration's git probes (see Archive) — pass the run's watchdog
 // context so those children die with the CLI.
+//
+// This union is THE runtime-discovery site: a future runtime (a new source
+// tool with its own transcript-dir location) is added here — its known
+// location behind a Source adapter, unioned like Claude and Codex below.
+// Discovery is location-based only; an arbitrary jsonl-bearing folder never
+// enters implicitly (--dir is the explicit opt-in).
 func All(ctx context.Context, sourceFilter string, reindex bool) []view.Scope {
 	var out []view.Scope
 	if sourceFilter == "" || sourceFilter == "claude" {

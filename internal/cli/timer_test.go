@@ -47,7 +47,7 @@ func TestLaunchdPlist_Content(t *testing.T) {
 		"<string>archive</string>",
 		"<string>push</string>",
 		"<string>--timeout</string>",
-		"<string>" + autosyncChildTimeout.String() + "</string>",
+		"<string>" + autosyncChildTimeoutArg + "</string>",
 		"<integer>3600</integer>",
 		"<key>RunAtLoad</key>\n\t<false/>",
 		"<string>/logs/timer.log</string>",
@@ -62,7 +62,7 @@ func TestLaunchdPlist_Content(t *testing.T) {
 func TestSystemdUnits_Content(t *testing.T) {
 	t.Parallel()
 	svc := systemdServiceUnit("/opt/rawclaw")
-	for _, want := range []string{"Type=oneshot", `ExecStart="/opt/rawclaw" archive push --timeout ` + autosyncChildTimeout.String()} {
+	for _, want := range []string{"Type=oneshot", `ExecStart="/opt/rawclaw" archive push --timeout ` + autosyncChildTimeoutArg} {
 		if !strings.Contains(svc, want) {
 			t.Errorf("service unit missing %q:\n%s", want, svc)
 		}

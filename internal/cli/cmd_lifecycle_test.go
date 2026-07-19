@@ -222,16 +222,17 @@ func TestDeleteCmd_EOFAbortExitsOne(t *testing.T) {
 	}
 }
 
-// TestDeleteCmd_YesSkipsPrompt: --yes deletes without consulting stdin. With
-// empty stdin (which would abort via EOF if the prompt ran), the matched session
-// is still removed — proving the prompt was skipped for non-interactive use.
+// TestDeleteCmd_YesSkipsPrompt: --yes --files deletes without consulting stdin.
+// With empty stdin (which would abort via EOF if the prompt ran), the matched
+// session is still removed — proving the prompt was skipped for non-interactive
+// use. (--files because original files die; --yes alone would refuse.)
 func TestDeleteCmd_YesSkipsPrompt(t *testing.T) {
 	root := newCfgRoot(t)
 	thin := writeSession(t, root, "proj-a", "thin3333eeee", 1)
 
 	// Empty stdin: if the y/N prompt ran, EOF would abort and the file would
-	// survive. With --yes the prompt is skipped and the delete proceeds.
-	out, err := runCmd(t, newDeleteCmd(), "", "--max-messages", "5", "--yes")
+	// survive. With --yes --files the prompt is skipped and the delete proceeds.
+	out, err := runCmd(t, newDeleteCmd(), "", "--max-messages", "5", "--yes", "--files")
 	if err != nil {
 		t.Fatalf("delete --yes: %v\nout: %s", err, out)
 	}
@@ -251,7 +252,7 @@ func TestDeleteCmd_YesShortFlag(t *testing.T) {
 	root := newCfgRoot(t)
 	thin := writeSession(t, root, "proj-a", "thin4444ffff", 1)
 
-	out, err := runCmd(t, newDeleteCmd(), "", "--max-messages", "5", "-y")
+	out, err := runCmd(t, newDeleteCmd(), "", "--max-messages", "5", "-y", "--files")
 	if err != nil {
 		t.Fatalf("delete -y: %v\nout: %s", err, out)
 	}
