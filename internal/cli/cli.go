@@ -199,6 +199,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	archiveCmd := newArchiveCmd()
 	archiveCmd.AddCommand(newArchiveInitCmd())
 	archiveCmd.AddCommand(newArchivePushCmd())
+	archiveCmd.AddCommand(newArchivePullCmd())
 	root.AddCommand(archiveCmd)
 	root.AddCommand(newLiveCmd())
 	root.AddCommand(newDeleteCmd())
@@ -504,7 +505,9 @@ func reindexOne(sc view.Scope, emb embed.Embedder) (int, error) {
 
 // runResume prints the paste-ready resume command for a session id — `claude
 // --resume <id>` for a Claude session, `codex resume <id>` for a Codex one. It
-// resolves against Claude projects first, then falls back to the Codex scopes.
+// resolves against Claude projects first, then falls back to the Codex scopes,
+// then to the archive replicas: a session recorded on ANOTHER machine can't be
+// resumed here, so the hint degrades to the command to run on that machine.
 func runResume(w io.Writer, o *Options) error {
 	hits := paths.ResolveSession(o.Resume)
 	src := "claude"
@@ -513,6 +516,9 @@ func runResume(w io.Writer, o *Options) error {
 		src = "codex"
 	}
 	if len(hits) == 0 {
+		if handled, err := resumeForeign(w, o); handled {
+			return err
+		}
 		fmt.Fprintf(w, "No session id starts with '%s'. Use the 8-char id from search output, e.g. [… · a1b2c3d4 · …].\n", o.Resume)
 		return nil
 	}
@@ -562,6 +568,81 @@ func resumeCommand(src string, h paths.SessionHit) string {
 		return "cd " + h.CWD + " && " + verb
 	}
 	return verb
+}
+
+// foreignHit is one archive-replica resume match: a session recorded on
+// another machine, with everything the degrade message names.
+type foreignHit struct {
+	sessionID string
+	machine   string // the owning machine's display name
+	cwd       string // working dir recorded on THAT machine
+	project   string
+	source    string // "claude" | "codex" — picks the remote-side verb
+}
+
+// resumeForeign is the archive fallback for --resume: a session that only
+// exists in another machine's archived dir cannot be resumed on this box (the
+// runtime's own session state lives there), so instead of a runnable local
+// command the hint degrades — clearly — to the machine's name and the command
+// to run on it. Returns handled=false when the archive has no match either,
+// letting the caller print the ordinary not-found hint.
+func resumeForeign(w io.Writer, o *Options) (handled bool, err error) {
+	hits := archiveResumeHits(o.Resume)
+	if len(hits) == 0 {
+		return false, nil
+	}
+	if len(hits) > 1 {
+		fmt.Fprintf(w, "%d sessions match '%s' on other machines — narrow it:\n", len(hits), o.Resume)
+		for _, h := range hits {
+			fmt.Fprintf(w, "  %s  (%s)\n", h.sessionID, h.project)
+		}
+		return true, nil
+	}
+
+	h := hits[0]
+	remote := resumeCommand(h.source, paths.SessionHit{SessionID: h.sessionID, CWD: h.cwd, Project: h.project})
+	if o.JSON {
+		return true, EmitJSON(w, struct {
+			SessionID string `json:"session_id"`
+			Machine   string `json:"machine"`
+			CWD       string `json:"cwd"`
+			Project   string `json:"project"`
+			Command   string `json:"command"`
+			Note      string `json:"note"`
+		}{h.sessionID, h.machine, h.cwd, h.project, remote,
+			"session recorded on another machine; the command must run there"})
+	}
+	fmt.Fprintf(w, "Session %s was recorded on another machine ('%s') — it can only be resumed there.\n", h.sessionID, h.machine)
+	fmt.Fprintf(w, "On %s, run:\n\n  %s\n", h.machine, remote)
+	return true, nil
+}
+
+// archiveResumeHits resolves a session-id prefix against the archive replica
+// scopes (other machines' sessions). Only top-level sessions are offered,
+// matching the local resume paths.
+func archiveResumeHits(prefix string) []foreignHit {
+	var out []foreignHit
+	for _, sc := range scopes.Archive(false) {
+		con, err := store.ConnectRO(sc.DBP)
+		if err != nil {
+			continue
+		}
+		ids, qerr := store.SessionsByPrefix(con, prefix, false, 3)
+		_ = con.Close()
+		if qerr != nil {
+			continue
+		}
+		for _, id := range ids {
+			out = append(out, foreignHit{
+				sessionID: id,
+				machine:   sc.OriginName,
+				cwd:       sc.CWD,
+				project:   sc.Project,
+				source:    sc.Source,
+			})
+		}
+	}
+	return out
 }
 
 // codexResumeHits resolves a session-id prefix against the Codex scope dbs. A
