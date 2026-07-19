@@ -35,6 +35,20 @@ func seedTranscripts(t *testing.T, home string) (claudeFile, codexFile string) {
 	return claudeFile, codexFile
 }
 
+// gitVerb returns the git subcommand in args — the first arg past the leading
+// "-c key=val" config pairs withCommitIdentity prepends — so fake run seams
+// classify invocations by verb regardless of identity pinning.
+func gitVerb(args []string) string {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-c" {
+			i++ // skip the -c value
+			continue
+		}
+		return args[i]
+	}
+	return ""
+}
+
 // remoteCommitCount returns the number of commits on the remote's default branch.
 func remoteCommitCount(t *testing.T, bare string) int {
 	t.Helper()
@@ -153,19 +167,11 @@ func TestPushLocal_AppendRecopiesOnlyThatFile(t *testing.T) {
 	}
 }
 
-// TestPushLocal_ConcurrentPusherRebaseRetry: a second machine's head appears
-// on the remote mid-push (after our commit, before our push) → the
-// rebase-retry loop lands BOTH machines' trees.
-func TestPushLocal_ConcurrentPusherRebaseRetry(t *testing.T) {
-	home := newTestHome(t)
-	bare := initBareRepo(t)
-	seedTranscripts(t, home)
-
-	a, err := Init(context.Background(), bare, "machine-a")
-	if err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-
+// injectConcurrentPusher wires a.run so that a second machine's head lands on
+// the remote exactly between our commit and our first push — the ref-contention
+// seam the rebase-retry path exists for.
+func injectConcurrentPusher(t *testing.T, a *Archive, bare string) {
+	t.Helper()
 	// Machine B: a separate clone of the same remote, claiming its own dir.
 	cloneB := filepath.Join(t.TempDir(), "clone-b")
 	gitT(t, "", "clone", bare, cloneB)
@@ -193,6 +199,44 @@ func TestPushLocal_ConcurrentPusherRebaseRetry(t *testing.T) {
 		}
 		return real(ctx, dir, args...)
 	}
+}
+
+// withoutGitIdentity makes every git child spawned under the test behave as on
+// a fresh machine with NO usable committer identity: the global config is
+// redirected to one that only disables ident auto-detection (plain absence is
+// not enough — on hosts whose hostname canonicalizes, git silently invents
+// user@host and would mask the bug), the system config is silenced, and every
+// identity env var is cleared.
+func withoutGitIdentity(t *testing.T) {
+	t.Helper()
+	gcfg := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(gcfg, []byte("[user]\n\tuseConfigOnly = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", gcfg)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	for _, k := range []string{
+		"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+		"GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL",
+	} {
+		t.Setenv(k, "") // register restoration of any original value…
+		os.Unsetenv(k)  // …then actually clear it for the child gits
+	}
+}
+
+// TestPushLocal_ConcurrentPusherRebaseRetry: a second machine's head appears
+// on the remote mid-push (after our commit, before our push) → the
+// rebase-retry loop lands BOTH machines' trees.
+func TestPushLocal_ConcurrentPusherRebaseRetry(t *testing.T) {
+	home := newTestHome(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	injectConcurrentPusher(t, a, bare)
 
 	rep, err := a.PushLocal(context.Background())
 	if err != nil {
@@ -216,19 +260,58 @@ func TestPushLocal_ConcurrentPusherRebaseRetry(t *testing.T) {
 	}
 }
 
+// TestPushLocal_RebaseRetryWithoutGitIdentity: the concurrent-push retry path
+// must succeed on a machine with NO git identity configured. commit() pins a
+// synthetic identity, but the retry's `pull --rebase` RE-CREATES the replayed
+// commit — unpinned, that child dies exit-128 "Committer identity unknown" on
+// any fresh machine, and the sync never lands.
+func TestPushLocal_RebaseRetryWithoutGitIdentity(t *testing.T) {
+	home := newTestHome(t)
+	withoutGitIdentity(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	injectConcurrentPusher(t, a, bare)
+
+	rep, err := a.PushLocal(context.Background())
+	if err != nil {
+		t.Fatalf("PushLocal on identity-less machine: %v", err)
+	}
+	if !rep.Pushed {
+		t.Error("push did not land")
+	}
+	if rep.Retries != 1 {
+		t.Errorf("Retries = %d, want 1", rep.Retries)
+	}
+
+	verify := checkoutRemote(t, bare)
+	for _, want := range []string{
+		"machine-a/claude/-tmp-proj/sess-1111.jsonl",
+		"machine-b/claude/-proj/sess-b.jsonl",
+	} {
+		if _, err := os.Stat(filepath.Join(verify, want)); err != nil {
+			t.Errorf("remote missing %s after identity-less rebase retry: %v", want, err)
+		}
+	}
+}
+
 // TestPushWithRetry_Bounded: a remote that stays contended forever exhausts
 // the bounded retries with a clear error — and the loop never force-pushes.
 func TestPushWithRetry_Bounded(t *testing.T) {
 	newTestHome(t)
 
-	var calls []string
+	var calls [][]string
 	a := &Archive{
 		cfg:       Config{Remote: "example.invalid/archive.git", Name: "machine-a"},
 		clone:     t.TempDir(),
 		machineID: "cafecafecafecafecafecafecafecafe",
 		run: func(ctx context.Context, dir string, args ...string) (string, error) {
-			calls = append(calls, strings.Join(args, " "))
-			switch args[0] {
+			calls = append(calls, args)
+			switch gitVerb(args) {
 			case "symbolic-ref":
 				return "main\n", nil
 			case "push":
@@ -254,14 +337,20 @@ func TestPushWithRetry_Bounded(t *testing.T) {
 
 	pushes, rebases := 0, 0
 	for _, c := range calls {
-		if strings.HasPrefix(c, "push") {
+		joined := strings.Join(c, " ")
+		switch gitVerb(c) {
+		case "push":
 			pushes++
-			if strings.Contains(c, "--force") || strings.Contains(c, "-f ") {
-				t.Errorf("force push issued: %q", c)
+			if strings.Contains(joined, "--force") || strings.Contains(joined, "-f ") {
+				t.Errorf("force push issued: %q", joined)
 			}
-		}
-		if strings.HasPrefix(c, "pull --rebase") {
+		case "pull":
 			rebases++
+			// The rebase re-creates replayed commits, so its invocation must
+			// carry the same pinned identity as commit().
+			if !strings.Contains(joined, "user.name=") || !strings.Contains(joined, "user.email=") {
+				t.Errorf("rebase invocation missing pinned identity: %q", joined)
+			}
 		}
 	}
 	if pushes != maxPushAttempts || rebases != maxPushAttempts-1 {
@@ -310,7 +399,7 @@ func TestPushWithRetry_AbortsWedgedRebase(t *testing.T) {
 		clone: t.TempDir(),
 		run: func(ctx context.Context, dir string, args ...string) (string, error) {
 			calls = append(calls, strings.Join(args, " "))
-			switch args[0] {
+			switch gitVerb(args) {
 			case "symbolic-ref":
 				return "main\n", nil
 			case "push":
