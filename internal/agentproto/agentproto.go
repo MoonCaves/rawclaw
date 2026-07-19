@@ -7,6 +7,7 @@
 package agentproto
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -230,9 +231,14 @@ func resolveRef(ref string) (string, string, error) {
 }
 
 // allScope returns every search scope across all runtimes (Claude projects +
-// Codex cwd-groups), via the scopes enumerator.
+// Codex cwd-groups), via the scopes enumerator. context.Background() is
+// deliberate: this is only the nil-scope fallback of the verb API, and the
+// verbs take a scope, not a ctx. Callers with a run deadline (the cli) build
+// their scope under the watchdog ctx and pass it in (cli.verbScope/allScope);
+// what remains here serves scope-agnostic library/test callers that have no
+// run context to bound the archive enumeration with.
 func allScope() []view.Scope {
-	return scopes.All("", false)
+	return scopes.All(context.Background(), "", false)
 }
 
 // runeLen counts code points in s.

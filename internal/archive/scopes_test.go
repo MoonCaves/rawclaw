@@ -73,7 +73,7 @@ func TestScopes_ForeignDirsOnly(t *testing.T) {
 	const foreignID = "beefbeefbeefbeefbeefbeefbeefbeef"
 	a := initArchiveWithForeign(t, "machine-b", foreignID)
 
-	scopes := a.Scopes(false)
+	scopes := a.Scopes(t.Context(), false)
 	if len(scopes) != 2 {
 		t.Fatalf("Scopes() = %d scopes (%+v), want 2 (foreign claude + codex)", len(scopes), scopes)
 	}
@@ -113,7 +113,7 @@ func TestScopes_StampsForeignOrigin(t *testing.T) {
 	const foreignID = "beefbeefbeefbeefbeefbeefbeefbeef"
 	a := initArchiveWithForeign(t, "machine-b", foreignID)
 
-	for _, sc := range a.Scopes(false) {
+	for _, sc := range a.Scopes(t.Context(), false) {
 		if n := checkAllOrigins(t, sc.DBP, foreignID); n == 0 {
 			t.Errorf("scope %q ingested zero sessions", sc.Project)
 		}
@@ -169,7 +169,7 @@ func TestScopes_RenamedOwnDirExcluded(t *testing.T) {
 	gitT(t, a.ClonePath(), "add", "-A")
 	gitT(t, a.ClonePath(), "commit", "-m", "old-name: stale self dir")
 
-	for _, sc := range a.Scopes(false) {
+	for _, sc := range a.Scopes(t.Context(), false) {
 		if strings.HasPrefix(sc.Project, "old-name/") {
 			t.Errorf("renamed own dir enumerated as foreign: %q", sc.Project)
 		}
@@ -200,7 +200,7 @@ func TestScopes_RenamedForeignDirDeduped(t *testing.T) {
 	gitT(t, a.ClonePath(), "commit", "-m", "machine-b-old: leftover pre-rename dir")
 
 	var names []string
-	for _, sc := range a.Scopes(false) {
+	for _, sc := range a.Scopes(t.Context(), false) {
 		if sc.Origin == foreignID {
 			names = append(names, sc.Project)
 		}
@@ -230,7 +230,7 @@ func TestScopes_EmptyMachineIDSkipped(t *testing.T) {
 	gitT(t, a.ClonePath(), "add", "-A")
 	gitT(t, a.ClonePath(), "commit", "-m", "machine-x: malformed manifest")
 
-	for _, sc := range a.Scopes(false) {
+	for _, sc := range a.Scopes(t.Context(), false) {
 		if strings.HasPrefix(sc.Project, "machine-x/") {
 			t.Errorf("empty-machine_id dir enumerated: %q", sc.Project)
 		}
@@ -245,7 +245,7 @@ func TestScopes_ManifestlessDirSkipped(t *testing.T) {
 	stray := filepath.Join(a.ClonePath(), "stray")
 	writeTranscript(t, stray, "claude/-x/sess-s.jsonl", "{}\n")
 
-	for _, sc := range a.Scopes(false) {
+	for _, sc := range a.Scopes(t.Context(), false) {
 		if strings.HasPrefix(sc.Project, "stray/") {
 			t.Errorf("manifest-less dir enumerated: %q", sc.Project)
 		}
@@ -264,7 +264,7 @@ func TestScopes_NoCloneNoScopes(t *testing.T) {
 	if err != nil || a == nil {
 		t.Fatalf("Load: (%v, %v)", a, err)
 	}
-	if scopes := a.Scopes(false); len(scopes) != 0 {
+	if scopes := a.Scopes(t.Context(), false); len(scopes) != 0 {
 		t.Errorf("Scopes() with no clone = %d scopes, want 0", len(scopes))
 	}
 }
@@ -288,7 +288,7 @@ func TestScopes_StaleDirFlagged(t *testing.T) {
 	gitEnvCommit(t, a.ClonePath(), "2020-01-01T00:00:00Z", "machine-c: ancient sync")
 
 	var sawFresh, sawStale bool
-	for _, sc := range a.Scopes(false) {
+	for _, sc := range a.Scopes(t.Context(), false) {
 		switch {
 		case strings.HasPrefix(sc.Project, "machine-b/"):
 			sawFresh = true
@@ -321,5 +321,59 @@ func gitEnvCommit(t *testing.T, dir, isoDate, msg string) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git commit (dated): %v\n%s", err, out)
+	}
+}
+
+// TestScopes_CanceledCtxProbeDegradesToStale: the staleness git probes run
+// under the CALLER's context — a dead ctx (the CLI watchdog firing) kills the
+// probe instead of letting it run unbounded, and the unknown freshness reads
+// as stale (never silently fresh). Enumeration itself still succeeds.
+func TestScopes_CanceledCtxProbeDegradesToStale(t *testing.T) {
+	a := initArchiveWithForeign(t, "machine-b", "beefbeefbeefbeefbeefbeefbeefbeef")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	scs := a.Scopes(ctx, false)
+	if len(scs) != 2 {
+		t.Fatalf("Scopes(dead ctx) = %d scopes, want 2 (enumeration must survive a dead probe)", len(scs))
+	}
+	for _, sc := range scs {
+		if !sc.Stale {
+			t.Errorf("scope %q Stale = false under a dead ctx; unknown freshness must read stale", sc.Project)
+		}
+	}
+}
+
+// TestLookupScopes_NeverIngests: LookupScopes enumerates the same foreign
+// scopes as Scopes but builds NOTHING — before any search-time ingest the
+// scope dbs must not exist; after a real Scopes pass, LookupScopes points at
+// the exact same, now-openable dbs.
+func TestLookupScopes_NeverIngests(t *testing.T) {
+	a := initArchiveWithForeign(t, "machine-b", "beefbeefbeefbeefbeefbeefbeefbeef")
+
+	look := a.LookupScopes()
+	if len(look) != 2 {
+		t.Fatalf("LookupScopes() = %d scopes, want 2 (foreign claude + codex)", len(look))
+	}
+	for _, sc := range look {
+		if sc.DBP == "" {
+			t.Fatalf("lookup scope %q has empty DBP", sc.Project)
+		}
+		if _, err := os.Stat(sc.DBP); err == nil {
+			t.Errorf("LookupScopes built %s — the lookup path must never ingest", sc.DBP)
+		}
+	}
+
+	ingested := map[string]bool{}
+	for _, sc := range a.Scopes(t.Context(), false) {
+		ingested[sc.DBP] = true
+	}
+	for _, sc := range look {
+		if !ingested[sc.DBP] {
+			t.Errorf("lookup scope db %s does not match any ingested scope db", sc.DBP)
+		}
+		if _, err := os.Stat(sc.DBP); err != nil {
+			t.Errorf("after Scopes ingest, lookup db %s still absent: %v", sc.DBP, err)
+		}
 	}
 }

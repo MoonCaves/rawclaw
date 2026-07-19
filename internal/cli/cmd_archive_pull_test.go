@@ -55,11 +55,17 @@ func TestArchivePullCmd_UnconfiguredNoOp(t *testing.T) {
 
 // TestResume_ForeignSessionDegrades: --resume on a session that lives on
 // another machine can't hand back a runnable local command — it degrades with
-// a clear message naming the machine and the command to run THERE.
+// a clear message naming the machine and the command to run THERE. The
+// foreign lookup reads only the replica dbs a prior search built (a resume
+// follows a search in practice), so the test runs one search first.
 func TestResume_ForeignSessionDegrades(t *testing.T) {
 	archivetest.Setup(t, "")
 
 	root := NewRootCmd(BuildInfo{})
+	if _, err := runCmd(t, root, "", archivetest.ForeignBeacon); err != nil {
+		t.Fatalf("priming search: %v", err)
+	}
+	root = NewRootCmd(BuildInfo{})
 	out, err := runCmd(t, root, "", "--resume", archivetest.ForeignSession[:8])
 	if err != nil {
 		t.Fatalf("--resume foreign: %v\n%s", err, out)
@@ -72,6 +78,23 @@ func TestResume_ForeignSessionDegrades(t *testing.T) {
 	}
 	if !strings.Contains(out, "another machine") {
 		t.Errorf("degrade message should say the session lives on another machine:\n%s", out)
+	}
+}
+
+// TestResume_ForeignUnsearchedMissesCheaply: --resume on a foreign session
+// whose replica db no search has built yet falls through to the ordinary
+// not-found hint — the lookup opens existing dbs read-only and must NOT
+// trigger the full foreign ingest just to answer a prefix miss.
+func TestResume_ForeignUnsearchedMissesCheaply(t *testing.T) {
+	archivetest.Setup(t, "")
+
+	root := NewRootCmd(BuildInfo{})
+	out, err := runCmd(t, root, "", "--resume", archivetest.ForeignSession[:8])
+	if err != nil {
+		t.Fatalf("--resume foreign (unsearched): %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "No session id starts with") {
+		t.Errorf("want the ordinary not-found hint before any search, got:\n%s", out)
 	}
 }
 

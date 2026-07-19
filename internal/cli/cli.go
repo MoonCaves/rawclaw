@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -308,13 +309,16 @@ func newVersionCmd(build BuildInfo) *cobra.Command {
 	}
 }
 
-// verbScope resolves the scope for the read/outline verbs: nil (all projects,
-// agentproto's default) unless --this-project, in which case the single cwd/--dir
-// project — or an explicit empty scope when this-project is asked but the dir has
-// no transcript history (so it resolves nothing rather than silently going wide).
-func verbScope(thisProject bool, dir string) []view.Scope {
+// verbScope resolves the scope for the read/outline verbs: the full
+// all-projects enumeration unless --this-project, in which case the single
+// cwd/--dir project — or an explicit empty scope when this-project is asked
+// but the dir has no transcript history (so it resolves nothing rather than
+// silently going wide).
+func verbScope(ctx context.Context, thisProject bool, dir string) []view.Scope {
 	if !thisProject {
-		return nil
+		// All-projects: built HERE (not via agentproto's nil-scope fallback) so
+		// the archive enumeration's git probes run under the run's watchdog ctx.
+		return allScope(ctx, "", false)
 	}
 	td := paths.FindTranscriptDir(dir)
 	if td == "" || !isDir(td) {
@@ -355,7 +359,7 @@ func newReadCmd() *cobra.Command {
 				v := budget
 				b = &v
 			}
-			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], verbScope(thisProject, dir),
+			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], verbScope(cmd.Context(), thisProject, dir),
 				focus, b, includeTools, moreLevel, around, jsonOut); err != nil {
 				return err
 			}
@@ -395,7 +399,7 @@ func newOutlineCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0], verbScope(thisProject, dir), includeTools, jsonOut); err != nil {
+			if err := agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0], verbScope(cmd.Context(), thisProject, dir), includeTools, jsonOut); err != nil {
 				return err
 			}
 			maybeAutosync() // after the arc is printed; never before
@@ -414,6 +418,7 @@ func newOutlineCmd() *cobra.Command {
 // list → reindex-vectors → resume → stats → browse → (search).
 func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	out := cmd.OutOrStdout()
+	ctx := cmd.Context()
 
 	if err := validateChoice("source", o.Source, "claude", "codex"); err != nil {
 		return err
@@ -425,7 +430,7 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	}
 
 	if o.ReindexVectors {
-		return runReindexVectors(out, o)
+		return runReindexVectors(ctx, out, o)
 	}
 
 	if o.Resume != "" {
@@ -433,14 +438,14 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	}
 
 	if o.Stats {
-		return runStats(out, o)
+		return runStats(ctx, out, o)
 	}
 
 	if len(args) == 0 {
 		return runBrowse(out, o)
 	}
 
-	if err := runSearch(out, o, args); err != nil {
+	if err := runSearch(ctx, out, o, args); err != nil {
 		return err
 	}
 	// Results are already printed; the sync-on-invoke trigger fires last so
@@ -462,13 +467,14 @@ func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool)
 
 // allScope builds the search scope spanning the requested runtime(s) — Claude
 // projects and/or Codex cwd-groups — via the scopes enumerator. source ""
-// spans all; "claude"/"codex" narrows.
-func allScope(source string, reindex bool) []view.Scope {
-	return scopes.All(source, reindex)
+// spans all; "claude"/"codex" narrows. ctx (the run's watchdog context)
+// bounds the archive enumeration's git probes.
+func allScope(ctx context.Context, source string, reindex bool) []view.Scope {
+	return scopes.All(ctx, source, reindex)
 }
 
 // runReindexVectors builds/updates the semantic index for the scope.
-func runReindexVectors(w io.Writer, o *Options) error {
+func runReindexVectors(ctx context.Context, w io.Writer, o *Options) error {
 	if !index.FTS5OK() {
 		fmt.Fprintln(w, "--reindex-vectors needs FTS5.")
 		return nil
@@ -488,7 +494,7 @@ func runReindexVectors(w io.Writer, o *Options) error {
 			scope = sc
 		}
 	} else {
-		scope = allScope(o.Source, o.Reindex)
+		scope = allScope(ctx, o.Source, o.Reindex)
 	}
 
 	total := 0
@@ -652,10 +658,14 @@ func resumeForeign(w io.Writer, o *Options) (handled bool, err error) {
 
 // archiveResumeHits resolves a session-id prefix against the archive replica
 // scopes (other machines' sessions). Only top-level sessions are offered,
-// matching the local resume paths.
+// matching the local resume paths. The lookup opens only the replica cache
+// dbs EARLIER searches already built (scopes.ArchiveLookup) — re-walking and
+// ingesting every foreign tree just to answer a prefix miss would be far too
+// heavy, so a session pulled but never yet covered by a search resolves to
+// the ordinary not-found hint until one runs.
 func archiveResumeHits(prefix string) []foreignHit {
 	var out []foreignHit
-	for _, sc := range scopes.Archive(false) {
+	for _, sc := range scopes.ArchiveLookup() {
 		con, err := store.ConnectRO(sc.DBP)
 		if err != nil {
 			continue
@@ -717,14 +727,14 @@ func toStatsJSON(s store.CorpusStats) statsJSON {
 
 // runStats prints the corpus overview for this project, or the all-projects aggregate
 // under --all.
-func runStats(w io.Writer, o *Options) error {
+func runStats(ctx context.Context, w io.Writer, o *Options) error {
 	if !index.FTS5OK() {
 		fmt.Fprintln(w, "--stats needs FTS5.")
 		return nil
 	}
 
 	if (o.All || o.Source != "") && !o.ThisProject {
-		return runStatsFleet(w, o)
+		return runStatsFleet(ctx, w, o)
 	}
 
 	sc, td, ok := thisScope(w, o)
@@ -761,12 +771,12 @@ type projectStat struct {
 }
 
 // runStatsFleet computes and prints the --all stats aggregate across all projects.
-func runStatsFleet(w io.Writer, o *Options) error {
+func runStatsFleet(ctx context.Context, w io.Writer, o *Options) error {
 	tot := store.CorpusStats{}
 	nProjects := 0
 	var per []projectStat
 
-	for _, sc := range allScope(o.Source, o.Reindex) {
+	for _, sc := range allScope(ctx, o.Source, o.Reindex) {
 		dbp, _, err := scopes.Resolve(sc, o.Reindex)
 		if err != nil {
 			continue
@@ -828,7 +838,7 @@ func runBrowse(w io.Writer, o *Options) error {
 }
 
 // runSearch dispatches a query to the FALLBACK / BRIEF / DISCOVERY shapes.
-func runSearch(w io.Writer, o *Options, args []string) error {
+func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) error {
 	q := strings.Join(args, " ")
 	ftsExpr, usedOps := query.BooleanToFTS5(q)
 	rawMatch := ""
@@ -878,7 +888,7 @@ func runSearch(w io.Writer, o *Options, args []string) error {
 		scope = sc
 		label = "on " + paths.ProjectLabel(td)
 	} else {
-		scope = allScope(o.Source, o.Reindex)
+		scope = allScope(ctx, o.Source, o.Reindex)
 		label = "across all projects"
 	}
 	var emb embed.Embedder
