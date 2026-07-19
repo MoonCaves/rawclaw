@@ -75,23 +75,33 @@ type deleteFlags struct {
 }
 
 // newDeleteCmd wires `rawclaw delete`: filter-gated, dry-run-first deletion of
-// sessions. It always computes the plan via a dry run first, prints it, and —
-// unless --dry-run — prompts y/N on stdin before the real delete.
+// sessions — by filter flags, or of ONE session named positionally (the
+// session8 prefix or full id from search output). It always computes the plan
+// via a dry run first, prints it, and — unless --dry-run — prompts y/N on
+// stdin before the real delete.
 func newDeleteCmd() *cobra.Command {
 	f := &deleteFlags{}
 	cmd := &cobra.Command{
-		Use:   "delete",
-		Short: "Delete sessions matching a filter (dry-run first, then y/N confirm)",
-		Long: "Delete transcript sessions matching a filter. At least one filter " +
-			"(--before/--project/--max-messages) is required; deleting every session " +
-			"is refused. The plan is always shown first; without --dry-run you are " +
-			"prompted y/N before anything is removed. A real delete writes a tombstone " +
-			"so a reindex skips the removed sessions.",
-		Args:          cobra.NoArgs,
+		Use:   "delete [session]",
+		Short: "Delete a session by id, or sessions matching a filter (dry-run first, then y/N confirm)",
+		Long: "Delete transcript sessions. Name ONE session positionally — the 8-char id " +
+			"from search output, or the full id — or match a set with the filter flags " +
+			"(--before/--project/--max-messages). One of the two is required; deleting " +
+			"every session is refused. The plan is always shown first; without --dry-run " +
+			"you are prompted y/N before anything is removed. A real delete writes a " +
+			"tombstone so a reindex skips the removed sessions.\n\n" +
+			"What a delete removes: the session's transcript file (when still on disk) " +
+			"and rawclaw's copy (index + archive — the index row via tombstone, this " +
+			"machine's archive copy on the next push). A RETAINED session — one whose transcript " +
+			"the source tool already purged — loses only rawclaw's copy; Claude Code / " +
+			"Codex transcript files are untouched. " +
+			"Foreign (other-machine) sessions are read-only from this machine and are " +
+			"refused with a pointer at their origin machine.",
+		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDelete(cmd, f)
+			return runDelete(cmd, f, args)
 		},
 	}
 	fl := cmd.Flags()
@@ -103,10 +113,19 @@ func newDeleteCmd() *cobra.Command {
 	return cmd
 }
 
-// runDelete builds the DeleteOpts, runs the dry-run plan, prints it, and (unless
-// --dry-run) confirms y/N before the real delete.
-func runDelete(cmd *cobra.Command, f *deleteFlags) error {
+// runDelete builds the DeleteOpts (filters plus the optional positional
+// session id), runs the dry-run plan, prints it, and (unless --dry-run)
+// confirms y/N before the real delete.
+func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 	out := cmd.OutOrStdout()
+
+	sid := ""
+	if len(args) == 1 {
+		sid = strings.TrimSpace(args[0])
+		if sid == "" {
+			return ExitError{Code: 2, Msg: "empty session id; pass the 8-char id from search output (or the full id)"}
+		}
+	}
 
 	before, err := parseBefore(f.before)
 	if err != nil {
@@ -117,6 +136,7 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 		Before:      before,
 		Project:     f.project,
 		MaxMessages: f.maxMessages,
+		SessionID:   sid,
 		DryRun:      true, // always plan first
 	}
 
@@ -126,7 +146,7 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 		if errors.Is(err, lifecycle.ErrNoFilter) {
 			return ExitError{
 				Code: 1,
-				Msg:  "refusing to delete all sessions; pass --before/--project/--max-messages",
+				Msg:  "refusing to delete all sessions; name a session id, or pass --before/--project/--max-messages",
 			}
 		}
 		return fmt.Errorf("plan delete: %w", err)
@@ -136,24 +156,89 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 	// source tool already purged, but which still live in an index db
 	// (missing_since set). matchSessions above only walks the live projects
 	// tree, so without this union exactly the rows durable retention creates
-	// are undeletable. Filters are the same three the live plan
-	// just used, so a --project/--before/--max-messages that matched nothing
-	// live can still reach a retained row.
-	retained, err := index.RetainedMatches("", f.project, before, f.maxMessages)
+	// are undeletable. Filters are the same ones the live plan just used
+	// (including the positional session id), so a filter/id that matched
+	// nothing live can still reach a retained row.
+	retained, err := index.RetainedMatches("", f.project, before, f.maxMessages, sid)
 	if err != nil {
 		return fmt.Errorf("plan retained matches: %w", err)
 	}
 
-	printPlan(out, plan)
-	printRetainedPlan(out, retained)
+	// De-duplicate by session id: one session can match more than one row —
+	// live AND stale-retained (file back on disk while missing_since lingers
+	// from an earlier purge), or retained in TWO index dbs (the old and new
+	// db of a renamed project dir). Counting duplicates would trip the
+	// positional ambiguity guard on a single session — making it undeletable
+	// by its own full id — and double-credit the summary. One tombstone entry
+	// covers every row carrying the id, so keeping the live match (else the
+	// first retained row) loses nothing.
+	if len(retained) > 0 {
+		seen := make(map[string]struct{}, len(plan.Matched)+len(retained))
+		for _, it := range plan.Matched {
+			seen[it.SessionID] = struct{}{}
+		}
+		kept := retained[:0]
+		for _, r := range retained {
+			if _, dup := seen[r.SessionID]; dup {
+				continue
+			}
+			seen[r.SessionID] = struct{}{}
+			kept = append(kept, r)
+		}
+		retained = kept
+	}
 	total := len(plan.Matched) + len(retained)
 
-	// Foreign guard: a --project that reaches another machine's archived
-	// scopes is named, never silently ignored — foreign sessions are
-	// read-only from every box (delete them on their origin machine). The
-	// probe is offline (clone-only) and best-effort: a broken archive config
-	// must not block a purely local delete.
+	// Foreign guard: a --project (or a positional session id) that reaches
+	// another machine's archived scopes is named, never silently ignored —
+	// foreign sessions are read-only from every box (delete them on their
+	// origin machine). The probe is offline (clone-only) and best-effort: a
+	// broken archive config must not block a purely local delete.
 	foreign := foreignDeleteMatches(f.project)
+	if sid != "" {
+		foreign = mergeNames(foreign, foreignDeleteSessionMatches(sid))
+	}
+
+	// Positional unknown-id: a clear error, exit 1 — before any plan output.
+	// (The filter form keeps its quieter "Nothing to delete." exit-0 shape: a
+	// filter matching nothing is an answer; a named session that does not
+	// exist is a mistake.) A foreign-only hit gets the origin-machine pointer.
+	if sid != "" && total == 0 {
+		if len(foreign) > 0 {
+			return ExitError{Code: 1, Msg: fmt.Sprintf(
+				"session %q was recorded on machine(s) %s; foreign sessions are read-only from this machine — delete it on its origin machine",
+				sid, strings.Join(foreign, ", "))}
+		}
+		if f.project != "" || f.before != "" || f.maxMessages > 0 {
+			return ExitError{Code: 1, Msg: fmt.Sprintf(
+				"no session matches %q under the given filter flags — drop the filters, or use the 8-char id from search output (or the full id)", sid)}
+		}
+		return ExitError{Code: 1, Msg: fmt.Sprintf(
+			"no session matches %q — use the 8-char id from search output (or the full id)", sid)}
+	}
+
+	printPlan(out, plan)
+	printRetainedPlan(out, retained)
+
+	// Positional ambiguity: an id/prefix addressing MORE than one session
+	// deletes none of them — with --yes in play, fanning out silently would
+	// let one session8 take out a second session by accident. The refusal
+	// lists the FULL colliding ids (the plan rows above truncate to 8 chars,
+	// which for a prefix collision renders identically) so the narrowed
+	// retry can be copy-pasted.
+	if sid != "" && total > 1 {
+		ids := make([]string, 0, total)
+		for _, it := range plan.Matched {
+			ids = append(ids, it.SessionID)
+		}
+		for _, r := range retained {
+			ids = append(ids, r.SessionID)
+		}
+		return ExitError{Code: 1, Msg: fmt.Sprintf(
+			"%d sessions match %q — narrow it to the full session id:\n  %s",
+			total, sid, strings.Join(ids, "\n  "))}
+	}
+
 	if len(foreign) > 0 {
 		fmt.Fprintf(out,
 			"Sessions on machine(s) %s in the archive also match; foreign sessions are read-only from this machine — delete them on their origin machine.\n",
@@ -181,6 +266,9 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 
 	// --yes skips the interactive prompt for non-interactive/agent use. Without it
 	// we always prompt y/N; an EOF (non-tty / closed stdin) still aborts safely.
+	// An abort prints its message and exits 1 (silently — the message is already
+	// out) so a script can distinguish "aborted" from "deleted"; --dry-run above
+	// stays exit 0.
 	if !f.yes {
 		ok, err := confirm(cmd.InOrStdin(), out,
 			fmt.Sprintf("Delete %d session(s)? This is irreversible. [y/N]: ", total))
@@ -189,7 +277,7 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 		}
 		if !ok {
 			fmt.Fprintln(out, "Aborted; nothing deleted.")
-			return nil
+			return ExitError{Code: 1}
 		}
 	}
 
@@ -215,7 +303,50 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 
 	fmt.Fprintf(out, "Deleted %d session(s) (%d retained), reclaimed %s. Tombstone: %s\n",
 		len(done.Matched)+len(retained), len(retained), humanizeBytes(done.TotalBytes), done.TombstonePath)
+	printProvenance(out, len(done.Matched))
 	return nil
+}
+
+// printProvenance states what a real delete just removed, so nobody has to
+// guess whose files died. A delete that removed live transcript files says so
+// plainly; a retained-only delete removed no on-disk transcript — only
+// rawclaw's copy — and the source tools' files are untouched.
+func printProvenance(w io.Writer, liveRemoved int) {
+	if liveRemoved > 0 {
+		fmt.Fprintln(w, "Removed the session transcript file(s) and rawclaw's copy (index + archive).")
+		return
+	}
+	fmt.Fprintln(w, "Removed rawclaw's copy (index + archive). Claude Code / Codex transcript files are untouched.")
+}
+
+// foreignDeleteSessionMatches asks the configured archive (feature off →
+// none) which foreign machines hold a session the positional id addresses.
+// Best-effort like foreignDeleteMatches: an unreadable archive config
+// degrades to "no foreign matches" rather than blocking a local delete.
+func foreignDeleteSessionMatches(id string) []string {
+	a, err := archive.Load()
+	if err != nil || a == nil {
+		return nil
+	}
+	return a.ForeignSessionMatches(id)
+}
+
+// mergeNames unions two name lists preserving order, dropping duplicates.
+func mergeNames(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	add := func(names []string) {
+		for _, n := range names {
+			if _, dup := seen[n]; dup {
+				continue
+			}
+			seen[n] = struct{}{}
+			out = append(out, n)
+		}
+	}
+	add(a)
+	add(b)
+	return out
 }
 
 // parseBefore parses the --before flag, accepting RFC3339 and YYYY-MM-DD. An

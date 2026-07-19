@@ -26,7 +26,7 @@ func TestRetainedMatches_FindsRetainedSession(t *testing.T) {
 		t.Fatalf("UpdateIndex pass 2 (after purge): %v", err)
 	}
 
-	got, err := RetainedMatches(filepath.Dir(dbp), "", time.Time{}, 0)
+	got, err := RetainedMatches(filepath.Dir(dbp), "", time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("RetainedMatches: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRetainedMatches_ExcludesLiveSession(t *testing.T) {
 		t.Fatalf("UpdateIndex: %v", err)
 	}
 
-	got, err := RetainedMatches(filepath.Dir(dbp), "", time.Time{}, 0)
+	got, err := RetainedMatches(filepath.Dir(dbp), "", time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("RetainedMatches: %v", err)
 	}
@@ -91,13 +91,13 @@ func TestRetainedMatches_ProjectFilter(t *testing.T) {
 
 	cacheDir := filepath.Dir(dbp)
 
-	if got, err := RetainedMatches(cacheDir, "my-special-project", time.Time{}, 0); err != nil {
+	if got, err := RetainedMatches(cacheDir, "my-special-project", time.Time{}, 0, ""); err != nil {
 		t.Fatalf("RetainedMatches (matching filter): %v", err)
 	} else if len(got) != 1 {
 		t.Errorf("project filter %q: got %d matches, want 1", "my-special-project", len(got))
 	}
 
-	if got, err := RetainedMatches(cacheDir, "no-such-project", time.Time{}, 0); err != nil {
+	if got, err := RetainedMatches(cacheDir, "no-such-project", time.Time{}, 0, ""); err != nil {
 		t.Fatalf("RetainedMatches (non-matching filter): %v", err)
 	} else if len(got) != 0 {
 		t.Errorf("project filter %q: got %d matches, want 0", "no-such-project", len(got))
@@ -111,7 +111,7 @@ func TestRetainedMatches_ProjectFilter(t *testing.T) {
 	}
 	base := filepath.Base(dbp) // e.g. "test.db"
 	needle := base[:len(base)-len(filepath.Ext(base))]
-	if got, err := RetainedMatches(cacheDir, needle, time.Time{}, 0); err != nil {
+	if got, err := RetainedMatches(cacheDir, needle, time.Time{}, 0, ""); err != nil {
 		t.Fatalf("RetainedMatches (db-name fallback): %v", err)
 	} else if len(got) != 1 {
 		t.Errorf("db-filename fallback filter %q: got %d matches, want 1", needle, len(got))
@@ -141,7 +141,7 @@ func TestRetainedMatches_BeforeFilter(t *testing.T) {
 
 	// Cutoff before the session's last_ts: excluded.
 	early := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	if got, err := RetainedMatches(cacheDir, "", early, 0); err != nil {
+	if got, err := RetainedMatches(cacheDir, "", early, 0, ""); err != nil {
 		t.Fatalf("RetainedMatches (early cutoff): %v", err)
 	} else if len(got) != 0 {
 		t.Errorf("cutoff before last_ts: got %d matches, want 0", len(got))
@@ -149,7 +149,7 @@ func TestRetainedMatches_BeforeFilter(t *testing.T) {
 
 	// Cutoff after the session's last_ts: included.
 	late := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
-	if got, err := RetainedMatches(cacheDir, "", late, 0); err != nil {
+	if got, err := RetainedMatches(cacheDir, "", late, 0, ""); err != nil {
 		t.Fatalf("RetainedMatches (late cutoff): %v", err)
 	} else if len(got) != 1 {
 		t.Errorf("cutoff after last_ts: got %d matches, want 1", len(got))
@@ -179,13 +179,13 @@ func TestRetainedMatches_MaxMessagesFilter(t *testing.T) {
 
 	cacheDir := filepath.Dir(dbp)
 
-	if got, err := RetainedMatches(cacheDir, "", time.Time{}, 2); err != nil {
+	if got, err := RetainedMatches(cacheDir, "", time.Time{}, 2, ""); err != nil {
 		t.Fatalf("RetainedMatches (max 2): %v", err)
 	} else if len(got) != 0 {
 		t.Errorf("max-messages 2 on a 3-message session: got %d matches, want 0", len(got))
 	}
 
-	if got, err := RetainedMatches(cacheDir, "", time.Time{}, 3); err != nil {
+	if got, err := RetainedMatches(cacheDir, "", time.Time{}, 3, ""); err != nil {
 		t.Fatalf("RetainedMatches (max 3): %v", err)
 	} else if len(got) != 1 {
 		t.Errorf("max-messages 3 on a 3-message session: got %d matches, want 1", len(got))
@@ -217,7 +217,7 @@ func TestRetainedMatches_ExcludesSubagents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := RetainedMatches(filepath.Dir(dbp), "", time.Time{}, 0)
+	got, err := RetainedMatches(filepath.Dir(dbp), "", time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("RetainedMatches: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestRetainedMatches_SkipsUnreadableDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := RetainedMatches(cacheDir, "", time.Time{}, 0)
+	got, err := RetainedMatches(cacheDir, "", time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("RetainedMatches should tolerate an unreadable db, got error: %v", err)
 	}

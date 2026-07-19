@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/archive"
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/spf13/cobra"
 )
 
@@ -86,7 +87,8 @@ func runAutosyncChild(ctx context.Context, w io.Writer) error {
 	return failed
 }
 
-// autosyncLogLine writes one timestamped receipt line to the sync log.
+// autosyncLogLine writes one timestamped receipt line to the sync log
+// (marked-UTC via the timefmt seam — a log is an agent-parsed surface).
 func autosyncLogLine(w io.Writer, format string, args ...any) {
-	fmt.Fprintf(w, time.Now().UTC().Format(time.RFC3339)+" "+format+"\n", args...)
+	fmt.Fprintf(w, timefmt.UTC(time.Now())+" "+format+"\n", args...)
 }

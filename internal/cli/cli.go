@@ -28,6 +28,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -148,7 +149,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.BoolVar(&opts.ThisProject, "this-project", false, "narrow to THIS project only (default searches all projects)")
 	f.Bool("this-desk", false, "") // hidden backward-compat alias for --this-project
 	_ = f.MarkHidden("this-desk")
-	f.BoolVar(&opts.All, "all", false, "(default) search every project")
+	f.BoolVar(&opts.All, "all", false, "cover every project: the search default already, and the widener for bare browse and --stats")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
 	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
 	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex); default searches all")
@@ -442,7 +443,22 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	}
 
 	if len(args) == 0 {
-		return runBrowse(out, o)
+		return runBrowse(ctx, out, o)
+	}
+
+	// Empty (or all-whitespace) query: a distinct coaching line, NOT the
+	// no-matches coaching — `rawclaw ""` asked for a search it never spelled.
+	// Under --json the same coaching ships as JSON, like every sibling shape.
+	if strings.TrimSpace(strings.Join(args, " ")) == "" {
+		const emptyQueryHint = "Add a search term, or run bare rawclaw to browse this folder (--all for every project)."
+		if o.JSON {
+			return EmitJSON(out, struct {
+				Error string `json:"error"`
+				Hint  string `json:"hint"`
+			}{"empty query", emptyQueryHint})
+		}
+		fmt.Fprintln(out, "Empty query. "+emptyQueryHint)
+		return nil
 	}
 
 	if err := runSearch(ctx, out, o, args); err != nil {
@@ -455,11 +471,12 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 }
 
 // thisScope resolves --dir to its transcript dir; on miss, it prints the
-// "No transcript history" hint and returns ok=false.
+// "No transcript history" hint (naming both escapes: --list to see the
+// projects, --all to cover every project) and returns ok=false.
 func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool) {
 	td = paths.FindTranscriptDir(o.Dir)
 	if td == "" || !isDir(td) {
-		fmt.Fprintf(w, "No transcript history for --dir %s. Try --list.\n", realpathExpand(o.Dir))
+		fmt.Fprintf(w, "No transcript history for --dir %s. Try --list, or --all for every project.\n", realpathExpand(o.Dir))
 		return nil, "", false
 	}
 	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}, td, true
@@ -819,8 +836,13 @@ func runStatsFleet(ctx context.Context, w io.Writer, o *Options) error {
 	return nil
 }
 
-// runBrowse handles the no-query case: list recent sessions for this project.
-func runBrowse(w io.Writer, o *Options) error {
+// runBrowse handles the no-query case: list recent sessions for this project,
+// or — under --all — for every project (same scope enumeration search uses).
+// An explicit --this-project wins over --all, same precedence runStats applies.
+func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
+	if o.All && !o.ThisProject {
+		return runBrowseAll(ctx, w, o)
+	}
 	sc, td, ok := thisScope(w, o)
 	if !ok {
 		return nil
@@ -834,6 +856,36 @@ func runBrowse(w io.Writer, o *Options) error {
 		}{paths.ProjectLabel(td), rows})
 	}
 	render.PrintBrowse(w, rows, paths.ProjectLabel(td))
+	return nil
+}
+
+// runBrowseAll is the --all shape of the no-query browse: recent sessions
+// across every project (Claude + Codex + retained scopes — the same
+// enumeration search uses), merged newest-first and capped at --limit.
+func runBrowseAll(ctx context.Context, w io.Writer, o *Options) error {
+	rows := []view.BrowseAllRow{} // non-nil so --json emits [] rather than null
+	for _, sc := range allScope(ctx, o.Source, o.Reindex) {
+		dbp, _, err := scopes.Resolve(sc, o.Reindex)
+		if err != nil {
+			continue // an unresolvable scope can't contribute rows; others still can
+		}
+		for _, r := range view.BrowseDB(dbp, o.Limit, o.Since, o.Before) {
+			rows = append(rows, view.BrowseAllRow{Project: sc.Project, BrowseRow: r})
+		}
+	}
+	// Newest-first across projects; each scope contributed at most --limit rows,
+	// so the merge only has to re-sort and cap.
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].LastTS > rows[j].LastTS })
+	if len(rows) > o.Limit {
+		rows = rows[:o.Limit]
+	}
+	if o.JSON {
+		return EmitJSON(w, struct {
+			Scope    string              `json:"scope"`
+			Sessions []view.BrowseAllRow `json:"sessions"`
+		}{"all", rows})
+	}
+	render.PrintBrowseAll(w, rows)
 	return nil
 }
 
@@ -978,7 +1030,8 @@ func PrintResults(w io.Writer, res []retrieve.Hit, nSessions int) {
 		if r.IsSubagent && r.Parent != "" {
 			tag = fmt.Sprintf(" · subagent⟵%s", trunc8(r.Parent))
 		}
-		fmt.Fprintf(w, "[%s · %s · %s%s] …%s…\n\n", orQ(r.ISO), label, r.Role, tag, r.Snippet)
+		// timefmt seam: search results are agent-parsed — marked UTC.
+		fmt.Fprintf(w, "[%s · %s · %s%s] …%s…\n\n", orQ(timefmt.UTCFromISO(r.ISO)), label, r.Role, tag, r.Snippet)
 	}
 }
 
