@@ -34,7 +34,7 @@ import (
 // here) because the setting only governs LIVE-scope scans: an orphan reconcile
 // always passes false — already-retained history is removed by an explicit
 // tombstone alone, never as a side effect of a search run with the mirror
-// setting in the environment (live-verified data-loss footgun).
+// setting in the environment (a live-verified data-loss footgun).
 func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now float64, mirror bool) error {
 	type fiRow struct {
 		path      string

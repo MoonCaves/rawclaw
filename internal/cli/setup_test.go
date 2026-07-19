@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// TestReadJSONFileToleratesLineCommentsAndTrailingCommas mirrors the othertool
-// fixture exactly: a `//` line comment outside any string, plus trailing
-// commas before both a `]` and a `}`, must parse — and a `//`-looking
+// TestReadJSONFileToleratesLineCommentsAndTrailingCommas: settings files in
+// the wild carry JSONC-isms — a `//` line comment outside any string, plus
+// trailing commas before both a `]` and a `}`, must parse — and a `//`-looking
 // substring INSIDE a string value must survive untouched (proving the
 // scanner tracks string state rather than blindly stripping `//`).
 func TestReadJSONFileToleratesLineCommentsAndTrailingCommas(t *testing.T) {
@@ -120,8 +120,7 @@ func TestContainsRawclaw(t *testing.T) {
 	}
 }
 
-// TestAddRawclawHookReplacesExistingRawclawEntry mirrors othertool's
-// TestAddClaudeHooksSelectiveReplacesExistingOthertoolHooks: seed SessionStart
+// TestAddRawclawHookReplacesExistingRawclawEntry: seed SessionStart
 // with a stale rawclaw entry (an old script path) plus a foreign custom
 // entry, then call addRawclawSessionStartHook — the stale rawclaw row must be
 // replaced (not duplicated), and the foreign entry must be untouched
@@ -238,8 +237,7 @@ func TestInstallRawclawCodexHookWritesHooksJSON(t *testing.T) {
 // TestRemoveRawclawHooksDropsEmptyEventAndHooksKey: when a rawclaw entry is
 // the ONLY thing in an event array, removing it must drop that event key
 // entirely; when it's the only event, the whole "hooks" key is dropped too —
-// mirroring othertool's RemoveClaudeHooks cleanup, and the shape a later --eject
-// slice depends on.
+// no empty husks left behind, and the exact shape --eject depends on.
 func TestRemoveRawclawHooksDropsEmptyEventAndHooksKey(t *testing.T) {
 	data := map[string]any{
 		"other_setting": true,
@@ -310,8 +308,8 @@ func TestProjectConfigDirUsesBase(t *testing.T) {
 
 // TestMaybePrintProjectTrustWarning covers every target/scope combination:
 // the warning is Codex-only AND project-scope-only — the
-// Claude Code target (the only one this slice wires up) must never print it,
-// proving the hook is a safe no-op until the Codex slice switches it on.
+// Claude Code target must never print it, in any scope, proving the call is
+// a safe unconditional no-op everywhere except a project-scoped Codex wire.
 func TestMaybePrintProjectTrustWarning(t *testing.T) {
 	tests := []struct {
 		name    string
