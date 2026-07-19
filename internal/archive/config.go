@@ -14,6 +14,11 @@ import (
 type Config struct {
 	Remote string `json:"remote"` // git remote URL of the archive repository
 	Name   string `json:"name"`   // this machine's top-level dir name in the repo
+
+	// SSH optionally maps a machine name to the ssh destination `rawclaw live`
+	// dials (e.g. "box-a": "user@10.0.0.5"). Unmapped names default to the
+	// name itself, so an ~/.ssh/config Host alias needs no entry here.
+	SSH map[string]string `json:"ssh,omitempty"`
 }
 
 // configPath is <state-dir>/archive-config.json — beside the machine-id file,

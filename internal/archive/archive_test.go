@@ -3,6 +3,7 @@ package archive
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -49,7 +50,7 @@ func TestLoad_Configured(t *testing.T) {
 	if a == nil {
 		t.Fatal("Load() = nil, want configured archive")
 	}
-	if a.cfg != cfg {
+	if !reflect.DeepEqual(a.cfg, cfg) {
 		t.Errorf("Load() cfg = %+v, want %+v", a.cfg, cfg)
 	}
 	if a.machineID == "" {
