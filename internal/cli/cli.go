@@ -592,6 +592,19 @@ func resumeForeign(w io.Writer, o *Options) (handled bool, err error) {
 		return false, nil
 	}
 	if len(hits) > 1 {
+		if o.JSON {
+			type row struct {
+				SessionID string `json:"session_id"`
+				Machine   string `json:"machine"`
+				CWD       string `json:"cwd"`
+				Project   string `json:"project"`
+			}
+			rows := make([]row, 0, len(hits))
+			for _, h := range hits {
+				rows = append(rows, row{h.sessionID, h.machine, h.cwd, h.project})
+			}
+			return true, EmitJSON(w, rows)
+		}
 		fmt.Fprintf(w, "%d sessions match '%s' on other machines — narrow it:\n", len(hits), o.Resume)
 		for _, h := range hits {
 			fmt.Fprintf(w, "  %s  (%s)\n", h.sessionID, h.project)

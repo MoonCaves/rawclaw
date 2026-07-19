@@ -70,13 +70,10 @@ func newArchivePullCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("archive pull: %w", err)
 			}
-			switch {
-			case pulled:
+			if pulled {
 				fmt.Fprintf(out, "Archive refreshed from %s.\n", a.Remote())
-			case throttle:
+			} else {
 				fmt.Fprintln(out, "Archive pull skipped (pulled recently; --throttle honors the sync window).")
-			default:
-				fmt.Fprintln(out, "Nothing to pull yet — the archive remote is empty until a machine pushes.")
 			}
 			return nil
 		},

@@ -39,10 +39,11 @@ func (a *Archive) Scopes(reindex bool) []view.Scope {
 	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err != nil {
 		return nil // no clone yet: local-only until `archive pull`
 	}
+	ctx := context.Background()
 	now := time.Now()
 	var out []view.Scope
 	for _, m := range a.foreignMachines() {
-		stale := a.dirStale(m.Name, now)
+		stale := a.dirStale(ctx, m.Name, now)
 		out = append(out, a.claudeScopes(m, stale, reindex)...)
 		out = append(out, a.codexScopes(m, stale, reindex)...)
 	}
@@ -59,6 +60,8 @@ func (a *Archive) Scopes(reindex bool) []view.Scope {
 func (a *Archive) foreignMachines() []manifest {
 	entries, err := os.ReadDir(a.clone)
 	if err != nil {
+		slog.Warn("archive: cannot list clone dirs; searching local scopes only",
+			"clone", a.clone, "err", err)
 		return nil
 	}
 	var out []manifest
@@ -86,8 +89,8 @@ func (a *Archive) foreignMachines() []manifest {
 // that machine IS what search serves, so an un-pulled clone and a silent
 // machine both (correctly) read as stale. An unreadable probe counts as stale:
 // unknown freshness is reported, never silently passed off as fresh.
-func (a *Archive) dirStale(name string, now time.Time) bool {
-	out, err := a.run(context.Background(), a.clone, "log", "-1", "--format=%ct", "--", name)
+func (a *Archive) dirStale(ctx context.Context, name string, now time.Time) bool {
+	out, err := a.run(ctx, a.clone, "log", "-1", "--format=%ct", "--", name)
 	if err != nil {
 		return true
 	}
@@ -101,22 +104,31 @@ func (a *Archive) dirStale(name string, now time.Time) bool {
 // claudeScopes enumerates one foreign machine's Claude project dirs
 // (<machine>/claude/<project-dir> holding top-level *.jsonl — the same shape
 // paths.AllProjectDirs requires locally) and ingests each into its namespaced
-// db with the machine's identity stamped as origin. An ingest failure keeps the
-// scope: search opens the db read-only and reports the degradation itself.
+// db with the machine's identity stamped as origin. Listing uses os.ReadDir,
+// not Glob: the path segments come from another machine's push, and a glob
+// metachar in a dir name must not silently vanish that machine's scopes. An
+// ingest failure keeps the scope: search opens the db read-only and reports
+// the degradation itself.
 func (a *Archive) claudeScopes(m manifest, stale, reindex bool) []view.Scope {
 	root := filepath.Join(a.clone, m.Name, "claude")
-	entries, _ := filepath.Glob(filepath.Join(root, "*"))
-	sort.Strings(entries)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("archive: cannot list foreign claude tree", "machine", m.Name, "err", err)
+		}
+		return nil // absent tree: the machine pushed no Claude transcripts
+	}
 
 	var out []view.Scope
-	for _, d := range entries {
-		if !isDir(d) {
+	for _, e := range entries {
+		if !e.IsDir() {
 			continue
 		}
-		if hits, _ := filepath.Glob(filepath.Join(d, "*.jsonl")); len(hits) == 0 {
+		d := filepath.Join(root, e.Name())
+		if !hasTopLevelJSONL(d) {
 			continue
 		}
-		dbp := archiveScopeDBPath(m.Name, "claude", filepath.Base(d))
+		dbp := archiveScopeDBPath(m.Name, "claude", e.Name())
 		if _, _, err := index.EnsureIndexedTree(dbp, d, reindex, m.MachineID); err != nil {
 			slog.Warn("archive: foreign claude scope index failed",
 				"machine", m.Name, "dir", d, "err", err)
@@ -182,9 +194,26 @@ func (a *Archive) codexScopes(m manifest, stale, reindex bool) []view.Scope {
 	return out
 }
 
+// hasTopLevelJSONL reports whether dir directly holds at least one .jsonl —
+// the ReadDir counterpart of the local scopes' top-level glob check.
+func hasTopLevelJSONL(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+			return true
+		}
+	}
+	return false
+}
+
 // codexGroupLabel is the friendly label for a Codex cwd group (basename of the
 // recorded cwd, "codex" when unknown) — the same label the local Codex scopes
-// wear, prefixed by the machine name at the call site.
+// wear (scopes.codexLabel; duplicated here because scopes imports archive, so
+// the reverse import would cycle), prefixed by the machine name at the call
+// site.
 func codexGroupLabel(cwd string) string {
 	if cwd == "" {
 		return "codex"
