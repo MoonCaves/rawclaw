@@ -29,7 +29,7 @@ func TestCodexRealDataSearchable(t *testing.T) {
 	}
 
 	dbp := filepath.Join(t.TempDir(), "codex.db")
-	n, _, err := index.EnsureIndexedContainers(dbp, true, cs, a.Messages, "codex")
+	n, _, err := index.EnsureIndexedContainers(dbp, true, cs, a.Messages, "codex", "")
 	if err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
