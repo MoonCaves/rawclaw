@@ -54,9 +54,10 @@ func (a *Archive) Status(ctx context.Context) (StatusReport, error) {
 	now := time.Now()
 	st.PushOverdue = overdueAt(st.LastPush, now)
 	st.PullOverdue = overdueAt(st.LastPull, now)
-	// Same completeness predicate ensureClone applies: a torn mid-clone dir
-	// (.git without the sentinel) is not a usable clone and must not report
-	// as one — status and recovery cannot disagree on "usable".
+	// Same marker ensureClone trusts: no sentinel → not a VERIFIED clone, so
+	// status won't vouch for it. (A structurally complete pre-sentinel clone
+	// gets adopted — stamped — by the next push/pull; status is an offline
+	// read and never probes git to make that call itself.)
 	if _, err := os.Stat(filepath.Join(a.clone, ".git", cloneSentinel)); err != nil {
 		return st, nil
 	}
