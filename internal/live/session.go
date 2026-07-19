@@ -107,10 +107,19 @@ func ServeSession(w io.Writer, prefix string, tail int, jsonOut bool) error {
 	return nil
 }
 
+// ambiguousListCap bounds how many candidate ids an ambiguous-prefix error
+// lists — it is a message, not a dump.
+const ambiguousListCap = 10
+
 // resolvePrefix finds the single top-level session whose id starts with
-// prefix, across every source. Zero matches and multiple matches are distinct
-// errors — the ambiguous one lists the candidates so the caller can narrow.
+// prefix, across every source. An empty prefix, zero matches, and multiple
+// matches are distinct errors — the ambiguous one lists (a capped number of)
+// candidates so the caller can narrow.
 func resolvePrefix(prefix string) (source.Registration, source.Container, error) {
+	if prefix == "" {
+		return source.Registration{}, source.Container{}, fmt.Errorf(
+			"session prefix is empty — drop it to list recent sessions instead")
+	}
 	type match struct {
 		reg source.Registration
 		c   source.Container
@@ -137,9 +146,16 @@ func resolvePrefix(prefix string) (source.Registration, source.Container, error)
 	case 1:
 		return matches[0].reg, matches[0].c, nil
 	default:
-		ids := make([]string, 0, len(matches))
-		for _, m := range matches {
+		shown := len(matches)
+		if shown > ambiguousListCap {
+			shown = ambiguousListCap
+		}
+		ids := make([]string, 0, shown+1)
+		for _, m := range matches[:shown] {
 			ids = append(ids, m.c.ID)
+		}
+		if rest := len(matches) - shown; rest > 0 {
+			ids = append(ids, fmt.Sprintf("… and %d more", rest))
 		}
 		return source.Registration{}, source.Container{}, fmt.Errorf(
 			"%d sessions match %q — narrow it:\n  %s", len(matches), prefix, strings.Join(ids, "\n  "))

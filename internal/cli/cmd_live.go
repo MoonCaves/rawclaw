@@ -44,6 +44,15 @@ func newLiveCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
+			// A flag on the wrong mode is a mistake worth a loud answer, not a
+			// silent ignore: --tail shapes a session render, --limit a list.
+			listing := (serve && len(args) == 0) || (!serve && len(args) == 1)
+			if listing && cmd.Flags().Changed("tail") {
+				return ExitError{Code: 2, Msg: "--tail applies to a session peek (pass a session prefix)"}
+			}
+			if !listing && cmd.Flags().Changed("limit") {
+				return ExitError{Code: 2, Msg: "--limit applies to the session list (drop the session prefix)"}
+			}
 			if serve {
 				if len(args) == 0 {
 					return live.ServeList(out, limit)
@@ -51,7 +60,11 @@ func newLiveCmd() *cobra.Command {
 				return live.ServeSession(out, args[0], tail, jsonOut)
 			}
 			machine := args[0]
-			c := live.NewClient(machine, archive.SSHDestination(machine))
+			dest, err := archive.SSHDestination(machine)
+			if err != nil {
+				return err
+			}
+			c := live.NewClient(machine, dest)
 			if len(args) == 1 {
 				return c.List(cmd.Context(), out, limit, jsonOut)
 			}

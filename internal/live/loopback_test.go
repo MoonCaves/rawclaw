@@ -13,20 +13,30 @@ import (
 	"time"
 )
 
+// loopbackSSHOpts pins the host-key state to a per-test file: the probe and
+// every dial share it, and a test run never touches ~/.ssh/known_hosts.
+func loopbackSSHOpts(t *testing.T) []string {
+	t.Helper()
+	return []string{
+		"-o", "UserKnownHostsFile=" + filepath.Join(t.TempDir(), "known_hosts"),
+		"-o", "StrictHostKeyChecking=accept-new",
+	}
+}
+
 // sshToLocalhostOK probes whether this machine can ssh itself non-interactively
 // — the loopback "remote" the end-to-end test drives. BatchMode forbids
 // prompts, so a machine without key-auth'd sshd skips rather than hangs.
-func sshToLocalhostOK(t *testing.T) bool {
+func sshToLocalhostOK(t *testing.T, sshOpts []string) bool {
 	t.Helper()
 	if _, err := exec.LookPath("ssh"); err != nil {
 		return false
 	}
-	cmd := exec.Command("ssh",
+	args := append([]string{}, sshOpts...)
+	args = append(args,
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=3",
-		"-o", "StrictHostKeyChecking=accept-new",
 		"localhost", "true")
-	return cmd.Run() == nil
+	return exec.Command("ssh", args...).Run() == nil
 }
 
 // buildRawclaw compiles the real binary the loopback "remote" runs.
@@ -41,27 +51,29 @@ func buildRawclaw(t *testing.T) string {
 	return bin
 }
 
-// repoRoot resolves the module root from this package dir (internal/live).
+// repoRoot resolves the module root via the go tool — robust against this
+// package ever moving depth.
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	wd, err := os.Getwd()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}").Output()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("go list -m: %v", err)
 	}
-	return filepath.Dir(filepath.Dir(wd))
+	return strings.TrimSpace(string(out))
 }
 
 // TestLoopbackLivePeek drives the WHOLE live path against a loopback remote:
 // real ssh to localhost, a real rawclaw binary serving, real quoting and
 // stream plumbing. The remote env is pinned by a wrapper script so the fixture
 // corpus — not this machine's — is what gets served. Skips (with the reason)
-// when localhost isn't ssh-able non-interactively; slice-level verification
+// when localhost isn't ssh-able non-interactively; release verification
 // against a genuinely separate machine happens outside the unit suite.
 func TestLoopbackLivePeek(t *testing.T) {
 	if testing.Short() {
 		t.Skip("loopback ssh test skipped in -short mode")
 	}
-	if !sshToLocalhostOK(t) {
+	sshOpts := loopbackSSHOpts(t)
+	if !sshToLocalhostOK(t, sshOpts) {
 		t.Skip("skipping: ssh to localhost is not available non-interactively (BatchMode probe failed)")
 	}
 	bin := buildRawclaw(t)
@@ -88,10 +100,10 @@ func TestLoopbackLivePeek(t *testing.T) {
 
 	c := NewClient("loopback", "localhost")
 	// Fixture seam: same real ssh adapter, argv[0] swapped from the PATH-found
-	// "rawclaw" to the pinned wrapper.
+	// "rawclaw" to the pinned wrapper, host-key state pinned to the temp file.
 	c.run = func(ctx context.Context, dest string, remoteArgs []string, w io.Writer) (string, error) {
 		remoteArgs = append([]string{wrapper}, remoteArgs[1:]...)
-		return runSSH(ctx, dest, remoteArgs, w)
+		return runSSHOpts(ctx, dest, sshOpts, remoteArgs, w)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

@@ -40,7 +40,7 @@ func NewClient(machine, dest string) *Client {
 // a human table by default (remote-computed ages, so clock skew never lies),
 // or the raw JSON bytes under jsonOut. limit<=0 uses the serve default.
 func (c *Client) List(ctx context.Context, w io.Writer, limit int, jsonOut bool) error {
-	args := []string{"rawclaw", "live", "--serve"}
+	args := serveArgs()
 	if limit > 0 {
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}
@@ -51,8 +51,10 @@ func (c *Client) List(ctx context.Context, w io.Writer, limit int, jsonOut bool)
 		return c.classify(stderr, err)
 	}
 	if jsonOut {
-		_, werr := w.Write(buf.Bytes())
-		return werr
+		if _, werr := w.Write(buf.Bytes()); werr != nil {
+			return fmt.Errorf("write session list: %w", werr)
+		}
+		return nil
 	}
 
 	var rows []Session
@@ -76,18 +78,31 @@ func (c *Client) List(ctx context.Context, w io.Writer, limit int, jsonOut bool)
 // read of the live transcript, so messages written seconds ago are included.
 // The remote bytes pass through verbatim (text or, under jsonOut, JSON).
 func (c *Client) Session(ctx context.Context, w io.Writer, prefix string, tail int, jsonOut bool) error {
-	args := []string{"rawclaw", "live", "--serve", prefix}
+	args := serveArgs()
 	if tail > 0 {
 		args = append(args, "--tail", strconv.Itoa(tail))
 	}
 	if jsonOut {
 		args = append(args, "--json")
 	}
+	// The prefix is user input: it crosses as a POSITIONAL behind a literal
+	// "--" so a flag-shaped prefix can never flip the remote's mode.
+	args = append(args, "--", prefix)
 	stderr, err := c.run(ctx, c.Dest, args, w)
 	if err != nil {
 		return c.classify(stderr, err)
 	}
 	return nil
+}
+
+// serveArgs is the remote argv every peek starts from. The remote watchdog is
+// disarmed (--timeout 0): the run is already bounded on THIS side (the local
+// watchdog + ssh), and the remote's own 30s default would kill a long render
+// mid-stream with advice — raise --timeout — that no local flag could satisfy.
+// A serving process can't outlive its pipe: when the client dies, the next
+// write fails and the remote exits.
+func serveArgs() []string {
+	return []string{"rawclaw", "live", "--serve", "--timeout", "0"}
 }
 
 // classify turns an ssh/remote failure into ONE distinct, actionable error:
@@ -145,10 +160,23 @@ func isResolveFailure(stderr string) bool {
 }
 
 // isTooOldRemote matches a remote rawclaw that predates the live verb or its
-// serve flags — cobra's unknown-command/-flag errors.
+// serve flags. A pre-live rawclaw treats "live" as a search term and trips on
+// the flag — verified against a real v0.4.0 build, whose stderr is exactly
+// "unknown flag: --serve" (bare; this CLI prints errors without a prefix).
+// The "Error: "-prefixed cobra form is accepted too. Matches are anchored to
+// the start of a stderr line so a remote error that merely ECHOES
+// marker-shaped user input (a no-match error quoting the prefix) is never
+// mistaken for an old binary.
 func isTooOldRemote(stderr string) bool {
-	return strings.Contains(stderr, `unknown command "live"`) ||
-		strings.Contains(stderr, "unknown flag: --serve")
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "Error: ")
+		if strings.HasPrefix(line, "unknown flag: --serve") ||
+			strings.HasPrefix(line, `unknown command "live"`) {
+			return true
+		}
+	}
+	return false
 }
 
 // runSSH is the real adapter: the system ssh binary. BatchMode forbids
@@ -157,17 +185,25 @@ func isTooOldRemote(stderr string) bool {
 // "--" ends option parsing so a hostile destination cannot inject ssh flags.
 // The remote argv is single-quoted for the POSIX shell sshd hands it to.
 func runSSH(ctx context.Context, dest string, remoteArgs []string, stdout io.Writer) (string, error) {
+	return runSSHOpts(ctx, dest, nil, remoteArgs, stdout)
+}
+
+// runSSHOpts is runSSH with extra ssh options prepended — the loopback test
+// threads an isolated UserKnownHostsFile through here so a test run never
+// touches the user's real ssh state.
+func runSSHOpts(ctx context.Context, dest string, sshOpts, remoteArgs []string, stdout io.Writer) (string, error) {
 	quoted := make([]string, 0, len(remoteArgs))
 	for _, a := range remoteArgs {
 		quoted = append(quoted, quoteRemoteArg(a))
 	}
-	args := []string{
+	args := append([]string{}, sshOpts...)
+	args = append(args,
 		"-o", "BatchMode=yes",
 		"-o", fmt.Sprintf("ConnectTimeout=%d", sshConnectTimeoutSecs),
 		"-T",
 		"--", dest,
 		strings.Join(quoted, " "),
-	}
+	)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	var errBuf bytes.Buffer
 	cmd.Stdout = stdout

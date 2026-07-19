@@ -34,6 +34,7 @@ const listJSON = `[
 // renders the JSON rows as a human list — remote-computed ages, source,
 // project, and the 8-char prefix to peek with.
 func TestClientList_RendersHuman(t *testing.T) {
+	t.Parallel()
 	var calls [][]string
 	c := &Client{Machine: "box-a", Dest: "user@10.0.0.5", run: fakeRun(&calls, listJSON, "", nil)}
 
@@ -46,7 +47,7 @@ func TestClientList_RendersHuman(t *testing.T) {
 		t.Fatalf("remote invocations = %d, want 1", len(calls))
 	}
 	got := strings.Join(calls[0], " ")
-	for _, want := range []string{"user@10.0.0.5", "rawclaw", "live", "--serve"} {
+	for _, want := range []string{"user@10.0.0.5", "rawclaw", "live", "--serve", "--timeout 0"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("remote invocation %q missing %q", got, want)
 		}
@@ -67,6 +68,7 @@ func TestClientList_RendersHuman(t *testing.T) {
 // TestClientList_JSONPassthrough: --json hands the remote's structured bytes
 // through untouched — the pipe format IS the contract.
 func TestClientList_JSONPassthrough(t *testing.T) {
+	t.Parallel()
 	var calls [][]string
 	c := &Client{Machine: "box-a", Dest: "box-a", run: fakeRun(&calls, listJSON, "", nil)}
 
@@ -82,6 +84,7 @@ func TestClientList_JSONPassthrough(t *testing.T) {
 // TestClientList_Empty: an empty remote list renders the "nothing recent"
 // story, not silence.
 func TestClientList_Empty(t *testing.T) {
+	t.Parallel()
 	var calls [][]string
 	c := &Client{Machine: "box-a", Dest: "box-a", run: fakeRun(&calls, "[]\n", "", nil)}
 
@@ -98,6 +101,7 @@ func TestClientList_Empty(t *testing.T) {
 // tail, and json flags to the remote serving half and streams its stdout
 // verbatim.
 func TestClientSession_StreamsAndPassesArgs(t *testing.T) {
+	t.Parallel()
 	var calls [][]string
 	c := &Client{Machine: "box-a", Dest: "box-a", run: fakeRun(&calls, "rendered transcript\n", "", nil)}
 
@@ -109,13 +113,35 @@ func TestClientSession_StreamsAndPassesArgs(t *testing.T) {
 		t.Errorf("stream = %q, want the remote bytes verbatim", buf.String())
 	}
 	got := strings.Join(calls[0], " ")
-	for _, want := range []string{"--serve", "aaaa1111", "--tail 7"} {
+	for _, want := range []string{"--serve", "--tail 7", "--timeout 0", "-- aaaa1111"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("remote invocation %q missing %q", got, want)
 		}
 	}
 	if strings.Contains(got, "--json") {
 		t.Errorf("remote invocation %q should not carry --json", got)
+	}
+}
+
+// TestClientSession_FlagShapedPrefix: a prefix that looks like a flag crosses
+// the pipe as a POSITIONAL (behind `--`) — it must never flip the remote into
+// a different mode.
+func TestClientSession_FlagShapedPrefix(t *testing.T) {
+	t.Parallel()
+	var calls [][]string
+	c := &Client{Machine: "box-a", Dest: "box-a", run: fakeRun(&calls, "", "", nil)}
+	if err := c.Session(context.Background(), io.Discard, "--json", 0, false); err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	got := calls[0]
+	sep := -1
+	for i, a := range got {
+		if a == "--" {
+			sep = i
+		}
+	}
+	if sep < 0 || sep+1 >= len(got) || got[sep+1] != "--json" {
+		t.Errorf("remote invocation %v must carry the prefix after a literal --", got)
 	}
 }
 
@@ -166,11 +192,28 @@ func TestClientErrors(t *testing.T) {
 			notWanted: "unreachable",
 		},
 		{
+			// The REAL pre-live shape, captured from a v0.4.0 build: bare
+			// "unknown flag" (this CLI prints errors without a prefix).
 			name:      "remote rawclaw too old for live",
+			exitCode:  1,
+			stderr:    "unknown flag: --serve",
+			wantParts: []string{"box-x", "too old", "upgrade"},
+			notWanted: "go install",
+		},
+		{
+			name:      "remote too old, cobra-prefixed form",
 			exitCode:  1,
 			stderr:    `Error: unknown command "live" for "rawclaw"`,
 			wantParts: []string{"box-x", "too old", "upgrade"},
 			notWanted: "go install",
+		},
+		{
+			name:     "remote error echoing a marker-shaped prefix is NOT too-old",
+			exitCode: 1,
+			stderr: `no session on this machine matches "unknown flag: --serve" ` +
+				`— drop the prefix to list recent sessions`,
+			wantParts: []string{"box-x", "no session on this machine"},
+			notWanted: "too old",
 		},
 	}
 	for _, tt := range tests {
@@ -200,6 +243,7 @@ func TestClientErrors(t *testing.T) {
 // arg is single-quoted, embedded quotes escaped, so a hostile prefix cannot
 // inject shell.
 func TestQuoteRemoteArg(t *testing.T) {
+	t.Parallel()
 	tests := []struct{ in, want string }{
 		{"plain", "'plain'"},
 		{"with space", "'with space'"},

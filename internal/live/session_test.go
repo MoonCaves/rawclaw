@@ -3,6 +3,7 @@ package live
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,41 @@ func TestServeSession_NoMatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "deadbeef") {
 		t.Errorf("error should name the prefix: %v", err)
+	}
+}
+
+// TestServeSession_EmptyPrefix: an empty prefix would match every session —
+// reject it instead of "rendering" an arbitrary one.
+func TestServeSession_EmptyPrefix(t *testing.T) {
+	claudeRoot, _ := newServeHome(t)
+	writeClaudeSession(t, claudeRoot, "-p", "aaaa1111-0000-0000-0000-000000000001",
+		"/home/u/p", time.Now(), "m")
+
+	var buf bytes.Buffer
+	if err := ServeSession(&buf, "", 0, false); err == nil {
+		t.Fatal("empty prefix: want error, got nil")
+	}
+}
+
+// TestServeSession_AmbiguousCapped: a floods-everything prefix lists at most a
+// handful of candidates plus a count — an error message, not a dump.
+func TestServeSession_AmbiguousCapped(t *testing.T) {
+	claudeRoot, _ := newServeHome(t)
+	for i := 0; i < 15; i++ {
+		writeClaudeSession(t, claudeRoot, "-p",
+			fmt.Sprintf("aaaa1111-%04d-0000-0000-000000000000", i),
+			"/home/u/p", time.Now(), "m")
+	}
+	var buf bytes.Buffer
+	err := ServeSession(&buf, "aaaa1111", 0, false)
+	if err == nil {
+		t.Fatal("ambiguous prefix: want error, got nil")
+	}
+	if n := strings.Count(err.Error(), "aaaa1111-"); n > 10 {
+		t.Errorf("ambiguous error lists %d candidates, want <= 10", n)
+	}
+	if !strings.Contains(err.Error(), "15 sessions match") {
+		t.Errorf("ambiguous error should carry the full count: %v", err)
 	}
 }
 
