@@ -65,9 +65,11 @@ func defaultMachineName() string {
 // validateMachineName rejects explicit names that would escape the machine
 // dir, hide it, or act as git pathspec magic — the name flows into
 // `git add/status -- <name>`, so a glob like "ma*" would stage OTHER
-// machines' dirs. Only [A-Za-z0-9._-] survives, dots may not lead. Explicit
-// names are validated, not silently rewritten — the user chose them and
-// deserves a loud failure over a surprising rename.
+// machines' dirs. Only [a-z0-9._-] survives; dots may not lead; uppercase is
+// rejected outright because "Mac" and "mac" are distinct dirs in the repo but
+// ONE dir on a case-insensitive filesystem clone. Explicit names are
+// validated, not silently rewritten — the user chose them and deserves a loud
+// failure over a surprising rename.
 func validateMachineName(name string) error {
 	if name == "" {
 		return errors.New("machine name is empty")
@@ -77,10 +79,10 @@ func validateMachineName(name string) error {
 	}
 	for _, r := range name {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9',
 			r == '-', r == '_', r == '.':
 		default:
-			return fmt.Errorf("machine name %q: only letters, digits, '.', '-', '_' are allowed", name)
+			return fmt.Errorf("machine name %q: only lowercase letters, digits, '.', '-', '_' are allowed", name)
 		}
 	}
 	return nil

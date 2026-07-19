@@ -337,6 +337,115 @@ func TestPushWithRetry_AbortsWedgedRebase(t *testing.T) {
 	}
 }
 
+// TestPushLocal_StrandedCommitRecovered: a commit whose push failed (network
+// down, kill mid-push) must be pushed by the NEXT run even when no new
+// transcript content arrives — otherwise a machine that stops producing
+// transcripts strands its last sync forever.
+func TestPushLocal_StrandedCommitRecovered(t *testing.T) {
+	home := newTestHome(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// First push: the commit lands locally, the push itself dies.
+	real := a.run
+	a.run = func(ctx context.Context, dir string, args ...string) (string, error) {
+		if args[0] == "push" {
+			return "fatal: unable to access remote", errors.New("exit status 128")
+		}
+		return real(ctx, dir, args...)
+	}
+	if _, err := a.PushLocal(context.Background()); err == nil {
+		t.Fatal("first push should have failed")
+	}
+
+	// Second run, network back, NOTHING new to copy: the stranded commit must
+	// still go out.
+	a.run = real
+	rep, err := a.PushLocal(context.Background())
+	if err != nil {
+		t.Fatalf("recovery push: %v", err)
+	}
+	if rep.Copied != 0 || rep.Committed {
+		t.Errorf("report = %+v, want no new copy/commit", rep)
+	}
+	if !rep.Pushed {
+		t.Error("stranded commit was not pushed")
+	}
+
+	verify := checkoutRemote(t, bare)
+	if _, err := os.Stat(filepath.Join(verify, "machine-a/claude/-tmp-proj/sess-1111.jsonl")); err != nil {
+		t.Errorf("stranded content never reached the remote: %v", err)
+	}
+}
+
+// TestPushLocal_RemoteMismatchRefuses: an existing clone pointing at a
+// different remote than the config is an error with a delete-to-re-clone
+// hint, never a silent push to the old remote.
+func TestPushLocal_RemoteMismatchRefuses(t *testing.T) {
+	home := newTestHome(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	if _, err := Init(context.Background(), bare, "machine-a"); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	// The config now claims a different remote than the clone's origin.
+	otherRemote := initBareRepo(t)
+	if err := writeConfig(Config{Remote: otherRemote, Name: "machine-a"}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := Load()
+	if err != nil || a == nil {
+		t.Fatalf("Load: (%v, %v)", a, err)
+	}
+
+	_, err = a.PushLocal(context.Background())
+	if err == nil {
+		t.Fatal("PushLocal succeeded against a mismatched clone, want refusal")
+	}
+	if !strings.Contains(err.Error(), "delete the clone dir") {
+		t.Errorf("error should hint at deleting the clone, got: %v", err)
+	}
+}
+
+// TestPushLocal_ClearsStaleCopyTemps: temp files orphaned under
+// .git/rawclaw-tmp by a killed run are cleared on the next push and never
+// reach the archive.
+func TestPushLocal_ClearsStaleCopyTemps(t *testing.T) {
+	home := newTestHome(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	stale := filepath.Join(a.ClonePath(), ".git", "rawclaw-tmp", "copy-orphan")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("torn"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := a.PushLocal(context.Background()); err != nil {
+		t.Fatalf("PushLocal: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("stale copy temp survived the push")
+	}
+	verify := checkoutRemote(t, bare)
+	if _, err := os.Stat(filepath.Join(verify, "machine-a", "copy-orphan")); !os.IsNotExist(err) {
+		t.Error("orphan temp reached the archive")
+	}
+}
+
 // TestNeedsCopy locks the rsync-style quick check.
 func TestNeedsCopy(t *testing.T) {
 	t.Parallel()

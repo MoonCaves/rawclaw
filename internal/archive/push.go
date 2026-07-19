@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +33,7 @@ func (a *Archive) PushLocal(ctx context.Context) (PushReport, error) {
 		return rep, err
 	}
 
-	copied, err := a.syncTrees()
+	copied, err := a.syncTrees(ctx)
 	if err != nil {
 		return rep, err
 	}
@@ -43,7 +44,24 @@ func (a *Archive) PushLocal(ctx context.Context) (PushReport, error) {
 		return rep, err
 	}
 	if !changed {
-		return rep, nil // nothing new: no commit, no push
+		// Nothing newly staged — but a previous run may have committed and then
+		// failed (or been killed) before its push landed. Without this check, a
+		// machine that stops producing new transcripts would strand that commit
+		// in the clone forever.
+		ahead, err := a.aheadOfRemote(ctx)
+		if err != nil {
+			return rep, err
+		}
+		if !ahead {
+			return rep, nil // truly up to date: no commit, no push
+		}
+		retries, err := a.pushWithRetry(ctx)
+		rep.Retries = retries
+		if err != nil {
+			return rep, err
+		}
+		rep.Pushed = true
+		return rep, nil
 	}
 	if err := a.commit(ctx, fmt.Sprintf("%s: sync transcripts", a.cfg.Name)); err != nil {
 		return rep, err
@@ -64,11 +82,22 @@ func (a *Archive) machineDir() string {
 	return filepath.Join(a.clone, a.cfg.Name)
 }
 
-// ensureClone guarantees a usable local clone: an existing one is used as-is;
-// otherwise the remote is cloned fresh (a leftover half-created dir is cleared
-// first). The clone is a rebuildable cache — deleting it is always safe.
+// ensureClone guarantees a usable local clone: an existing one is used after
+// verifying it still points at the configured remote (a silently-edited config
+// must not keep pushing to the old remote); otherwise the remote is cloned
+// fresh (a leftover half-created dir is cleared first). The clone is a
+// rebuildable cache — deleting it is always safe.
 func (a *Archive) ensureClone(ctx context.Context) error {
 	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err == nil {
+		out, err := a.run(ctx, a.clone, "remote", "get-url", "origin")
+		if err != nil {
+			return fmt.Errorf("read clone remote: %w", err)
+		}
+		if got := strings.TrimSpace(out); got != a.cfg.Remote {
+			return fmt.Errorf(
+				"local clone %s points at %s but the config says %s; delete the clone dir to re-clone",
+				a.clone, got, a.cfg.Remote)
+		}
 		return nil
 	}
 	parent := filepath.Dir(a.clone)
@@ -90,7 +119,18 @@ func (a *Archive) ensureClone(ctx context.Context) error {
 // machine dir, preserving relative paths (<machine>/<source>/<rel>), and
 // returns how many files were copied. Files are only ever added or updated —
 // the archive never prunes, and foreign machine dirs are never touched.
-func (a *Archive) syncTrees() (int, error) {
+func (a *Archive) syncTrees(ctx context.Context) (int, error) {
+	// Copies stage through a temp dir under .git: same filesystem (rename
+	// stays atomic) but invisible to `git add`, so a temp file orphaned by a
+	// kill can never be committed to the archive. Stale orphans are cleared.
+	tmpDir := filepath.Join(a.clone, ".git", "rawclaw-tmp")
+	if err := os.RemoveAll(tmpDir); err != nil {
+		return 0, fmt.Errorf("clear copy temp dir: %w", err)
+	}
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return 0, fmt.Errorf("create copy temp dir: %w", err)
+	}
+
 	copied := 0
 	for _, tree := range sourceTrees() {
 		if tree.root == "" || !isDir(tree.root) {
@@ -98,6 +138,9 @@ func (a *Archive) syncTrees() (int, error) {
 		}
 		destRoot := filepath.Join(a.machineDir(), tree.id)
 		for _, src := range paths.ContainedJSONL(tree.root) {
+			if err := ctx.Err(); err != nil {
+				return copied, err // honor cancellation between files
+			}
 			rel, err := filepath.Rel(tree.root, src)
 			if err != nil || strings.HasPrefix(rel, "..") {
 				continue // outside the tree (shouldn't happen post-containment)
@@ -110,7 +153,7 @@ func (a *Archive) syncTrees() (int, error) {
 			if !needsCopy(src, info, dst) {
 				continue
 			}
-			if err := copyFile(src, dst, info); err != nil {
+			if err := copyFile(src, dst, tmpDir, info); err != nil {
 				return copied, fmt.Errorf("copy %s: %w", rel, err)
 			}
 			copied++
@@ -120,11 +163,14 @@ func (a *Archive) syncTrees() (int, error) {
 }
 
 // needsCopy is the rsync-style quick check deciding whether src must be
-// (re)copied over dst: missing dst or a size change always copies; equal
-// size + equal mtime skips (copyFile mirrors the source mtime onto the dst,
-// so this fast path holds across pushes); equal size but different mtime
-// falls back to the content fingerprint, catching same-size in-place
-// rewrites while skipping touch-only mtime churn.
+// (re)copied over dst: missing dst or a size change always copies (the
+// append-only common case); equal size + equal mtime skips (copyFile mirrors
+// the source mtime onto the dst, so this fast path holds across pushes);
+// equal size but different mtime falls back to the head+tail content
+// fingerprint — catching in-place rewrites that touch either end while
+// skipping touch-only mtime churn. (A same-size rewrite confined to the
+// fingerprint's blind middle region is not detected; for append-only
+// transcripts that shape does not occur.)
 func needsCopy(src string, srcInfo os.FileInfo, dst string) bool {
 	dstInfo, err := os.Stat(dst)
 	if err != nil {
@@ -144,10 +190,11 @@ func needsCopy(src string, srcInfo os.FileInfo, dst string) bool {
 	return srcFP != dstFP
 }
 
-// copyFile streams src into dst via a temp file + rename (a kill mid-copy
-// never leaves a torn dst), then mirrors the source mtime onto dst so the
+// copyFile streams src into dst via a temp file (in tmpDir, outside the
+// tracked tree) + rename — a kill mid-copy never leaves a torn or stray file
+// where git could stage it — then mirrors the source mtime onto dst so the
 // quick check's mtime fast path holds on the next push.
-func copyFile(src, dst string, srcInfo os.FileInfo) error {
+func copyFile(src, dst, tmpDir string, srcInfo os.FileInfo) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
@@ -157,7 +204,7 @@ func copyFile(src, dst string, srcInfo os.FileInfo) error {
 	}
 	defer in.Close()
 
-	tmp, err := os.CreateTemp(filepath.Dir(dst), ".rawclaw-tmp-*")
+	tmp, err := os.CreateTemp(tmpDir, "copy-*")
 	if err != nil {
 		return err
 	}
@@ -203,6 +250,32 @@ func (a *Archive) commit(ctx context.Context, msg string) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// aheadOfRemote reports whether HEAD holds commits the remote-tracking branch
+// lacks — the stranded-commit case: a prior run committed, then its push
+// failed or was killed. An unborn HEAD is never ahead; a branch the remote
+// doesn't know yet always is.
+func (a *Archive) aheadOfRemote(ctx context.Context) (bool, error) {
+	if _, err := a.run(ctx, a.clone, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+		return false, nil // unborn HEAD: nothing committed yet
+	}
+	branch, err := a.currentBranch(ctx)
+	if err != nil {
+		return false, err
+	}
+	if _, err := a.run(ctx, a.clone, "rev-parse", "--verify", "--quiet", "origin/"+branch); err != nil {
+		return true, nil // remote branch unknown locally: our commits never landed
+	}
+	out, err := a.run(ctx, a.clone, "rev-list", "--count", "origin/"+branch+"..HEAD")
+	if err != nil {
+		return false, fmt.Errorf("count unpushed commits: %w", err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return false, fmt.Errorf("parse unpushed commit count %q: %w", out, err)
+	}
+	return n > 0, nil
 }
 
 // currentBranch resolves the checked-out branch (the remote's default branch
