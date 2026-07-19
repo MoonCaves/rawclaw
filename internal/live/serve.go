@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/source/claude"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 )
@@ -34,7 +35,7 @@ type Session struct {
 	Source       string `json:"source"`  // "claude" | "codex"
 	Project      string `json:"project"` // basename of the working dir ("" if unknown)
 	CWD          string `json:"cwd,omitempty"`
-	LastActivity string `json:"last_activity"` // RFC3339 UTC, from the file mtime
+	LastActivity string `json:"last_activity"` // marked-UTC RFC3339 (timefmt seam), from the file mtime
 	AgeSeconds   int64  `json:"age_seconds"`   // now - mtime on the serving machine
 	SizeBytes    int64  `json:"size_bytes"`
 }
@@ -108,7 +109,7 @@ func localSessions() []timedSession {
 					Source:       reg.ID,
 					Project:      projectName(c.CWD),
 					CWD:          c.CWD,
-					LastActivity: info.ModTime().UTC().Format(time.RFC3339),
+					LastActivity: timefmt.UTC(info.ModTime()),
 					AgeSeconds:   age,
 					SizeBytes:    info.Size(),
 				},

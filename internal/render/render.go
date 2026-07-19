@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
@@ -93,7 +94,8 @@ func PrintDebugSearch(w io.Writer, hits []retrieve.Hit, explains []retrieve.Scor
 
 	fmt.Fprintf(w, "%d hit(s) · scoring explainer (LLM-free; the REAL ranking, no invented blend):\n\n", len(hits))
 	for i, h := range hits {
-		iso := h.ISO
+		// timefmt seam: search results are agent-parsed — marked UTC.
+		iso := timefmt.UTCFromISO(h.ISO)
 		if iso == "" {
 			iso = "?"
 		}

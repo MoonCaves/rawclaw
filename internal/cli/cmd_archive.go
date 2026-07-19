@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/archive"
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/spf13/cobra"
 )
 
@@ -210,10 +211,13 @@ func printArchiveStatus(w io.Writer, st archive.StatusReport) {
 }
 
 // stampLabel renders a recorded time for status output; the zero time reads
-// "never" (no stamp / no history yet).
+// "never" (no stamp / no history yet). `archive status` is a human surface, so
+// the timefmt seam renders local time WITH the zone abbreviation — an
+// unmarked local stamp reads as ambiguous next to the marked-UTC agent
+// surfaces.
 func stampLabel(t time.Time) string {
 	if t.IsZero() {
 		return "never"
 	}
-	return t.Local().Format("2006-01-02 15:04")
+	return timefmt.Local(t)
 }

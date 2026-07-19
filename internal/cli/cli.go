@@ -28,6 +28,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -978,7 +979,8 @@ func PrintResults(w io.Writer, res []retrieve.Hit, nSessions int) {
 		if r.IsSubagent && r.Parent != "" {
 			tag = fmt.Sprintf(" · subagent⟵%s", trunc8(r.Parent))
 		}
-		fmt.Fprintf(w, "[%s · %s · %s%s] …%s…\n\n", orQ(r.ISO), label, r.Role, tag, r.Snippet)
+		// timefmt seam: search results are agent-parsed — marked UTC.
+		fmt.Fprintf(w, "[%s · %s · %s%s] …%s…\n\n", orQ(timefmt.UTCFromISO(r.ISO)), label, r.Role, tag, r.Snippet)
 	}
 }
 
