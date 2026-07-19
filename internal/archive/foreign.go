@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 )
@@ -67,4 +68,54 @@ func (a *Archive) foreignMachineMatches(m manifest, project string) bool {
 		}
 	}
 	return nameHit && hasSessions
+}
+
+// ForeignSessionMatches reports the foreign machine names holding a session
+// the given id addresses (lifecycle.MatchesSessionID: exact id, or a >=8-char
+// prefix) — the positional delete's counterpart to ForeignProjectMatches.
+// Same posture: offline, clone-only, best-effort — an absent clone matches
+// nothing, and the caller turns a foreign-only hit into the read-only
+// refusal naming the origin machine.
+func (a *Archive) ForeignSessionMatches(id string) []string {
+	if id == "" {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(a.clone, ".git", cloneSentinel)); err != nil {
+		return nil // no usable clone: nothing foreign is reachable (or warn-worthy)
+	}
+	var hits []string
+	for _, m := range a.foreignMachines() {
+		if a.foreignMachineHasSession(m, id) {
+			hits = append(hits, m.Name)
+		}
+	}
+	return hits
+}
+
+// foreignMachineHasSession reports whether one foreign machine's archived
+// trees hold a session addressed by id — Claude scopes by .jsonl stem, Codex
+// rollouts by container id.
+func (a *Archive) foreignMachineHasSession(m manifest, id string) bool {
+	claudeRoot := filepath.Join(a.clone, m.Name, "claude")
+	if entries, err := os.ReadDir(claudeRoot); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			files, _ := filepath.Glob(filepath.Join(claudeRoot, e.Name(), "*.jsonl"))
+			for _, f := range files {
+				if lifecycle.MatchesSessionID(strings.TrimSuffix(filepath.Base(f), ".jsonl"), id) {
+					return true
+				}
+			}
+		}
+	}
+	if containers, err := codex.New().DiscoverRoot(filepath.Join(a.clone, m.Name, "codex")); err == nil {
+		for _, c := range containers {
+			if lifecycle.MatchesSessionID(c.ID, id) {
+				return true
+			}
+		}
+	}
+	return false
 }

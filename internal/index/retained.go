@@ -48,13 +48,15 @@ type RetainedSession struct {
 // migrateDurabilityColumns). before, when non-zero, keeps only sessions whose
 // last_ts (epoch seconds) is strictly before it — a row with no recorded
 // last_ts is excluded rather than guessed at. maxMessages, when > 0, keeps
-// only sessions with at most that many messages. A zero-value filter is unset
+// only sessions with at most that many messages. sessionID, when non-empty,
+// keeps only the session lifecycle.MatchesSessionID addresses (exact id, or a
+// >=8-char prefix) — the positional-delete form. A zero-value filter is unset
 // and does not constrain the match, same rule as DeleteOpts.
 //
 // A db that fails to open or query (busy, corrupt, mid-write) is skipped
 // rather than failing the whole scan — the same best-effort tolerance
 // scopes.orphanClaudeScopes applies to its own db enumeration.
-func RetainedMatches(cacheDir string, project string, before time.Time, maxMessages int) ([]RetainedSession, error) {
+func RetainedMatches(cacheDir string, project string, before time.Time, maxMessages int, sessionID string) ([]RetainedSession, error) {
 	if cacheDir == "" {
 		cacheDir = store.CacheDir()
 	}
@@ -78,7 +80,7 @@ func RetainedMatches(cacheDir string, project string, before time.Time, maxMessa
 		if strings.HasPrefix(filepath.Base(dbp), ArchiveDBPrefix) {
 			continue
 		}
-		matches, err := retainedInDB(dbp, project, before, maxMessages)
+		matches, err := retainedInDB(dbp, project, before, maxMessages, sessionID)
 		if err != nil {
 			continue // unreadable db — best-effort, like orphan scope discovery
 		}
@@ -94,7 +96,7 @@ func RetainedMatches(cacheDir string, project string, before time.Time, maxMessa
 
 // retainedInDB queries one index db read-only for its retained sessions
 // passing the filter.
-func retainedInDB(dbp, project string, before time.Time, maxMessages int) ([]RetainedSession, error) {
+func retainedInDB(dbp, project string, before time.Time, maxMessages int, sessionID string) ([]RetainedSession, error) {
 	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return nil, fmt.Errorf("open %q: %w", dbp, err)
@@ -122,6 +124,9 @@ func retainedInDB(dbp, project string, before time.Time, maxMessages int) ([]Ret
 		}
 
 		if project != "" && !strings.Contains(sourcePath.String, project) && !strings.Contains(base, project) {
+			continue
+		}
+		if sessionID != "" && !lifecycle.MatchesSessionID(id, sessionID) {
 			continue
 		}
 		if !before.IsZero() && (!lastTS.Valid || !time.Unix(int64(lastTS.Float64), 0).Before(before)) {
