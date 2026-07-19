@@ -171,7 +171,7 @@ func TestWatchdogDisabledIsNoop(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	stop := startWatchdog(0, &bytes.Buffer{}, func(int) { called = true })
+	_, stop := startWatchdog(0, &bytes.Buffer{}, func(int) { called = true })
 	stop()
 	if called {
 		t.Error("disabled watchdog must never call exit")
@@ -185,7 +185,7 @@ func TestWatchdogStopDisarmsCleanly(t *testing.T) {
 	t.Parallel()
 
 	called := false
-	stop := startWatchdog(time.Hour, &bytes.Buffer{}, func(int) { called = true })
+	_, stop := startWatchdog(time.Hour, &bytes.Buffer{}, func(int) { called = true })
 	stop() // disarm well before the hour-long deadline
 	if called {
 		t.Error("exit called despite disarming before the deadline")

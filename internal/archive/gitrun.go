@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // runGitFunc is the git seam: one real adapter (system git via exec) and fakes
@@ -23,6 +25,13 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+	// Context cancellation delivers SIGTERM, not the default SIGKILL: git's
+	// signal handler removes its lock files (.git/index.lock) on the way out,
+	// so a cancelled run cannot strand a lock that wedges every later one.
+	// WaitDelay is the backstop for a git that ignores the signal (and for
+	// platforms where Signal is unsupported).
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 5 * time.Second
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf

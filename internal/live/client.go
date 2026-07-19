@@ -36,6 +36,28 @@ func NewClient(machine, dest string) *Client {
 	return &Client{Machine: machine, Dest: dest, run: runSSH}
 }
 
+// listResponseLimit caps how much of a remote session list List buffers
+// before parsing. A real list is a few kilobytes; only a broken or hostile
+// remote streams more, and the cap stops it from filling local memory.
+// (Session peeks stream through unbuffered and need no cap.)
+const listResponseLimit = 8 << 20 // 8 MiB
+
+// boundedBuffer collects at most max bytes; the write that would exceed the
+// cap is refused, which stops the ssh copy and records the overflow.
+type boundedBuffer struct {
+	buf        bytes.Buffer
+	max        int
+	overflowed bool
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if b.buf.Len()+len(p) > b.max {
+		b.overflowed = true
+		return 0, fmt.Errorf("response larger than %d bytes", b.max)
+	}
+	return b.buf.Write(p)
+}
+
 // List invokes the remote rawclaw's serving half and renders its session list:
 // a human table by default (remote-computed ages, so clock skew never lies),
 // or the raw JSON bytes under jsonOut. limit<=0 uses the serve default.
@@ -45,11 +67,19 @@ func (c *Client) List(ctx context.Context, w io.Writer, limit int, jsonOut bool)
 		args = append(args, "--limit", strconv.Itoa(limit))
 	}
 
-	var buf bytes.Buffer
-	stderr, err := c.run(ctx, c.Dest, args, &buf)
+	bounded := &boundedBuffer{max: listResponseLimit}
+	stderr, err := c.run(ctx, c.Dest, args, bounded)
+	// The overflow is the real story: cutting off the stream also makes the
+	// underlying ssh run fail, so check the cap before classifying err.
+	if bounded.overflowed {
+		return fmt.Errorf(
+			"machine %q streamed over %d MiB for a session list — refusing to buffer it (broken or untrustworthy remote?)",
+			c.Machine, listResponseLimit>>20)
+	}
 	if err != nil {
 		return c.classify(stderr, err)
 	}
+	buf := &bounded.buf
 	if jsonOut {
 		if _, werr := w.Write(buf.Bytes()); werr != nil {
 			return fmt.Errorf("write session list: %w", werr)

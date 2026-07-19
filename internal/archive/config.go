@@ -50,17 +50,39 @@ func readConfig() (Config, error) {
 	return cfg, nil
 }
 
-// writeConfig persists cfg. One small single-shot write: a torn write cannot
-// pass unnoticed — it surfaces as a parse error from Load, whose message
-// points at the file.
+// writeConfig persists cfg atomically: the bytes land in a unique scratch file
+// beside the config, then rename swaps it in — same-directory rename is
+// atomic, so a process killed at any point leaves either the old config or the
+// new one, never a torn file that Load would reject on every later run. The
+// unique scratch name keeps two concurrent writers from tearing each other's
+// bytes; a scratch stranded by a kill in the window is inert (nothing reads
+// it) and is cleaned up opportunistically on failure paths here.
 func writeConfig(cfg Config) error {
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode archive config: %w", err)
 	}
 	p := configPath()
-	if err := os.WriteFile(p, append(b, '\n'), 0o644); err != nil {
+	f, err := os.CreateTemp(filepath.Dir(p), "archive-config-*.tmp")
+	if err != nil {
 		return fmt.Errorf("write %s: %w", p, err)
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename has landed
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		f.Close()
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	// CreateTemp opens 0600; the config is not a secret — match the state
+	// dir's conventional 0644.
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		return fmt.Errorf("replace %s: %w", p, err)
 	}
 	return nil
 }
