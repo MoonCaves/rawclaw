@@ -54,7 +54,7 @@ const childKillGrace = 200 * time.Millisecond
 // nothing.
 //
 // On deadline the watchdog writes a clear message to stderr, waits
-// childKillGrace for context cancellation to reap children, and calls exit(124)
+// childKillGrace for the context-cancellation kill to land, and calls exit(124)
 // — the conventional `timeout(1)` code — which terminates the process even if
 // the main goroutine is parked inside a CGO-free SQLite call that context
 // cancellation alone cannot unblock. That hard exit is the whole point: an agent
