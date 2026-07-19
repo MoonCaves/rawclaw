@@ -159,6 +159,17 @@ Each machine gets a top-level directory in the repo (`<machine>/<source>/...`), 
 
 > **The remote MUST be a private repository.** Transcripts contain whatever you and your agents pasted into sessions — API keys, tokens, private code. RawClaw prints this warning at `archive init` and cannot verify a host's visibility settings for you.
 
+### Live peek — what is that machine's agent doing *right now*?
+
+The archive is durable, not instant. For seconds-fresh visibility, `rawclaw live` skips it entirely and reads the other machine's in-progress session over one SSH hop:
+
+```bash
+rawclaw live box-a               # list box-a's recent sessions, newest first
+rawclaw live box-a 3f2a91c0      # render that session's current transcript (messages written seconds ago included)
+```
+
+The machine name doubles as the ssh destination — an `~/.ssh/config` Host alias just works — or map it explicitly in the archive config (`"ssh": {"box-a": "user@10.0.0.5"}`). The far end needs sshd plus a rawclaw on its non-interactive PATH; without that, `live` fails with a pointed error and your freshness is whatever the last `archive push` uploaded. `--json` gives agents the structured form; `--tail N` widens the transcript window. Live peek renders the raw session bytes — no summarizing, no interpretation.
+
 ---
 
 ## Roadmap
