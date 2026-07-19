@@ -256,3 +256,46 @@ func TestQuoteRemoteArg(t *testing.T) {
 		}
 	}
 }
+
+// TestClientList_BoundsRemoteResponse: a session list is a few kilobytes; a
+// remote streaming vastly more is broken or hostile, and List must refuse it
+// with a clear story instead of buffering without bound. Both render modes
+// share the buffer, so both are checked; a chunked stream must trip the cap
+// the same way a single oversized write does.
+func TestClientList_BoundsRemoteResponse(t *testing.T) {
+	t.Parallel()
+
+	over := strings.Repeat("x", listResponseLimit+1)
+	tests := []struct {
+		name    string
+		jsonOut bool
+		run     runSSHFunc
+	}{
+		{"human mode, one oversized write", false, fakeRun(new([][]string), over, "", nil)},
+		{"json mode, one oversized write", true, fakeRun(new([][]string), over, "", nil)},
+		{"chunked stream past the cap", false, func(_ context.Context, _ string, _ []string, w io.Writer) (string, error) {
+			chunk := strings.Repeat("y", 1<<20)
+			for i := 0; i <= listResponseLimit/len(chunk); i++ {
+				if _, err := w.Write([]byte(chunk)); err != nil {
+					return "", err
+				}
+			}
+			return "", nil
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := &Client{Machine: "box-a", Dest: "box-a", run: tt.run}
+			err := c.List(context.Background(), io.Discard, 0, tt.jsonOut)
+			if err == nil {
+				t.Fatal("List buffered an over-limit response without complaint")
+			}
+			for _, want := range []string{"box-a", "session list"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q missing %q", err.Error(), want)
+				}
+			}
+		})
+	}
+}
