@@ -6,6 +6,23 @@ All notable changes to RawClaw are documented in this file.
 
 ### Added
 
+- **Positional session delete: `rawclaw delete <session8>` (or the full id).** Deletes exactly
+  that one session — same dry-run-first plan, same y/N prompt (`--yes` works), same tombstone and
+  receipts as a filter delete. Sub-8-char prefixes must match a full id exactly; a prefix
+  matching two sessions deletes neither (refused, exit 1); an unknown id is a clear error, exit
+  1; a session that lives only in another machine's archive is refused with the origin-machine
+  pointer. Retained sessions (source file already purged) are deletable by id too. This makes the
+  README's `rawclaw delete --yes <session8>` example true.
+- **`--all` in the folder-scoped shapes.** Bare browse and `--stats` now honor `--all`: browse
+  merges the most recent sessions across every project (newest first, per-row project label,
+  `--json` scope-tagged); the corpus stats aggregate no longer needs a history-bearing `--dir`.
+  The "No transcript history for --dir …" hint now names both escapes: `--list`, or `--all` for
+  every project. `--this-project` wins over `--all`, as it already did for stats.
+- **Delete provenance note.** After a real delete rawclaw states what was removed: the session's
+  transcript file plus rawclaw's copy (index + archive) for live sessions; for retained-only
+  deletes, rawclaw's copy alone — Claude Code / Codex transcript files untouched. The same
+  sentence lives in `delete --help` and the README.
+
 - **Transcript archive (tracer): `rawclaw archive init <remote-url>` + `rawclaw archive push`.**
   Any private git remote becomes durable, multi-machine storage for raw transcripts: init clones
   the repo (an empty remote works — it is born on the first push), registers the machine under a
@@ -53,6 +70,20 @@ All notable changes to RawClaw are documented in this file.
   the archive is the durable mirror. Foreign machine dirs are read-only from every box: a delete
   filter reaching another machine's archived sessions is refused with a pointer at the origin
   machine, and foreign replica dbs can never enter the tombstone path.
+
+### Changed
+
+- **One seam for user-facing time.** All user-facing timestamps now render through a single
+  policy package: agent-parsed surfaces (search results, the outline header, the live list and
+  stream, `--json` fields) are marked UTC — RFC3339 `Z`, or `HH:MM:SSZ` for bare clocks — and
+  human surfaces (`archive status`) are local time with the zone abbreviation. The outline
+  header previously rendered unmarked local time and the live stream an unmarked UTC clock;
+  both now carry explicit markers.
+- **Empty query coaching.** `rawclaw ""` (or an all-whitespace query) prints a distinct
+  "Empty query…" line pointing at bare browse and `--all`, instead of the no-matches coaching.
+- **Delete abort exit code.** Answering `n` (or EOF) at the delete prompt still prints
+  "Aborted; nothing deleted." but now exits 1 so scripts can distinguish an abort from a
+  completed delete; `--dry-run` stays exit 0.
 
 ### Fixed
 

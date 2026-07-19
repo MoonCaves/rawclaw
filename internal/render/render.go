@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
@@ -41,6 +42,20 @@ func PrintBrowse(w io.Writer, rows []view.BrowseRow, project string) {
 	fmt.Fprintf(w, "%d most-recent sessions on %s:\n\n", len(rows), project)
 	for _, r := range rows {
 		fmt.Fprintf(w, "  · %s · %d msgs · %s\n", sid8(r.SessionID), r.N, r.Preview)
+	}
+}
+
+// PrintBrowseAll renders the cross-project (--all) recent-sessions list: the
+// same row shape as PrintBrowse, each row additionally naming its project.
+func PrintBrowseAll(w io.Writer, rows []view.BrowseAllRow) {
+	if len(rows) == 0 {
+		fmt.Fprintln(w, "No sessions in any project. Try --list to see the searchable projects.")
+		return
+	}
+
+	fmt.Fprintf(w, "%d most-recent sessions across all projects:\n\n", len(rows))
+	for _, r := range rows {
+		fmt.Fprintf(w, "  · %s · %s · %d msgs · %s\n", sid8(r.SessionID), r.Project, r.N, r.Preview)
 	}
 }
 
@@ -93,7 +108,8 @@ func PrintDebugSearch(w io.Writer, hits []retrieve.Hit, explains []retrieve.Scor
 
 	fmt.Fprintf(w, "%d hit(s) · scoring explainer (LLM-free; the REAL ranking, no invented blend):\n\n", len(hits))
 	for i, h := range hits {
-		iso := h.ISO
+		// timefmt seam: search results are agent-parsed — marked UTC.
+		iso := timefmt.UTCFromISO(h.ISO)
 		if iso == "" {
 			iso = "?"
 		}

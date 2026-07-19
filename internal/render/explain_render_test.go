@@ -64,7 +64,8 @@ func TestPrintDebugSearch(t *testing.T) {
 	t.Parallel()
 
 	hits := []retrieve.Hit{
-		{SessionID: "alphasession", ISO: "2026-06-01", Role: "user", Snippet: "kube"},
+		// Full parseable ISO: pins the timefmt-seam normalization to marked UTC.
+		{SessionID: "alphasession", ISO: "2026-06-01T10:00:00.123Z", Role: "user", Snippet: "kube"},
 		{SessionID: "betasession", ISO: "", Role: "user", Snippet: "redis"},
 	}
 	explains := []retrieve.ScoreExplain{
@@ -78,7 +79,8 @@ func TestPrintDebugSearch(t *testing.T) {
 
 	for _, w := range []string{
 		"2 hit(s)", "scoring explainer",
-		"alphases", // sid8 truncation of "alphasession"
+		"alphases",             // sid8 truncation of "alphasession"
+		"2026-06-01T10:00:00Z", // stored ISO normalized to marked UTC (timefmt seam)
 		retrieve.MethodBM25,
 		"?",              // empty ISO rendered as "?"
 		"(no breakdown)", // second hit has no matching explain

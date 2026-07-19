@@ -11,6 +11,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 )
 
 // DefaultSessionTail is how many trailing messages a session render shows when
@@ -181,8 +182,10 @@ func resolvePrefix(prefix string) (source.Registration, source.Container, error)
 	}
 }
 
-// fileActivity returns (RFC3339 mtime, age seconds) for path, zero-valued when
-// the file cannot be stat'd (it may have vanished between resolve and render).
+// fileActivity returns (marked-UTC RFC3339 mtime, age seconds) for path,
+// zero-valued when the file cannot be stat'd (it may have vanished between
+// resolve and render). Rendering goes through the timefmt seam: live output is
+// an agent-parsed surface, so the instant carries the explicit Z marker.
 func fileActivity(path string) (string, int64) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -192,16 +195,16 @@ func fileActivity(path string) (string, int64) {
 	if age < 0 {
 		age = 0
 	}
-	return info.ModTime().UTC().Format(time.RFC3339), age
+	return timefmt.UTC(info.ModTime()), age
 }
 
-// clockOf renders a message's wall-clock (UTC HH:MM:SS), "?" when the record
-// carries no timestamp.
+// clockOf renders a message's wall-clock (marked UTC, "HH:MM:SSZ" via the
+// timefmt seam), "?" when the record carries no timestamp.
 func clockOf(m model.Message) string {
 	if m.TS <= 0 {
 		return "?"
 	}
-	return time.Unix(int64(m.TS), 0).UTC().Format("15:04:05")
+	return timefmt.UTCClock(time.Unix(int64(m.TS), 0))
 }
 
 // FormatAge renders seconds as a compact "how long ago": 42s, 5m, 3h, 2d.

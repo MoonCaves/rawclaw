@@ -70,6 +70,15 @@ func TestPrintResults(t *testing.T) {
 				"[2026-06-18 · a1b2c3d4 · user] …hello…\n\n",
 		},
 		{
+			name: "full iso normalized to marked utc",
+			// A parseable stored ISO (fractional, Z) renders through the timefmt
+			// seam as marked-UTC seconds — pins the seam call at this site.
+			res:   []retrieve.Hit{{ISO: "2026-06-18T10:00:00.123Z", SessionID: "a1b2c3d4e5", Role: "user", Snippet: "hello"}},
+			nSess: 1,
+			exact: "Top 1 match(es) across 1 of this project's sessions:\n\n" +
+				"[2026-06-18T10:00:00Z · a1b2c3d4 · user] …hello…\n\n",
+		},
+		{
 			name: "unknown count + subagent tag + empty iso",
 			res: []retrieve.Hit{
 				{ISO: "", SessionID: "sess", Role: "assistant", IsSubagent: true, Parent: "parent99xx", Snippet: "snip"},
