@@ -20,10 +20,12 @@ const pullThrottleWindow = 5 * time.Minute
 // deleting a corrupt clone and pulling is the documented recovery). With
 // throttle=true it no-ops unless the last successful pull is older than
 // pullThrottleWindow, judged by the stamp file's mtime in the state dir; the
-// explicit CLI verb passes false and always pulls. Returns pulled=true when a
-// network refresh actually ran ("already up to date" still counts — the clone
-// was verified current), false on a throttled skip or an empty remote.
-func (a *Archive) Pull(ctx context.Context, throttle bool) (bool, error) {
+// explicit CLI verb passes false and always pulls. pulled reports whether the
+// remote was actually consulted: true after any successful refresh — including
+// "already up to date" and a still-empty remote (its branch is born on the
+// first push; nothing-there is a verified-fresh state) — false only on a
+// throttled skip, so callers can render the two honestly.
+func (a *Archive) Pull(ctx context.Context, throttle bool) (pulled bool, err error) {
 	if throttle && !pullDue(time.Now()) {
 		return false, nil
 	}
@@ -35,13 +37,7 @@ func (a *Archive) Pull(ctx context.Context, throttle bool) (bool, error) {
 		return false, err
 	}
 	out, err := a.run(ctx, a.clone, "pull", "--rebase", "origin", branch)
-	if err != nil {
-		if isMissingRemoteRef(out) {
-			// Empty remote: its default branch is born on the first push. Nothing
-			// to pull is a fresh state, so the stamp is still written.
-			stampPull()
-			return false, nil
-		}
+	if err != nil && !isMissingRemoteRef(out) {
 		_, _ = a.run(ctx, a.clone, "rebase", "--abort") // never leave a wedged clone
 		return false, fmt.Errorf("pull archive: %w", err)
 	}

@@ -70,11 +70,12 @@ func TestAll_SourceFilterAppliesToArchiveScopes(t *testing.T) {
 // TestResolve_StaleArchiveScope: a Stale replica scope resolves to its db with
 // IndexStale — the existing stale-fallback posture picks it up from there.
 func TestResolve_StaleArchiveScope(t *testing.T) {
-	dbp, status, err := Resolve(view.Scope{DBP: "/tmp/some.db", Stale: true}, false)
+	want := filepath.Join(t.TempDir(), "some.db")
+	dbp, status, err := Resolve(view.Scope{DBP: want, Stale: true}, false)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if dbp != "/tmp/some.db" {
+	if dbp != want {
 		t.Errorf("dbp = %q, want the scope's DBP", dbp)
 	}
 	if status != index.IndexStale {

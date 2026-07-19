@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,11 +128,12 @@ func TestPull_RecreatesDeletedClone(t *testing.T) {
 	}
 }
 
-// TestPull_EmptyRemoteIsNoop: pulling an archive whose remote is still empty
+// TestPull_EmptyRemoteSucceeds: pulling an archive whose remote is still empty
 // (its default branch is born on the first push, which hasn't happened
-// anywhere yet) is a clean no-op, not an error. Config written directly —
-// Init would push the registration and un-empty the remote.
-func TestPull_EmptyRemoteIsNoop(t *testing.T) {
+// anywhere yet) succeeds — the remote was consulted and verified empty-fresh,
+// so pulled is true and the stamp is written. Config written directly — Init
+// would push the registration and un-empty the remote.
+func TestPull_EmptyRemoteSucceeds(t *testing.T) {
 	newTestHome(t)
 	bare := initBareRepo(t)
 	if err := writeConfig(Config{Remote: bare, Name: "machine-a"}); err != nil {
@@ -146,8 +148,11 @@ func TestPull_EmptyRemoteIsNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pull against empty remote: %v", err)
 	}
-	if pulled {
-		t.Error("pulled = true against an empty remote, want vacuous no-op")
+	if !pulled {
+		t.Error("pulled = false against an empty remote, want verified-fresh true")
+	}
+	if _, err := os.Stat(pullStampPath()); err != nil {
+		t.Errorf("throttle stamp missing after empty-remote pull: %v", err)
 	}
 }
 
@@ -173,7 +178,7 @@ func TestPull_NetworkFailureSurfaces(t *testing.T) {
 			case "symbolic-ref":
 				return "main\n", nil
 			case "pull":
-				return "fatal: unable to access remote", os.ErrDeadlineExceeded
+				return "fatal: unable to access remote", errors.New("exit status 128")
 			default:
 				return "", nil
 			}

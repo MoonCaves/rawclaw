@@ -195,15 +195,15 @@ func originOr(origin string) string {
 // ReindexFile parses the whole file into memory FIRST, then atomically replaces
 // this session's rows (an I/O failure can't commit away existing data). Returns
 // true on success. Rows are stamped with this machine's identity; a replicated
-// tree goes through reindexFileOrigin instead.
+// tree goes through reindexFileWithOrigin instead.
 func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
-	return reindexFileOrigin(con, path, transcriptDir, "")
+	return reindexFileWithOrigin(con, path, transcriptDir, "")
 }
 
-// reindexFileOrigin is ReindexFile with an explicit origin_machine ("" = this
+// reindexFileWithOrigin is ReindexFile with an explicit origin_machine ("" = this
 // machine) — the provenance seam the archive-scope ingest stamps foreign
 // machine ids through.
-func reindexFileOrigin(con *sql.DB, path, transcriptDir, origin string) bool {
+func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string) bool {
 	sid, isSub, parent := provenance.SessionIDFor(path, transcriptDir)
 
 	rows, started, last, ok := parseTranscript(path, sid)
@@ -313,12 +313,12 @@ type fileMeta struct {
 // each contained file, reindex changed ones, prune deleted sessions. Writes
 // commit under database/sql autocommit.
 func UpdateIndex(con *sql.DB, transcriptDir string) error {
-	return updateIndexOrigin(con, transcriptDir, "")
+	return updateIndexWithOrigin(con, transcriptDir, "")
 }
 
-// updateIndexOrigin is UpdateIndex with an explicit origin_machine ("" = this
+// updateIndexWithOrigin is UpdateIndex with an explicit origin_machine ("" = this
 // machine) stamped onto every (re)indexed session — the archive-scope path.
-func updateIndexOrigin(con *sql.DB, transcriptDir, origin string) error {
+func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 	files := paths.ContainedJSONL(transcriptDir)
 
 	onDisk := make(map[string]struct{}, len(files))
@@ -363,7 +363,7 @@ func updateIndexOrigin(con *sql.DB, transcriptDir, origin string) error {
 				}
 			}
 		}
-		if reindexFileOrigin(con, f, transcriptDir, origin) {
+		if reindexFileWithOrigin(con, f, transcriptDir, origin) {
 			sid, _, _ := provenance.SessionIDFor(f, transcriptDir)
 			if _, err := con.Exec(
 				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
@@ -561,7 +561,7 @@ func EnsureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions
 		}
 		return 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
 	}
-	if err := updateIndexOrigin(con, tdir, origin); err != nil {
+	if err := updateIndexWithOrigin(con, tdir, origin); err != nil {
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}

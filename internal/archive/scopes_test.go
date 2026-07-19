@@ -114,34 +114,42 @@ func TestScopes_StampsForeignOrigin(t *testing.T) {
 	a := initArchiveWithForeign(t, "machine-b", foreignID)
 
 	for _, sc := range a.Scopes(false) {
-		con, err := store.ConnectRO(sc.DBP)
-		if err != nil {
-			t.Fatalf("open %s: %v", sc.DBP, err)
-		}
-		rows, err := con.Query("SELECT id, origin_machine FROM sessions")
-		if err != nil {
-			t.Fatalf("query sessions: %v", err)
-		}
-		n := 0
-		for rows.Next() {
-			var id, origin string
-			if err := rows.Scan(&id, &origin); err != nil {
-				t.Fatal(err)
-			}
-			n++
-			if origin != foreignID {
-				t.Errorf("session %s origin_machine = %q, want %q", id, origin, foreignID)
-			}
-		}
-		if err := rows.Err(); err != nil {
-			t.Fatal(err)
-		}
-		rows.Close()
-		con.Close()
-		if n == 0 {
+		if n := checkAllOrigins(t, sc.DBP, foreignID); n == 0 {
 			t.Errorf("scope %q ingested zero sessions", sc.Project)
 		}
 	}
+}
+
+// checkAllOrigins asserts every session row in dbp carries origin_machine ==
+// want and returns the row count. Connections close via defer so a fatal
+// assertion cannot leak them.
+func checkAllOrigins(t *testing.T, dbp, want string) int {
+	t.Helper()
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("open %s: %v", dbp, err)
+	}
+	defer con.Close()
+	rows, err := con.Query("SELECT id, origin_machine FROM sessions")
+	if err != nil {
+		t.Fatalf("query sessions: %v", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var id, origin string
+		if err := rows.Scan(&id, &origin); err != nil {
+			t.Fatal(err)
+		}
+		n++
+		if origin != want {
+			t.Errorf("session %s origin_machine = %q, want %q", id, origin, want)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
 
 // TestScopes_RenamedOwnDirExcluded: a dir whose manifest carries OUR machine id
