@@ -17,6 +17,16 @@ All notable changes to RawClaw are documented in this file.
   machines are absorbed by a bounded pull-rebase-and-retry loop (never a force-push, never a
   clone left mid-rebase). Unconfigured, the feature is off: `archive push` is a clean no-op
   pointing at init.
+- **Live peek: `rawclaw live <machine> [session-prefix]`.** "What is the agent on that machine
+  doing right now" — one direct SSH hop that lists the machine's recent sessions (newest first,
+  Claude + Codex, ages computed on the far end so clock skew never lies) or renders one
+  in-progress session's current transcript, messages written seconds ago included. The archive
+  is never touched. The machine name is the ssh destination by default (an `~/.ssh/config` alias
+  just works); the archive config's optional `"ssh"` map overrides it per machine. Degrades with
+  distinct, actionable errors: unresolvable machine name, unreachable ssh, no rawclaw on the
+  remote's non-interactive PATH (with the install one-liner), or a remote rawclaw too old to
+  serve. `--json` for agents; `--tail N` to widen the transcript window; raw bytes rendered, no
+  summarization.
 
 ## [0.4.0] — 2026-07-18
 
