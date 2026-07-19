@@ -45,7 +45,9 @@ func readConfig() (Config, error) {
 	return cfg, nil
 }
 
-// writeConfig persists cfg atomically-enough for a single small file.
+// writeConfig persists cfg. One small single-shot write: a torn write cannot
+// pass unnoticed — it surfaces as a parse error from Load, whose message
+// points at the file.
 func writeConfig(cfg Config) error {
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

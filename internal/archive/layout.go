@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -61,19 +62,26 @@ func defaultMachineName() string {
 	return sanitizeMachineName(h)
 }
 
-// validateMachineName rejects explicit names that would escape or hide the
-// machine dir. Explicit names are validated, not silently rewritten — the user
-// chose them and deserves a loud failure over a surprising rename.
+// validateMachineName rejects explicit names that would escape the machine
+// dir, hide it, or act as git pathspec magic — the name flows into
+// `git add/status -- <name>`, so a glob like "ma*" would stage OTHER
+// machines' dirs. Only [A-Za-z0-9._-] survives, dots may not lead. Explicit
+// names are validated, not silently rewritten — the user chose them and
+// deserves a loud failure over a surprising rename.
 func validateMachineName(name string) error {
-	switch {
-	case name == "":
-		return fmt.Errorf("machine name is empty")
-	case strings.ContainsAny(name, `/\`):
-		return fmt.Errorf("machine name %q must not contain path separators", name)
-	case name == "." || name == "..":
-		return fmt.Errorf("machine name %q is reserved", name)
-	case strings.HasPrefix(name, "."):
+	if name == "" {
+		return errors.New("machine name is empty")
+	}
+	if strings.HasPrefix(name, ".") {
 		return fmt.Errorf("machine name %q must not start with a dot", name)
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+		default:
+			return fmt.Errorf("machine name %q: only letters, digits, '.', '-', '_' are allowed", name)
+		}
 	}
 	return nil
 }
