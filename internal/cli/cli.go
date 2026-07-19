@@ -200,6 +200,8 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	archiveCmd.AddCommand(newArchiveInitCmd())
 	archiveCmd.AddCommand(newArchivePushCmd())
 	archiveCmd.AddCommand(newArchivePullCmd())
+	archiveCmd.AddCommand(newArchiveAutosyncCmd())
+	archiveCmd.AddCommand(newArchiveEnableTimerCmd())
 	root.AddCommand(archiveCmd)
 	root.AddCommand(newLiveCmd())
 	root.AddCommand(newDeleteCmd())
@@ -352,8 +354,12 @@ func newReadCmd() *cobra.Command {
 				v := budget
 				b = &v
 			}
-			return agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], verbScope(thisProject, dir),
-				focus, b, includeTools, moreLevel, around, jsonOut)
+			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], verbScope(thisProject, dir),
+				focus, b, includeTools, moreLevel, around, jsonOut); err != nil {
+				return err
+			}
+			maybeAutosync() // after the excerpt is printed; never before
+			return nil
 		},
 	}
 	f := cmd.Flags()
@@ -388,7 +394,11 @@ func newOutlineCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0], verbScope(thisProject, dir), includeTools, jsonOut)
+			if err := agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0], verbScope(thisProject, dir), includeTools, jsonOut); err != nil {
+				return err
+			}
+			maybeAutosync() // after the arc is printed; never before
+			return nil
 		},
 	}
 	f := cmd.Flags()
@@ -429,7 +439,13 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 		return runBrowse(out, o)
 	}
 
-	return runSearch(out, o, args)
+	if err := runSearch(out, o, args); err != nil {
+		return err
+	}
+	// Results are already printed; the sync-on-invoke trigger fires last so
+	// the search never waits on it (and a failed search never syncs).
+	maybeAutosync()
+	return nil
 }
 
 // thisScope resolves --dir to its transcript dir; on miss, it prints the

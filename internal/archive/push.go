@@ -26,6 +26,15 @@ const maxPushAttempts = 5
 // status output and logging.
 func (a *Archive) PushLocal(ctx context.Context) (PushReport, error) {
 	var rep PushReport
+	// Single-writer gate: pushes from two local processes (a timer firing over
+	// a manual push, overlapping background syncs) would otherwise race over
+	// the same clone and its .git/rawclaw-tmp staging dir. ErrBusy is the
+	// clean "someone else is syncing" signal, not a failure.
+	release, err := acquireSyncLock(ctx)
+	if err != nil {
+		return rep, err
+	}
+	defer release()
 	if err := a.ensureClone(ctx); err != nil {
 		return rep, err
 	}
