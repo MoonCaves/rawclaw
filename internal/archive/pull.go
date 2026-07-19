@@ -29,6 +29,19 @@ func (a *Archive) Pull(ctx context.Context, throttle bool) (pulled bool, err err
 	if throttle && !pullDue(time.Now()) {
 		return false, nil
 	}
+	// The same single-writer lock pushes hold: a pull rebasing the clone while
+	// a push stages into it is the identical same-machine race. The throttled
+	// fast path above stays lock-free (one stat, no contention), and the
+	// window is RE-checked after the wait — the holder we waited on may itself
+	// have just refreshed the clone.
+	release, err := acquireSyncLock(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	if throttle && !pullDue(time.Now()) {
+		return false, nil
+	}
 	if err := a.ensureClone(ctx); err != nil {
 		return false, err
 	}
