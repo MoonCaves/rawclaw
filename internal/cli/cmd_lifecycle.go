@@ -91,8 +91,8 @@ func newDeleteCmd() *cobra.Command {
 			"you are prompted y/N before anything is removed. A real delete writes a " +
 			"tombstone so a reindex skips the removed sessions.\n\n" +
 			"What a delete removes: the session's transcript file (when still on disk) " +
-			"and rawclaw's copy (index + archive — the index row now, this machine's " +
-			"archive copy on the next push). A RETAINED session — one whose transcript " +
+			"and rawclaw's copy (index + archive — the index row via tombstone, this " +
+			"machine's archive copy on the next push). A RETAINED session — one whose transcript " +
 			"the source tool already purged — loses only rawclaw's copy; Claude Code / " +
 			"Codex transcript files are untouched. " +
 			"Foreign (other-machine) sessions are read-only from this machine and are " +
@@ -317,13 +317,17 @@ func foreignDeleteSessionMatches(id string) []string {
 func mergeNames(a, b []string) []string {
 	seen := make(map[string]struct{}, len(a)+len(b))
 	out := make([]string, 0, len(a)+len(b))
-	for _, n := range append(append([]string{}, a...), b...) {
-		if _, dup := seen[n]; dup {
-			continue
+	add := func(names []string) {
+		for _, n := range names {
+			if _, dup := seen[n]; dup {
+				continue
+			}
+			seen[n] = struct{}{}
+			out = append(out, n)
 		}
-		seen[n] = struct{}{}
-		out = append(out, n)
 	}
+	add(a)
+	add(b)
 	return out
 }
 

@@ -217,7 +217,9 @@ func TestDeleteCmd_EOFAbortExitsOne(t *testing.T) {
 	if _, serr := os.Stat(thin); serr != nil {
 		t.Errorf("session deleted despite EOF abort: %v", serr)
 	}
-	_ = out
+	if !strings.Contains(out, "Aborted; nothing deleted.") {
+		t.Errorf("EOF abort should print the abort message; out: %s", out)
+	}
 }
 
 // TestDeleteCmd_YesSkipsPrompt: --yes deletes without consulting stdin. With
