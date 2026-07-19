@@ -112,7 +112,7 @@ func newDeleteCmd() *cobra.Command {
 	fl.StringVar(&f.project, "project", "", "only sessions whose transcript-dir path contains this substring")
 	fl.IntVar(&f.maxMessages, "max-messages", 0, "only sessions with at most N messages (drops thin/bootstrap threads)")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "report the plan without deleting anything")
-	fl.BoolVarP(&f.yes, "yes", "y", false, "skip the interactive y/N prompt (for non-interactive/agent use)")
+	fl.BoolVarP(&f.yes, "yes", "y", false, "skip the interactive y/N prompt (deletes touching original files also need --files)")
 	fl.BoolVar(&f.files, "files", false, "with --yes: also authorize deleting original transcript files non-interactively")
 	return cmd
 }
