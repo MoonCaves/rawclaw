@@ -25,7 +25,10 @@ func newArchiveCmd() *cobra.Command {
 		Short: "Move a session's transcript out of the active tree into the archive",
 		Long: "Move a session's transcript (.jsonl) out of the active projects tree into the " +
 			"archive dir. <session> is the 8+ char session id (or a path to the .jsonl). " +
-			"Archiving is idempotent: an already-archived session reports success.",
+			"Archiving is idempotent: an already-archived session reports success.\n\n" +
+			"The init/push subcommands manage something different: the transcript archive, " +
+			"a private git remote mirroring this machine's transcript trees " +
+			"(see `rawclaw archive init --help`).",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
