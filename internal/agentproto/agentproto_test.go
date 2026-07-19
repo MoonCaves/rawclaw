@@ -1062,7 +1062,7 @@ func TestSearchDiscoversOrphanedProject(t *testing.T) {
 	}
 
 	// Discover from the real projects root; the first search builds the index db.
-	env := Search("orphandiscoverybeacon", scopes.All("", false), SearchOpts{}, nil)
+	env := Search("orphandiscoverybeacon", scopes.All(t.Context(), "", false), SearchOpts{}, nil)
 	if len(env.Results) != 1 {
 		t.Fatalf("pre-purge results = %d, want 1", len(env.Results))
 	}
@@ -1074,7 +1074,7 @@ func TestSearchDiscoversOrphanedProject(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env = Search("orphandiscoverybeacon", scopes.All("", false), SearchOpts{}, nil)
+	env = Search("orphandiscoverybeacon", scopes.All(t.Context(), "", false), SearchOpts{}, nil)
 	if len(env.Results) != 1 {
 		t.Fatalf("post-purge results = %d, want 1 — orphaned-source db not discovered/searchable", len(env.Results))
 	}
@@ -1083,7 +1083,7 @@ func TestSearchDiscoversOrphanedProject(t *testing.T) {
 	}
 
 	// read resolves the retained content through the discovered scope.
-	rr, err := Read(ref, scopes.All("", false), ReadOpts{})
+	rr, err := Read(ref, scopes.All(t.Context(), "", false), ReadOpts{})
 	if err != nil {
 		t.Fatalf("read via discovered orphan scope: %v", err)
 	}

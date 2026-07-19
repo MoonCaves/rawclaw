@@ -135,6 +135,15 @@ func (a *Archive) ensureClone(ctx context.Context) error {
 	gitDir := filepath.Join(a.clone, ".git")
 	_, gitErr := os.Stat(gitDir)
 	_, okErr := os.Stat(filepath.Join(gitDir, cloneSentinel))
+	// A stat failure that is NOT "does not exist" (EACCES, I/O error) is
+	// environmental, not torn-state evidence — fail loudly rather than let it
+	// route into the rebuild path and destroy a possibly-healthy clone.
+	if gitErr != nil && !os.IsNotExist(gitErr) {
+		return fmt.Errorf("stat clone git dir: %w", gitErr)
+	}
+	if okErr != nil && !os.IsNotExist(okErr) {
+		return fmt.Errorf("stat clone sentinel: %w", okErr)
+	}
 	if gitErr == nil && okErr == nil {
 		out, err := a.run(ctx, a.clone, "remote", "get-url", "origin")
 		if err != nil {
