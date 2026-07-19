@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -58,7 +59,19 @@ func Init(ctx context.Context, remote, name string) (*Archive, error) {
 	defer release()
 
 	// A clone left by a previous failed/abandoned init is stale state, not
-	// truth — the remote is truth. Start from a fresh clone.
+	// truth — the remote is truth. Start from a fresh clone — but never
+	// silently destroy unpushed work (same doctrine as ensureClone's rebuild
+	// guard): a leftover clone holding commits no remote has (config lost
+	// after a sync committed but before it pushed) is refused with the
+	// recovery path. A clone too torn to even answer the probe is the
+	// documented start-fresh case and proceeds.
+	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err == nil {
+		if n, serr := a.strandedCommits(ctx); serr == nil && n > 0 {
+			return nil, fmt.Errorf(
+				"existing clone %s holds %d unpushed commit(s); push or back them up (git -C %s status), or delete the dir, then re-run init",
+				a.clone, n, a.clone)
+		}
+	}
 	if err := os.RemoveAll(a.clone); err != nil {
 		return nil, fmt.Errorf("clear stale clone: %w", err)
 	}

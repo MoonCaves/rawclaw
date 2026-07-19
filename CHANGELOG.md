@@ -60,14 +60,21 @@ All notable changes to RawClaw are documented in this file.
   served.
 
 - **`rawclaw archive status`** — an offline freshness report: remote, local clone (and whether it
-  is usable), this machine's last successful push and pull, and one line per machine dir with its
-  last sync time — a machine silent past the same 24-hour window search uses is marked `STALE`,
-  so status and search can never disagree on what stale means.
+  is usable), this machine's last successful push and pull, and one line per machine dir with the
+  time new content last arrived. Wording is honest about what the clone can know: an idle machine
+  with nothing new to push and a dead one look identical from here, so no machine is ever labeled
+  stale/dead — the only warning raised is for what THIS machine knows first-hand, its own sync
+  stamps going overdue (no successful push/pull sync in over a day; a verified-nothing-to-push
+  run counts as a successful sync). Search's possibly-out-of-date posture for silent machines is
+  unchanged.
 - **Deletes propagate to the archive — own sessions, explicit deletes only.** A session removed
   with `rawclaw delete` (file gone + tombstone recorded) is also removed from the archive on this
-  machine's next push, so an explicit delete is never resurrected by a later pull. Absence alone
-  never deletes: upstream purges and `RAWCLAW_RETENTION=mirror` prunes keep their archive copies —
-  the archive is the durable mirror. Foreign machine dirs are read-only from every box: a delete
+  machine's next push, so an explicit delete is never resurrected by a later pull. On the OTHER
+  machines, the next pull + search reindex drops the session from their archive-replica dbs too:
+  for archive scopes the synced clone is the source of truth and absence is authoritative, so an
+  owner's delete can never be resurrected by a replica's index. Absence alone never deletes
+  LOCALLY: upstream purges and `RAWCLAW_RETENTION=mirror` prunes keep their archive copies — the
+  archive is the durable mirror. Foreign machine dirs are read-only from every box: a delete
   filter reaching another machine's archived sessions is refused with a pointer at the origin
   machine, and foreign replica dbs can never enter the tombstone path.
 
@@ -119,6 +126,24 @@ All notable changes to RawClaw are documented in this file.
   `.git/index.lock` left by git itself dying (power loss, process-group kill) is aged out after
   15 minutes while fresh locks stay honored. The remote never sees partial state beyond git's
   own commit atomicity.
+- **Rebuild only with proof, recover under a dying watchdog.** The wipe-and-reclone recovery
+  path now refuses to destroy anything it cannot prove disposable: before any rebuild the clone
+  is checked for commits the remote lacks (a stranded, unpushed sync) and the rebuild is refused
+  with instructions instead of eating them; a sentinel-less but structurally complete clone
+  (created before the sentinel existed) is adopted in place — the marker is stamped — rather
+  than wiped, where "complete" demands a finished checkout (resolvable branch HEAD AND a clean
+  status — a clone killed mid-checkout has the former but not the latter, and adopting it would
+  let the next push commit a tree missing every other machine's dir); `archive init` refuses to
+  wipe a leftover clone that still holds unpushed commits (config lost after a sync committed
+  but before it pushed); and the mid-rebase/mid-merge abort runs on its own short-deadline
+  context, so the watchdog cancelling a verb mid-recovery can no longer make a recoverable
+  wedge look like corruption and trigger a destructive re-clone.
+- **Replica reconciliation only from a verified, quiescent clone.** Because absence from the
+  clone is now authoritative for archive scopes, search-time replica ingest is gated twice: a
+  clone without the completed-clone sentinel (torn, or not yet adopted) is not enumerated at
+  all, and while a sibling sync holds the machine-wide lock (a pull may be mid-rebase, with the
+  worktree half-rewritten) enumeration serves the previously built scope dbs without
+  reconciling — foreign sessions can no longer transiently vanish from search mid-sync.
 
 ## [0.4.0] — 2026-07-18
 

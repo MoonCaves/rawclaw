@@ -3,37 +3,46 @@ package archive
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
 // StatusReport is the raw material for `archive status` and doctor-style
-// output: where the archive lives, when this machine last synced, and how
-// fresh each machine's dir is. Status is an OFFLINE read — recorded state
-// only (config, stamp files, the clone's git history); it never fetches.
+// output: where the archive lives, when this machine last synced, and when
+// each machine's dir last received new content. Status is an OFFLINE read —
+// recorded state only (config, stamp files, the clone's git history); it
+// never fetches.
+//
+// The only staleness verdicts here are the own-sync overdue flags: this
+// machine knows first-hand when ITS last successful push/pull ran. A foreign
+// machine's freshness is deliberately NOT judged — from the clone alone an
+// idle-but-healthy machine (nothing new to commit) and a dead one are
+// indistinguishable, so per-machine state is reported as the honest
+// LastCommit ("last new content") and nothing more.
 type StatusReport struct {
-	Remote   string          // configured remote URL
-	Clone    string          // local clone path
-	CloneOK  bool            // a COMPLETED clone exists (sentinel present — ensureClone's own predicate)
-	LastPush time.Time       // last successful push from this machine (zero = never)
-	LastPull time.Time       // last successful pull on this machine (zero = never)
-	Machines []MachineStatus // one entry per machine dir in the clone, own first
+	Remote      string          // configured remote URL
+	Clone       string          // local clone path
+	CloneOK     bool            // a COMPLETED clone exists (sentinel present — ensureClone's own predicate)
+	LastPush    time.Time       // last successful push sync from this machine, incl. verified no-ops (zero = never)
+	LastPull    time.Time       // last successful pull on this machine (zero = never)
+	PushOverdue bool            // a recorded push sync exists but is older than the window (never ≠ overdue)
+	PullOverdue bool            // a recorded pull exists but is older than the window (never ≠ overdue)
+	Machines    []MachineStatus // one entry per machine dir in the clone, own first
 }
 
-// MachineStatus is one machine dir's freshness as recorded in the clone.
+// MachineStatus is one machine dir's recorded state in the clone.
 type MachineStatus struct {
 	Name       string    // top-level dir name in the archive
 	MachineID  string    // stable machine id from the dir's manifest
 	Own        bool      // this machine's own dir
-	LastCommit time.Time // last commit touching the dir (zero = none yet)
-	Stale      bool      // older than the staleAfter window (same window search uses)
+	LastCommit time.Time // last commit touching the dir (zero = none yet) — last NEW CONTENT, not liveness
 }
 
-// Status reports clone path, remote, last push/pull, and per-machine
-// last-commit staleness. A missing clone is a reported state (CloneOK=false,
-// no machines), not an error — `archive pull` is the repair path.
+// Status reports clone path, remote, last push/pull (with own-sync overdue
+// flags), and per-machine last-new-content times. A missing clone is a
+// reported state (CloneOK=false, no machines), not an error — `archive pull`
+// is the repair path.
 func (a *Archive) Status(ctx context.Context) (StatusReport, error) {
 	st := StatusReport{
 		Remote:   a.cfg.Remote,
@@ -41,30 +50,38 @@ func (a *Archive) Status(ctx context.Context) (StatusReport, error) {
 		LastPush: stampTime(pushStampPath()),
 		LastPull: stampTime(pullStampPath()),
 	}
-	// Same completeness predicate ensureClone applies: a torn mid-clone dir
-	// (.git without the sentinel) is not a usable clone and must not report
-	// as one — status and recovery cannot disagree on "usable".
-	if _, err := os.Stat(filepath.Join(a.clone, ".git", cloneSentinel)); err != nil {
+	now := time.Now()
+	st.PushOverdue = overdueAt(st.LastPush, now)
+	st.PullOverdue = overdueAt(st.LastPull, now)
+	// Same marker ensureClone stamps and scope enumeration trusts: no
+	// sentinel → not a VERIFIED clone, so status won't vouch for it. (A
+	// structurally complete pre-sentinel clone gets adopted — stamped — by
+	// the next push/pull; status is an offline read and never probes git to
+	// make that call itself.)
+	if !a.cloneUsable() {
 		return st, nil
 	}
 	st.CloneOK = true
 
-	now := time.Now()
 	own := MachineStatus{Name: a.cfg.Name, MachineID: a.machineID, Own: true}
 	own.LastCommit = a.dirLastCommit(ctx, a.cfg.Name)
-	own.Stale = staleAt(own.LastCommit, now)
 	st.Machines = append(st.Machines, own)
 
 	for _, m := range a.foreignMachines() {
-		lc := a.dirLastCommit(ctx, m.Name)
 		st.Machines = append(st.Machines, MachineStatus{
 			Name:       m.Name,
 			MachineID:  m.MachineID,
-			LastCommit: lc,
-			Stale:      staleAt(lc, now),
+			LastCommit: a.dirLastCommit(ctx, m.Name),
 		})
 	}
 	return st, nil
+}
+
+// overdueAt reports whether a recorded own-sync stamp is older than the
+// shared window. A zero stamp is NOT overdue: "never" is its own honest
+// state (a machine that never pulled isn't a broken sync loop).
+func overdueAt(stamp, now time.Time) bool {
+	return !stamp.IsZero() && now.Sub(stamp) > staleAfter
 }
 
 // dirLastCommit resolves the last commit time touching name's dir in the
@@ -84,12 +101,6 @@ func (a *Archive) dirLastCommit(ctx context.Context, name string) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(ct, 0).UTC()
-}
-
-// staleAt applies the shared staleness window: unknown freshness (zero time)
-// is reported stale, never silently passed off as fresh.
-func staleAt(lastCommit, now time.Time) bool {
-	return lastCommit.IsZero() || now.Sub(lastCommit) > staleAfter
 }
 
 // stampTime reads a stamp file's mtime; zero when the stamp does not exist.
