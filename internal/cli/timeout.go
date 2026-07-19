@@ -40,20 +40,31 @@ func resolveTimeout(flagSet bool, flagVal time.Duration, env string) time.Durati
 	return defaultTimeout
 }
 
-// startWatchdog arms the hard self-bounding guarantee. It returns a `stop` that
-// the caller MUST defer: stop() cancels the deadline and waits for the watchdog
-// goroutine to exit, so a successful (or any returned) run leaks nothing.
+// childKillGrace is the pause between the deadline cancelling the run context
+// (which SIGKILLs any child started via exec.CommandContext — the ssh a live
+// peek dials) and the watchdog's own exit(124): long enough for the kill to
+// land, far too short to dent the never-hang guarantee.
+const childKillGrace = 200 * time.Millisecond
+
+// startWatchdog arms the hard self-bounding guarantee. It returns the run's
+// context — cancelled the instant the deadline fires, so a child process
+// started under it dies with the run instead of surviving as an orphan — and a
+// `stop` that the caller MUST defer: stop() cancels the deadline and waits for
+// the watchdog goroutine to exit, so a successful (or any returned) run leaks
+// nothing.
 //
-// On deadline the watchdog writes a clear message to stderr and calls exit(124)
+// On deadline the watchdog writes a clear message to stderr, waits
+// childKillGrace for context cancellation to reap children, and calls exit(124)
 // — the conventional `timeout(1)` code — which terminates the process even if
 // the main goroutine is parked inside a CGO-free SQLite call that context
 // cancellation alone cannot unblock. That hard exit is the whole point: an agent
 // can rely on rawclaw never hanging past its deadline.
 //
-// A non-positive timeout disables the watchdog: stop() is then a no-op.
-func startWatchdog(timeout time.Duration, stderr io.Writer, exit func(int)) (stop func()) {
+// A non-positive timeout disables the watchdog: the context never expires and
+// stop() is then a no-op.
+func startWatchdog(timeout time.Duration, stderr io.Writer, exit func(int)) (ctx context.Context, stop func()) {
 	if timeout <= 0 {
-		return func() {}
+		return context.Background(), func() {}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -64,11 +75,12 @@ func startWatchdog(timeout time.Duration, stderr io.Writer, exit func(int)) (sto
 		<-ctx.Done()
 		if ctx.Err() == context.DeadlineExceeded {
 			fmt.Fprintf(stderr, "rawclaw: timed out after %s (raise --timeout or set --timeout 0 to disable)\n", timeout)
+			time.Sleep(childKillGrace)
 			exit(124)
 		}
 	}()
 
-	return func() {
+	return ctx, func() {
 		cancel()
 		<-done
 	}
