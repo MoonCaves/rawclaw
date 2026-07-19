@@ -97,9 +97,17 @@ func gitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
 const localOpTimeout = 10 * time.Minute
 
 // transferOp reports whether args invoke a remote-talking git verb — the ones
-// stall detection bounds and a wall-clock cap must not touch.
+// stall detection bounds and a wall-clock cap must not touch. A "-c" config
+// flag takes its VALUE as a separate arg (withCommitIdentity prepends such
+// pairs); both are skipped so the value is never misread as the verb — which
+// would demote an identity-pinned pull to a wall-clock-capped local op.
 func transferOp(args []string) bool {
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-c" {
+			i++ // skip the -c value too
+			continue
+		}
 		if strings.HasPrefix(a, "-") {
 			continue
 		}
