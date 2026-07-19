@@ -107,10 +107,16 @@ func (c *Client) List(ctx context.Context, w io.Writer, limit int, jsonOut bool)
 // Session streams the remote rendering of one in-progress session — a one-hop
 // read of the live transcript, so messages written seconds ago are included.
 // The remote bytes pass through verbatim (text or, under jsonOut, JSON).
-func (c *Client) Session(ctx context.Context, w io.Writer, prefix string, tail int, jsonOut bool) error {
+// includeTools crosses the pipe only when set: the stripped render is the
+// remote's own default, so the default peek stays compatible with remotes
+// that predate the flag.
+func (c *Client) Session(ctx context.Context, w io.Writer, prefix string, tail int, includeTools, jsonOut bool) error {
 	args := serveArgs()
 	if tail > 0 {
 		args = append(args, "--tail", strconv.Itoa(tail))
+	}
+	if includeTools {
+		args = append(args, "--include-tools")
 	}
 	if jsonOut {
 		args = append(args, "--json")
@@ -193,15 +199,18 @@ func isResolveFailure(stderr string) bool {
 // serve flags. A pre-live rawclaw treats "live" as a search term and trips on
 // the flag — verified against a real v0.4.0 build, whose stderr is exactly
 // "unknown flag: --serve" (bare; this CLI prints errors without a prefix).
-// The "Error: "-prefixed cobra form is accepted too. Matches are anchored to
-// the start of a stderr line so a remote error that merely ECHOES
-// marker-shaped user input (a no-match error quoting the prefix) is never
-// mistaken for an old binary.
+// A remote that knows --serve but predates the tool opt-in fails the same
+// way on "unknown flag: --include-tools" (captured from a real pre-flag
+// build). The "Error: "-prefixed cobra form is accepted too. Matches are
+// anchored to the start of a stderr line so a remote error that merely
+// ECHOES marker-shaped user input (a no-match error quoting the prefix) is
+// never mistaken for an old binary.
 func isTooOldRemote(stderr string) bool {
 	for _, line := range strings.Split(stderr, "\n") {
 		line = strings.TrimSpace(line)
 		line = strings.TrimPrefix(line, "Error: ")
 		if strings.HasPrefix(line, "unknown flag: --serve") ||
+			strings.HasPrefix(line, "unknown flag: --include-tools") ||
 			strings.HasPrefix(line, `unknown command "live"`) {
 			return true
 		}

@@ -17,10 +17,11 @@ import (
 // files directly.
 func newLiveCmd() *cobra.Command {
 	var (
-		serve   bool
-		limit   int
-		tail    int
-		jsonOut bool
+		serve        bool
+		limit        int
+		tail         int
+		includeTools bool
+		jsonOut      bool
 	)
 	cmd := &cobra.Command{
 		Use:   "live <machine> [session-prefix]",
@@ -50,6 +51,9 @@ func newLiveCmd() *cobra.Command {
 			if listing && cmd.Flags().Changed("tail") {
 				return ExitError{Code: 2, Msg: "--tail applies to a session peek (pass a session prefix)"}
 			}
+			if listing && cmd.Flags().Changed("include-tools") {
+				return ExitError{Code: 2, Msg: "--include-tools applies to a session peek (pass a session prefix)"}
+			}
 			if !listing && cmd.Flags().Changed("limit") {
 				return ExitError{Code: 2, Msg: "--limit applies to the session list (drop the session prefix)"}
 			}
@@ -57,7 +61,7 @@ func newLiveCmd() *cobra.Command {
 				if len(args) == 0 {
 					return live.ServeList(out, limit)
 				}
-				return live.ServeSession(out, args[0], tail, jsonOut)
+				return live.ServeSession(out, args[0], tail, includeTools, jsonOut)
 			}
 			machine := args[0]
 			dest, err := archive.SSHDestination(machine)
@@ -68,7 +72,7 @@ func newLiveCmd() *cobra.Command {
 			if len(args) == 1 {
 				return c.List(cmd.Context(), out, limit, jsonOut)
 			}
-			return c.Session(cmd.Context(), out, args[1], tail, jsonOut)
+			return c.Session(cmd.Context(), out, args[1], tail, includeTools, jsonOut)
 		},
 	}
 	f := cmd.Flags()
@@ -76,6 +80,7 @@ func newLiveCmd() *cobra.Command {
 	_ = f.MarkHidden("serve")
 	f.IntVar(&limit, "limit", 0, "max sessions to list (default 10)")
 	f.IntVar(&tail, "tail", 0, "trailing messages to render for a session (default 40)")
+	f.BoolVar(&includeTools, "include-tools", false, "also render tool calls in a session peek (stripped by default, matching read/outline)")
 	f.BoolVar(&jsonOut, "json", false, "machine-readable JSON output")
 	return cmd
 }

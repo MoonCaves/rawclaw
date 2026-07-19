@@ -106,7 +106,7 @@ func TestClientSession_StreamsAndPassesArgs(t *testing.T) {
 	c := &Client{Machine: "box-a", Dest: "box-a", run: fakeRun(&calls, "rendered transcript\n", "", nil)}
 
 	var buf bytes.Buffer
-	if err := c.Session(context.Background(), &buf, "aaaa1111", 7, false); err != nil {
+	if err := c.Session(context.Background(), &buf, "aaaa1111", 7, false, false); err != nil {
 		t.Fatalf("Session: %v", err)
 	}
 	if buf.String() != "rendered transcript\n" {
@@ -121,6 +121,31 @@ func TestClientSession_StreamsAndPassesArgs(t *testing.T) {
 	if strings.Contains(got, "--json") {
 		t.Errorf("remote invocation %q should not carry --json", got)
 	}
+	// The default peek sends NO tool flag: the stripped render is the remote
+	// default, and an older remote that predates the flag keeps working.
+	if strings.Contains(got, "--include-tools") {
+		t.Errorf("remote invocation %q should not carry --include-tools by default", got)
+	}
+}
+
+// TestClientSession_IncludeTools: the tool opt-in crosses the pipe as
+// --include-tools — only when asked for, so the default stays compatible with
+// remotes that predate the flag.
+func TestClientSession_IncludeTools(t *testing.T) {
+	t.Parallel()
+	var calls [][]string
+	c := &Client{Machine: "box-a", Dest: "box-a", run: fakeRun(&calls, "", "", nil)}
+	if err := c.Session(context.Background(), io.Discard, "aaaa1111", 0, true, false); err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	got := strings.Join(calls[0], " ")
+	if !strings.Contains(got, "--include-tools") {
+		t.Errorf("remote invocation %q missing --include-tools", got)
+	}
+	// User input still crosses as a positional behind the literal separator.
+	if !strings.Contains(got, "-- aaaa1111") {
+		t.Errorf("remote invocation %q lost the -- prefix guard", got)
+	}
 }
 
 // TestClientSession_FlagShapedPrefix: a prefix that looks like a flag crosses
@@ -130,7 +155,7 @@ func TestClientSession_FlagShapedPrefix(t *testing.T) {
 	t.Parallel()
 	var calls [][]string
 	c := &Client{Machine: "box-a", Dest: "box-a", run: fakeRun(&calls, "", "", nil)}
-	if err := c.Session(context.Background(), io.Discard, "--json", 0, false); err != nil {
+	if err := c.Session(context.Background(), io.Discard, "--json", 0, false, false); err != nil {
 		t.Fatalf("Session: %v", err)
 	}
 	got := calls[0]
@@ -204,6 +229,15 @@ func TestClientErrors(t *testing.T) {
 			name:      "remote too old, cobra-prefixed form",
 			exitCode:  1,
 			stderr:    `Error: unknown command "live" for "rawclaw"`,
+			wantParts: []string{"box-x", "too old", "upgrade"},
+			notWanted: "go install",
+		},
+		{
+			// Captured from a real build that knows --serve but predates the
+			// tool opt-in: bare "unknown flag: --include-tools", exit 1.
+			name:      "remote rawclaw too old for --include-tools",
+			exitCode:  1,
+			stderr:    "unknown flag: --include-tools",
 			wantParts: []string{"box-x", "too old", "upgrade"},
 			notWanted: "go install",
 		},
