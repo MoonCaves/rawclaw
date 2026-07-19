@@ -6,6 +6,7 @@
 package scopes
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"log/slog"
@@ -27,8 +28,10 @@ import (
 // eager (Codex + archive) dbs. Archive scopes are the FOREIGN machine dirs of
 // the transcript-archive clone, spliced in so a plain search transparently
 // covers other machines' pushed sessions; each carries its Source, so the
-// runtime filter applies to them exactly as to local scopes.
-func All(sourceFilter string, reindex bool) []view.Scope {
+// runtime filter applies to them exactly as to local scopes. ctx bounds the
+// archive enumeration's git probes (see Archive) — pass the run's watchdog
+// context so those children die with the CLI.
+func All(ctx context.Context, sourceFilter string, reindex bool) []view.Scope {
 	var out []view.Scope
 	if sourceFilter == "" || sourceFilter == "claude" {
 		out = append(out, Claude()...)
@@ -36,7 +39,7 @@ func All(sourceFilter string, reindex bool) []view.Scope {
 	if sourceFilter == "" || sourceFilter == "codex" {
 		out = append(out, Codex(reindex)...)
 	}
-	for _, sc := range Archive(reindex) {
+	for _, sc := range Archive(ctx, reindex) {
 		if sourceFilter == "" || sc.Source == sourceFilter {
 			out = append(out, sc)
 		}
@@ -48,8 +51,9 @@ func All(sourceFilter string, reindex bool) []view.Scope {
 // the archive clone, ready to search (see archive.Scopes). An unconfigured
 // archive (or one whose clone is absent) yields nil — the zero state costs one
 // nil-check. A broken archive config is warned and degrades to local-only
-// rather than failing the whole enumeration.
-func Archive(reindex bool) []view.Scope {
+// rather than failing the whole enumeration. ctx bounds the per-machine
+// staleness git probes so they die with the caller's watchdog.
+func Archive(ctx context.Context, reindex bool) []view.Scope {
 	a, err := archive.Load()
 	if err != nil {
 		slog.Warn("scopes: archive config unreadable; searching local scopes only", "err", err)
@@ -58,7 +62,23 @@ func Archive(reindex bool) []view.Scope {
 	if a == nil {
 		return nil // feature off
 	}
-	return a.Scopes(reindex)
+	return a.Scopes(ctx, reindex)
+}
+
+// ArchiveLookup returns the archive scopes WITHOUT ingesting or probing
+// anything (see archive.LookupScopes): scope DBPs name whatever cache dbs
+// earlier searches already built, for cheap point lookups like resolving a
+// --resume prefix. Spawns no child processes, hence no ctx.
+func ArchiveLookup() []view.Scope {
+	a, err := archive.Load()
+	if err != nil {
+		slog.Warn("scopes: archive config unreadable; searching local scopes only", "err", err)
+		return nil
+	}
+	if a == nil {
+		return nil // feature off
+	}
+	return a.LookupScopes()
 }
 
 // Claude returns the union of (a) the lazy live Claude project scopes — TDir set,

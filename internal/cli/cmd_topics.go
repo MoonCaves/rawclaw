@@ -34,7 +34,7 @@ func newTopicsCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := strings.Join(args, " ")
-			return agentproto.TopicsAndRender(cmd.OutOrStdout(), q, verbScope(thisProject, dir), limit, includePath, jsonOut)
+			return agentproto.TopicsAndRender(cmd.OutOrStdout(), q, verbScope(cmd.Context(), thisProject, dir), limit, includePath, jsonOut)
 		},
 	}
 	f := cmd.Flags()
