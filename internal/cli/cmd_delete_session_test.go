@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,6 +238,76 @@ func TestBrowseThisProjectWinsOverAll(t *testing.T) {
 	}
 	if !strings.Contains(out, "No transcript history") {
 		t.Errorf("--this-project should win over --all on browse:\n%s", out)
+	}
+}
+
+// TestDeleteCmd_PositionalRetainedInTwoDBs: the same session id retained in
+// TWO index dbs (a renamed project dir leaves an old and a new db, both
+// eventually purged) is still ONE session — the positional delete by its full
+// id proceeds instead of tripping the ambiguity guard against itself, and the
+// id tombstones once (one entry suppresses every row carrying the id).
+func TestDeleteCmd_PositionalRetainedInTwoDBs(t *testing.T) {
+	root := newCfgRoot(t)
+	const fullID = "cafe0013-0000-0000-0000-000000000014"
+	retainSession(t, root, "proj-old-name", fullID, 2)
+	retainSession(t, root, "proj-new-name", fullID, 2)
+
+	out, err := runCmd(t, newDeleteCmd(), "", "--yes", fullID)
+	if err != nil {
+		t.Fatalf("delete of doubly-retained id: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, "Deleted 1 session(s) (1 retained)") {
+		t.Errorf("want a single retained delete, not a double-count; out: %s", out)
+	}
+	if tomb := readTombstone(t, root); strings.Count(tomb, fullID) != 1 {
+		t.Errorf("id should be tombstoned exactly once; got %q", tomb)
+	}
+}
+
+// TestDeleteCmd_AmbiguousRefusalListsFullIDs: the ambiguity refusal names the
+// full colliding ids (the plan rows truncate to 8 chars, which for a prefix
+// collision renders identically), so the narrowed retry is copy-pasteable.
+func TestDeleteCmd_AmbiguousRefusalListsFullIDs(t *testing.T) {
+	root := newCfgRoot(t)
+	writeSession(t, root, "proj-a", "cafe0014-0000-0000-0000-000000000015", 2)
+	writeSession(t, root, "proj-b", "cafe0014-1111-0000-0000-000000000016", 2)
+
+	out, err := runCmd(t, newDeleteCmd(), "", "--yes", "cafe0014")
+	if err == nil {
+		t.Fatalf("ambiguous prefix should refuse; out: %s", out)
+	}
+	var ee ExitError
+	if !asExit(err, &ee) || ee.Code != 1 {
+		t.Fatalf("want ExitError code 1, got %T: %v", err, err)
+	}
+	for _, want := range []string{
+		"cafe0014-0000-0000-0000-000000000015",
+		"cafe0014-1111-0000-0000-000000000016",
+	} {
+		if !strings.Contains(ee.Msg, want) {
+			t.Errorf("refusal should list full id %q; got %q", want, ee.Msg)
+		}
+	}
+}
+
+// TestEmptyQueryJSON: --json with an empty query emits a JSON envelope (like
+// every sibling shape), not the human coaching line.
+func TestEmptyQueryJSON(t *testing.T) {
+	newCfgRoot(t)
+
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "")
+	if err != nil {
+		t.Fatalf("rawclaw --json \"\": %v\n%s", err, out)
+	}
+	var got struct {
+		Error string `json:"error"`
+		Hint  string `json:"hint"`
+	}
+	if uerr := json.Unmarshal([]byte(out), &got); uerr != nil {
+		t.Fatalf("--json empty query is not JSON: %v\n%s", uerr, out)
+	}
+	if got.Error != "empty query" || !strings.Contains(got.Hint, "--all for every project") {
+		t.Errorf("empty-query JSON = %+v", got)
 	}
 }
 
