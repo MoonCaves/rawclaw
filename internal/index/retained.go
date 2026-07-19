@@ -62,6 +62,13 @@ func RetainedMatches(cacheDir string, project string, before time.Time, maxMessa
 
 	out := []RetainedSession{}
 	for _, dbp := range entries {
+		// Archive-replica dbs (the "archive-" namespace, same predicate the
+		// orphan scan uses) hold FOREIGN machines' sessions — read-only
+		// replicas that must never enter the delete/tombstone path, even if
+		// a row in one ever carried a stray missing_since.
+		if strings.HasPrefix(filepath.Base(dbp), "archive-") {
+			continue
+		}
 		matches, err := retainedInDB(dbp, project, before, maxMessages)
 		if err != nil {
 			continue // unreadable db — best-effort, like orphan scope discovery
