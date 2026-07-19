@@ -38,14 +38,11 @@ func newArchiveAutosyncCmd() *cobra.Command {
 // between spawn and start). Real failures are receipted AND returned, so the
 // child's exit code stays honest.
 func runAutosyncChild(ctx context.Context, w io.Writer) error {
-	// Bound every git subprocess comfortably below this child's own watchdog:
-	// the watchdog's hard exit releases the sync flock as the process dies,
-	// but only a dying ctx actually kills a hung git — without this margin an
-	// orphaned git could outlive the lock and overlap the next sync's writer.
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, autosyncChildTimeout-30*time.Second)
-	defer cancel()
-
+	// No wall-clock bound on the git children: a legitimate slow multi-GB
+	// first push must run as long as it keeps moving. A HUNG transfer dies on
+	// stall instead (the archive git runner's http.lowSpeedLimit/Time + ssh
+	// keepalives), the error propagates, the child exits, and the sync flock
+	// releases with it.
 	a, err := archive.Load()
 	if err != nil {
 		autosyncLogLine(w, "autosync: %v", err)

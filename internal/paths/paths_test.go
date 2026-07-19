@@ -153,20 +153,34 @@ func TestFindTranscriptDir(t *testing.T) {
 		}
 	})
 
-	t.Run("footgun: passing a dir holding jsonl returns it verbatim", func(t *testing.T) {
+	t.Run("folder guard: a dir merely holding loose jsonl is NOT a transcripts dir", func(t *testing.T) {
 		base := t.TempDir()
 		t.Setenv("CLAUDE_CONFIG_DIR", base)
 		// projects root exists but is empty; the target itself holds a jsonl.
+		// The old loose-jsonl fallback fired here — how /tmp got indexed into
+		// the real cache on a bare run. Implicit discovery must resolve nothing.
 		if err := os.MkdirAll(filepath.Join(base, "projects"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		target := t.TempDir()
 		writeJSONL(t, filepath.Join(target, "x.jsonl"), `{"cwd":"/whatever"}`)
 
-		got := FindTranscriptDir(target)
-		// realpath of target (tmp dirs may be symlinked on macOS), so compare resolved.
-		if got != realpath(target) && got != target {
-			t.Fatalf("FindTranscriptDir(footgun) = %q, want %q", got, target)
+		if got := FindTranscriptDir(target); got != "" {
+			t.Fatalf("FindTranscriptDir(loose-jsonl dir) = %q, want empty (implicit discovery)", got)
+		}
+	})
+
+	t.Run("already-encoded projects child is still returned verbatim", func(t *testing.T) {
+		base := t.TempDir()
+		t.Setenv("CLAUDE_CONFIG_DIR", base)
+		projects := filepath.Join(base, "projects")
+		child := filepath.Join(projects, "-home-user-thing")
+		if err := os.MkdirAll(child, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := FindTranscriptDir(child)
+		if got != child && got != realpath(child) {
+			t.Fatalf("FindTranscriptDir(projects child) = %q, want %q", got, child)
 		}
 	})
 
@@ -200,6 +214,55 @@ func TestFindTranscriptDir(t *testing.T) {
 		}
 		if got := FindTranscriptDir("/home/user/nothing-here"); got != "" {
 			t.Fatalf("FindTranscriptDir(none) = %q, want empty", got)
+		}
+	})
+}
+
+// TestFindTranscriptDirExplicit: the explicit --dir opt-in accepts an arbitrary
+// jsonl-bearing folder — the escape hatch implicit discovery no longer has —
+// while still preferring the ordinary resolution when it answers.
+func TestFindTranscriptDirExplicit(t *testing.T) {
+	t.Run("loose-jsonl dir accepted verbatim", func(t *testing.T) {
+		base := t.TempDir()
+		t.Setenv("CLAUDE_CONFIG_DIR", base)
+		if err := os.MkdirAll(filepath.Join(base, "projects"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		target := t.TempDir()
+		writeJSONL(t, filepath.Join(target, "x.jsonl"), `{"cwd":"/whatever"}`)
+
+		got := FindTranscriptDirExplicit(target)
+		if got != realpath(target) && got != target {
+			t.Fatalf("FindTranscriptDirExplicit(loose) = %q, want %q", got, target)
+		}
+	})
+
+	t.Run("recorded-cwd match wins over the loose fallback", func(t *testing.T) {
+		base := t.TempDir()
+		projects := filepath.Join(base, "projects")
+		t.Setenv("CLAUDE_CONFIG_DIR", base)
+		encoded := filepath.Join(projects, "-home-user-myproj")
+		workdir := t.TempDir()
+		// The working dir ALSO holds a stray .jsonl (a repo carrying jsonl data
+		// files): the transcript whose recorded cwd matches must win, not the
+		// stray-file fallback.
+		writeJSONL(t, filepath.Join(workdir, "data.jsonl"), `{"k":"v"}`)
+		writeJSONL(t, filepath.Join(encoded, "sess1.jsonl"), `{"cwd":"`+jsonEscape(realpath(workdir))+`"}`)
+
+		got := FindTranscriptDirExplicit(workdir)
+		if got != encoded {
+			t.Fatalf("FindTranscriptDirExplicit(workdir) = %q, want %q", got, encoded)
+		}
+	})
+
+	t.Run("no jsonl and no match resolves empty", func(t *testing.T) {
+		base := t.TempDir()
+		t.Setenv("CLAUDE_CONFIG_DIR", base)
+		if err := os.MkdirAll(filepath.Join(base, "projects"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := FindTranscriptDirExplicit(t.TempDir()); got != "" {
+			t.Fatalf("FindTranscriptDirExplicit(empty dir) = %q, want empty", got)
 		}
 	})
 }

@@ -91,7 +91,7 @@ func launchdPlist(exe, logPath string) string {
 	<string>%s</string>
 </dict>
 </plist>
-`, launchdLabel, xmlEscape(exe), autosyncChildTimeout, timerIntervalSec, xmlEscape(logPath), xmlEscape(logPath))
+`, launchdLabel, xmlEscape(exe), autosyncChildTimeoutArg, timerIntervalSec, xmlEscape(logPath), xmlEscape(logPath))
 }
 
 // systemdUserDir resolves the user-unit dir per the freedesktop spec:
@@ -125,7 +125,7 @@ Description=rawclaw archive push
 [Service]
 Type=oneshot
 ExecStart="%s" archive push --timeout %s
-`, systemdEscape(exe), autosyncChildTimeout)
+`, systemdEscape(exe), autosyncChildTimeoutArg)
 }
 
 // systemdTimerUnit renders the hourly timer. Persistent=true catches up after

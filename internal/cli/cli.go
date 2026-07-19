@@ -60,6 +60,7 @@ type Options struct {
 	MinMessages      int
 	DebugSearch      bool
 	Timeout          time.Duration
+	DirSet           bool // --dir explicitly passed (the arbitrary-folder opt-in)
 }
 
 // params builds the retrieve.SearchParams the search shapes read, carrying the
@@ -137,6 +138,10 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 			if cmd.Flags().Changed("this-desk") {
 				opts.ThisProject = true
 			}
+			// An explicit --dir is the opt-in that lets an arbitrary
+			// jsonl-bearing folder resolve as a transcripts dir; the cwd
+			// default never is (folder guard).
+			opts.DirSet = cmd.Flags().Changed("dir")
 			return runRoot(cmd, opts, args)
 		},
 	}
@@ -254,10 +259,22 @@ func resolveTimeoutFromArgs(args []string, env string) time.Duration {
 	flagSet := probe.Changed("timeout")
 	resolved := resolveTimeout(flagSet, *to, env)
 
-	// Only override the floor when the user expressed no preference at all: an
-	// explicit flag or env var is authoritative even for upgrade.
-	if !flagSet && env == "" && isUpgradeInvocation(args) && resolved < upgradeWatchdog {
-		return upgradeWatchdog
+	// Only override when the user expressed no preference at all: an explicit
+	// flag or env var is authoritative even for upgrade/archive.
+	if !flagSet && env == "" {
+		if isUpgradeInvocation(args) && resolved < upgradeWatchdog {
+			return upgradeWatchdog
+		}
+		// The syncing archive verbs (init/push/pull/autosync) run WITHOUT the
+		// wall-clock watchdog: no cap fits both a hung transfer and a legit
+		// slow multi-GB first push, so — like rsync's --timeout and curl's
+		// --speed-time — a hang is caught by STALL detection on the git
+		// children instead (http.lowSpeedLimit/Time + ssh keepalives; see
+		// archive's git runner). A stalled transfer dies in ~30-60s; a
+		// slow-but-moving one runs as long as it keeps moving.
+		if isArchiveSyncInvocation(args) {
+			return 0
+		}
 	}
 	return resolved
 }
@@ -290,6 +307,41 @@ func isUpgradeInvocation(args []string) bool {
 	return false
 }
 
+// isArchiveSyncInvocation reports whether args target a SYNCING archive verb —
+// `archive init|push|pull|autosync` — the ones that talk to the git remote and
+// run stall-bounded instead of wall-clock-bounded. `archive
+// status`/`enable-timer`/`archive <session>` (the local move) keep the
+// default watchdog. Same lenient scan as isUpgradeInvocation: flags are
+// skipped, a space-separated --timeout value is consumed, and the first two
+// non-flag tokens decide.
+func isArchiveSyncInvocation(args []string) bool {
+	words := []string{}
+	for i := 0; i < len(args) && len(words) < 2; i++ {
+		a := args[i]
+		if a == "--" {
+			for j := i + 1; j < len(args) && len(words) < 2; j++ {
+				words = append(words, args[j])
+			}
+			break
+		}
+		if strings.HasPrefix(a, "-") {
+			if a == "--timeout" && i+1 < len(args) {
+				i++ // consume the flag's space-separated value
+			}
+			continue
+		}
+		words = append(words, a)
+	}
+	if len(words) < 2 || words[0] != "archive" {
+		return false
+	}
+	switch words[1] {
+	case "init", "push", "pull", "autosync":
+		return true
+	}
+	return false
+}
+
 // newVersionCmd wires `rawclaw version`: print the build stamp (same banner as
 // the cobra-native `--version` flag) plus the embedding Go toolchain version.
 func newVersionCmd(build BuildInfo) *cobra.Command {
@@ -314,18 +366,29 @@ func newVersionCmd(build BuildInfo) *cobra.Command {
 // all-projects enumeration unless --this-project, in which case the single
 // cwd/--dir project — or an explicit empty scope when this-project is asked
 // but the dir has no transcript history (so it resolves nothing rather than
-// silently going wide).
-func verbScope(ctx context.Context, thisProject bool, dir string) []view.Scope {
+// silently going wide). dirSet marks an explicit --dir (the arbitrary-folder
+// opt-in resolveTDir honors).
+func verbScope(ctx context.Context, thisProject bool, dir string, dirSet bool) []view.Scope {
 	if !thisProject {
 		// All-projects: built HERE (not via agentproto's nil-scope fallback) so
 		// the archive enumeration's git probes run under the run's watchdog ctx.
 		return allScope(ctx, "", false)
 	}
-	td := paths.FindTranscriptDir(dir)
+	td := resolveTDir(dir, dirSet)
 	if td == "" || !isDir(td) {
 		return []view.Scope{}
 	}
 	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}
+}
+
+// resolveTDir maps a --dir value to its transcripts dir. Only an EXPLICIT
+// --dir may resolve an arbitrary jsonl-bearing folder (the /tmp folder guard:
+// implicit cwd discovery is location-based only).
+func resolveTDir(dir string, explicit bool) string {
+	if explicit {
+		return paths.FindTranscriptDirExplicit(dir)
+	}
+	return paths.FindTranscriptDir(dir)
 }
 
 // newReadCmd wires the top-level `rawclaw read <session8:uuid8>` verb: a bounded,
@@ -360,7 +423,8 @@ func newReadCmd() *cobra.Command {
 				v := budget
 				b = &v
 			}
-			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], verbScope(cmd.Context(), thisProject, dir),
+			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0],
+				verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir")),
 				focus, b, includeTools, moreLevel, around, jsonOut); err != nil {
 				return err
 			}
@@ -400,7 +464,8 @@ func newOutlineCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0], verbScope(cmd.Context(), thisProject, dir), includeTools, jsonOut); err != nil {
+			if err := agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0],
+				verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir")), includeTools, jsonOut); err != nil {
 				return err
 			}
 			maybeAutosync() // after the arc is printed; never before
@@ -474,7 +539,7 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 // "No transcript history" hint (naming both escapes: --list to see the
 // projects, --all to cover every project) and returns ok=false.
 func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool) {
-	td = paths.FindTranscriptDir(o.Dir)
+	td = resolveTDir(o.Dir, o.DirSet)
 	if td == "" || !isDir(td) {
 		fmt.Fprintf(w, "No transcript history for --dir %s. Try --list, or --all for every project.\n", realpathExpand(o.Dir))
 		return nil, "", false

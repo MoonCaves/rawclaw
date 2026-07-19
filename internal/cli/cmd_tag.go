@@ -55,7 +55,7 @@ func newTagPrepCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTagPrepCmd(cmd.OutOrStdout(), args[0], verbScope(cmd.Context(), thisProject, dir))
+			return runTagPrepCmd(cmd.OutOrStdout(), args[0], verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir")))
 		},
 	}
 	f := cmd.Flags()
@@ -120,7 +120,7 @@ func newTagWriteCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTagWriteCmd(cmd.OutOrStdout(), cmd.InOrStdin(), args[0], verbScope(cmd.Context(), thisProject, dir))
+			return runTagWriteCmd(cmd.OutOrStdout(), cmd.InOrStdin(), args[0], verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir")))
 		},
 	}
 	f := cmd.Flags()
