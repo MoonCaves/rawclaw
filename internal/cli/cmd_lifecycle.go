@@ -72,6 +72,7 @@ type deleteFlags struct {
 	maxMessages int
 	dryRun      bool
 	yes         bool
+	files       bool
 }
 
 // newDeleteCmd wires `rawclaw delete`: filter-gated, dry-run-first deletion of
@@ -95,6 +96,8 @@ func newDeleteCmd() *cobra.Command {
 			"machine's archive copy on the next push). A RETAINED session — one whose transcript " +
 			"the source tool already purged — loses only rawclaw's copy; Claude Code / " +
 			"Codex transcript files are untouched. " +
+			"Non-interactive: --yes alone covers retained-only deletes; a delete that " +
+			"removes original transcript files additionally requires --files. " +
 			"Foreign (other-machine) sessions are read-only from this machine and are " +
 			"refused with a pointer at their origin machine.",
 		Args:          cobra.MaximumNArgs(1),
@@ -109,7 +112,8 @@ func newDeleteCmd() *cobra.Command {
 	fl.StringVar(&f.project, "project", "", "only sessions whose transcript-dir path contains this substring")
 	fl.IntVar(&f.maxMessages, "max-messages", 0, "only sessions with at most N messages (drops thin/bootstrap threads)")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "report the plan without deleting anything")
-	fl.BoolVarP(&f.yes, "yes", "y", false, "skip the interactive y/N prompt (for non-interactive/agent use)")
+	fl.BoolVarP(&f.yes, "yes", "y", false, "skip the interactive y/N prompt (deletes touching original files also need --files)")
+	fl.BoolVar(&f.files, "files", false, "with --yes: also authorize deleting original transcript files non-interactively")
 	return cmd
 }
 
@@ -264,14 +268,22 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 		return nil
 	}
 
-	// --yes skips the interactive prompt for non-interactive/agent use. Without it
-	// we always prompt y/N; an EOF (non-tty / closed stdin) still aborts safely.
-	// An abort prints its message and exits 1 (silently — the message is already
-	// out) so a script can distinguish "aborted" from "deleted"; --dry-run above
-	// stays exit 0.
+	// Confirmation gate. Interactive: the prompt says what dies — a delete that
+	// removes LIVE sessions (original transcript files still on disk) names the
+	// originals; a retained-only delete keeps the rawclaw's-copy-only shape.
+	// Non-interactive: --yes alone covers retained-only deletes; when original
+	// files would be deleted it refuses (exit 2) unless --files also authorizes
+	// it — an agent must not take out the source tool's files on a bare --yes.
+	// An EOF (non-tty / closed stdin) still aborts safely; an abort prints its
+	// message and exits 1 (silently — the message is already out) so a script
+	// can distinguish "aborted" from "deleted"; --dry-run above stays exit 0.
+	liveFiles := len(plan.Matched) > 0
 	if !f.yes {
-		ok, err := confirm(cmd.InOrStdin(), out,
-			fmt.Sprintf("Delete %d session(s)? This is irreversible. [y/N]: ", total))
+		prompt := fmt.Sprintf("Delete %d session(s)? This is irreversible. [y/N]: ", total)
+		if liveFiles {
+			prompt = "This removes rawclaw's copy (index and archive) and the original session transcript files. Confirm with your user. [y/N]: "
+		}
+		ok, err := confirm(cmd.InOrStdin(), out, prompt)
 		if err != nil {
 			return fmt.Errorf("read confirmation: %w", err)
 		}
@@ -279,6 +291,8 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 			fmt.Fprintln(out, "Aborted; nothing deleted.")
 			return ExitError{Code: 1}
 		}
+	} else if liveFiles && !f.files {
+		return ExitError{Code: 2, Msg: "This delete removes original transcript files. Confirm with your user, then re-run with --yes --files."}
 	}
 
 	opts.DryRun = false
@@ -313,7 +327,7 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 // rawclaw's copy — and the source tools' files are untouched.
 func printProvenance(w io.Writer, liveRemoved int) {
 	if liveRemoved > 0 {
-		fmt.Fprintln(w, "Removed the session transcript file(s) and rawclaw's copy (index + archive).")
+		fmt.Fprintln(w, "Removed rawclaw's copy (index and archive) and the original session transcript files.")
 		return
 	}
 	fmt.Fprintln(w, "Removed rawclaw's copy (index + archive). Claude Code / Codex transcript files are untouched.")

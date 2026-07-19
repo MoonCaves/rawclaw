@@ -47,6 +47,33 @@ func timerLogPath() string {
 	return filepath.Join(store.CacheDir(), "archive", "timer.log")
 }
 
+// timerUnitsRecordPath is <state-dir>/archive/timer-units — the systemd unit
+// paths as INSTALLED (one per line), so a later eject removes the real files
+// even if XDG_CONFIG_HOME changed in between and the current resolution points
+// somewhere else. Darwin needs no record: the plist path derives from HOME
+// alone.
+func timerUnitsRecordPath() string {
+	return filepath.Join(store.CacheDir(), "archive", "timer-units")
+}
+
+// systemdMarker is the content fingerprint every rawclaw-written systemd unit
+// carries (both Description lines contain it); launchd's marker is the label
+// itself. Eject removes exactly what enable-timer added — a same-named file
+// WITHOUT the marker was written by someone else and is left alone.
+const systemdMarker = "rawclaw archive push"
+
+// isForeignArtifact reports whether path exists but was NOT written by rawclaw
+// (its content lacks marker). A missing or unreadable file is not foreign —
+// missing is the clean no-op path, and an unreadable one surfaces on the
+// removal attempt instead.
+func isForeignArtifact(path, marker string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return !strings.Contains(string(b), marker)
+}
+
 // launchdPlistPath is the one file enable-timer owns on macOS.
 func launchdPlistPath(home string) string {
 	return filepath.Join(home, "Library", "LaunchAgents", launchdLabel+".plist")
@@ -91,7 +118,7 @@ func launchdPlist(exe, logPath string) string {
 	<string>%s</string>
 </dict>
 </plist>
-`, launchdLabel, xmlEscape(exe), autosyncChildTimeout, timerIntervalSec, xmlEscape(logPath), xmlEscape(logPath))
+`, launchdLabel, xmlEscape(exe), autosyncChildTimeoutArg, timerIntervalSec, xmlEscape(logPath), xmlEscape(logPath))
 }
 
 // systemdUserDir resolves the user-unit dir per the freedesktop spec:
@@ -125,7 +152,7 @@ Description=rawclaw archive push
 [Service]
 Type=oneshot
 ExecStart="%s" archive push --timeout %s
-`, systemdEscape(exe), autosyncChildTimeout)
+`, systemdEscape(exe), autosyncChildTimeoutArg)
 }
 
 // systemdTimerUnit renders the hourly timer. Persistent=true catches up after
@@ -157,6 +184,10 @@ func installTimer(ctx context.Context, w io.Writer, goos, home string) error {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(p), err)
 		}
+		// Remember an existing install's artifact: a REINSTALL whose bootstrap
+		// fails below must put the working timer back, not leave the machine
+		// with none.
+		prior, priorErr := os.ReadFile(p)
 		if err := os.WriteFile(p, []byte(launchdPlist(exe, timerLogPath())), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", p, err)
 		}
@@ -164,10 +195,19 @@ func installTimer(ctx context.Context, w io.Writer, goos, home string) error {
 		// re-run picks up the fresh plist instead of erroring on a live job.
 		_, _ = runTimerTool(ctx, "launchctl", "bootout", launchdDomain()+"/"+launchdLabel)
 		if _, err := runTimerTool(ctx, "launchctl", "bootstrap", launchdDomain(), p); err != nil {
-			// launchd loads everything under LaunchAgents at the next GUI
-			// login — a plist left behind by a FAILED registration would
-			// become a delayed silent install. Take it back out.
-			_ = os.Remove(p)
+			if priorErr == nil {
+				// Reinstall path: restore the prior artifact and re-register
+				// it (best-effort) — the previous timer keeps running.
+				if werr := os.WriteFile(p, prior, 0o644); werr == nil {
+					_, _ = runTimerTool(ctx, "launchctl", "bootstrap", launchdDomain(), p)
+				}
+			} else {
+				// Fresh install: launchd loads everything under LaunchAgents
+				// at the next GUI login — a plist left behind by a FAILED
+				// registration would become a delayed silent install. Take it
+				// back out.
+				_ = os.Remove(p)
+			}
 			return fmt.Errorf("register launchd agent %s: %w", launchdLabel, err)
 		}
 		fmt.Fprintf(w, "Hourly archive push installed.\n  launchd agent: %s\n  log:           %s\nRemove it any time with `rawclaw archive enable-timer --eject`.\n",
@@ -190,6 +230,11 @@ func installTimer(ctx context.Context, w io.Writer, goos, home string) error {
 		if _, err := runTimerTool(ctx, "systemctl", "--user", "enable", "--now", systemdUnitName+".timer"); err != nil {
 			return fmt.Errorf("enable systemd user timer: %w", err)
 		}
+		// Record where the units landed (best-effort): eject removes from the
+		// RECORDED paths, so a later XDG_CONFIG_HOME change can't strand them.
+		if err := os.MkdirAll(filepath.Dir(timerUnitsRecordPath()), 0o755); err == nil {
+			_ = os.WriteFile(timerUnitsRecordPath(), []byte(servicePath+"\n"+timerPath+"\n"), 0o644)
+		}
 		fmt.Fprintf(w, "Hourly archive push installed.\n  systemd user units: %s + %s\n  logs:               journalctl --user -u %s\nRemove it any time with `rawclaw archive enable-timer --eject`.\n",
 			servicePath, timerPath, systemdUnitName)
 		return nil
@@ -204,10 +249,17 @@ func installTimer(ctx context.Context, w io.Writer, goos, home string) error {
 func ejectTimer(ctx context.Context, w io.Writer, goos, home string) error {
 	switch goos {
 	case "darwin":
+		p := launchdPlistPath(home)
+		// Ownership check BEFORE any unload: a same-named plist rawclaw did
+		// not write (no label in its content) is someone else's job — eject
+		// removes exactly what enable-timer added, so leave it running.
+		if isForeignArtifact(p, launchdLabel) {
+			fmt.Fprintf(w, "%s exists but was not written by rawclaw; not touching it.\n", p)
+			return nil
+		}
 		// Ignore bootout failure: "not loaded" is the normal already-ejected
 		// state, and a stale registration with no plist must not block eject.
 		_, _ = runTimerTool(ctx, "launchctl", "bootout", launchdDomain()+"/"+launchdLabel)
-		p := launchdPlistPath(home)
 		removed, err := removeOwn(p)
 		if err != nil {
 			return err
@@ -219,8 +271,14 @@ func ejectTimer(ctx context.Context, w io.Writer, goos, home string) error {
 		}
 		return nil
 	case "linux":
+		servicePath, timerPath := recordedOrCurrentUnitPaths(home)
+		// Same ownership rule as darwin: foreign same-named units are neither
+		// disabled nor deleted.
+		if isForeignArtifact(servicePath, systemdMarker) || isForeignArtifact(timerPath, systemdMarker) {
+			fmt.Fprintf(w, "%s / %s exist but were not written by rawclaw; not touching them.\n", servicePath, timerPath)
+			return nil
+		}
 		_, _ = runTimerTool(ctx, "systemctl", "--user", "disable", "--now", systemdUnitName+".timer")
-		servicePath, timerPath := systemdUnitPaths(home)
 		removedTimer, err := removeOwn(timerPath)
 		if err != nil {
 			return err
@@ -230,6 +288,7 @@ func ejectTimer(ctx context.Context, w io.Writer, goos, home string) error {
 			return err
 		}
 		_, _ = runTimerTool(ctx, "systemctl", "--user", "daemon-reload")
+		_ = os.Remove(timerUnitsRecordPath()) // record's referents are gone
 		if removedTimer || removedService {
 			fmt.Fprintf(w, "Hourly archive push removed (disabled %s.timer, deleted its units).\n", systemdUnitName)
 		} else {
@@ -239,6 +298,20 @@ func ejectTimer(ctx context.Context, w io.Writer, goos, home string) error {
 	default:
 		return fmt.Errorf("no timer backend for %s; nothing rawclaw could have installed here", goos)
 	}
+}
+
+// recordedOrCurrentUnitPaths resolves where the systemd units to eject live:
+// the install-time record when one exists (immune to an XDG_CONFIG_HOME change
+// since install), else the current resolution — the pre-record behavior, which
+// still covers installs made before the record existed.
+func recordedOrCurrentUnitPaths(home string) (service, timer string) {
+	if b, err := os.ReadFile(timerUnitsRecordPath()); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+		if len(lines) == 2 && lines[0] != "" && lines[1] != "" {
+			return lines[0], lines[1]
+		}
+	}
+	return systemdUnitPaths(home)
 }
 
 // removeOwn removes one rawclaw-owned file, reporting whether it existed.

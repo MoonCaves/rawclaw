@@ -100,7 +100,8 @@ func TestFailedVerb_NeverSpawns(t *testing.T) {
 }
 
 // TestSpawnAutosyncChild_DetachedChildRunsWithLog: the REAL spawn path, with a
-// fake self-binary: the detached child runs `archive autosync --timeout 10m`
+// fake self-binary: the detached child runs `archive autosync --timeout 0`
+// (wall-clock watchdog off; transfers are stall-bounded by the git runner)
 // and its output lands in the state-dir receipt log — while the spawner
 // returns immediately.
 func TestSpawnAutosyncChild_DetachedChildRunsWithLog(t *testing.T) {
@@ -120,7 +121,7 @@ func TestSpawnAutosyncChild_DetachedChildRunsWithLog(t *testing.T) {
 	spawnAutosyncChild()
 
 	deadline := time.Now().Add(5 * time.Second)
-	want := "child-argv archive autosync --timeout " + autosyncChildTimeout.String()
+	want := "child-argv archive autosync --timeout " + autosyncChildTimeoutArg
 	for {
 		b, _ := os.ReadFile(archive.AutosyncLogPath())
 		if strings.Contains(string(b), want) {
