@@ -192,7 +192,7 @@ func TestCodexUnionsOrphanedDBs_NoLiveContainers(t *testing.T) {
 	src := filepath.Join(home, "orphan-source", "rollout-orphansess.jsonl")
 	writeCodexRollout(t, src, "orphansess", cwd)
 	cs := []source.Container{{ID: "orphansess", Path: src, CWD: cwd}}
-	if _, _, err := index.EnsureIndexedContainers(dbp, true, cs, codex.New().Messages, "codex"); err != nil {
+	if _, _, err := index.EnsureIndexedContainers(dbp, true, cs, codex.New().Messages, "codex", ""); err != nil {
 		t.Fatalf("seed orphan db: %v", err)
 	}
 
@@ -251,7 +251,7 @@ func TestCodexUnionsOrphanedDBs_TombstonedExcluded(t *testing.T) {
 	src := filepath.Join(home, "orphan-source", "rollout-deadsess.jsonl")
 	writeCodexRollout(t, src, "deadsess", cwd)
 	cs := []source.Container{{ID: "deadsess", Path: src, CWD: cwd}}
-	if _, _, err := index.EnsureIndexedContainers(dbp, true, cs, codex.New().Messages, "codex"); err != nil {
+	if _, _, err := index.EnsureIndexedContainers(dbp, true, cs, codex.New().Messages, "codex", ""); err != nil {
 		t.Fatalf("seed orphan db: %v", err)
 	}
 

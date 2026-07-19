@@ -139,7 +139,7 @@ func Codex(reindex bool) []view.Scope {
 	for _, cwd := range cwds {
 		dbp := codexDBPath(cwd)
 		liveDBs[dbp] = struct{}{}
-		if _, _, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, codex.Registration().ID); ierr != nil {
+		if _, _, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, codex.Registration().ID, ""); ierr != nil {
 			slog.Warn("scopes: codex index failed", "cwd", cwd, "err", ierr)
 			// The db path may still hold a prior good index; include the scope so
 			// search can open it read-only and degrade gracefully.
