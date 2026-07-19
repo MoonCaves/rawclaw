@@ -47,11 +47,12 @@ func pushForeignDir(t *testing.T, bare, name, date string) {
 	gitT(t, clone, "push", "origin", "HEAD")
 }
 
-// TestStatus_ReportsMachinesAndStaleness: after a push and a pull of a
+// TestStatus_ReportsMachinesAndSyncStamps: after a push and a pull of a
 // foreign dir with an old pinned commit date, Status reports the remote, the
-// clone, both stamps, and one entry per machine whose staleness matches the
-// fixture commit times: our fresh dir is not stale, the old foreign dir is.
-func TestStatus_ReportsMachinesAndStaleness(t *testing.T) {
+// clone, both sync stamps (fresh → not overdue), and one entry per machine
+// carrying its last-new-content commit time — the old foreign dir's pinned
+// date verbatim, with no staleness verdict attached.
+func TestStatus_ReportsMachinesAndSyncStamps(t *testing.T) {
 	home := newTestHome(t)
 	bare := initBareRepo(t)
 	seedTranscripts(t, home)
@@ -201,7 +202,9 @@ func TestPushLocal_UpToDateStampsSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("push stamp missing after no-op sync: %v", err)
 	}
-	if time.Since(st.ModTime()) > time.Minute {
+	// Deterministic: without the refresh the mtime would still equal the aged
+	// value; any refresh lands it far after old+staleAfter.
+	if !st.ModTime().After(old.Add(staleAfter)) {
 		t.Errorf("push stamp not refreshed by a verified-up-to-date sync (mtime %v)", st.ModTime())
 	}
 }

@@ -45,6 +45,25 @@ func syncLockPath() string {
 // try-lock until acquired, the wait cap elapses, or ctx is done — both give
 // ErrBusy, so a second local syncer no-ops or waits cleanly, never interleaves.
 // The returned release both unlocks and closes the lock fd.
+// tryAcquireSyncLock takes the sync lock WITHOUT waiting: one try-lock, no
+// poll. Read-side callers (scope enumeration deciding whether the clone is
+// quiescent enough to ingest from) use it so a search never blocks behind a
+// running sync — they degrade to serving existing state instead. ok=false on
+// any failure (held elsewhere, fs error): the caller treats "can't prove
+// quiescent" exactly like "busy".
+func tryAcquireSyncLock() (release func(), ok bool) {
+	p := syncLockPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return nil, false
+	}
+	fl := flock.New(p)
+	locked, err := fl.TryLock()
+	if err != nil || !locked {
+		return nil, false
+	}
+	return func() { _ = fl.Unlock() }, true
+}
+
 func acquireSyncLock(ctx context.Context) (release func(), err error) {
 	p := syncLockPath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {

@@ -355,7 +355,11 @@ func TestScopes_OwnerDeletePropagatesToReplicaIndex(t *testing.T) {
 
 	// First search-time ingest: all four foreign sessions land in the replica dbs.
 	dbps := map[string]string{} // source → db path
-	for _, sc := range a.Scopes(t.Context(), false) {
+	scs := a.Scopes(t.Context(), false)
+	if len(scs) != 2 {
+		t.Fatalf("Scopes = %d, want exactly 2 (one per source; the source→db map below assumes it)", len(scs))
+	}
+	for _, sc := range scs {
 		dbps[sc.Source] = sc.DBP
 	}
 	for src, sids := range map[string][]string{
@@ -402,6 +406,56 @@ func TestScopes_OwnerDeletePropagatesToReplicaIndex(t *testing.T) {
 			t.Errorf("surviving %s session %s lost by the replica reconcile (sessions=%d messages=%d)",
 				src, sid, s, m)
 		}
+	}
+}
+
+// TestScopes_BusySyncSkipsIngest: while a sibling sync holds the machine-wide
+// lock (a pull may be mid-rebase, tearing the worktree down file-by-file),
+// scope enumeration must NOT ingest — replica reconciliation would read the
+// half-rewritten tree as authoritative absence and prune live foreign
+// sessions. Scopes still enumerates (existing dbs keep serving); once the
+// lock frees, the next pass ingests normally.
+func TestScopes_BusySyncSkipsIngest(t *testing.T) {
+	a := initArchiveWithForeign(t, "machine-b", "beefbeefbeefbeefbeefbeefbeefbeef")
+
+	release, ok := tryAcquireSyncLock()
+	if !ok {
+		t.Fatal("could not take the sync lock in an idle fixture")
+	}
+	scs := a.Scopes(t.Context(), false)
+	if len(scs) != 2 {
+		t.Fatalf("Scopes under a held sync lock = %d scopes, want 2 (enumeration must survive)", len(scs))
+	}
+	for _, sc := range scs {
+		if _, err := os.Stat(sc.DBP); err == nil {
+			t.Errorf("scope %q ingested %s while a sync held the lock", sc.Project, sc.DBP)
+		}
+	}
+	release()
+
+	a.Scopes(t.Context(), false)
+	for _, sc := range scs {
+		if _, err := os.Stat(sc.DBP); err != nil {
+			t.Errorf("scope %q not ingested after the lock freed: %v", sc.Project, err)
+		}
+	}
+}
+
+// TestScopes_UnverifiedCloneNotEnumerated: a clone without the completed-
+// clone sentinel (torn mid-clone, or pre-sentinel and not yet adopted) is
+// not enumerated by Scopes OR LookupScopes — its partial tree must never
+// feed replica reconciliation, where absence is authoritative.
+func TestScopes_UnverifiedCloneNotEnumerated(t *testing.T) {
+	a := initArchiveWithForeign(t, "machine-b", "beefbeefbeefbeefbeefbeefbeefbeef")
+
+	if err := os.Remove(filepath.Join(a.ClonePath(), ".git", cloneSentinel)); err != nil {
+		t.Fatal(err)
+	}
+	if scs := a.Scopes(t.Context(), false); len(scs) != 0 {
+		t.Errorf("Scopes on an unverified clone = %d scopes, want 0", len(scs))
+	}
+	if scs := a.LookupScopes(); len(scs) != 0 {
+		t.Errorf("LookupScopes on an unverified clone = %d scopes, want 0", len(scs))
 	}
 }
 

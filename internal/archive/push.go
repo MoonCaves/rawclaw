@@ -249,8 +249,21 @@ func (a *Archive) recoverExistingClone(ctx context.Context, gitDir string, compl
 	if completed {
 		return true, nil // healthy (or recovered) clone
 	}
+	// Legacy adoption demands positive proof the original clone FINISHED —
+	// two probes, because `git clone` writes refs and HEAD before the
+	// checkout: HEAD resolving to a commit rules out a kill mid-fetch, and a
+	// clean `status` (index and worktree exactly matching HEAD) rules out a
+	// kill mid-CHECKOUT. A checkout-killed clone has a resolvable HEAD but no
+	// (complete) index; adopting it would let the next push's `add -A` build
+	// a near-empty index and commit a tree that drops every other machine's
+	// dir from the archive tip. Any probe failure or any dirty output means
+	// "cannot prove complete" — the caller's stranded-work guard then decides
+	// whether the rebuild is safe.
 	if _, err := a.run(ctx, a.clone, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
-		return false, nil // unborn/unresolvable HEAD: the torn mid-clone shape
+		return false, nil // unborn/unresolvable HEAD: the torn mid-fetch shape
+	}
+	if st, err := a.run(ctx, a.clone, "status", "--porcelain"); err != nil || strings.TrimSpace(st) != "" {
+		return false, nil // dirty or unprovable: the torn mid-checkout shape
 	}
 	return true, nil // structurally complete legacy clone — adoptable
 }

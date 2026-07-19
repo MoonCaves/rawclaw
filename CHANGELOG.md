@@ -131,9 +131,19 @@ All notable changes to RawClaw are documented in this file.
   is checked for commits the remote lacks (a stranded, unpushed sync) and the rebuild is refused
   with instructions instead of eating them; a sentinel-less but structurally complete clone
   (created before the sentinel existed) is adopted in place — the marker is stamped — rather
-  than wiped; and the mid-rebase/mid-merge abort runs on its own short-deadline context, so the
-  watchdog cancelling a verb mid-recovery can no longer make a recoverable wedge look like
-  corruption and trigger a destructive re-clone.
+  than wiped, where "complete" demands a finished checkout (resolvable branch HEAD AND a clean
+  status — a clone killed mid-checkout has the former but not the latter, and adopting it would
+  let the next push commit a tree missing every other machine's dir); `archive init` refuses to
+  wipe a leftover clone that still holds unpushed commits (config lost after a sync committed
+  but before it pushed); and the mid-rebase/mid-merge abort runs on its own short-deadline
+  context, so the watchdog cancelling a verb mid-recovery can no longer make a recoverable
+  wedge look like corruption and trigger a destructive re-clone.
+- **Replica reconciliation only from a verified, quiescent clone.** Because absence from the
+  clone is now authoritative for archive scopes, search-time replica ingest is gated twice: a
+  clone without the completed-clone sentinel (torn, or not yet adopted) is not enumerated at
+  all, and while a sibling sync holds the machine-wide lock (a pull may be mid-rebase, with the
+  worktree half-rewritten) enumeration serves the previously built scope dbs without
+  reconciling — foreign sessions can no longer transiently vanish from search mid-sync.
 
 ## [0.4.0] — 2026-07-18
 
