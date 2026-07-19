@@ -170,35 +170,55 @@ func TestInit_AlreadyConfigured(t *testing.T) {
 	}
 }
 
-// TestInit_RejectsBadName: names that would escape or hide the machine dir are
-// rejected up front.
+// TestInit_RejectsBadName: names that would escape the machine dir, hide it,
+// or act as git pathspec magic (globs, magic-prefix colons) are rejected up
+// front — the name flows into `git add -- <name>` as a pathspec.
 func TestInit_RejectsBadName(t *testing.T) {
 	newTestHome(t)
 
-	for _, bad := range []string{"a/b", `a\b`, "..", ".hidden", ""} {
-		if bad == "" {
-			continue // empty means "default hostname", tested elsewhere
-		}
-		if _, err := Init(context.Background(), "/nonexistent.git", bad); err == nil {
-			t.Errorf("Init(name=%q) succeeded, want rejection", bad)
-		}
+	tests := []struct {
+		name string
+		bad  string
+	}{
+		{"path separator", "a/b"},
+		{"backslash", `a\b`},
+		{"parent traversal", ".."},
+		{"hidden dir", ".hidden"},
+		{"glob star", "machine*"},
+		{"glob question mark", "machine?"},
+		{"glob bracket", "ma[ch]ine"},
+		{"pathspec magic colon", ":top"},
+		{"space", "my machine"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Init(context.Background(), "/nonexistent.git", tt.bad); err == nil {
+				t.Errorf("Init(name=%q) succeeded, want rejection", tt.bad)
+			}
+		})
 	}
 }
 
 // TestSanitizeMachineName locks the hostname → dir-name mapping.
 func TestSanitizeMachineName(t *testing.T) {
 	t.Parallel()
-	tests := []struct{ in, want string }{
-		{"Alices-MacBook-Pro.local", "alices-macbook-pro"},
-		{"box7", "box7"},
-		{"Weird Host!Name", "weird-host-name"},
-		{"...", "machine"},
-		{"", "machine"},
-		{"host.sub.example.com", "host"},
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"mac hostname drops domain and case", "Alices-MacBook-Pro.local", "alices-macbook-pro"},
+		{"plain name passes through", "box7", "box7"},
+		{"specials fold to dashes", "Weird Host!Name", "weird-host-name"},
+		{"nothing survives", "...", "machine"},
+		{"empty hostname", "", "machine"},
+		{"fqdn keeps first label", "host.sub.example.com", "host"},
 	}
 	for _, tt := range tests {
-		if got := sanitizeMachineName(tt.in); got != tt.want {
-			t.Errorf("sanitizeMachineName(%q) = %q, want %q", tt.in, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeMachineName(tt.in); got != tt.want {
+				t.Errorf("sanitizeMachineName(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }

@@ -22,7 +22,9 @@ PRIVATE repository. rawclaw does not (and cannot reliably) verify this.`
 // the registration, and writes the config Load reads from then on.
 //
 // Init refuses a machine dir already claimed by a DIFFERENT machine_id — pick
-// another name with --name. Re-init by the same machine is idempotent.
+// another name with --name. A live config also refuses (with a pointer at the
+// file to remove); after state loss (config gone, machine-id intact) re-init
+// against the same remote is idempotent — the machine reclaims its own dir.
 func Init(ctx context.Context, remote, name string) (*Archive, error) {
 	if remote == "" {
 		return nil, errors.New("archive init: remote url required")
@@ -33,8 +35,8 @@ func Init(ctx context.Context, remote, name string) (*Archive, error) {
 			configPath(), cloneDir())
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf(
-			"archive config exists but is unreadable (%v); remove %s to re-initialize",
-			err, configPath())
+			"archive config exists but is unreadable; remove %s to re-initialize: %w",
+			configPath(), err)
 	}
 
 	if name == "" {

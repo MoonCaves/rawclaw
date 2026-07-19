@@ -79,7 +79,9 @@ func (a *Archive) ensureClone(ctx context.Context) error {
 		return fmt.Errorf("clear broken clone: %w", err)
 	}
 	if _, err := a.run(ctx, parent, "clone", a.cfg.Remote, a.clone); err != nil {
-		return fmt.Errorf("clone archive remote: %w", err)
+		return fmt.Errorf(
+			"clone archive remote (the repository must already exist on your git host — create it, PRIVATE, then retry): %w",
+			err)
 	}
 	return nil
 }
@@ -161,16 +163,16 @@ func copyFile(src, dst string, srcInfo os.FileInfo) error {
 	}
 	tmpName := tmp.Name()
 	if _, err := io.Copy(tmp, in); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName) // best-effort cleanup; the copy error is the story
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := os.Rename(tmpName, dst); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return err
 	}
 	// Zero atime = leave unchanged; only the mtime is mirrored.
