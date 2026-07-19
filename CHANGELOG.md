@@ -6,6 +6,19 @@ All notable changes to RawClaw are documented in this file.
 
 ### Added
 
+- **Automatic topic tagging: a SessionEnd queue behind `rawclaw setup`.** `setup` now wires a
+  second Claude Code hook: on SessionEnd the finished session is queued for topic tagging
+  (`rawclaw tag-queue add`, called by the installed `tagqueue.sh`), and the SessionStart banner
+  lists the queue so the next session's agent tags what's pending (`tag-prep` → `tag-write`; a
+  successful `tag-write` dequeues its session). Tagging happens on its own, agent to agent —
+  no human closeout discipline needed, and rawclaw itself still calls no model. New verb:
+  `rawclaw tag-queue` (bare = list pending as 8-char ids, silent when empty; `add` is the hook's
+  entry point, idempotent; `remove` skips a session that won't resolve or isn't worth tagging;
+  `--json` on the listing). The queue is a plain-text file in the state dir, one session id per
+  line. Codex keeps SessionStart only — its SessionEnd event surface is unverified, so nothing
+  is registered there that might never fire. `setup --eject` removes both scripts and both
+  entries, same symmetry as before.
+
 - **Positional session delete: `rawclaw delete <session8>` (or the full id).** Deletes exactly
   that one session — same dry-run-first plan, same y/N prompt (`--yes` works), same tombstone and
   receipts as a filter delete. Sub-8-char prefixes must match a full id exactly; a prefix

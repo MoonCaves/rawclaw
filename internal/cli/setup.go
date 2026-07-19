@@ -10,14 +10,15 @@ import (
 )
 
 // rawclawMarker identifies a rawclaw-owned entry by its installed script's
-// path suffix — NOT the bare word "rawclaw", which would also match a sibling
+// path segment — NOT the bare word "rawclaw", which would also match a sibling
 // tool whose command merely lives under a rawclaw-named directory (e.g.
-// /home/me/rawclaw-notes/hooks/other-tool.sh) and delete it. Matching the full
-// hooks/rawclaw/prime.sh suffix keeps installs idempotent (re-running finds
-// and replaces rawclaw's own rows) while a sibling entry from any other tool
-// sharing SessionStart is never touched. Path separators are normalized
-// before matching so the identity check holds on Windows too.
-const rawclawMarker = "hooks/rawclaw/prime.sh"
+// /home/me/rawclaw-notes/hooks/other-tool.sh) and delete it. The hooks/rawclaw/
+// directory is rawclaw's alone, so matching that segment covers every script
+// setup installs there (prime.sh, tagqueue.sh — and entries from older versions
+// that only knew prime.sh) while a sibling entry from any other tool sharing an
+// event is never touched. Path separators are normalized before matching so the
+// identity check holds on Windows too.
+const rawclawMarker = "hooks/rawclaw/"
 
 // rawclawPrimeScript is installed at <configDir>/hooks/rawclaw/prime.sh and
 // registered as a Claude Code SessionStart hook. POSIX sh only — a SessionStart
@@ -64,6 +65,40 @@ hold the superseding current truth; rawclaw is the dated raw record underneath i
 --json for structured output; --help for the rest.
 If the user seems to want to pick up a past session, offering to resume/fork it can help.
 BANNER
+
+# Finished sessions the SessionEnd hook queued for topic tagging: list them so
+# this session's agent tags them first. Silence (no rawclaw output, or an
+# error) means nothing pending — never a hook failure.
+pending=$(rawclaw tag-queue 2>/dev/null | head -n 8) || pending=""
+if [ -n "$pending" ]; then
+	printf '[rawclaw] finished sessions awaiting topic tags — tag them before starting other work:\n'
+	printf '%s\n' "$pending" | sed 's/^/  /'
+	printf 'For each id: rawclaw tag-prep <id> (read, split into topic segments), then rawclaw tag-write <id>.\n'
+	printf 'A session that will not resolve or is not worth tagging: rawclaw tag-queue remove <id>.\n'
+fi
+`
+
+// rawclawTagQueueScript is installed at <configDir>/hooks/rawclaw/tagqueue.sh
+// and registered as a Claude Code SessionEnd hook: it queues the finished
+// session for topic tagging (the SessionStart banner above surfaces the queue
+// to the next agent session, which does the actual tagging — rawclaw calls no
+// model). Same POSIX-sh posture and tolerant session_id extraction as the
+// prime script; every failure path is a silent exit 0, because a tagging queue
+// is never worth breaking a session's shutdown over.
+const rawclawTagQueueScript = `#!/bin/sh
+# Installed by ` + "`rawclaw setup`" + `; removed by ` + "`rawclaw setup --eject`" + ` along with
+# its settings.json entry. Queues the finished session for topic tagging on
+# Claude Code SessionEnd — the next session's agent picks the queue up.
+set -eu
+
+command -v rawclaw >/dev/null 2>&1 || exit 0
+
+input=$(cat)
+session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+[ -n "$session_id" ] || exit 0
+
+rawclaw tag-queue add "$session_id" >/dev/null 2>&1 || true
+exit 0
 `
 
 // setupTarget names the agent whose config `rawclaw setup` is wiring into:
@@ -132,6 +167,13 @@ func hookScriptPath(configDir string) string {
 	return filepath.Join(configDir, "hooks", "rawclaw", "prime.sh")
 }
 
+// tagQueueScriptPath is the fixed location `rawclaw setup` installs the
+// SessionEnd tagging-queue hook to — same rawclaw-owned dir as the discovery
+// script.
+func tagQueueScriptPath(configDir string) string {
+	return filepath.Join(configDir, "hooks", "rawclaw", "tagqueue.sh")
+}
+
 // settingsPath is the Claude Code settings file a target config dir owns.
 func settingsPath(configDir string) string {
 	return filepath.Join(configDir, "settings.json")
@@ -147,13 +189,13 @@ func codexHooksPath(configDir string) string {
 	return filepath.Join(configDir, "hooks.json")
 }
 
-// writeHookScript (re)writes the discovery-hook script to path, creating its
-// parent dir as needed. Executable (0o755): Claude Code invokes it directly.
-func writeHookScript(path string) error {
+// writeHookScript (re)writes a hook script to path, creating its parent dir as
+// needed. Executable (0o755): Claude Code invokes it directly.
+func writeHookScript(path, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(rawclawPrimeScript), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
@@ -358,68 +400,84 @@ func removeRawclawHooks(data map[string]any) {
 	}
 }
 
-// addRawclawSessionStartHook idempotently registers the discovery hook as a
-// SessionStart entry: it first removes any existing rawclaw entry (so a
-// re-run, or an upgrade from a previous scriptPath, never leaves a duplicate),
-// then appends exactly one fresh entry pointing at scriptPath. Every sibling
-// hook — on SessionStart or any other event — is left exactly as found.
-func addRawclawSessionStartHook(data map[string]any, scriptPath string) error {
+// addRawclawHooks idempotently registers rawclaw's hook entries: it first
+// removes every existing rawclaw entry across all events (so a re-run, or an
+// upgrade from a previous scriptPath, never leaves a duplicate), then appends
+// exactly one fresh entry per event → scriptPath pair. Every sibling hook — on
+// these events or any other — is left exactly as found.
+func addRawclawHooks(data map[string]any, entries map[string]string) error {
 	removeRawclawHooks(data)
 	hooks, err := ensureHooksMap(data)
 	if err != nil {
 		return err
 	}
 
-	entry := map[string]any{
-		"hooks": []any{
-			map[string]any{
-				"type":    "command",
-				"command": scriptPath,
+	for event, scriptPath := range entries {
+		entry := map[string]any{
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": scriptPath,
+				},
 			},
-		},
-	}
-	// Off-schema but legal JSON (SessionStart holding a non-array) must never
-	// be silently clobbered — refuse and leave the user's file untouched.
-	if raw, exists := hooks["SessionStart"]; exists {
-		if _, ok := raw.([]any); !ok {
-			return fmt.Errorf("unexpected SessionStart shape %T (want an array); refusing to overwrite it", raw)
 		}
+		// Off-schema but legal JSON (the event holding a non-array) must never
+		// be silently clobbered — refuse and leave the user's file untouched.
+		if raw, exists := hooks[event]; exists {
+			if _, ok := raw.([]any); !ok {
+				return fmt.Errorf("unexpected %s shape %T (want an array); refusing to overwrite it", event, raw)
+			}
+		}
+		arr, _ := hooks[event].([]any)
+		hooks[event] = append(arr, entry)
 	}
-	arr, _ := hooks["SessionStart"].([]any)
-	hooks["SessionStart"] = append(arr, entry)
 	return nil
 }
 
-// installRawclawHook writes the hook script and registers it in
-// <configDir>/settings.json — the Claude Code target.
+// installRawclawHook writes both hook scripts and registers them in
+// <configDir>/settings.json — the Claude Code target: the SessionStart
+// discovery banner plus the SessionEnd tagging-queue hook.
 func installRawclawHook(configDir string) error {
-	return installRawclawHookAt(configDir, settingsPath(configDir))
+	return installRawclawHookAt(configDir, settingsPath(configDir), true)
 }
 
-// installRawclawCodexHook writes the (shared) hook script and registers it in
-// <configDir>/hooks.json — the Codex target. Same script, same merge engine,
-// same SessionStart shape as Claude Code; only the config file differs, since
-// Codex's hooks.json and Claude's settings.json agree on the hooks{} shape.
+// installRawclawCodexHook writes the (shared) discovery script and registers
+// it in <configDir>/hooks.json — the Codex target. Same script, same merge
+// engine, same SessionStart shape as Claude Code; only the config file
+// differs, since Codex's hooks.json and Claude's settings.json agree on the
+// hooks{} shape. SessionEnd is NOT wired for Codex: only Claude Code is known
+// to emit that event — registering an entry Codex might reject (or silently
+// never fire) helps nobody, so the tagging queue stays Claude-fed until
+// Codex's own event surface is verified.
 func installRawclawCodexHook(configDir string) error {
-	return installRawclawHookAt(configDir, codexHooksPath(configDir))
+	return installRawclawHookAt(configDir, codexHooksPath(configDir), false)
 }
 
-// installRawclawHookAt writes the hook script under configDir and registers it
-// as a SessionStart entry in configFile, in that order (an entry pointing at a
-// script that doesn't exist yet is the wrong intermediate state to risk if the
-// second step fails). Shared by both the Claude Code and Codex targets — they
-// differ only in which JSON file the SessionStart entry is merged into.
-func installRawclawHookAt(configDir, configFile string) error {
+// installRawclawHookAt writes the hook scripts under configDir and registers
+// them in configFile, in that order (an entry pointing at a script that
+// doesn't exist yet is the wrong intermediate state to risk if the second step
+// fails). Shared by both the Claude Code and Codex targets — they differ in
+// which JSON file the entries are merged into and whether the SessionEnd
+// tagging-queue hook is wired (withSessionEnd).
+func installRawclawHookAt(configDir, configFile string, withSessionEnd bool) error {
 	scriptPath := hookScriptPath(configDir)
-	if err := writeHookScript(scriptPath); err != nil {
+	if err := writeHookScript(scriptPath, rawclawPrimeScript); err != nil {
 		return fmt.Errorf("install hook script: %w", err)
+	}
+	entries := map[string]string{"SessionStart": scriptPath}
+	if withSessionEnd {
+		tagPath := tagQueueScriptPath(configDir)
+		if err := writeHookScript(tagPath, rawclawTagQueueScript); err != nil {
+			return fmt.Errorf("install tag-queue hook script: %w", err)
+		}
+		entries["SessionEnd"] = tagPath
 	}
 
 	data, err := readJSONFile(configFile)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", configFile, err)
 	}
-	if err := addRawclawSessionStartHook(data, scriptPath); err != nil {
+	if err := addRawclawHooks(data, entries); err != nil {
 		return fmt.Errorf("register hook in %s: %w", configFile, err)
 	}
 	if err := writeJSONFile(configFile, data); err != nil {
@@ -464,18 +522,20 @@ func writeOrRemoveConfigFile(path string, data map[string]any) error {
 // caller can print an accurate line (or a clean "nothing to remove" note)
 // instead of always claiming success at full volume.
 type ejectOutcome struct {
-	scriptPath    string
-	configFile    string
-	scriptRemoved bool
-	entryRemoved  bool
-	fileDeleted   bool
+	scriptPath       string
+	tagScriptPath    string
+	configFile       string
+	scriptRemoved    bool
+	tagScriptRemoved bool
+	entryRemoved     bool
+	fileDeleted      bool
 }
 
 // didAnything reports whether this target had anything rawclaw-owned to
 // remove at all — the signal a fully clean, nothing-installed machine uses to
 // print a single no-op message instead of a line per target.
 func (o ejectOutcome) didAnything() bool {
-	return o.scriptRemoved || o.entryRemoved || o.fileDeleted
+	return o.scriptRemoved || o.tagScriptRemoved || o.entryRemoved || o.fileDeleted
 }
 
 // ejectRawclawHookAt reverses installRawclawHookAt: remove the hook script
@@ -485,12 +545,13 @@ func (o ejectOutcome) didAnything() bool {
 // was never installed (or ejecting twice) is a clean no-op, never an error.
 func ejectRawclawHookAt(configDir, configFile string) (ejectOutcome, error) {
 	scriptPath := hookScriptPath(configDir)
+	tagScriptPath := tagQueueScriptPath(configDir)
 	scriptDir := filepath.Dir(scriptPath)     // configDir/hooks/rawclaw — ours alone
 	hooksParentDir := filepath.Dir(scriptDir) // configDir/hooks — may hold siblings
 
-	out := ejectOutcome{scriptPath: scriptPath, configFile: configFile}
+	out := ejectOutcome{scriptPath: scriptPath, tagScriptPath: tagScriptPath, configFile: configFile}
 
-	// Remove exactly the file setup installed — never the whole directory. A
+	// Remove exactly the files setup installed — never the whole directory. A
 	// user may have parked their own files under hooks/rawclaw; they are not
 	// ours to delete, and the dir cascade below only fires when truly empty.
 	if _, err := os.Stat(scriptPath); err == nil {
@@ -498,6 +559,12 @@ func ejectRawclawHookAt(configDir, configFile string) (ejectOutcome, error) {
 			return out, fmt.Errorf("remove %s: %w", scriptPath, err)
 		}
 		out.scriptRemoved = true
+	}
+	if _, err := os.Stat(tagScriptPath); err == nil {
+		if err := os.Remove(tagScriptPath); err != nil {
+			return out, fmt.Errorf("remove %s: %w", tagScriptPath, err)
+		}
+		out.tagScriptRemoved = true
 	}
 	removeIfEmpty(scriptDir)
 	removeIfEmpty(hooksParentDir)
