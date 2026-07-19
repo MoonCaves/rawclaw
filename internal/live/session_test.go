@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +88,55 @@ func TestServeSession_StripsToolsByDefault(t *testing.T) {
 		}
 	}
 }
+
+// TestServeSession_ToolOnlyTurnsHidden: a turn that is nothing but tool calls
+// strips to empty — the render skips it (no blank timestamped lines, the same
+// empty-turn posture read takes) and says how many it hid, so a tool-heavy
+// tail never reads as a dead session.
+func TestServeSession_ToolOnlyTurnsHidden(t *testing.T) {
+	claudeRoot, _ := newServeHome(t)
+	writeClaudeSession(t, claudeRoot, "-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"/home/u/proj-a", time.Now(),
+		"please check the tests",
+		`[TOOL:Bash] "command" "go test ./..."`,
+		`[TOOL_RESULT] ok all pass`,
+		"all green")
+
+	var buf bytes.Buffer
+	if err := ServeSession(&buf, "aaaa1111", 0, false, false); err != nil {
+		t.Fatalf("ServeSession: %v", err)
+	}
+	out := buf.String()
+	if blankTurn.MatchString(out) {
+		t.Errorf("default render printed a blank timestamped line for a tool-only turn:\n%s", out)
+	}
+	if !strings.Contains(out, "please check the tests") || !strings.Contains(out, "all green") {
+		t.Errorf("default render dropped conversation text:\n%s", out)
+	}
+	if !strings.Contains(out, "2 tool-only turns hidden") {
+		t.Errorf("default render should say how many tool-only turns it hid:\n%s", out)
+	}
+	if !strings.Contains(out, "--include-tools") {
+		t.Errorf("hidden-turns note should name the opt-in flag:\n%s", out)
+	}
+
+	// The opt-in renders those same turns and drops the note.
+	buf.Reset()
+	if err := ServeSession(&buf, "aaaa1111", 0, true, false); err != nil {
+		t.Fatalf("ServeSession includeTools: %v", err)
+	}
+	out = buf.String()
+	if !strings.Contains(out, "[TOOL:Bash]") || !strings.Contains(out, "[TOOL_RESULT]") {
+		t.Errorf("includeTools render missing the tool turns:\n%s", out)
+	}
+	if strings.Contains(out, "hidden") {
+		t.Errorf("includeTools render should not claim hidden turns:\n%s", out)
+	}
+}
+
+// blankTurn matches a rendered message line with no text after the role — the
+// shape an unskipped empty turn would leak as.
+var blankTurn = regexp.MustCompile(`(?m)^\[\S+ (user|assistant)\] *$`)
 
 // TestServeSession_IncludeTools: includeTools=true renders the tool calls too
 // — the same opt-in read/outline honor.

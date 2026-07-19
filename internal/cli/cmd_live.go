@@ -80,7 +80,7 @@ func newLiveCmd() *cobra.Command {
 	_ = f.MarkHidden("serve")
 	f.IntVar(&limit, "limit", 0, "max sessions to list (default 10)")
 	f.IntVar(&tail, "tail", 0, "trailing messages to render for a session (default 40)")
-	f.BoolVar(&includeTools, "include-tools", false, "also render tool calls in a session peek (stripped by default, matching read/outline)")
+	f.BoolVar(&includeTools, "include-tools", false, "include tool calls in the session peek")
 	f.BoolVar(&jsonOut, "json", false, "machine-readable JSON output")
 	return cmd
 }

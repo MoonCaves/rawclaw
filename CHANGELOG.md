@@ -25,8 +25,9 @@ All notable changes to RawClaw are documented in this file.
   just works); the archive config's optional `"ssh"` map overrides it per machine. Degrades with
   distinct, actionable errors: unresolvable machine name, unreachable ssh, no rawclaw on the
   remote's non-interactive PATH (with the install one-liner), or a remote rawclaw too old to
-  serve. `--json` for agents; `--tail N` to widen the transcript window; raw bytes rendered, no
-  summarization.
+  serve. `--json` for agents (raw message text, tool calls and all); `--tail N` to widen the
+  transcript window. The human render follows the same display posture as `read`/`outline` —
+  tool calls stripped by default, `--include-tools` to render them. No summarization.
 
 - **Cross-machine search: `rawclaw archive pull` + transparent foreign scopes.**
   Pull refreshes the local clone (a deleted/corrupt clone is simply re-cloned; `--throttle`

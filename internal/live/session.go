@@ -99,9 +99,26 @@ func ServeSession(w io.Writer, prefix string, tail int, includeTools, jsonOut bo
 
 	fmt.Fprintf(w, "session %s · %s · %s · last activity %s\n\n",
 		c.ID, orUnknown(projectName(c.CWD)), reg.ID, FormatAge(age))
+	hidden := 0
 	for _, m := range msgs {
-		fmt.Fprintf(w, "[%s %s] %s\n", clockOf(m), m.Role,
-			parse.Disp(m.Text, includeTools, sessionDispCap))
+		text := parse.Disp(m.Text, includeTools, sessionDispCap)
+		if text == "" {
+			// A turn that is nothing but tool calls strips to empty. Skip it —
+			// the same empty-turn posture read takes — and count it, so a
+			// tool-heavy tail reads as a working agent, not blank lines.
+			if strings.TrimSpace(m.Text) != "" {
+				hidden++
+			}
+			continue
+		}
+		fmt.Fprintf(w, "[%s %s] %s\n", clockOf(m), m.Role, text)
+	}
+	if hidden > 0 {
+		noun := "turns"
+		if hidden == 1 {
+			noun = "turn"
+		}
+		fmt.Fprintf(w, "\n(%d tool-only %s hidden — --include-tools renders them)\n", hidden, noun)
 	}
 	if total > len(msgs) {
 		fmt.Fprintf(w, "\n(showing the last %d of %d messages)\n", len(msgs), total)
