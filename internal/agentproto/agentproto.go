@@ -1037,7 +1037,6 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 	}, nil
 }
 
-
 // sessionMeta reads last_ts + message_count and formats the ISO through the
 // timefmt seam: the outline header is an agent-parsed surface, so the instant
 // is marked UTC (RFC3339 "Z") — never an unmarked local time. A missing row →
