@@ -113,9 +113,9 @@ func TestSpawnAutosyncChild_DetachedChildRunsWithLog(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"child-argv $*\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	oldExe := autosyncExe
-	autosyncExe = func() (string, error) { return script, nil }
-	t.Cleanup(func() { autosyncExe = oldExe })
+	oldExe := selfExe
+	selfExe = func() (string, error) { return script, nil }
+	t.Cleanup(func() { selfExe = oldExe })
 
 	spawnAutosyncChild()
 
@@ -132,10 +132,6 @@ func TestSpawnAutosyncChild_DetachedChildRunsWithLog(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
-
-// TestDetach_NewSession (unix): the child is configured into its own session —
-// the property that makes "a hung push can never hold a search open" true.
-// (See detach_unix_test.go for the platform assertion.)
 
 // TestOpenAutosyncLog_RotatesOversized: an oversized receipt log is rotated to
 // one .old generation before the next spawn appends.

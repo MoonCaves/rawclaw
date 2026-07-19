@@ -18,13 +18,10 @@ import (
 // the same trees.
 var ErrBusy = errors.New("another rawclaw archive sync is already running on this machine")
 
-const (
-	// lockRetryDelay is the poll interval while waiting for the sync lock.
-	// flock acquisition costs a syscall per attempt, so the tick is coarse
-	// enough to limit churn while still reacting quickly on release.
-	lockRetryDelay = 100 * time.Millisecond
-
-)
+// lockRetryDelay is the poll interval while waiting for the sync lock.
+// flock acquisition costs a syscall per attempt, so the tick is coarse
+// enough to limit churn while still reacting quickly on release.
+const lockRetryDelay = 100 * time.Millisecond
 
 // lockWaitMax bounds how long an acquirer waits for a busy lock before giving
 // up with ErrBusy. Long enough to ride out a routine push by a sibling

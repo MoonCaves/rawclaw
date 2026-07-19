@@ -42,6 +42,23 @@ func TestAcquireAutosyncToken_StaleTokenReclaimed(t *testing.T) {
 	}
 }
 
+// TestAcquireAutosyncToken_FutureTokenIsDue: a token stamped in the future (a
+// clock stepped backwards) is reclaimable now — one extra sync beats a
+// silently muted window.
+func TestAcquireAutosyncToken_FutureTokenIsDue(t *testing.T) {
+	newTestHome(t)
+	if !AcquireAutosyncToken(time.Now()) {
+		t.Fatal("initial claim refused")
+	}
+	future := time.Now().Add(autosyncWindow + 2*time.Minute)
+	if err := os.Chtimes(autosyncTokenPath(), future, future); err != nil {
+		t.Fatal(err)
+	}
+	if !AcquireAutosyncToken(time.Now()) {
+		t.Error("far-future token not reclaimed; want due on backwards clock")
+	}
+}
+
 // TestAutosyncPaths_LiveInArchiveStateDir: token and log sit beside the other
 // archive state (one dir holds every piece of cross-session archive state).
 func TestAutosyncPaths_LiveInArchiveStateDir(t *testing.T) {

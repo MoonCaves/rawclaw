@@ -13,7 +13,7 @@ import (
 // transcript bytes to the remote and receipts both halves — a completed push
 // and the throttled pull skip (the fixture's own pull just stamped).
 func TestArchiveAutosyncCmd_PushesAndReceipts(t *testing.T) {
-	fx := archivetest.Setup(t, "")
+	archivetest.Setup(t, "")
 
 	// New local bytes since the fixture's push.
 	sess := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "projects", "-local-proj", "localsess.jsonl")
@@ -39,7 +39,6 @@ func TestArchiveAutosyncCmd_PushesAndReceipts(t *testing.T) {
 	if !strings.Contains(out, "pull: skipped (throttled)") {
 		t.Errorf("receipt missing the throttled-pull line, got:\n%s", out)
 	}
-	_ = fx
 }
 
 // TestArchiveAutosyncCmd_UpToDateReceipt: nothing new → an honest "up to

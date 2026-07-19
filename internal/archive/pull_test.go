@@ -240,3 +240,18 @@ func TestPull_NetworkFailureSurfaces(t *testing.T) {
 		t.Error("failed pull did not abort the rebase — clone could wedge")
 	}
 }
+
+// TestPullDue_FutureStampIsDue: a stamp mtime in the FUTURE (a clock stepped
+// backwards) reads as due — one redundant pull beats throttled silence until
+// wall-clock catches back up.
+func TestPullDue_FutureStampIsDue(t *testing.T) {
+	newTestHome(t)
+	stampPull()
+	future := time.Now().Add(pullThrottleWindow + 2*time.Minute)
+	if err := os.Chtimes(pullStampPath(), future, future); err != nil {
+		t.Fatal(err)
+	}
+	if !pullDue(time.Now()) {
+		t.Error("far-future stamp not due; want due on backwards clock")
+	}
+}
