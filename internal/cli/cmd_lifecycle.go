@@ -9,11 +9,27 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/archive"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/spf13/cobra"
 )
+
+// foreignDeleteMatches asks the configured archive (feature off → none) which
+// foreign machines the delete's --project filter reaches. Best-effort by
+// design: an unreadable archive config degrades to "no foreign matches"
+// rather than blocking a purely local delete.
+func foreignDeleteMatches(project string) []string {
+	if project == "" {
+		return nil
+	}
+	a, err := archive.Load()
+	if err != nil || a == nil {
+		return nil
+	}
+	return a.ForeignProjectMatches(project)
+}
 
 // newArchiveCmd wires `rawclaw archive <session>`: move one session's .jsonl out
 // of the active projects tree into the archive dir, printing the new path. The
@@ -132,12 +148,29 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 	printRetainedPlan(out, retained)
 	total := len(plan.Matched) + len(retained)
 
+	// Foreign guard: a --project that reaches another machine's archived
+	// scopes is named, never silently ignored — foreign sessions are
+	// read-only from every box (delete them on their origin machine). The
+	// probe is offline (clone-only) and best-effort: a broken archive config
+	// must not block a purely local delete.
+	foreign := foreignDeleteMatches(f.project)
+	if len(foreign) > 0 {
+		fmt.Fprintf(out,
+			"Sessions on machine(s) %s in the archive also match; foreign sessions are read-only from this machine — delete them on their origin machine.\n",
+			strings.Join(foreign, ", "))
+	}
+
 	// Dry run, or nothing matched (live or retained): stop here without
 	// touching disk.
 	if f.dryRun {
 		return nil
 	}
 	if total == 0 {
+		if len(foreign) > 0 {
+			return ExitError{Code: 1, Msg: fmt.Sprintf(
+				"only foreign sessions matched (machine(s) %s); foreign sessions are read-only from this machine — run the delete on the origin machine",
+				strings.Join(foreign, ", "))}
+		}
 		fmt.Fprintln(out, "Nothing to delete.")
 		return nil
 	}
