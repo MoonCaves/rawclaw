@@ -50,16 +50,21 @@ func readConfig() (Config, error) {
 	return cfg, nil
 }
 
-// writeConfig persists cfg. One small single-shot write: a torn write cannot
-// pass unnoticed — it surfaces as a parse error from Load, whose message
-// points at the file.
+// writeConfig persists cfg atomically: the bytes land in a scratch file beside
+// the config, then rename swaps it in — same-directory rename is atomic, so a
+// process killed mid-write leaves either the old config or the new one, never
+// a torn file that Load would reject on every later run.
 func writeConfig(cfg Config) error {
 	b, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode archive config: %w", err)
 	}
 	p := configPath()
-	if err := os.WriteFile(p, append(b, '\n'), 0o644); err != nil {
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, p); err != nil {
 		return fmt.Errorf("write %s: %w", p, err)
 	}
 	return nil
