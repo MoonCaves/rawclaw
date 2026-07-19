@@ -52,11 +52,18 @@ func (a *Archive) Scopes(reindex bool) []view.Scope {
 
 // foreignMachines lists the clone's top-level dirs that are OTHER machines'
 // registered dirs: hidden dirs and our own dir (by name) are skipped, a dir
-// without a readable manifest is not a machine dir (warned, skipped), and a
+// without a readable manifest is not a machine dir (warned, skipped), a
+// manifest with no machine id is malformed (warned, skipped — an empty id
+// would fall through to the local stamp and corrupt provenance), and a
 // manifest claiming OUR machine id is this machine's data under an old name —
 // skipped, or every pre-rename session would come back as a duplicate foreign
-// hit. The returned manifests carry the DIR name as Name (the layout truth;
-// a manifest's recorded name could lag a rename).
+// hit. The same rename can happen to a FOREIGN machine (the archive never
+// prunes, so its old dir lingers with the identical machine id and identical
+// session files): dirs are deduped by machine id, newest manifest wins —
+// otherwise every pre-rename session would list twice and its unchanged
+// session id could never be disambiguated by any prefix. The returned
+// manifests carry the DIR name as Name (the layout truth; a manifest's
+// recorded name could lag a rename).
 func (a *Archive) foreignMachines() []manifest {
 	entries, err := os.ReadDir(a.clone)
 	if err != nil {
@@ -64,7 +71,8 @@ func (a *Archive) foreignMachines() []manifest {
 			"clone", a.clone, "err", err)
 		return nil
 	}
-	var out []manifest
+	byID := map[string]manifest{} // machine id → winning manifest
+	var order []string            // ids in first-seen (alphabetical-dir) order
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == a.cfg.Name {
 			continue
@@ -75,11 +83,30 @@ func (a *Archive) foreignMachines() []manifest {
 				"dir", e.Name(), "err", merr)
 			continue
 		}
+		if m.MachineID == "" {
+			slog.Warn("archive: skipping machine dir with an empty machine_id", "dir", e.Name())
+			continue
+		}
 		if m.MachineID == a.machineID {
 			continue // our own data under a previous name — the live tree wins
 		}
 		m.Name = e.Name()
-		out = append(out, m)
+		cur, seen := byID[m.MachineID]
+		if !seen {
+			byID[m.MachineID] = m
+			order = append(order, m.MachineID)
+			continue
+		}
+		// Duplicate claim: keep the newer registration (UpdatedAt is RFC3339
+		// UTC, so lexical compare orders correctly); ties keep the first dir
+		// (ReadDir is sorted), so the choice is deterministic either way.
+		if m.UpdatedAt > cur.UpdatedAt {
+			byID[m.MachineID] = m
+		}
+	}
+	out := make([]manifest, 0, len(order))
+	for _, id := range order {
+		out = append(out, byID[id])
 	}
 	return out
 }

@@ -98,6 +98,7 @@ func (a *Archive) ensureClone(ctx context.Context) error {
 				"local clone %s points at %s but the config says %s; delete the clone dir to re-clone",
 				a.clone, got, a.cfg.Remote)
 		}
+		a.abortStaleRebase(ctx)
 		return nil
 	}
 	parent := filepath.Dir(a.clone)
@@ -113,6 +114,21 @@ func (a *Archive) ensureClone(ctx context.Context) error {
 			err)
 	}
 	return nil
+}
+
+// abortStaleRebase recovers a clone left mid-rebase by a kill (the process,
+// or rawclaw's own watchdog, dying between `pull --rebase` starting and its
+// abort handler running). A wedged rebase detaches HEAD, which breaks
+// currentBranch and with it every later push AND pull — so any verb that
+// found an existing clone aborts the leftover first. Best-effort: a clone
+// with no rebase in progress is untouched.
+func (a *Archive) abortStaleRebase(ctx context.Context) {
+	for _, marker := range []string{"rebase-merge", "rebase-apply"} {
+		if _, err := os.Stat(filepath.Join(a.clone, ".git", marker)); err == nil {
+			_, _ = a.run(ctx, a.clone, "rebase", "--abort")
+			return
+		}
+	}
 }
 
 // syncTrees copies changed transcript files from every source tree into the
@@ -312,7 +328,10 @@ func (a *Archive) pushWithRetry(ctx context.Context) (int, error) {
 			break
 		}
 		if _, rerr := a.run(ctx, a.clone, "pull", "--rebase", "origin", branch); rerr != nil {
-			_, _ = a.run(ctx, a.clone, "rebase", "--abort") // never leave a wedged clone
+			// Abort on a FRESH context: if the failure above was this ctx being
+			// canceled, the same ctx could never start the abort — and the whole
+			// point is never leaving a wedged clone.
+			_, _ = a.run(context.Background(), a.clone, "rebase", "--abort")
 			return attempt, fmt.Errorf("rebase onto updated remote: %w", rerr)
 		}
 	}
