@@ -42,6 +42,29 @@ All notable changes to RawClaw are documented in this file.
   existing stale-scope posture ("N stale — results may be incomplete") with its results still
   served.
 
+- **`rawclaw archive status`** — an offline freshness report: remote, local clone (and whether it
+  is usable), this machine's last successful push and pull, and one line per machine dir with its
+  last sync time — a machine silent past the same 24-hour window search uses is marked `STALE`,
+  so status and search can never disagree on what stale means.
+- **Deletes propagate to the archive — own sessions, explicit deletes only.** A session removed
+  with `rawclaw delete` (file gone + tombstone recorded) is also removed from the archive on this
+  machine's next push, so an explicit delete is never resurrected by a later pull. Absence alone
+  never deletes: upstream purges and `RAWCLAW_RETENTION=mirror` prunes keep their archive copies —
+  the archive is the durable mirror. Foreign machine dirs are read-only from every box: a delete
+  filter reaching another machine's archived sessions is refused with a pointer at the origin
+  machine, and foreign replica dbs can never enter the tombstone path.
+
+### Fixed
+
+- **Kill-safety across the whole push sequence.** A push killed at any point — mid-copy, before
+  the commit, before the push, during the rebase, even mid-`git clone` — now leaves a clone the
+  next push fully recovers on its own: a clone interrupted mid-creation is detected
+  (completed-clone sentinel) and rebuilt; leftover mid-rebase/mid-merge state is aborted, and a
+  clone whose HEAD stays unresolvable after recovery is rebuilt outright; a stale
+  `.git/index.lock` left by git itself dying (power loss, process-group kill) is aged out after
+  15 minutes while fresh locks stay honored. The remote never sees partial state beyond git's
+  own commit atomicity.
+
 ## [0.4.0] — 2026-07-18
 
 ### Added
