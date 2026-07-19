@@ -131,7 +131,7 @@ func TestLoopbackLivePeek(t *testing.T) {
 	// be in the rendered transcript (the whole point of the direct path).
 	appendLoopbackMessage(t, sessionFile, "assistant", "written seconds ago over loopback")
 	var sess bytes.Buffer
-	if err := c.Session(ctx, &sess, "abcd1234", 0, false); err != nil {
+	if err := c.Session(ctx, &sess, "abcd1234", 0, false, false); err != nil {
 		t.Fatalf("loopback Session: %v", err)
 	}
 	for _, want := range []string{"opening message", "written seconds ago over loopback"} {
@@ -141,7 +141,7 @@ func TestLoopbackLivePeek(t *testing.T) {
 	}
 
 	// A bad prefix travels back as the serving half's distinct error.
-	err := c.Session(ctx, io.Discard, "ffffffff", 0, false)
+	err := c.Session(ctx, io.Discard, "ffffffff", 0, false, false)
 	if err == nil || !strings.Contains(err.Error(), "ffffffff") {
 		t.Errorf("loopback bad-prefix error = %v, want the remote no-match story", err)
 	}
