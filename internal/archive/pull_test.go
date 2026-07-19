@@ -168,6 +168,7 @@ func TestPull_RecoversWedgedRebase(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(clone, ".git", "rebase-merge"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeCloneSentinel(t, clone)
 	a := &Archive{
 		cfg:   Config{Remote: "example.invalid/archive.git", Name: "machine-a"},
 		clone: clone,
@@ -209,6 +210,7 @@ func TestPull_NetworkFailureSurfaces(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(clone, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeCloneSentinel(t, clone)
 	a := &Archive{
 		cfg:   Config{Remote: "example.invalid/archive.git", Name: "machine-a"},
 		clone: clone,
