@@ -13,7 +13,7 @@ import (
 // entry in the live config file (configFile — either target's settingsPath or
 // codexHooksPath) against the entry originally seeded. Whole-file byte
 // identity is impossible by design (the merge engine re-marshals the JSON),
-// so the spec's "unchanged" guarantee is asserted at the entry level:
+// so the "unchanged" guarantee is asserted at the entry level:
 // deep-equal structure and values.
 func assertForeignEntryIntact(t *testing.T, seeded []byte, configFile string) {
 	t.Helper()
@@ -41,9 +41,9 @@ func assertForeignEntryIntact(t *testing.T, seeded []byte, configFile string) {
 
 // seedForeignSessionStartHook pre-seeds configFile (either target's
 // settingsPath or codexHooksPath) with a single foreign (non-rawclaw)
-// SessionStart hook entry, mirroring the sibling-tool fixture the spec's
-// testing decisions call for (othertool/agent-monitor/cmux — something already
-// hooked into the same event before rawclaw ever runs). Returns the exact
+// SessionStart hook entry — some other tool already hooked into the same
+// event before rawclaw ever runs, the exact situation setup must leave
+// untouched. Returns the exact
 // bytes written, so a later read can assert byte-identity.
 func seedForeignSessionStartHook(t *testing.T, configFile string) []byte {
 	t.Helper()
@@ -332,7 +332,7 @@ func TestSetupCmd_Yes_CodexIdempotentSecondRun(t *testing.T) {
 // CODEX_HOME points at a directory that does not exist, `setup --yes` must
 // skip the Codex target cleanly — print a note, write nothing under it, and
 // never create the directory — while still wiring Claude Code normally.
-// Mirrors othertool's detect-then-offer shape as detect-then-skip for --yes.
+// Detect-then-skip: a missing target earns a note, never an error or a mkdir.
 func TestSetupCmd_Yes_CodexNotDetected_SkipsWithoutCreatingTree(t *testing.T) {
 	claudeCfg := t.TempDir()
 	missingCodexDir := filepath.Join(t.TempDir(), "nonexistent-codex-home")
@@ -362,7 +362,7 @@ func TestSetupCmd_Yes_CodexNotDetected_SkipsWithoutCreatingTree(t *testing.T) {
 }
 
 // TestSetupCmd_ScriptContentContainsBanner: the installed script carries the
-// spec's finalized banner text verbatim (a subset of distinctive lines, since
+// discovery banner text verbatim (a subset of distinctive lines, since
 // asserting the byte-for-byte totality here would just duplicate the
 // rawclawPrimeScript constant definition itself).
 func TestSetupCmd_ScriptContentContainsBanner(t *testing.T) {

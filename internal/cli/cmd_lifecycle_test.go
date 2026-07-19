@@ -252,7 +252,7 @@ func retainSession(t *testing.T, root, project, id string, nLines int) {
 	}
 }
 
-// TestDeleteCmd_ReachesRetainedSession is the CLI-level proof:
+// TestDeleteCmd_ReachesRetainedSession is the CLI-level proof of the union:
 // a RETAINED session (source .jsonl already gone) has no live file for
 // matchSessions to find, yet `delete --project <label> --yes` must still
 // report it and tombstone it — the feature's contract is that explicit delete

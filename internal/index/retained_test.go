@@ -228,8 +228,7 @@ func TestRetainedMatches_ExcludesSubagents(t *testing.T) {
 
 // TestRetainedMatches_SkipsUnreadableDB guards the best-effort tolerance: a
 // corrupt/non-db file sitting in the cache dir must not fail the whole scan —
-// the stated requirement ("skip unreadable DBs gracefully, like scopes
-// discovery does").
+// unreadable DBs are skipped gracefully, like scopes discovery already does.
 func TestRetainedMatches_SkipsUnreadableDB(t *testing.T) {
 	proj := t.TempDir()
 	f := filepath.Join(proj, "s.jsonl")
