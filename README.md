@@ -146,6 +146,10 @@ rawclaw "monthly billing for the paid tier"   # now lexical + semantic, fused
 
 Vectors live as BLOBs in the same on-disk index; cosine scoring and fusion run in pure Go — no LLM, no extra service, no numpy, no GPU. Unset the env (or pass `--no-vector`) and you're back to byte-identical keyword search.
 
+### Topic tags — where the conversation pivoted
+
+Every session gets tagged at its topic-change points with concept keywords, so an agent can always find the moment a conversation pivoted — `rawclaw topics "<concept>"` drops it right there.
+
 ### Optional transcript archive — a git remote as durable, multi-machine storage
 
 Raw transcripts die upstream (Claude Code's ~30-day purge) and live on only one machine until they don't. The archive gives them one durable home: any private git remote (GitHub, Gitea, a bare repo over SSH — no rawclaw-specific server).
