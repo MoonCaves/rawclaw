@@ -16,11 +16,10 @@ import (
 func TestPushLocal_DeletePropagates(t *testing.T) {
 	home := newTestHome(t)
 	bare := initBareRepo(t)
-	keep := writeTranscript(t, filepath.Join(home, ".claude", "projects"),
+	writeTranscript(t, filepath.Join(home, ".claude", "projects"),
 		"-tmp-proj/sess-keep.jsonl", `{"type":"user","text":"keep"}`+"\n")
 	doomed := writeTranscript(t, filepath.Join(home, ".claude", "projects"),
 		"-tmp-proj/sess-doomed.jsonl", `{"type":"user","text":"doomed"}`+"\n")
-	_ = keep
 
 	a, err := Init(context.Background(), bare, "machine-a")
 	if err != nil {
@@ -231,6 +230,68 @@ func TestPushLocal_MirrorModeNeverPrunesArchive(t *testing.T) {
 	} {
 		if _, err := os.Stat(filepath.Join(verify, want)); err != nil {
 			t.Errorf("archive copy pruned under mirror mode: %s: %v", want, err)
+		}
+	}
+}
+
+// TestPushLocal_DeleteReportsOnce: the archive-side removal is reported by
+// the push that performs it — not by every later push. A tombstoned session
+// whose local file still exists is skipped at the copy, so it can neither
+// resurrect nor be re-copied-and-re-removed forever.
+func TestPushLocal_DeleteReportsOnce(t *testing.T) {
+	home := newTestHome(t)
+	bare := initBareRepo(t)
+	writeTranscript(t, filepath.Join(home, ".claude", "projects"),
+		"-tmp-proj/sess-zombie.jsonl", `{"type":"user","text":"zombie"}`+"\n")
+	writeTranscript(t, filepath.Join(home, ".claude", "projects"),
+		"-tmp-proj/sess-live.jsonl", `{"type":"user","text":"live"}`+"\n")
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if _, err := a.PushLocal(context.Background()); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+
+	// Tombstone the zombie but leave its local file in place (restored
+	// backup / delete race). The next push removes its archive copy once.
+	if err := lifecycle.TombstoneIDs("", []string{"sess-zombie"}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := a.PushLocal(context.Background())
+	if err != nil {
+		t.Fatalf("propagation push: %v", err)
+	}
+	if rep.Removed != 1 {
+		t.Errorf("propagation push Removed = %d, want 1", rep.Removed)
+	}
+
+	// A later push with unrelated new content: the zombie must not be
+	// re-copied or re-counted.
+	writeTranscript(t, filepath.Join(home, ".claude", "projects"),
+		"-tmp-proj/sess-new.jsonl", `{"type":"user","text":"new"}`+"\n")
+	rep, err = a.PushLocal(context.Background())
+	if err != nil {
+		t.Fatalf("later push: %v", err)
+	}
+	if rep.Removed != 0 {
+		t.Errorf("later push Removed = %d, want 0 (removal already propagated)", rep.Removed)
+	}
+	if rep.Copied != 1 {
+		t.Errorf("later push Copied = %d, want 1 (only the new session)", rep.Copied)
+	}
+
+	verify := checkoutRemote(t, bare)
+	if _, err := os.Stat(filepath.Join(verify, "machine-a/claude/-tmp-proj/sess-zombie.jsonl")); !os.IsNotExist(err) {
+		t.Error("tombstoned session present in the archive")
+	}
+	for _, want := range []string{
+		"machine-a/claude/-tmp-proj/sess-live.jsonl",
+		"machine-a/claude/-tmp-proj/sess-new.jsonl",
+	} {
+		if _, err := os.Stat(filepath.Join(verify, want)); err != nil {
+			t.Errorf("remote missing %s: %v", want, err)
 		}
 	}
 }

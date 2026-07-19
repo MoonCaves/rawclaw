@@ -125,6 +125,11 @@ func newArchivePushCmd() *cobra.Command {
 				return fmt.Errorf("archive push: %w", err)
 			}
 			switch {
+			case !rep.Committed && rep.Pushed:
+				// The stranded-commit recovery path: a previous run committed
+				// and then died before its push landed. Say so — this run DID
+				// change the remote.
+				fmt.Fprintf(out, "Pushed a previously stranded sync to %s.\n", a.Remote())
 			case !rep.Committed:
 				fmt.Fprintln(out, "Archive up to date; nothing to push.")
 			case rep.Retries > 0:

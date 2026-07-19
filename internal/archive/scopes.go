@@ -244,7 +244,7 @@ func codexGroupLabel(cwd string) string {
 // injective even though the readable segment is lossy and capped.
 func archiveScopeDBPath(machine, sourceID, key string) string {
 	sum := sha1.Sum([]byte(machine + "\x00" + sourceID + "\x00" + key))
-	name := "archive-" + machine + "-" + sourceID + "-" + sanitizeDBSegment(key) +
+	name := index.ArchiveDBPrefix + machine + "-" + sourceID + "-" + sanitizeDBSegment(key) +
 		"-" + hex.EncodeToString(sum[:])[:8]
 	return index.DBPath(name)
 }

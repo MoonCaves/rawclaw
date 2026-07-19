@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/provenance"
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // maxPushAttempts bounds the push → pull-rebase → push loop. Machine dirs are
@@ -42,13 +44,18 @@ func (a *Archive) PushLocal(ctx context.Context) (PushReport, error) {
 		return rep, err
 	}
 
-	copied, err := a.syncTrees(ctx)
+	tombs, err := lifecycle.LoadTombstones("")
+	if err != nil {
+		return rep, fmt.Errorf("read delete tombstones: %w", err)
+	}
+
+	copied, err := a.syncTrees(ctx, tombs)
 	if err != nil {
 		return rep, err
 	}
 	rep.Copied = copied
 
-	removed, err := a.removeTombstoned()
+	removed, err := a.removeTombstoned(ctx, tombs)
 	if err != nil {
 		return rep, err
 	}
@@ -113,34 +120,44 @@ const cloneSentinel = "rawclaw-clone-ok"
 // clone legitimately runs this long.
 const lockGracePeriod = 15 * time.Minute
 
-// ensureClone guarantees a usable local clone. An existing one is kept only
-// if it passes recovery: the completed-clone sentinel is present, it points
-// at the configured remote (a silently-edited config must not keep pushing
-// to the old remote — that mismatch is a hard error, not a rebuild), stale
+// ensureClone guarantees a usable local clone. An existing COMPLETED one
+// (sentinel present) is kept: it must point at the configured remote (a
+// silently-edited config must not keep pushing to the old remote), stale
 // operation state left by a kill (mid-rebase/mid-merge markers, an aged
-// index.lock) is cleared, and HEAD resolves to a branch afterwards. Anything
-// unrecoverable is rebuilt from the remote — the clone is a rebuildable
-// cache, so recovery is rebuild, never surgery.
+// index.lock) is cleared, and HEAD must resolve to a branch afterwards.
+// Rebuild (wipe + re-clone) happens only on POSITIVE evidence of a torn or
+// wedged clone — a sentinel-less .git (killed mid-clone) or a detached/
+// unreadable HEAD that recovery could not reattach. Transient failures
+// (unreadable config, exec errors, a dying ctx) surface as hard errors
+// instead: a rebuild discards any locally-committed-but-unpushed sync, so
+// destruction needs evidence, not absence of proof.
 func (a *Archive) ensureClone(ctx context.Context) error {
 	gitDir := filepath.Join(a.clone, ".git")
 	_, gitErr := os.Stat(gitDir)
 	_, okErr := os.Stat(filepath.Join(gitDir, cloneSentinel))
 	if gitErr == nil && okErr == nil {
 		out, err := a.run(ctx, a.clone, "remote", "get-url", "origin")
-		if err == nil {
-			if got := strings.TrimSpace(out); got != a.cfg.Remote {
-				return fmt.Errorf(
-					"local clone %s points at %s but the config says %s; delete the clone dir to re-clone",
-					a.clone, got, a.cfg.Remote)
-			}
-			a.recoverStaleOps(ctx)
-			if _, err := a.run(ctx, a.clone, "symbolic-ref", "--short", "HEAD"); err == nil {
-				return nil // healthy (or recovered) clone
-			}
-			// HEAD still unresolvable after recovery: fall through to rebuild.
+		if err != nil {
+			// Environmental, not positive torn-state evidence (the sentinel
+			// says the clone completed): fail loudly rather than destroy a
+			// clone that may hold a stranded unpushed commit.
+			return fmt.Errorf("read clone remote: %w", err)
 		}
-		// A completed clone whose origin cannot even be read is corrupt:
-		// fall through to rebuild.
+		if got := strings.TrimSpace(out); got != a.cfg.Remote {
+			return fmt.Errorf(
+				"local clone %s points at %s but the config says %s; delete the clone dir to re-clone",
+				a.clone, got, a.cfg.Remote)
+		}
+		a.recoverStaleOps(ctx)
+		if _, err := a.run(ctx, a.clone, "symbolic-ref", "--short", "HEAD"); err == nil {
+			return nil // healthy (or recovered) clone
+		} else if headAttached(gitDir) {
+			// The HEAD file itself still names a branch, so the symbolic-ref
+			// failure was environmental — same posture as get-url above.
+			return fmt.Errorf("resolve clone HEAD: %w", err)
+		}
+		// Positive wedge evidence: HEAD detached (or unreadable) even after
+		// recovery — fall through to rebuild.
 	}
 
 	parent := filepath.Dir(a.clone)
@@ -161,6 +178,17 @@ func (a *Archive) ensureClone(ctx context.Context) error {
 	return nil
 }
 
+// headAttached reports whether the clone's HEAD file names a branch ("ref: "
+// symref). Read directly from disk so a git that cannot even exec is not
+// mistaken for a detached HEAD. Unreadable/raw-SHA HEAD = not attached.
+func headAttached(gitDir string) bool {
+	b, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(string(b)), "ref: ")
+}
+
 // recoverStaleOps clears operation state a kill can leave in the clone:
 // a mid-rebase marker (the process, or rawclaw's own watchdog, dying between
 // `pull --rebase` starting and its abort handler running — a wedged rebase
@@ -168,6 +196,14 @@ func (a *Archive) ensureClone(ctx context.Context) error {
 // pull), a mid-merge marker (belt-and-suspenders; our verbs only rebase), and
 // an index.lock older than lockGracePeriod (git itself died holding it).
 // Best-effort: ensureClone's HEAD check decides whether recovery sufficed.
+//
+// Markers are aborted without an age gate, deliberately: the machine-wide
+// sync flock serializes live rawclaw writers, so by the time we run, marker
+// state can only belong to a DEAD holder — or to its orphaned git child,
+// which was already ctx-cancelled (SIGTERM) as its parent died and is at
+// worst finishing its last writes. Aborting under that race converges: the
+// abort or the orphan wins, and either end state is one the HEAD check plus
+// the next run recover from (interleave-tested).
 func (a *Archive) recoverStaleOps(ctx context.Context) {
 	for _, marker := range []string{"rebase-merge", "rebase-apply"} {
 		if _, err := os.Stat(filepath.Join(a.clone, ".git", marker)); err == nil {
@@ -188,7 +224,10 @@ func (a *Archive) recoverStaleOps(ctx context.Context) {
 // machine dir, preserving relative paths (<machine>/<source>/<rel>), and
 // returns how many files were copied. Files are only ever added or updated —
 // the archive never prunes, and foreign machine dirs are never touched.
-func (a *Archive) syncTrees(ctx context.Context) (int, error) {
+// Tombstoned sessions are skipped at the copy: a deleted session whose local
+// file survives (restored backup, delete race) must neither resurrect in the
+// archive nor be re-copied-and-re-removed on every later push.
+func (a *Archive) syncTrees(ctx context.Context, tombs map[string]struct{}) (int, error) {
 	// Copies stage through a temp dir under .git: same filesystem (rename
 	// stays atomic) but invisible to `git add`, so a temp file orphaned by a
 	// kill can never be committed to the archive. Stale orphans are cleared.
@@ -205,10 +244,14 @@ func (a *Archive) syncTrees(ctx context.Context) (int, error) {
 		if tree.root == "" || !isDir(tree.root) {
 			continue // absent runtime: nothing to push
 		}
+		skip := tombstonedSources(tree, tombs)
 		destRoot := filepath.Join(a.machineDir(), tree.id)
 		for _, src := range paths.ContainedJSONL(tree.root) {
 			if err := ctx.Err(); err != nil {
 				return copied, err // honor cancellation between files
+			}
+			if _, dead := skip[src]; dead {
+				continue // explicitly deleted: never (re)enters the archive
 			}
 			rel, err := filepath.Rel(tree.root, src)
 			if err != nil || strings.HasPrefix(rel, "..") {
@@ -409,4 +452,20 @@ func isRejectedPush(out string) bool {
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// pushStampPath is <state-dir>/archive/last-push — the last-successful-push
+// record. Like the pull stamp, its MTIME is the record (the body stays empty).
+func pushStampPath() string {
+	return filepath.Join(store.CacheDir(), "archive", "last-push")
+}
+
+// stampPush records a successful push by (re)writing the stamp file.
+// Best-effort: a failed stamp only under-reports `archive status`.
+func stampPush() {
+	p := pushStampPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(p, nil, 0o644)
 }

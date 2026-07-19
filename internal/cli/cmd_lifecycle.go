@@ -160,17 +160,21 @@ func runDelete(cmd *cobra.Command, f *deleteFlags) error {
 			strings.Join(foreign, ", "))
 	}
 
+	// Foreign-only match is refused on BOTH the dry run and the real run —
+	// the two must return the same verdict, or a script gating on the dry
+	// run's exit code would read a different answer than the delete gives.
+	if total == 0 && len(foreign) > 0 {
+		return ExitError{Code: 1, Msg: fmt.Sprintf(
+			"only foreign sessions matched (machine(s) %s); foreign sessions are read-only from this machine — run the delete on the origin machine",
+			strings.Join(foreign, ", "))}
+	}
+
 	// Dry run, or nothing matched (live or retained): stop here without
 	// touching disk.
 	if f.dryRun {
 		return nil
 	}
 	if total == 0 {
-		if len(foreign) > 0 {
-			return ExitError{Code: 1, Msg: fmt.Sprintf(
-				"only foreign sessions matched (machine(s) %s); foreign sessions are read-only from this machine — run the delete on the origin machine",
-				strings.Join(foreign, ", "))}
-		}
 		fmt.Fprintln(out, "Nothing to delete.")
 		return nil
 	}

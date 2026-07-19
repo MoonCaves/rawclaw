@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -60,20 +61,33 @@ func RetainedMatches(cacheDir string, project string, before time.Time, maxMessa
 	entries, _ := filepath.Glob(filepath.Join(cacheDir, "*.db"))
 	sort.Strings(entries)
 
+	// Rows already tombstoned are dead-but-not-yet-reconciled: listing them
+	// again would re-prompt, re-append duplicate ids, and inflate the delete
+	// report on every repeat run until a reconcile pass prunes them.
+	tombstoned, err := lifecycle.LoadTombstones(cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("read delete tombstones: %w", err)
+	}
+
 	out := []RetainedSession{}
 	for _, dbp := range entries {
 		// Archive-replica dbs (the "archive-" namespace, same predicate the
 		// orphan scan uses) hold FOREIGN machines' sessions — read-only
 		// replicas that must never enter the delete/tombstone path, even if
 		// a row in one ever carried a stray missing_since.
-		if strings.HasPrefix(filepath.Base(dbp), "archive-") {
+		if strings.HasPrefix(filepath.Base(dbp), ArchiveDBPrefix) {
 			continue
 		}
 		matches, err := retainedInDB(dbp, project, before, maxMessages)
 		if err != nil {
 			continue // unreadable db — best-effort, like orphan scope discovery
 		}
-		out = append(out, matches...)
+		for _, m := range matches {
+			if _, dead := tombstoned[m.SessionID]; dead {
+				continue
+			}
+			out = append(out, m)
+		}
 	}
 	return out, nil
 }
