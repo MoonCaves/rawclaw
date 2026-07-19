@@ -78,3 +78,16 @@ func TestLiveArgs(t *testing.T) {
 		t.Error("live --serve with 2 args should be a usage error")
 	}
 }
+
+// TestLiveCrossModeFlags: a flag on the wrong mode errors loudly instead of
+// being silently ignored.
+func TestLiveCrossModeFlags(t *testing.T) {
+	newArchiveHome(t)
+
+	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "live", "--serve", "--tail", "5"); err == nil {
+		t.Error("--tail on a list should be a usage error")
+	}
+	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "live", "--serve", "somepfx", "--limit", "5"); err == nil {
+		t.Error("--limit on a session peek should be a usage error")
+	}
+}
