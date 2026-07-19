@@ -32,8 +32,8 @@ func newSetupCmd() *cobra.Command {
 			"By default the hook is wired at the USER level (honors $CLAUDE_CONFIG_DIR, else " +
 			"~/.claude): rawclaw searches every project, so a global hook is the honest default. " +
 			"--project narrows the write to the CURRENT project's own config instead. " +
-			"Every other hook already registered in any of these files (othertool, agent-monitor, " +
-			"cmux, or anything else) is left untouched, and re-running is safe: rawclaw's own " +
+			"Every other hook already registered in any of these files — whatever tool it " +
+			"belongs to — is left untouched, and re-running is safe: rawclaw's own " +
 			"entry is replaced, never duplicated. --yes skips the interactive y/N prompt for " +
 			"non-interactive/agent use.\n\n" +
 			"--eject removes exactly what setup installed, across the same targets and scope: " +

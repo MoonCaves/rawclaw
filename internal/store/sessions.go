@@ -1,7 +1,7 @@
 // Sessions read surface: the typed queries over the sessions table that the
 // view / agentproto / retrieve / cli layers previously issued as inline SQL.
 // Every method reproduces its consumer site's WHERE/ORDER BY/LIMIT semantics
-// exactly.
+// exactly, so moving a consumer onto them is behavior-preserving.
 package store
 
 import "database/sql"

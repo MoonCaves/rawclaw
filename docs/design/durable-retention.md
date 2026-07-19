@@ -3,7 +3,7 @@
 Status: DRAFT (evidence, not ratified). Branch `feat/durable-retention`.
 Every decision below cites verified prior art. Citations were independently
 re-verified against the source (repo+file+line / doc), not
-taken from an agent's summary. See `prior-art/` for the full research.
+taken from a secondhand summary. See `prior-art/` for the full research.
 
 ## Problem
 

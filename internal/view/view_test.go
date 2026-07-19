@@ -289,7 +289,7 @@ func TestSessionPreview(t *testing.T) {
 	}
 }
 
-// TestSessionPreviewKeepsSessionWithGreetingOpener is the spec's headline case:
+// TestSessionPreviewKeepsSessionWithGreetingOpener is the headline case:
 // a 'hi'-opening session must still surface (a non-empty preview), with the
 // preview text coming from its first substantive turn — the session is never
 // dropped on the low-signal predicate.

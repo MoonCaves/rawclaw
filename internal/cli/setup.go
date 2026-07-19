@@ -14,10 +14,9 @@ import (
 // tool whose command merely lives under a rawclaw-named directory (e.g.
 // /home/me/rawclaw-notes/hooks/other-tool.sh) and delete it. Matching the full
 // hooks/rawclaw/prime.sh suffix keeps installs idempotent (re-running finds
-// and replaces rawclaw's own rows) while a sibling entry (othertool,
-// agent-monitor, cmux, or anything else sharing SessionStart) is never
-// touched. Path separators are normalized before matching so the identity
-// check holds on Windows too.
+// and replaces rawclaw's own rows) while a sibling entry from any other tool
+// sharing SessionStart is never touched. Path separators are normalized
+// before matching so the identity check holds on Windows too.
 const rawclawMarker = "hooks/rawclaw/prime.sh"
 
 // rawclawPrimeScript is installed at <configDir>/hooks/rawclaw/prime.sh and
@@ -67,10 +66,10 @@ If the user seems to want to pick up a past session, offering to resume/fork it 
 BANNER
 `
 
-// setupTarget names the agent whose config `rawclaw setup` is wiring into.
-// Only targetClaudeCode is implemented this slice; targetCodex is declared
-// now so a Codex target (whose project-trust
-// warning) has a stable value to switch on with no rename once it merges.
+// setupTarget names the agent whose config `rawclaw setup` is wiring into:
+// Claude Code (always targeted) or Codex (targeted when its config dir
+// already exists). Target-specific behavior — e.g. the Codex project-trust
+// warning — switches on this value.
 type setupTarget string
 
 const (
@@ -82,20 +81,18 @@ const (
 // untrusted Codex projects silently skip project-local
 // `.codex/` config layers — including hooks.json — entirely, so a
 // project-local rawclaw hook may never fire until the project is
-// Codex-trusted; the default global install has no such gate. The survey
-// found no equivalent gate on Claude Code's project-local
-// .claude/settings.json, so this text is Codex-only.
+// Codex-trusted; the default global install has no such gate. Claude Code
+// applies no equivalent gate to its project-local .claude/settings.json, so
+// this text is Codex-only.
 const projectTrustWarning = "Warning: this project is not yet Codex-trusted. A project-local hook " +
 	"silently won't fire until the project passes Codex's own trust review (see Codex's `/hooks`); " +
 	"the default global install has no such gate."
 
 // maybePrintProjectTrustWarning prints projectTrustWarning when target/scope
-// requires it (currently: target == targetCodex and scope is project-local),
-// both for interactive and --yes runs — call it once, right after scope
-// resolution and before describing what setup will write. Every other
-// target/scope combination (including every call this slice makes, since only
-// targetClaudeCode exists here) is a deliberate no-op: the seam a later Codex
-// slice switches on by passing targetCodex, with no change to this function.
+// requires it (target == targetCodex and scope is project-local), both for
+// interactive and --yes runs — call it once, right after scope resolution
+// and before describing what setup will write. Every other target/scope
+// combination is a deliberate no-op, so callers invoke it unconditionally.
 func maybePrintProjectTrustWarning(out io.Writer, target setupTarget, project bool) {
 	if target != targetCodex || !project {
 		return
@@ -105,9 +102,9 @@ func maybePrintProjectTrustWarning(out io.Writer, target setupTarget, project bo
 }
 
 // projectConfigDir resolves cwd's own project-local config dir named base
-// (e.g. "`.claude`"; a future Codex slice would pass its own, e.g.
-// "`.codex`") — the --project narrowing opt-in's target, matching how Claude
-// Code itself layers project settings inside the project directory.
+// ("`.claude`" or "`.codex`") — the --project narrowing opt-in's target,
+// matching how Claude Code itself layers project settings inside the project
+// directory.
 func projectConfigDir(base string) (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -120,8 +117,8 @@ func projectConfigDir(base string) (string, error) {
 // (global unless narrowed — rawclaw searches every project, so a global hook
 // is the honest default) unless project
 // is set, in which case it resolves to cwd's own base-named dir instead. One
-// function every target's scope routing shares — a later Codex slice reuses
-// it with its own globalDir/base rather than forking a second copy.
+// function every target's scope routing shares — each target passes its own
+// globalDir/base rather than forking a second copy.
 func scopeConfigDir(project bool, globalDir, base string) (string, error) {
 	if !project {
 		return globalDir, nil
