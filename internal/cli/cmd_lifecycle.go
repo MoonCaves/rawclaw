@@ -164,22 +164,26 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 		return fmt.Errorf("plan retained matches: %w", err)
 	}
 
-	// De-duplicate: a session can transiently match BOTH halves (file back on
-	// disk while its retained row still carries missing_since from an earlier
-	// purge). Counting it twice would trip the positional ambiguity guard on a
-	// single session — making it undeletable — and double-credit the summary.
-	// The live delete + tombstone covers the row, so the retained copy is
-	// dropped from the plan.
-	if len(plan.Matched) > 0 && len(retained) > 0 {
-		live := make(map[string]struct{}, len(plan.Matched))
+	// De-duplicate by session id: one session can match more than one row —
+	// live AND stale-retained (file back on disk while missing_since lingers
+	// from an earlier purge), or retained in TWO index dbs (the old and new
+	// db of a renamed project dir). Counting duplicates would trip the
+	// positional ambiguity guard on a single session — making it undeletable
+	// by its own full id — and double-credit the summary. One tombstone entry
+	// covers every row carrying the id, so keeping the live match (else the
+	// first retained row) loses nothing.
+	if len(retained) > 0 {
+		seen := make(map[string]struct{}, len(plan.Matched)+len(retained))
 		for _, it := range plan.Matched {
-			live[it.SessionID] = struct{}{}
+			seen[it.SessionID] = struct{}{}
 		}
 		kept := retained[:0]
 		for _, r := range retained {
-			if _, dup := live[r.SessionID]; !dup {
-				kept = append(kept, r)
+			if _, dup := seen[r.SessionID]; dup {
+				continue
 			}
+			seen[r.SessionID] = struct{}{}
+			kept = append(kept, r)
 		}
 		retained = kept
 	}
@@ -205,6 +209,10 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 				"session %q was recorded on machine(s) %s; foreign sessions are read-only from this machine — delete it on its origin machine",
 				sid, strings.Join(foreign, ", "))}
 		}
+		if f.project != "" || f.before != "" || f.maxMessages > 0 {
+			return ExitError{Code: 1, Msg: fmt.Sprintf(
+				"no session matches %q under the given filter flags — drop the filters, or use the 8-char id from search output (or the full id)", sid)}
+		}
 		return ExitError{Code: 1, Msg: fmt.Sprintf(
 			"no session matches %q — use the 8-char id from search output (or the full id)", sid)}
 	}
@@ -214,11 +222,21 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 
 	// Positional ambiguity: an id/prefix addressing MORE than one session
 	// deletes none of them — with --yes in play, fanning out silently would
-	// let one session8 take out a second session by accident. The plan above
-	// already listed the collisions; the refusal asks to narrow.
+	// let one session8 take out a second session by accident. The refusal
+	// lists the FULL colliding ids (the plan rows above truncate to 8 chars,
+	// which for a prefix collision renders identically) so the narrowed
+	// retry can be copy-pasted.
 	if sid != "" && total > 1 {
+		ids := make([]string, 0, total)
+		for _, it := range plan.Matched {
+			ids = append(ids, it.SessionID)
+		}
+		for _, r := range retained {
+			ids = append(ids, r.SessionID)
+		}
 		return ExitError{Code: 1, Msg: fmt.Sprintf(
-			"%d sessions match %q — narrow it to the full session id", total, sid)}
+			"%d sessions match %q — narrow it to the full session id:\n  %s",
+			total, sid, strings.Join(ids, "\n  "))}
 	}
 
 	if len(foreign) > 0 {

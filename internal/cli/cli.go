@@ -448,8 +448,16 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 
 	// Empty (or all-whitespace) query: a distinct coaching line, NOT the
 	// no-matches coaching — `rawclaw ""` asked for a search it never spelled.
+	// Under --json the same coaching ships as JSON, like every sibling shape.
 	if strings.TrimSpace(strings.Join(args, " ")) == "" {
-		fmt.Fprintln(out, "Empty query. Add a search term, or run bare rawclaw to browse this folder (--all for every project).")
+		const emptyQueryHint = "Add a search term, or run bare rawclaw to browse this folder (--all for every project)."
+		if o.JSON {
+			return EmitJSON(out, struct {
+				Error string `json:"error"`
+				Hint  string `json:"hint"`
+			}{"empty query", emptyQueryHint})
+		}
+		fmt.Fprintln(out, "Empty query. "+emptyQueryHint)
 		return nil
 	}
 
