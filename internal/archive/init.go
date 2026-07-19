@@ -48,6 +48,15 @@ func Init(ctx context.Context, remote, name string) (*Archive, error) {
 
 	a := newArchive(Config{Remote: remote, Name: name})
 
+	// Same single-writer lock the sync verbs hold: a re-init's RemoveAll must
+	// never race a still-running background sync (spawned before the old
+	// config was removed) over the same clone path.
+	release, err := acquireSyncLock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	// A clone left by a previous failed/abandoned init is stale state, not
 	// truth — the remote is truth. Start from a fresh clone.
 	if err := os.RemoveAll(a.clone); err != nil {

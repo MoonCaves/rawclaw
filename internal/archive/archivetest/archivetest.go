@@ -52,6 +52,10 @@ func Setup(t *testing.T, foreignDate string) *Fixture {
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("RAWCLAW_ARCHIVE", "")
+	// A CONFIGURED archive would let any test that drives the real command
+	// tree spawn a detached background sync of the test binary — kill the
+	// trigger fixture-wide; autosync's own tests opt back in explicitly.
+	t.Setenv("RAWCLAW_ARCHIVE_AUTOSYNC", "off")
 
 	// Local Claude project with a searchable beacon.
 	writeFile(t, filepath.Join(home, ".claude", "projects", "-local-proj", "localsess.jsonl"),

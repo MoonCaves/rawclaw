@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/MoonCaves/rawclaw/internal/archive"
@@ -67,6 +68,12 @@ func newArchivePullCmd() *cobra.Command {
 				return nil
 			}
 			pulled, err := a.Pull(cmd.Context(), throttle)
+			if errors.Is(err, archive.ErrBusy) {
+				// A sibling process is mid-sync on this clone. A clean no-op,
+				// not a failure — pull again once it finishes.
+				fmt.Fprintln(out, "Archive pull skipped: another rawclaw sync is running on this machine; try again shortly.")
+				return nil
+			}
 			if err != nil {
 				return fmt.Errorf("archive pull: %w", err)
 			}
@@ -104,6 +111,14 @@ func newArchivePushCmd() *cobra.Command {
 				return nil
 			}
 			rep, err := a.PushLocal(cmd.Context())
+			if errors.Is(err, archive.ErrBusy) {
+				// Waited the lock's grace window and a sibling process still
+				// holds the clone (timer, background sync, another shell).
+				// Transcripts it hasn't seen are caught by the next sync —
+				// a clean no-op, not a failure.
+				fmt.Fprintln(out, "Archive push skipped: another rawclaw sync is running on this machine; re-run to push anything it misses.")
+				return nil
+			}
 			if err != nil {
 				return fmt.Errorf("archive push: %w", err)
 			}
