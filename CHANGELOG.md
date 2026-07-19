@@ -2,7 +2,7 @@
 
 All notable changes to RawClaw are documented in this file.
 
-## [Unreleased]
+## [0.5.0] — 2026-07-19
 
 ### Added
 
