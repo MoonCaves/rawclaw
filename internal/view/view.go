@@ -193,6 +193,19 @@ func Browse(tdir string, limit int, since, before string) []BrowseRow {
 	if err != nil {
 		return nil
 	}
+	return BrowseDB(dbp, limit, since, before)
+}
+
+// BrowseAllRow is one recent-session row of the cross-project (--all) browse:
+// a BrowseRow tagged with the project it came from.
+type BrowseAllRow struct {
+	Project string `json:"project"`
+	BrowseRow
+}
+
+// BrowseDB is Browse over an already-resolved index db (a pre-ensured scope —
+// Codex, retained/orphaned, or a Claude scope the caller resolved itself).
+func BrowseDB(dbp string, limit int, since, before string) []BrowseRow {
 	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return nil

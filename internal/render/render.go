@@ -45,6 +45,20 @@ func PrintBrowse(w io.Writer, rows []view.BrowseRow, project string) {
 	}
 }
 
+// PrintBrowseAll renders the cross-project (--all) recent-sessions list: the
+// same row shape as PrintBrowse, each row additionally naming its project.
+func PrintBrowseAll(w io.Writer, rows []view.BrowseAllRow) {
+	if len(rows) == 0 {
+		fmt.Fprintln(w, "No sessions in any project. Try --list to see the searchable projects.")
+		return
+	}
+
+	fmt.Fprintf(w, "%d most-recent sessions across all projects:\n\n", len(rows))
+	for _, r := range rows {
+		fmt.Fprintf(w, "  · %s · %s · %d msgs · %s\n", sid8(r.SessionID), r.Project, r.N, r.Preview)
+	}
+}
+
 // bm25Field renders the BM25Rank for a human line. -1 means bm25 did not order
 // this hit (a recency overlay, or the multi-term post-resort case where the
 // pre-resort bm25 ordinal is not recoverable) — we say so plainly rather than
