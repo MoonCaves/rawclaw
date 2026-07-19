@@ -142,7 +142,7 @@ func TestAddRawclawHookReplacesExistingRawclawEntry(t *testing.T) {
 		},
 	}
 
-	addRawclawSessionStartHook(data, "/new/path/hooks/rawclaw/prime.sh")
+	addRawclawHooks(data, map[string]string{"SessionStart": "/new/path/hooks/rawclaw/prime.sh"})
 
 	hooks := data["hooks"].(map[string]any)
 	arr := hooks["SessionStart"].([]any)
@@ -182,14 +182,14 @@ func TestAddRawclawHookReplacesExistingRawclawEntry(t *testing.T) {
 	}
 }
 
-// TestAddRawclawHookIdempotentSecondCall: calling addRawclawSessionStartHook
+// TestAddRawclawHookIdempotentSecondCall: calling addRawclawHooks
 // twice with the same scriptPath must still leave exactly one rawclaw entry —
 // the re-run story the CLI-level idempotency test also covers, isolated here
 // at the merge-engine seam.
 func TestAddRawclawHookIdempotentSecondCall(t *testing.T) {
 	data := map[string]any{}
-	addRawclawSessionStartHook(data, "/x/hooks/rawclaw/prime.sh")
-	addRawclawSessionStartHook(data, "/x/hooks/rawclaw/prime.sh")
+	addRawclawHooks(data, map[string]string{"SessionStart": "/x/hooks/rawclaw/prime.sh"})
+	addRawclawHooks(data, map[string]string{"SessionStart": "/x/hooks/rawclaw/prime.sh"})
 
 	hooks := data["hooks"].(map[string]any)
 	arr := hooks["SessionStart"].([]any)
@@ -351,7 +351,7 @@ func TestRemoveRawclawHooksSparesForeignRawclawNamedPath(t *testing.T) {
 			},
 		},
 	}
-	if err := addRawclawSessionStartHook(data, "/cfg/hooks/rawclaw/prime.sh"); err != nil {
+	if err := addRawclawHooks(data, map[string]string{"SessionStart": "/cfg/hooks/rawclaw/prime.sh"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
 	arr := data["hooks"].(map[string]any)["SessionStart"].([]any)
@@ -377,7 +377,7 @@ func TestAddRawclawHookRefusesOffShapeSessionStart(t *testing.T) {
 			"SessionStart": map[string]any{"weird": true},
 		},
 	}
-	if err := addRawclawSessionStartHook(data, "/cfg/hooks/rawclaw/prime.sh"); err == nil {
+	if err := addRawclawHooks(data, map[string]string{"SessionStart": "/cfg/hooks/rawclaw/prime.sh"}); err == nil {
 		t.Fatal("want an error on off-shape SessionStart, got nil (silent clobber)")
 	}
 	if _, ok := data["hooks"].(map[string]any)["SessionStart"].(map[string]any); !ok {
@@ -568,7 +568,7 @@ func TestEjectKeepsConfigFileWithNonHookKeys(t *testing.T) {
 	if err := os.WriteFile(cf, []byte(`{"model": "opus"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := installRawclawHookAt(dir, cf); err != nil {
+	if err := installRawclawHookAt(dir, cf, true); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if _, err := ejectRawclawHookAt(dir, cf); err != nil {
@@ -592,7 +592,7 @@ func TestEjectKeepsConfigFileWithNonHookKeys(t *testing.T) {
 func TestEjectSparesUserFilesInScriptDir(t *testing.T) {
 	dir := t.TempDir()
 	cf := settingsPath(dir)
-	if err := installRawclawHookAt(dir, cf); err != nil {
+	if err := installRawclawHookAt(dir, cf, true); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	userFile := filepath.Join(filepath.Dir(hookScriptPath(dir)), "notes.txt")
@@ -647,7 +647,7 @@ func TestInstallRefusesNonObjectHooksValue(t *testing.T) {
 	if err := os.WriteFile(cf, orig, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := installRawclawHookAt(dir, cf); err == nil {
+	if err := installRawclawHookAt(dir, cf, true); err == nil {
 		t.Fatal("want an error on non-object hooks value, got nil (silent clobber)")
 	}
 	b, err := os.ReadFile(cf)

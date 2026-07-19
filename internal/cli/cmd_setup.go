@@ -26,7 +26,11 @@ func newSetupCmd() *cobra.Command {
 		Short: "Wire the rawclaw discovery hook into Claude Code and Codex",
 		Long: "Install the rawclaw discovery-hook script and register it as a SessionStart hook " +
 			"in every agent runtime detected on this machine, so a session announces rawclaw " +
-			"exists. Claude Code is always targeted; Codex is targeted too when its config dir " +
+			"exists. For Claude Code a second, SessionEnd hook is wired too: it queues each " +
+			"finished session for topic tagging, and the SessionStart banner tells the next " +
+			"session's agent to tag the queue (tag-prep → tag-write) — tagging happens on its " +
+			"own, agent to agent, and rawclaw itself never calls a model. " +
+			"Claude Code is always targeted; Codex is targeted too when its config dir " +
 			"already exists (honors $CODEX_HOME, else ~/.codex) — a machine with no Codex install " +
 			"is left untouched for that target rather than having a Codex tree created for it. " +
 			"By default the hook is wired at the USER level (honors $CLAUDE_CONFIG_DIR, else " +
@@ -94,6 +98,8 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 	fmt.Fprintf(out, "rawclaw setup will:\n")
 	fmt.Fprintf(out, "  install the discovery-hook script at %s\n", scriptPath)
 	fmt.Fprintf(out, "  register it as a SessionStart hook in %s\n", sp)
+	fmt.Fprintf(out, "  install the tagging-queue hook script at %s\n", tagQueueScriptPath(configDir))
+	fmt.Fprintf(out, "  register it as a SessionEnd hook in %s (queues each finished session for topic tagging)\n", sp)
 	if codexDetected {
 		fmt.Fprintf(out, "  install the discovery-hook script at %s\n", hookScriptPath(codexDir))
 		fmt.Fprintf(out, "  register it as a SessionStart hook in %s\n", codexHooksPath(codexDir))
@@ -117,6 +123,7 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 		return fmt.Errorf("install rawclaw hook: %w", err)
 	}
 	fmt.Fprintf(out, "Installed %s\nRegistered SessionStart hook in %s\n", scriptPath, sp)
+	fmt.Fprintf(out, "Installed %s\nRegistered SessionEnd hook in %s\n", tagQueueScriptPath(configDir), sp)
 
 	if codexDetected {
 		if err := installRawclawCodexHook(codexDir); err != nil {
@@ -156,7 +163,8 @@ func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 
 	fmt.Fprintf(out, "rawclaw setup --eject will:\n")
 	fmt.Fprintf(out, "  remove the discovery-hook script at %s (if present)\n", scriptPath)
-	fmt.Fprintf(out, "  strip rawclaw's own entry out of %s (if present)\n", sp)
+	fmt.Fprintf(out, "  remove the tagging-queue hook script at %s (if present)\n", tagQueueScriptPath(configDir))
+	fmt.Fprintf(out, "  strip rawclaw's own entries out of %s (if present)\n", sp)
 	if codexDetected {
 		fmt.Fprintf(out, "  remove the discovery-hook script at %s (if present)\n", hookScriptPath(codexDir))
 		fmt.Fprintf(out, "  strip rawclaw's own entry out of %s (if present)\n", codexHooksPath(codexDir))
@@ -211,6 +219,9 @@ func printEjectOutcome(out io.Writer, label string, o ejectOutcome) {
 	}
 	if o.scriptRemoved {
 		fmt.Fprintf(out, "%s: removed %s\n", label, o.scriptPath)
+	}
+	if o.tagScriptRemoved {
+		fmt.Fprintf(out, "%s: removed %s\n", label, o.tagScriptPath)
 	}
 	switch {
 	case o.fileDeleted:
