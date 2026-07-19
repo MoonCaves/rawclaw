@@ -2,6 +2,7 @@ package archive
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,16 +52,11 @@ func TestEnsureClone_RebuildsTornClone(t *testing.T) {
 	gitT(t, "", "init", a.ClonePath())
 	gitT(t, a.ClonePath(), "remote", "add", "origin", bare)
 
-	rep, err := a.PushLocal(context.Background())
-	if err != nil {
+	if _, err := a.PushLocal(context.Background()); err != nil {
 		t.Fatalf("push over torn clone: %v", err)
 	}
-	if !rep.Pushed && rep.Copied == 0 {
-		// Rebuild restored the pushed state; nothing new is fine — but the
-		// clone must now be complete.
-		if _, err := os.Stat(filepath.Join(a.ClonePath(), ".git", cloneSentinel)); err != nil {
-			t.Errorf("rebuilt clone missing sentinel: %v", err)
-		}
+	if _, err := os.Stat(filepath.Join(a.ClonePath(), ".git", cloneSentinel)); err != nil {
+		t.Errorf("rebuilt clone missing sentinel: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(a.ClonePath(), "machine-a", ".rawclaw-machine.json")); err != nil {
 		t.Errorf("rebuilt clone missing our machine dir: %v", err)
@@ -96,11 +92,9 @@ func TestEnsureClone_RebuildsUnrecoverableRebaseWedge(t *testing.T) {
 	}
 	gitT(t, a.ClonePath(), "checkout", "--detach")
 
-	rep, err := a.PushLocal(context.Background())
-	if err != nil {
+	if _, err := a.PushLocal(context.Background()); err != nil {
 		t.Fatalf("push over unrecoverable wedge: %v", err)
 	}
-	_ = rep
 	if _, err := os.Stat(filepath.Join(a.ClonePath(), ".git", "rebase-merge")); !os.IsNotExist(err) {
 		t.Error("rebase marker survived recovery")
 	}
@@ -325,5 +319,129 @@ func TestPushLocal_KillInjection(t *testing.T) {
 				t.Errorf("steady-state push not a no-op: %+v", rep2)
 			}
 		})
+	}
+}
+
+// TestEnsureClone_TransientFailureDoesNotDestroy: a COMPLETED clone (sentinel
+// present) whose `remote get-url` probe fails for an environmental reason must
+// surface a hard error — never be wiped. A rebuild discards any
+// committed-but-unpushed sync; destruction needs positive torn-state
+// evidence, not absence of proof.
+func TestEnsureClone_TransientFailureDoesNotDestroy(t *testing.T) {
+	home := newTestHome(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if _, err := a.PushLocal(context.Background()); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+
+	// A stranded local commit: content committed in the clone, never pushed.
+	writeTranscript(t, a.ClonePath(), "machine-a/claude/-tmp-proj/sess-stranded.jsonl", "{}\n")
+	gitT(t, a.ClonePath(), "add", "-A")
+	gitT(t, a.ClonePath(), "commit", "-m", "machine-a: sync transcripts")
+	stranded := strings.TrimSpace(gitT(t, a.ClonePath(), "rev-parse", "HEAD"))
+
+	// Environmental failure: the remote probe errors (unreadable config,
+	// exec failure, dying ctx — all look the same to the caller).
+	real := a.run
+	a.run = func(ctx context.Context, dir string, args ...string) (string, error) {
+		if args[0] == "remote" {
+			return "", errors.New("simulated transient failure")
+		}
+		return real(ctx, dir, args...)
+	}
+	if _, err := a.PushLocal(context.Background()); err == nil {
+		t.Fatal("push with failing remote probe succeeded, want hard error")
+	}
+
+	// The clone survived, stranded commit intact.
+	if got := strings.TrimSpace(gitT(t, a.ClonePath(), "rev-parse", "HEAD")); got != stranded {
+		t.Errorf("clone HEAD changed under a transient failure: %s -> %s", stranded, got)
+	}
+
+	// Recovery once the environment heals: the stranded commit goes out.
+	a.run = real
+	rep, err := a.PushLocal(context.Background())
+	if err != nil {
+		t.Fatalf("recovery push: %v", err)
+	}
+	if !rep.Pushed {
+		t.Error("stranded commit not pushed after recovery")
+	}
+	verify := checkoutRemote(t, bare)
+	if _, err := os.Stat(filepath.Join(verify, "machine-a/claude/-tmp-proj/sess-stranded.jsonl")); err != nil {
+		t.Errorf("stranded content lost: %v", err)
+	}
+}
+
+// TestPushLocal_OrphanGitInterleave: the residual the single-writer flock
+// cannot close — a watchdog hard-exit releases the lock as the process dies,
+// while its last git child (already ctx-cancelled/SIGTERMed) may briefly
+// outlive it and keep touching the clone. A second pusher entering during
+// that window must never corrupt anything: a FRESH index.lock is honored
+// (fail loudly, no sabotage), the marker-abort race converges, and once the
+// orphan is gone the next push fully succeeds.
+func TestPushLocal_OrphanGitInterleave(t *testing.T) {
+	home := newTestHome(t)
+	bare := initBareRepo(t)
+	seedTranscripts(t, home)
+
+	a, err := Init(context.Background(), bare, "machine-a")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if _, err := a.PushLocal(context.Background()); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+
+	// The dead holder's leavings: mid-rebase marker + a FRESH index.lock,
+	// with a live "orphan git" that finishes its (cancelled) work shortly
+	// after — clearing its own state, as a SIGTERMed git does.
+	marker := filepath.Join(a.ClonePath(), ".git", "rebase-merge")
+	lock := filepath.Join(a.ClonePath(), ".git", "index.lock")
+	if err := os.MkdirAll(marker, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orphanDone := make(chan struct{})
+	go func() {
+		defer close(orphanDone)
+		time.Sleep(300 * time.Millisecond)
+		_ = os.RemoveAll(marker)
+		_ = os.Remove(lock)
+	}()
+
+	// New content arrives; the second pusher enters while the orphan lives.
+	writeTranscript(t, filepath.Join(home, ".claude", "projects"),
+		"-tmp-proj/sess-during-orphan.jsonl", "{}\n")
+	_, perr := a.PushLocal(context.Background())
+	// Either outcome is legitimate: a loud failure on the honored fresh lock,
+	// or success if the orphan finished first. Corruption is not.
+	t.Logf("push during orphan window: err=%v", perr)
+
+	<-orphanDone
+	rep, err := a.PushLocal(context.Background())
+	if err != nil {
+		t.Fatalf("push after orphan exit: %v", err)
+	}
+	if perr == nil && (rep.Committed || rep.Pushed) {
+		// If the first push already landed everything, this one must no-op.
+		t.Errorf("post-orphan push not a no-op after a successful interleaved push: %+v", rep)
+	}
+
+	verify := checkoutRemote(t, bare)
+	if _, err := os.Stat(filepath.Join(verify, "machine-a/claude/-tmp-proj/sess-during-orphan.jsonl")); err != nil {
+		t.Errorf("content lost across the orphan interleave: %v", err)
+	}
+	gitT(t, bare, "fsck", "--strict")
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Error("rebase marker survived convergence")
 	}
 }

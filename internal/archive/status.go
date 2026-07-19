@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // StatusReport is the raw material for `archive status` and doctor-style
@@ -18,7 +16,7 @@ import (
 type StatusReport struct {
 	Remote   string          // configured remote URL
 	Clone    string          // local clone path
-	CloneOK  bool            // a usable clone exists on disk
+	CloneOK  bool            // a COMPLETED clone exists (sentinel present — ensureClone's own predicate)
 	LastPush time.Time       // last successful push from this machine (zero = never)
 	LastPull time.Time       // last successful pull on this machine (zero = never)
 	Machines []MachineStatus // one entry per machine dir in the clone, own first
@@ -43,7 +41,10 @@ func (a *Archive) Status(ctx context.Context) (StatusReport, error) {
 		LastPush: stampTime(pushStampPath()),
 		LastPull: stampTime(pullStampPath()),
 	}
-	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err != nil {
+	// Same completeness predicate ensureClone applies: a torn mid-clone dir
+	// (.git without the sentinel) is not a usable clone and must not report
+	// as one — status and recovery cannot disagree on "usable".
+	if _, err := os.Stat(filepath.Join(a.clone, ".git", cloneSentinel)); err != nil {
 		return st, nil
 	}
 	st.CloneOK = true
@@ -69,9 +70,12 @@ func (a *Archive) Status(ctx context.Context) (StatusReport, error) {
 // dirLastCommit resolves the last commit time touching name's dir in the
 // clone — the clone's knowledge of that machine IS what search serves, so an
 // un-pulled clone and a silent machine both (correctly) read as old. Zero
-// when the probe fails or the dir has no history yet.
+// when the probe fails or the dir has no history yet. The name is passed as
+// a literal pathspec: foreign dir names arrive from other machines' pushes
+// unvalidated, and a glob metachar in one must probe that dir, not pattern-
+// match across the clone (same posture as the foreign scope enumeration).
 func (a *Archive) dirLastCommit(ctx context.Context, name string) time.Time {
-	out, err := a.run(ctx, a.clone, "log", "-1", "--format=%ct", "--", name)
+	out, err := a.run(ctx, a.clone, "log", "-1", "--format=%ct", "--", ":(literal)"+name)
 	if err != nil {
 		return time.Time{}
 	}
@@ -86,22 +90,6 @@ func (a *Archive) dirLastCommit(ctx context.Context, name string) time.Time {
 // is reported stale, never silently passed off as fresh.
 func staleAt(lastCommit, now time.Time) bool {
 	return lastCommit.IsZero() || now.Sub(lastCommit) > staleAfter
-}
-
-// pushStampPath is <state-dir>/archive/last-push — the last-successful-push
-// record. Like the pull stamp, its MTIME is the record (the body stays empty).
-func pushStampPath() string {
-	return filepath.Join(store.CacheDir(), "archive", "last-push")
-}
-
-// stampPush records a successful push by (re)writing the stamp file.
-// Best-effort: a failed stamp only under-reports `archive status`.
-func stampPush() {
-	p := pushStampPath()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(p, nil, 0o644)
 }
 
 // stampTime reads a stamp file's mtime; zero when the stamp does not exist.

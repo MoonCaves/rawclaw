@@ -1,13 +1,15 @@
 package archive
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/MoonCaves/rawclaw/internal/lifecycle"
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 )
 
@@ -21,14 +23,10 @@ import (
 // every box (no cross-machine delete in v1). Claude sessions are addressed by
 // file stem (the stem IS the session id); codex rollouts carry their id in
 // the session_meta header, so those are resolved through the codex adapter
-// against the clone's own tree. Runs AFTER the copy pass, so a tombstoned
-// session whose local file still exists is copied and then removed in the
-// same run — the tombstone outranks presence.
-func (a *Archive) removeTombstoned() (int, error) {
-	tombs, err := lifecycle.LoadTombstones("")
-	if err != nil {
-		return 0, fmt.Errorf("read delete tombstones: %w", err)
-	}
+// against the clone's own tree. Runs after the copy pass, which itself skips
+// tombstoned sources — between them a tombstoned session can neither survive
+// in nor re-enter the archive.
+func (a *Archive) removeTombstoned(ctx context.Context, tombs map[string]struct{}) (int, error) {
 	if len(tombs) == 0 {
 		return 0, nil
 	}
@@ -40,17 +38,23 @@ func (a *Archive) removeTombstoned() (int, error) {
 		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil // unreadable entries: leave them; deletion must be deliberate
 		}
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr // honor cancellation between removals
+		}
 		stem := strings.TrimSuffix(d.Name(), ".jsonl")
 		if _, ok := tombs[stem]; !ok {
 			return nil
 		}
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("remove tombstoned session from clone: %w", err)
+		if rerr := os.Remove(path); rerr != nil {
+			if errors.Is(rerr, fs.ErrNotExist) {
+				return nil // vanished concurrently: the deletion already holds
+			}
+			return fmt.Errorf("remove tombstoned session from clone: %w", rerr)
 		}
 		removed++
 		return nil
 	})
-	if werr != nil && !os.IsNotExist(werr) {
+	if werr != nil {
 		return removed, werr
 	}
 
@@ -62,13 +66,54 @@ func (a *Archive) removeTombstoned() (int, error) {
 		return removed, fmt.Errorf("resolve codex sessions in clone: %w", derr)
 	}
 	for _, c := range containers {
+		if cerr := ctx.Err(); cerr != nil {
+			return removed, cerr
+		}
 		if _, ok := tombs[c.ID]; !ok {
 			continue
 		}
 		if err := os.Remove(c.Path); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
 			return removed, fmt.Errorf("remove tombstoned codex rollout from clone: %w", err)
 		}
 		removed++
 	}
 	return removed, nil
+}
+
+// tombstonedSources resolves the tombstone set against one LOCAL source tree,
+// returning the set of source file paths that must never be copied into the
+// archive — the copy-side half of delete propagation, covering a tombstoned
+// session whose local file still exists (restored backup, delete race).
+// Without it, such a zombie would be re-copied and re-removed on every push,
+// inflating the report and churning I/O forever. Claude files resolve by
+// stem; codex rollouts by their session_meta id (header reads, paid only
+// when tombstones exist at all).
+func tombstonedSources(tree sourceTree, tombs map[string]struct{}) map[string]struct{} {
+	if len(tombs) == 0 {
+		return nil
+	}
+	skip := map[string]struct{}{}
+	switch tree.id {
+	case "claude":
+		for _, src := range paths.ContainedJSONL(tree.root) {
+			stem := strings.TrimSuffix(filepath.Base(src), ".jsonl")
+			if _, ok := tombs[stem]; ok {
+				skip[src] = struct{}{}
+			}
+		}
+	case "codex":
+		containers, err := codex.New().DiscoverRoot(tree.root)
+		if err != nil {
+			return skip // enumeration failure: copy as before, the rm pass still guards
+		}
+		for _, c := range containers {
+			if _, ok := tombs[c.ID]; ok {
+				skip[c.Path] = struct{}{}
+			}
+		}
+	}
+	return skip
 }
