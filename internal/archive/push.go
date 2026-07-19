@@ -1,0 +1,265 @@
+package archive
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/provenance"
+)
+
+// maxPushAttempts bounds the push → pull-rebase → push loop. Machine dirs are
+// disjoint by construction, so the only contention is ref-level; a handful of
+// rounds outlasts any realistic burst of concurrent pushers.
+const maxPushAttempts = 5
+
+// PushLocal copies this machine's transcript trees into the clone, commits,
+// and pushes (pull --rebase + push, bounded retries). Idempotent; safe
+// mid-session (transcripts are append-only, so a half-written file in the
+// archive is valid and superseded by the next push). Returns a report for
+// status output and logging.
+func (a *Archive) PushLocal(ctx context.Context) (PushReport, error) {
+	var rep PushReport
+	if err := a.ensureClone(ctx); err != nil {
+		return rep, err
+	}
+	if err := a.ensureRegistered(); err != nil {
+		return rep, err
+	}
+
+	copied, err := a.syncTrees()
+	if err != nil {
+		return rep, err
+	}
+	rep.Copied = copied
+
+	changed, err := a.stageMachineDir(ctx)
+	if err != nil {
+		return rep, err
+	}
+	if !changed {
+		return rep, nil // nothing new: no commit, no push
+	}
+	if err := a.commit(ctx, fmt.Sprintf("%s: sync transcripts", a.cfg.Name)); err != nil {
+		return rep, err
+	}
+	rep.Committed = true
+
+	retries, err := a.pushWithRetry(ctx)
+	rep.Retries = retries
+	if err != nil {
+		return rep, err
+	}
+	rep.Pushed = true
+	return rep, nil
+}
+
+// machineDir is this machine's top-level dir inside the clone.
+func (a *Archive) machineDir() string {
+	return filepath.Join(a.clone, a.cfg.Name)
+}
+
+// ensureClone guarantees a usable local clone: an existing one is used as-is;
+// otherwise the remote is cloned fresh (a leftover half-created dir is cleared
+// first). The clone is a rebuildable cache — deleting it is always safe.
+func (a *Archive) ensureClone(ctx context.Context) error {
+	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err == nil {
+		return nil
+	}
+	parent := filepath.Dir(a.clone)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("create archive state dir: %w", err)
+	}
+	if err := os.RemoveAll(a.clone); err != nil {
+		return fmt.Errorf("clear broken clone: %w", err)
+	}
+	if _, err := a.run(ctx, parent, "clone", a.cfg.Remote, a.clone); err != nil {
+		return fmt.Errorf("clone archive remote: %w", err)
+	}
+	return nil
+}
+
+// syncTrees copies changed transcript files from every source tree into the
+// machine dir, preserving relative paths (<machine>/<source>/<rel>), and
+// returns how many files were copied. Files are only ever added or updated —
+// the archive never prunes, and foreign machine dirs are never touched.
+func (a *Archive) syncTrees() (int, error) {
+	copied := 0
+	for _, tree := range sourceTrees() {
+		if tree.root == "" || !isDir(tree.root) {
+			continue // absent runtime: nothing to push
+		}
+		destRoot := filepath.Join(a.machineDir(), tree.id)
+		for _, src := range paths.ContainedJSONL(tree.root) {
+			rel, err := filepath.Rel(tree.root, src)
+			if err != nil || strings.HasPrefix(rel, "..") {
+				continue // outside the tree (shouldn't happen post-containment)
+			}
+			info, err := os.Stat(src)
+			if err != nil {
+				continue // vanished mid-walk: the next push catches it
+			}
+			dst := filepath.Join(destRoot, rel)
+			if !needsCopy(src, info, dst) {
+				continue
+			}
+			if err := copyFile(src, dst, info); err != nil {
+				return copied, fmt.Errorf("copy %s: %w", rel, err)
+			}
+			copied++
+		}
+	}
+	return copied, nil
+}
+
+// needsCopy is the rsync-style quick check deciding whether src must be
+// (re)copied over dst: missing dst or a size change always copies; equal
+// size + equal mtime skips (copyFile mirrors the source mtime onto the dst,
+// so this fast path holds across pushes); equal size but different mtime
+// falls back to the content fingerprint, catching same-size in-place
+// rewrites while skipping touch-only mtime churn.
+func needsCopy(src string, srcInfo os.FileInfo, dst string) bool {
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		return true
+	}
+	if srcInfo.Size() != dstInfo.Size() {
+		return true
+	}
+	if srcInfo.ModTime().Equal(dstInfo.ModTime()) {
+		return false
+	}
+	srcFP := provenance.FileFingerprint(src, srcInfo.Size())
+	dstFP := provenance.FileFingerprint(dst, dstInfo.Size())
+	if srcFP == "" || dstFP == "" {
+		return true // unreadable side: copy rather than silently skip
+	}
+	return srcFP != dstFP
+}
+
+// copyFile streams src into dst via a temp file + rename (a kill mid-copy
+// never leaves a torn dst), then mirrors the source mtime onto dst so the
+// quick check's mtime fast path holds on the next push.
+func copyFile(src, dst string, srcInfo os.FileInfo) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".rawclaw-tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := io.Copy(tmp, in); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	// Zero atime = leave unchanged; only the mtime is mirrored.
+	return os.Chtimes(dst, time.Time{}, srcInfo.ModTime())
+}
+
+// stageMachineDir stages this machine's dir and reports whether anything is
+// actually staged — the no-changes signal that suppresses empty commits.
+func (a *Archive) stageMachineDir(ctx context.Context) (bool, error) {
+	if _, err := a.run(ctx, a.clone, "add", "-A", "--", a.cfg.Name); err != nil {
+		return false, fmt.Errorf("stage machine dir: %w", err)
+	}
+	out, err := a.run(ctx, a.clone, "status", "--porcelain", "--", a.cfg.Name)
+	if err != nil {
+		return false, fmt.Errorf("check staged changes: %w", err)
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+// commit creates a commit with a pinned identity, so pushes work on machines
+// with no global git identity configured.
+func (a *Archive) commit(ctx context.Context, msg string) error {
+	_, err := a.run(ctx, a.clone,
+		"-c", "user.name=rawclaw",
+		"-c", "user.email=rawclaw@localhost",
+		"commit", "-m", msg)
+	if err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// currentBranch resolves the checked-out branch (the remote's default branch
+// after a clone; also set on an empty clone's unborn HEAD).
+func (a *Archive) currentBranch(ctx context.Context) (string, error) {
+	out, err := a.run(ctx, a.clone, "symbolic-ref", "--short", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("resolve branch: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// pushWithRetry pushes the current branch, retrying on non-fast-forward
+// rejection (a concurrent machine pushed first): each round rebases the local
+// commits onto the updated remote ref — machine dirs are disjoint, so the
+// rebase is content-conflict-free — and pushes again, bounded by
+// maxPushAttempts. Never force-pushes. A failed rebase is aborted before
+// returning, so the clone is never left wedged mid-rebase. Returns how many
+// retry rounds were needed.
+func (a *Archive) pushWithRetry(ctx context.Context) (int, error) {
+	branch, err := a.currentBranch(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for attempt := 1; attempt <= maxPushAttempts; attempt++ {
+		out, err := a.run(ctx, a.clone, "push", "-u", "origin", branch)
+		if err == nil {
+			return attempt - 1, nil
+		}
+		if !isRejectedPush(out) {
+			return attempt - 1, fmt.Errorf("push archive: %w", err)
+		}
+		if attempt == maxPushAttempts {
+			break
+		}
+		if _, rerr := a.run(ctx, a.clone, "pull", "--rebase", "origin", branch); rerr != nil {
+			_, _ = a.run(ctx, a.clone, "rebase", "--abort") // never leave a wedged clone
+			return attempt, fmt.Errorf("rebase onto updated remote: %w", rerr)
+		}
+	}
+	return maxPushAttempts - 1, fmt.Errorf(
+		"push rejected %d times in a row (remote %s is receiving concurrent pushes); try again shortly",
+		maxPushAttempts, a.cfg.Remote)
+}
+
+// isRejectedPush classifies push output: true only for ref-contention
+// rejections worth a rebase-retry; auth, network, and missing-remote failures
+// return immediately instead of burning retries.
+func isRejectedPush(out string) bool {
+	for _, marker := range []string{"[rejected]", "non-fast-forward", "fetch first", "cannot lock ref"} {
+		if strings.Contains(out, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDir reports whether path exists and is a directory.
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
