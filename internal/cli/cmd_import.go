@@ -4,19 +4,19 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/MoonCaves/rawclaw/internal/index"
-	"github.com/MoonCaves/rawclaw/internal/scopes"
+	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/retention"
 	"github.com/MoonCaves/rawclaw/internal/source/claudeweb"
 	"github.com/spf13/cobra"
 )
 
 // newImportCmd wires `rawclaw import <zip|dir>`: ingest a Claude account
 // data-export (the emailed Settings -> Privacy -> Export data ZIP, or an
-// already-extracted copy of it) as the claude-web source, so cloud
-// conversations become searchable through the normal `rawclaw "query"` /
-// `read` / `outline` surface. Unlike claude/codex, claude-web has no live
-// directory to re-scan — the export is a one-shot file the user drops anywhere —
-// so this explicit command is its only ingest path.
+// already-extracted copy of it) as the claude-web source. Import MATERIALIZES
+// each conversation as a raw JSONL transcript under paths.ClaudeWebRoot(), then
+// indexes those files — so cloud conversations become searchable through the
+// normal `rawclaw "query"` / `read` / `outline` surface, and the raw transcripts
+// are the durable truth (the index db is a rebuildable cache).
 func newImportCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
@@ -27,6 +27,7 @@ func newImportCmd() *cobra.Command {
 			"Point it at the emailed export ZIP or an already-extracted copy:\n\n" +
 			"  rawclaw import ~/Downloads/data-<account>-<date>.zip\n" +
 			"  rawclaw import ~/Downloads/claude-export/\n\n" +
+			"Each conversation is saved as a raw transcript under the rawclaw data dir and indexed. " +
 			"Imported conversations carry the `claude-web` source; scope a search with --source claude-web. " +
 			"Cloud chats have no working directory, so they stay out of --this-project and surface on a normal " +
 			"(all-projects) search.",
@@ -41,60 +42,54 @@ func newImportCmd() *cobra.Command {
 	return cmd
 }
 
-// importResult is the machine-readable summary of one import: the
-// reconciliation stats plus the source and db path.
+// importResult is the machine-readable summary of one import.
 type importResult struct {
-	Source string                     `json:"source"`
-	DB     string                     `json:"db"`
-	Stats  index.ClaudeWebImportStats `json:"stats"`
+	Source        string `json:"source"`
+	Accounts      int    `json:"accounts"`
+	Conversations int    `json:"conversations"`
+	Messages      int    `json:"messages"`
+	Root          string `json:"transcript_root"`
 }
 
-// runImport parses the export at path and reconciles its conversations into the
-// dedicated claude-web db (idempotent: re-importing appends only new messages
-// and reconciles conversations absent from a newer export). It prints an
-// added / updated / skipped summary. A malformed / non-Claude export surfaces
-// as an error (from Discover), never a silent no-op.
+// runImport materializes the export at path into the claude-web transcript tree
+// (the durable source of truth), then reconciles each account (mirror-prunes
+// files absent from a fresher export, staleness-guarded). The per-account cache
+// dbs are (re)built lazily from these files at SEARCH time (scopes.ClaudeWeb),
+// so import writes only the raw truth. A malformed / non-Claude export surfaces
+// as an error with NO partial write (materialize stages then commits).
 func runImport(w io.Writer, path string, jsonOut bool) error {
-	ad := claudeweb.New(path)
+	root := paths.ClaudeWebRoot()
+	mirror := retention.RetentionMirror()
 
-	containers, err := ad.Discover()
-	if err != nil {
-		return err
-	}
-	newest, err := ad.NewestUpdatedAt()
-	if err != nil {
-		return err
-	}
-	account, err := ad.Account()
-	if err != nil {
-		return err
-	}
-
-	// Split any legacy single db into per-account dbs FIRST (fail-closed), so a
-	// pre-per-account db's conversations aren't stranded when this import writes
-	// to the account db. A failure here blocks the import rather than risk a
-	// split-brain across the two db layouts.
-	if err := scopes.MigrateLegacyClaudeWeb(); err != nil {
-		return fmt.Errorf("import %s: claude-web migration: %w", path, err)
-	}
-
-	dbp := scopes.ClaudeWebDBPath(account)
-	stats, err := index.ImportClaudeWeb(dbp, containers, ad.Messages, claudeweb.ID, account, newest)
+	// Materialize the export → raw JSONL transcripts (merged, never-drop;
+	// fail-closed; F-3 refuses an account-less export under mirror).
+	res, err := claudeweb.Materialize(path, root, mirror)
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)
 	}
 
-	res := importResult{Source: claudeweb.ID, DB: dbp, Stats: stats}
+	var totalConvs, totalMsgs int
+	for _, ai := range res.Accounts {
+		if err := claudeweb.Reconcile(ai, mirror); err != nil {
+			return fmt.Errorf("import %s: reconcile account: %w", path, err)
+		}
+		totalConvs += ai.Written
+		totalMsgs += ai.Messages
+	}
+
+	out := importResult{
+		Source:        claudeweb.ID,
+		Accounts:      len(res.Accounts),
+		Conversations: totalConvs,
+		Messages:      totalMsgs,
+		Root:          root,
+	}
 	if jsonOut {
-		return EmitJSON(w, res)
+		return EmitJSON(w, out)
 	}
-	fmt.Fprintf(w, "Imported as source %q: +%d new, ~%d updated, =%d unchanged conversation(s); +%d message(s).\n",
-		res.Source, stats.AddedConversations, stats.UpdatedConversations, stats.SkippedConversations, stats.AddedMessages)
-	if stats.RetainedAbsent > 0 || stats.PrunedAbsent > 0 {
-		fmt.Fprintf(w, "Reconciled conversations absent from this export: %d retained (deleted-upstream), %d pruned.\n",
-			stats.RetainedAbsent, stats.PrunedAbsent)
-	}
-	fmt.Fprintf(w, "%d conversation(s) total. Search with:  rawclaw \"<term>\"   (or --source %s to scope)\n",
-		stats.TotalConversations, claudeweb.ID)
+	fmt.Fprintf(w, "Imported %d conversation(s) across %d account(s) as source %q.\n",
+		out.Conversations, out.Accounts, out.Source)
+	fmt.Fprintf(w, "Raw transcripts: %s\n", root)
+	fmt.Fprintf(w, "Search with:  rawclaw \"<term>\"   (or --source %s to scope)\n", claudeweb.ID)
 	return nil
 }

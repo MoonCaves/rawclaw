@@ -4,67 +4,38 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
-	"sort"
+	"strings"
 	"testing"
 
-	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/source"
 )
 
-// A synthetic mini-export: three conversations. c1 is a plain text turn pair;
-// c2 carries thinking + tool_use + tool_result blocks (exercising the reused
-// internal/parse block handling) and a duplicate message.uuid (exercising
-// within-dump dedup); c3 is out of created_at order in the file (exercising the
-// created_at sort). NOT a real personal export — every value here is invented.
+// A synthetic mini-export: three conversations (single account). c1 is a plain
+// text turn pair; c2 carries thinking + tool_use + tool_result blocks and a
+// duplicate message.uuid (within-dump dedup); c3 is out of created_at order.
+// NOT a real export — every value is invented.
 const fixtureConversations = `[
-  {
-    "uuid": "c1111111-1111-1111-1111-111111111111",
-    "name": "deploy auth decision",
-    "created_at": "2026-07-15T10:00:00Z",
-    "updated_at": "2026-07-15T10:05:00Z",
-    "chat_messages": [
-      {"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","text":"where did we land on auth",
-       "content":[{"type":"text","text":"where did we land on auth"}]},
-      {"uuid":"m2","sender":"assistant","created_at":"2026-07-15T10:00:30Z","text":"we chose short-lived tokens",
-       "content":[{"type":"text","text":"we chose short-lived tokens"}]}
-    ]
-  },
-  {
-    "uuid": "c2222222-2222-2222-2222-222222222222",
-    "name": "tool session",
-    "created_at": "2026-07-16T09:00:00Z",
-    "updated_at": "2026-07-16T09:10:00Z",
-    "chat_messages": [
-      {"uuid":"m3","sender":"human","created_at":"2026-07-16T09:00:00Z",
-       "content":[{"type":"text","text":"run the migration please"}]},
-      {"uuid":"m4","sender":"assistant","created_at":"2026-07-16T09:00:10Z",
-       "content":[
-         {"type":"thinking","thinking":"the user wants a schema migration"},
-         {"type":"tool_use","name":"bash","input":{"cmd":"migrate up"}},
-         {"type":"text","text":"running the migration now"}
-       ]},
-      {"uuid":"m5","sender":"assistant","created_at":"2026-07-16T09:00:20Z",
-       "content":[{"type":"tool_result","content":"migration applied cleanly"}]},
-      {"uuid":"m5","sender":"assistant","created_at":"2026-07-16T09:00:20Z",
-       "content":[{"type":"tool_result","content":"migration applied cleanly"}]}
-    ]
-  },
-  {
-    "uuid": "c3333333-3333-3333-3333-333333333333",
-    "name": "ordering",
-    "created_at": "2026-07-17T08:00:00Z",
-    "updated_at": "2026-07-17T08:10:00Z",
-    "chat_messages": [
-      {"uuid":"m7","sender":"assistant","created_at":"2026-07-17T08:00:30Z",
-       "content":[{"type":"text","text":"second"}]},
-      {"uuid":"m6","sender":"human","created_at":"2026-07-17T08:00:00Z",
-       "content":[{"type":"text","text":"first"}]}
-    ]
-  }
+  {"uuid":"c1111111-1111-1111-1111-111111111111","name":"auth","created_at":"2026-07-15T10:00:00Z","updated_at":"2026-07-15T10:05:00Z","account":{"uuid":"acc00001-0000-0000-0000-000000000000"},
+   "chat_messages":[
+     {"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","text":"where did we land on auth","content":[{"type":"text","text":"where did we land on auth"}]},
+     {"uuid":"m2","sender":"assistant","created_at":"2026-07-15T10:00:30Z","text":"we chose short-lived tokens","content":[{"type":"text","text":"we chose short-lived tokens"}]}
+   ]},
+  {"uuid":"c2222222-2222-2222-2222-222222222222","name":"tool","created_at":"2026-07-16T09:00:00Z","updated_at":"2026-07-16T09:10:00Z","account":{"uuid":"acc00001-0000-0000-0000-000000000000"},
+   "chat_messages":[
+     {"uuid":"m3","sender":"human","created_at":"2026-07-16T09:00:00Z","content":[{"type":"text","text":"run the migration please"}]},
+     {"uuid":"m4","sender":"assistant","created_at":"2026-07-16T09:00:10Z","content":[{"type":"thinking","thinking":"the user wants a schema migration"},{"type":"tool_use","name":"bash","input":{"cmd":"migrate up"}},{"type":"text","text":"running the migration now"}]},
+     {"uuid":"m5","sender":"assistant","created_at":"2026-07-16T09:00:20Z","content":[{"type":"tool_result","content":"migration applied cleanly"}]},
+     {"uuid":"m5","sender":"assistant","created_at":"2026-07-16T09:00:20Z","content":[{"type":"tool_result","content":"migration applied cleanly"}]}
+   ]},
+  {"uuid":"c3333333-3333-3333-3333-333333333333","name":"order","created_at":"2026-07-17T08:00:00Z","updated_at":"2026-07-17T08:10:00Z","account":{"uuid":"acc00001-0000-0000-0000-000000000000"},
+   "chat_messages":[
+     {"uuid":"m7","sender":"assistant","created_at":"2026-07-17T08:00:30Z","content":[{"type":"text","text":"second"}]},
+     {"uuid":"m6","sender":"human","created_at":"2026-07-17T08:00:00Z","content":[{"type":"text","text":"first"}]}
+   ]}
 ]`
 
-// writeDirExport writes conversations.json into a fresh directory and returns
-// the directory path (the "already-extracted export" import shape).
+const fixtureAccount = "acc00001-0000-0000-0000-000000000000"
+
 func writeDirExport(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -74,33 +45,6 @@ func writeDirExport(t *testing.T, body string) string {
 	return dir
 }
 
-// writeZipExport writes a .zip holding conversations.json (optionally nested
-// under a top-level directory, matching a real export's layout) and returns the
-// zip path.
-func writeZipExport(t *testing.T, body, member string) string {
-	t.Helper()
-	dir := t.TempDir()
-	zp := filepath.Join(dir, "data-export.zip")
-	f, err := os.Create(zp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	zw := zip.NewWriter(f)
-	w, err := zw.Create(member)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write([]byte(body)); err != nil {
-		t.Fatal(err)
-	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return zp
-}
-
-// writeNamedZip writes a zip named `name` in dir, holding conversations.json.
 func writeNamedZip(t *testing.T, dir, name, body string) string {
 	t.Helper()
 	zp := filepath.Join(dir, name)
@@ -123,99 +67,263 @@ func writeNamedZip(t *testing.T, dir, name, body string) string {
 	return zp
 }
 
-// TestMultiBatchImportedAsOne: a large account exports as several
-// "…-batch-NNNN.zip" files; pointing import at one globs the whole set and
-// ingests every conversation, nothing dropped.
-func TestMultiBatchImportedAsOne(t *testing.T) {
+// materialize writes body as a dir export, materializes into a fresh root, and
+// returns (root, adapter over that root).
+func materialize(t *testing.T, body string) (string, *Adapter) {
+	t.Helper()
+	root := t.TempDir()
+	if _, err := Materialize(writeDirExport(t, body), root, false); err != nil {
+		t.Fatalf("Materialize: %v", err)
+	}
+	return root, NewRoot(root)
+}
+
+func containerByID(cs []source.Container, id string) (source.Container, bool) {
+	for _, c := range cs {
+		if c.ID == id {
+			return c, true
+		}
+	}
+	return source.Container{}, false
+}
+
+func TestMaterializeAndRead_RoundTrip(t *testing.T) {
+	t.Parallel()
+	root, ad := materialize(t, fixtureConversations)
+
+	// The tree: one account dir, three transcript files.
+	accDir := filepath.Join(root, fixtureAccount)
+	files, _ := filepath.Glob(filepath.Join(accDir, "*.jsonl"))
+	if len(files) != 3 {
+		t.Fatalf("want 3 transcript files under %s, got %d", accDir, len(files))
+	}
+
+	got, err := ad.Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("Discover: want 3 containers, got %d", len(got))
+	}
+	for _, id := range []string{"c1111111-1111-1111-1111-111111111111", "c2222222-2222-2222-2222-222222222222", "c3333333-3333-3333-3333-333333333333"} {
+		c, ok := containerByID(got, id)
+		if !ok {
+			t.Errorf("missing container %q", id)
+			continue
+		}
+		if c.CWD != "" || c.IsSubagent || c.ParentID != "" {
+			t.Errorf("container %q malformed: %+v", id, c)
+		}
+	}
+
+	// c1: role mapping + text.
+	c1, _ := containerByID(got, "c1111111-1111-1111-1111-111111111111")
+	m1, err := ad.Messages(c1)
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	if len(m1) != 2 || m1[0].Role != "user" || m1[0].Text != "where did we land on auth" || m1[1].Role != "assistant" {
+		t.Errorf("c1 messages wrong: %+v", m1)
+	}
+	if m1[0].UUID != "m1" || m1[0].TSISO != "2026-07-15T10:00:00Z" || m1[0].TS == 0 {
+		t.Errorf("c1 msg[0] identity/ts wrong: %+v", m1[0])
+	}
+
+	// c2: parse block reuse + uuid dedup (m5 twice → 3 messages).
+	c2, _ := containerByID(got, "c2222222-2222-2222-2222-222222222222")
+	m2, _ := ad.Messages(c2)
+	if len(m2) != 3 {
+		t.Fatalf("c2: want 3 messages after uuid dedup, got %d: %+v", len(m2), m2)
+	}
+	for _, marker := range []string{"[THINKING]", "[TOOL:bash]", "running the migration now"} {
+		if !strings.Contains(m2[1].Text, marker) {
+			t.Errorf("c2 assistant text %q missing %q (parse block reuse)", m2[1].Text, marker)
+		}
+	}
+	if !strings.Contains(m2[2].Text, "[TOOL_RESULT]") {
+		t.Errorf("c2 tool_result not flattened: %q", m2[2].Text)
+	}
+
+	// c3: created_at order.
+	c3, _ := containerByID(got, "c3333333-3333-3333-3333-333333333333")
+	m3, _ := ad.Messages(c3)
+	if len(m3) != 2 || m3[0].Text != "first" || m3[1].Text != "second" {
+		t.Errorf("c3 not in created_at order: %+v", m3)
+	}
+}
+
+// TestContentBlocksVerbatim: the materialized file stores the export's content
+// blocks VERBATIM (thinking/tool_use/tool_result), so the rebuilt index is
+// byte-identical.
+func TestContentBlocksVerbatim(t *testing.T) {
+	t.Parallel()
+	root, _ := materialize(t, fixtureConversations)
+	data, err := os.ReadFile(filepath.Join(root, fixtureAccount, "c2222222-2222-2222-2222-222222222222.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	for _, block := range []string{`"thinking"`, `"tool_use"`, `"tool_result"`, `"bash"`, "migrate up"} {
+		if !strings.Contains(body, block) {
+			t.Errorf("materialized transcript missing verbatim block content %q", block)
+		}
+	}
+}
+
+// TestPerAccountTree: a two-account export materializes into two account dirs,
+// each conversation routed to its own account.
+func TestPerAccountTree(t *testing.T) {
+	t.Parallel()
+	const twoAccounts = `[
+	  {"uuid":"a1","account":{"uuid":"aaaa0000-1111-2222-3333-444444444444"},"chat_messages":[{"uuid":"ma","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"account A"}]}]},
+	  {"uuid":"b1","account":{"uuid":"bbbb0000-5555-6666-7777-888888888888"},"chat_messages":[{"uuid":"mb","sender":"human","created_at":"2026-07-16T10:00:00Z","content":[{"type":"text","text":"account B"}]}]}
+	]`
+	root, ad := materialize(t, twoAccounts)
+
+	for _, acc := range []string{"aaaa0000-1111-2222-3333-444444444444", "bbbb0000-5555-6666-7777-888888888888"} {
+		if _, err := os.Stat(filepath.Join(root, acc)); err != nil {
+			t.Errorf("account dir %q missing: %v", acc, err)
+		}
+	}
+	got, _ := ad.Discover()
+	if len(got) != 2 {
+		t.Fatalf("want 2 containers across accounts, got %d", len(got))
+	}
+	// AccountDirName routes each container to the right account.
+	for _, c := range got {
+		acc := AccountDirName(c.Path)
+		if (c.ID == "a1" && acc != "aaaa0000-1111-2222-3333-444444444444") ||
+			(c.ID == "b1" && acc != "bbbb0000-5555-6666-7777-888888888888") {
+			t.Errorf("container %q routed to wrong account dir %q", c.ID, acc)
+		}
+	}
+}
+
+// TestMultiBatchMaterialize: a "…-batch-NNNN.zip" import globs the batch set and
+// materializes every conversation.
+func TestMultiBatchMaterialize(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	writeNamedZip(t, dir, "data-acct1-ts-hash-batch-0000.zip",
-		`[{"uuid":"c1","account":{"uuid":"acct1"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"in batch 0"}]}]}]`)
-	writeNamedZip(t, dir, "data-acct1-ts-hash-batch-0001.zip",
-		`[{"uuid":"c2","account":{"uuid":"acct1"},"chat_messages":[{"uuid":"m2","sender":"human","created_at":"2026-07-16T10:00:00Z","content":[{"type":"text","text":"in batch 1"}]}]}]`)
-	// A sibling non-batch zip must NOT be pulled in.
+	writeNamedZip(t, dir, "data-a-ts-h-batch-0000.zip",
+		`[{"uuid":"c1","account":{"uuid":"aaaa0000-1111-2222-3333-444444444444"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"batch 0"}]}]}]`)
+	writeNamedZip(t, dir, "data-a-ts-h-batch-0001.zip",
+		`[{"uuid":"c2","account":{"uuid":"aaaa0000-1111-2222-3333-444444444444"},"chat_messages":[{"uuid":"m2","sender":"human","created_at":"2026-07-16T10:00:00Z","content":[{"type":"text","text":"batch 1"}]}]}]`)
 	writeNamedZip(t, dir, "unrelated.zip", `[{"uuid":"cX","chat_messages":[]}]`)
 
-	got, err := New(filepath.Join(dir, "data-acct1-ts-hash-batch-0000.zip")).Discover()
-	if err != nil {
-		t.Fatalf("Discover(batch): %v", err)
+	root := t.TempDir()
+	if _, err := Materialize(filepath.Join(dir, "data-a-ts-h-batch-0000.zip"), root, false); err != nil {
+		t.Fatalf("Materialize(batch): %v", err)
 	}
+	got, _ := NewRoot(root).Discover()
 	ids := map[string]bool{}
 	for _, c := range got {
 		ids[c.ID] = true
 	}
 	if len(got) != 2 || !ids["c1"] || !ids["c2"] {
-		t.Fatalf("multi-batch import = %v, want exactly {c1,c2} from both batches", ids)
+		t.Fatalf("multi-batch materialized = %v, want {c1,c2}", ids)
 	}
 	if ids["cX"] {
-		t.Error("an unrelated sibling zip was pulled into the batch import")
+		t.Error("unrelated sibling zip pulled into the batch import")
 	}
 }
 
-// TestMalformedMidStreamErrorsNoPartial: a conversations.json that goes bad
-// partway through is a clear error and yields NO containers (no partial load →
-// no partial write downstream, since Discover errors before any db is opened).
-func TestMalformedMidStreamErrorsNoPartial(t *testing.T) {
+// TestMalformedNoPartial: a malformed export errors and leaves the tree
+// UNTOUCHED (staged writes never committed).
+func TestMalformedNoPartial(t *testing.T) {
 	t.Parallel()
-	dir := writeDirExport(t, `[{"uuid":"c1","chat_messages":[]},{"uuid":`)
-	got, err := New(dir).Discover()
+	root := t.TempDir()
+	_, err := Materialize(writeDirExport(t, `[{"uuid":"c1","account":{"uuid":"a"},"chat_messages":[]},{"uuid":`), root, false)
 	if err == nil {
-		t.Fatal("a malformed conversation mid-stream must error")
+		t.Fatal("malformed export must error")
 	}
-	if got != nil {
-		t.Errorf("a malformed export must yield no containers (no partial), got %+v", got)
+	// No account dirs committed (only the temp staging, which is removed).
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".import-") {
+			t.Errorf("malformed import left a committed entry %q (partial write)", e.Name())
+		}
 	}
 }
 
-// TestUsersJSONNeverRead: the adapter reads ONLY conversations.json — a
-// users.json (name/email/phone) beside it is never opened, so its PII can't
-// reach the index. The account axis reads the opaque account uuid only.
+// TestEmptyAccountRefusedUnderMirror: an account-less export is refused under
+// mirror (no write) and allowed under keep (materialized into the "unknown"
+// account dir).
+func TestEmptyAccountRefusedUnderMirror(t *testing.T) {
+	t.Parallel()
+	body := `[{"uuid":"c1","chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"no account"}]}]}]`
+
+	t.Run("mirror refuses", func(t *testing.T) {
+		root := t.TempDir()
+		if _, err := Materialize(writeDirExport(t, body), root, true); err == nil {
+			t.Fatal("account-less export under mirror must be refused")
+		}
+		if entries, _ := os.ReadDir(root); hasCommitted(entries) {
+			t.Error("refused import left committed files")
+		}
+	})
+	t.Run("keep allows into unknown", func(t *testing.T) {
+		root := t.TempDir()
+		if _, err := Materialize(writeDirExport(t, body), root, false); err != nil {
+			t.Fatalf("account-less under keep must be allowed: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(root, "unknown", "c1.jsonl")); err != nil {
+			t.Errorf("account-less conversation not materialized under 'unknown': %v", err)
+		}
+	})
+}
+
+func hasCommitted(entries []os.DirEntry) bool {
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), ".import-") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestUsersJSONNeverRead: a users.json beside conversations.json is never read,
+// so its PII never reaches a materialized transcript.
 func TestUsersJSONNeverRead(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "users.json"),
-		[]byte(`[{"uuid":"u1","email_address":"secret@example.com","full_name":"Jane Secret","phone_number":"+15550001111"}]`), 0o644); err != nil {
+		[]byte(`[{"email_address":"secret@example.com","full_name":"Jane Secret","phone_number":"+15550001111"}]`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, conversationsFile),
-		[]byte(`[{"uuid":"c1","account":{"uuid":"acct-abc"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"hello world"}]}]}]`), 0o644); err != nil {
+		[]byte(`[{"uuid":"c1","account":{"uuid":"acc00009-0000-0000-0000-000000000000"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"hello"}]}]}]`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ad := New(dir)
-	msgs, err := ad.Messages(source.Container{ID: "c1"})
+	root := t.TempDir()
+	if _, err := Materialize(dir, root, false); err != nil {
+		t.Fatalf("Materialize: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "acc00009-0000-0000-0000-000000000000", "c1.jsonl"))
 	if err != nil {
-		t.Fatalf("Messages: %v", err)
+		t.Fatal(err)
 	}
-	for _, m := range msgs {
-		for _, pii := range []string{"secret@example.com", "Jane Secret", "+15550001111"} {
-			if contains(m.Text, pii) {
-				t.Errorf("users.json PII %q leaked into a message: %q", pii, m.Text)
-			}
+	for _, pii := range []string{"secret@example.com", "Jane Secret", "+15550001111"} {
+		if strings.Contains(string(data), pii) {
+			t.Errorf("PII %q leaked into a materialized transcript", pii)
 		}
-	}
-	acct, err := ad.Account()
-	if err != nil || acct != "acct-abc" {
-		t.Errorf("Account() = (%q,%v), want (acct-abc,nil)", acct, err)
 	}
 }
 
-// TestBranchedConversationCreatedAtOrder: a branched conversation
-// (parent_message_uuid present, an edited/regenerated turn) indexes ALL messages
-// in created_at order — no tree walk, matching CLI precedent.
-func TestBranchedConversationCreatedAtOrder(t *testing.T) {
+// TestBranchedCreatedAtOrder: a branched conversation (parent_message_uuid) is
+// materialized + read with ALL messages in created_at order (no tree walk).
+func TestBranchedCreatedAtOrder(t *testing.T) {
 	t.Parallel()
-	dir := writeDirExport(t, `[{"uuid":"c1","chat_messages":[
+	body := `[{"uuid":"c1","account":{"uuid":"acc00003-0000-0000-0000-000000000000"},"chat_messages":[
 	  {"uuid":"m3","sender":"assistant","created_at":"2026-07-15T10:00:30Z","parent_message_uuid":"m1","content":[{"type":"text","text":"branch two"}]},
 	  {"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","parent_message_uuid":"root","content":[{"type":"text","text":"root turn"}]},
 	  {"uuid":"m2","sender":"assistant","created_at":"2026-07-15T10:00:15Z","parent_message_uuid":"m1","content":[{"type":"text","text":"branch one"}]}
-	]}]`)
-	msgs, err := New(dir).Messages(source.Container{ID: "c1"})
-	if err != nil {
-		t.Fatalf("Messages: %v", err)
-	}
+	]}]`
+	_, ad := materialize(t, body)
+	got, _ := ad.Discover()
+	msgs, _ := ad.Messages(got[0])
 	want := []string{"root turn", "branch one", "branch two"}
-	if len(msgs) != len(want) {
-		t.Fatalf("want %d messages (all branches), got %d: %+v", len(want), len(msgs), msgs)
+	if len(msgs) != 3 {
+		t.Fatalf("want 3 messages, got %d: %+v", len(msgs), msgs)
 	}
 	for i, w := range want {
 		if msgs[i].Text != w {
@@ -224,134 +332,89 @@ func TestBranchedConversationCreatedAtOrder(t *testing.T) {
 	}
 }
 
-func TestDiscoverDirExport(t *testing.T) {
+// TestDiscoverEmptyRootNotError: an absent transcript root yields no containers,
+// not an error.
+func TestDiscoverEmptyRootNotError(t *testing.T) {
 	t.Parallel()
-	dir := writeDirExport(t, fixtureConversations)
-	got, err := New(dir).Discover()
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("want 3 containers, got %d: %+v", len(got), got)
-	}
-	wantIDs := map[string]bool{
-		"c1111111-1111-1111-1111-111111111111": true,
-		"c2222222-2222-2222-2222-222222222222": true,
-		"c3333333-3333-3333-3333-333333333333": true,
-	}
-	for _, c := range got {
-		if !wantIDs[c.ID] {
-			t.Errorf("unexpected container id %q (want the bare conversation uuid, no source prefix)", c.ID)
-		}
-		if c.CWD != "" {
-			t.Errorf("container %q CWD = %q, want empty (export drops the working dir)", c.ID, c.CWD)
-		}
-		if c.IsSubagent || c.ParentID != "" {
-			t.Errorf("container %q must be a root session, got IsSubagent=%v ParentID=%q", c.ID, c.IsSubagent, c.ParentID)
-		}
-		// Path is a stable synthetic per-conversation key, not the transient
-		// export file, so a re-import reconciles on conversation identity.
-		if want := "claude-web:" + c.ID; c.Path != want {
-			t.Errorf("container %q Path = %q, want synthetic key %q", c.ID, c.Path, want)
-		}
+	got, err := NewRoot(filepath.Join(t.TempDir(), "nope")).Discover()
+	if err != nil || len(got) != 0 {
+		t.Errorf("empty root: got (%d, %v), want (0, nil)", len(got), err)
 	}
 }
 
-func TestDiscoverZipExport(t *testing.T) {
+// TestMergeNeverDrops is the raw-archive keep-everything guarantee: re-importing
+// a SMALLER export of the same conversation must NOT drop a message a prior
+// import wrote — the transcript is MERGED (union by identity), never overwritten.
+func TestMergeNeverDrops(t *testing.T) {
 	t.Parallel()
-	// Nested under a top-level dir, as a real export ZIP lays it out.
-	zp := writeZipExport(t, fixtureConversations, "data-export/"+conversationsFile)
-	got, err := New(zp).Discover()
-	if err != nil {
-		t.Fatalf("Discover(zip): %v", err)
+	root := t.TempDir()
+	acc := `"account":{"uuid":"acc00007-0000-0000-0000-000000000000"}`
+	// Import 1: c1 has m1 + m2.
+	full := `[{"uuid":"c1",` + acc + `,"chat_messages":[` +
+		`{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"first turn"}]},` +
+		`{"uuid":"m2","sender":"assistant","created_at":"2026-07-15T10:00:30Z","content":[{"type":"text","text":"second turn"}]}]}]`
+	if _, err := Materialize(writeDirExport(t, full), root, false); err != nil {
+		t.Fatalf("import 1: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("want 3 containers from zip, got %d", len(got))
+	// Import 2: a SMALLER export of c1 with only m1.
+	smaller := `[{"uuid":"c1",` + acc + `,"chat_messages":[` +
+		`{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"first turn"}]}]}]`
+	if _, err := Materialize(writeDirExport(t, smaller), root, false); err != nil {
+		t.Fatalf("import 2: %v", err)
 	}
-	for _, c := range got {
-		if want := "claude-web:" + c.ID; c.Path != want {
-			t.Errorf("zip-backed container Path = %q, want synthetic key %q", c.Path, want)
+	// The transcript still holds BOTH messages.
+	got, _ := NewRoot(root).Discover()
+	if len(got) != 1 {
+		t.Fatalf("want 1 conversation, got %d", len(got))
+	}
+	msgs, _ := NewRoot(root).Messages(got[0])
+	if len(msgs) != 2 {
+		t.Errorf("merge dropped a message: got %d, want 2 (m1+m2 preserved): %+v", len(msgs), msgs)
+	}
+}
+
+// TestReconcileMirrorPrunesAbsentFresh + staleness: under mirror, a FRESHER
+// export that omits a conversation deletes its transcript; a STALE export never
+// prunes.
+func TestReconcileMirror(t *testing.T) {
+	t.Parallel()
+	acc := "acc00008-0000-0000-0000-000000000000"
+
+	twoConvs := `[` +
+		`{"uuid":"c1","updated_at":"2026-07-15T10:00:00Z","account":{"uuid":"` + acc + `"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"keep"}]}]},` +
+		`{"uuid":"c2","updated_at":"2026-07-15T10:00:00Z","account":{"uuid":"` + acc + `"},"chat_messages":[{"uuid":"m2","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"maybe pruned"}]}]}]`
+	oneConvFresh := `[{"uuid":"c1","updated_at":"2026-07-20T10:00:00Z","account":{"uuid":"` + acc + `"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-20T10:00:00Z","content":[{"type":"text","text":"keep"}]}]}]`
+	oneConvStale := `[{"uuid":"c1","updated_at":"2026-07-10T10:00:00Z","account":{"uuid":"` + acc + `"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-10T10:00:00Z","content":[{"type":"text","text":"keep"}]}]}]`
+
+	reconcile := func(t *testing.T, root, body string) {
+		res, err := Materialize(writeDirExport(t, body), root, true)
+		if err != nil {
+			t.Fatalf("materialize: %v", err)
+		}
+		for _, ai := range res.Accounts {
+			if err := Reconcile(ai, true); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
 		}
 	}
-}
+	c2File := func(root string) string { return filepath.Join(root, acc, "c2.jsonl") }
 
-func TestNewestUpdatedAt(t *testing.T) {
-	t.Parallel()
-	ad := New(writeDirExport(t, fixtureConversations))
-	got, err := ad.NewestUpdatedAt()
-	if err != nil {
-		t.Fatalf("NewestUpdatedAt: %v", err)
-	}
-	// c3's updated_at 2026-07-17T08:10:00Z is the newest across the fixture.
-	want := parse.ISOToEpoch("2026-07-17T08:10:00Z")
-	if got != want {
-		t.Errorf("NewestUpdatedAt() = %v, want %v (the newest conversation updated_at)", got, want)
-	}
-	// Empty export -> 0 (no staleness signal).
-	empty := New(writeDirExport(t, "[]"))
-	if z, err := empty.NewestUpdatedAt(); err != nil || z != 0 {
-		t.Errorf("NewestUpdatedAt(empty) = (%v,%v), want (0,nil)", z, err)
-	}
-}
-
-func TestMessagesRoleMappingAndText(t *testing.T) {
-	t.Parallel()
-	ad := New(writeDirExport(t, fixtureConversations))
-	got, err := ad.Messages(source.Container{ID: "c1111111-1111-1111-1111-111111111111"})
-	if err != nil {
-		t.Fatalf("Messages: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("want 2 messages, got %d: %+v", len(got), got)
-	}
-	if got[0].Role != "user" || got[0].Text != "where did we land on auth" {
-		t.Errorf("msg[0] = (%q,%q), want (user, where did we land on auth)", got[0].Role, got[0].Text)
-	}
-	if got[1].Role != "assistant" || got[1].Text != "we chose short-lived tokens" {
-		t.Errorf("msg[1] = (%q,%q), want (assistant, we chose short-lived tokens)", got[1].Role, got[1].Text)
-	}
-	if got[0].UUID != "m1" || got[0].TSISO != "2026-07-15T10:00:00Z" || got[0].TS == 0 {
-		t.Errorf("msg[0] identity/timestamp wrong: %+v", got[0])
-	}
-}
-
-// The typed content blocks must flow through the SHARED internal/parse handling,
-// producing the same [THINKING]/[TOOL:...]/[TOOL_RESULT] markers the CLI source
-// gets — and a duplicate message.uuid must be collapsed.
-func TestMessagesReuseParseBlocksAndDedup(t *testing.T) {
-	t.Parallel()
-	ad := New(writeDirExport(t, fixtureConversations))
-	got, err := ad.Messages(source.Container{ID: "c2222222-2222-2222-2222-222222222222"})
-	if err != nil {
-		t.Fatalf("Messages: %v", err)
-	}
-	// m3, m4, m5 — the duplicate m5 is deduped away.
-	if len(got) != 3 {
-		t.Fatalf("want 3 messages after uuid dedup, got %d: %+v", len(got), got)
-	}
-	assistant := got[1]
-	for _, marker := range []string{"[THINKING]", "[TOOL:bash]", "running the migration now"} {
-		if !contains(assistant.Text, marker) {
-			t.Errorf("assistant text %q missing %q (parse block reuse)", assistant.Text, marker)
+	t.Run("fresher export prunes the absent conversation", func(t *testing.T) {
+		root := t.TempDir()
+		reconcile(t, root, twoConvs)     // establishes c1,c2 (watermark 07-15)
+		reconcile(t, root, oneConvFresh) // fresher (07-20), c2 absent → pruned
+		if _, err := os.Stat(c2File(root)); !os.IsNotExist(err) {
+			t.Error("c2 not pruned under mirror by a fresher export")
 		}
-	}
-	if !contains(got[2].Text, "[TOOL_RESULT]") || !contains(got[2].Text, "migration applied cleanly") {
-		t.Errorf("tool_result text not flattened via parse: %q", got[2].Text)
-	}
-}
-
-// Messages must come out in created_at order even when the export lists them
-// out of order.
-func TestMessagesOrderedByCreatedAt(t *testing.T) {
-	t.Parallel()
-	ad := New(writeDirExport(t, fixtureConversations))
-	got, err := ad.Messages(source.Container{ID: "c3333333-3333-3333-3333-333333333333"})
-	if err != nil {
-		t.Fatalf("Messages: %v", err)
-	}
-	if len(got) != 2 || got[0].Text != "first" || got[1].Text != "second" {
-		t.Fatalf("messages not ordered by created_at: %+v", got)
-	}
+	})
+	t.Run("stale export does not prune", func(t *testing.T) {
+		root := t.TempDir()
+		reconcile(t, root, twoConvs)     // watermark 07-15
+		reconcile(t, root, oneConvStale) // STALE (07-10), c2 absent → must KEEP
+		if _, err := os.Stat(c2File(root)); err != nil {
+			t.Errorf("c2 pruned by a STALE export (staleness guard failed): %v", err)
+		}
+	})
 }
 
 func TestMapSender(t *testing.T) {
@@ -360,136 +423,6 @@ func TestMapSender(t *testing.T) {
 	for in, want := range cases {
 		if got := mapSender(in); got != want {
 			t.Errorf("mapSender(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-// A directory with no conversations.json is a real error (a user pointed import
-// at the wrong place) — never a silent empty import.
-func TestMissingConversationsIsError(t *testing.T) {
-	t.Parallel()
-	empty := t.TempDir()
-	if _, err := New(empty).Discover(); err == nil {
-		t.Fatal("Discover on a dir without conversations.json must error")
-	}
-}
-
-// A ZIP that is not a Claude export (no conversations.json member) is a clear
-// error, not a no-op.
-func TestNonClaudeZipIsError(t *testing.T) {
-	t.Parallel()
-	zp := writeZipExport(t, "irrelevant", "some/other-file.json")
-	if _, err := New(zp).Discover(); err == nil {
-		t.Fatal("Discover on a zip without conversations.json must error")
-	}
-}
-
-// A conversations.json body that is not a JSON array is a clear error.
-func TestMalformedConversationsIsError(t *testing.T) {
-	t.Parallel()
-	dir := writeDirExport(t, `{"not":"an array"}`)
-	if _, err := New(dir).Discover(); err == nil {
-		t.Fatal("Discover on a non-array conversations.json must error")
-	}
-}
-
-// An empty conversation array is NOT an error — it is a valid (if empty) export.
-func TestEmptyArrayIsNotError(t *testing.T) {
-	t.Parallel()
-	dir := writeDirExport(t, `[]`)
-	got, err := New(dir).Discover()
-	if err != nil {
-		t.Fatalf("empty array must not error: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("want 0 containers for an empty export, got %d", len(got))
-	}
-}
-
-// Account reads the export's opaque account uuid (the reconciliation axis),
-// never the account's email/name (PII).
-func TestAccount(t *testing.T) {
-	t.Parallel()
-	const withAccount = `[
-  {"uuid":"c9","created_at":"2026-07-15T10:00:00Z","account":{"uuid":"acct-xyz","email_address":"secret@example.com"},
-   "chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"hi"}]}]}
-]`
-	got, err := New(writeDirExport(t, withAccount)).Account()
-	if err != nil {
-		t.Fatalf("Account: %v", err)
-	}
-	if got != "acct-xyz" {
-		t.Errorf("Account() = %q, want %q", got, "acct-xyz")
-	}
-	// An export with no account block yields "" (not an error).
-	if a, err := New(writeDirExport(t, `[{"uuid":"c1","chat_messages":[]}]`)).Account(); err != nil || a != "" {
-		t.Errorf("Account(no account block) = (%q,%v), want (\"\",nil)", a, err)
-	}
-}
-
-// PII guard: nothing from a users.json / account block is read into a message.
-// Here the export carries an account object on the conversation; the indexed
-// messages must contain only the transcript text, never the account email.
-func TestNoAccountPIILeaksIntoMessages(t *testing.T) {
-	t.Parallel()
-	const withAccount = `[
-  {"uuid":"c9","name":"n","created_at":"2026-07-15T10:00:00Z",
-   "account":{"uuid":"acct-1","email_address":"secret@example.com"},
-   "chat_messages":[
-     {"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z",
-      "content":[{"type":"text","text":"hello world"}]}
-   ]}
-]`
-	ad := New(writeDirExport(t, withAccount))
-	got, err := ad.Messages(source.Container{ID: "c9"})
-	if err != nil {
-		t.Fatalf("Messages: %v", err)
-	}
-	for _, m := range got {
-		if contains(m.Text, "secret@example.com") {
-			t.Errorf("account email leaked into an indexed message: %q", m.Text)
-		}
-	}
-}
-
-// contains is a tiny substring helper (avoids importing strings just for this).
-func contains(haystack, needle string) bool {
-	return len(needle) == 0 || indexOf(haystack, needle) >= 0
-}
-
-func indexOf(haystack, needle string) int {
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
-}
-
-// Guard the fixture stays deterministic: the discovery order equals the file
-// order, independent of map iteration.
-func TestDiscoverOrderIsFileOrder(t *testing.T) {
-	t.Parallel()
-	ad := New(writeDirExport(t, fixtureConversations))
-	got, err := ad.Discover()
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
-	ids := make([]string, len(got))
-	for i, c := range got {
-		ids[i] = c.ID
-	}
-	want := []string{
-		"c1111111-1111-1111-1111-111111111111",
-		"c2222222-2222-2222-2222-222222222222",
-		"c3333333-3333-3333-3333-333333333333",
-	}
-	if !sort.StringsAreSorted(ids) { // fixture uuids are ascending, so file order == sorted
-		t.Errorf("discovery order not file order: %v", ids)
-	}
-	for i := range want {
-		if ids[i] != want[i] {
-			t.Errorf("discovery order[%d] = %q, want %q", i, ids[i], want[i])
 		}
 	}
 }

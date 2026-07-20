@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
-	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/claudeweb"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
@@ -280,6 +279,7 @@ func emptyStore(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", filepath.Join(home, "nocodex"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, "xdg-data")) // isolate the claude-web transcript root
 	return home
 }
 
@@ -317,15 +317,10 @@ func TestAll_ImportedClaudeWebDoesNotLeakAcrossSources(t *testing.T) {
 	emptyStore(t)
 	ctx := context.Background()
 
-	// Seed one account's claude-web db as `rawclaw import` would (one conversation).
+	// Seed one account's claude-web cache db as `rawclaw import` now does
+	// (materialize → index the transcripts via the standard container path).
 	const account = "a1b2c3d4-1111-2222-3333-444455556666"
-	cs := []source.Container{{ID: "conv-1"}}
-	msgs := func(source.Container) ([]model.Message, error) {
-		return []model.Message{{Role: "user", Text: "cloud beacon token", TS: 1, TSISO: "2026-07-15T10:00:00Z", UUID: "m1"}}, nil
-	}
-	if _, err := index.ImportClaudeWeb(ClaudeWebDBPath(account), cs, msgs, claudeweb.ID, account, 100); err != nil {
-		t.Fatalf("seed claude-web db: %v", err)
-	}
+	seedAccount(t, account)
 
 	// --source claude-web: exactly the one imported account scope.
 	cw := All(ctx, claudeweb.ID, false)

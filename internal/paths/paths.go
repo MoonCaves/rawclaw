@@ -35,6 +35,20 @@ func ProjectsRoot() string {
 	return expandHome("~/.claude/projects")
 }
 
+// ClaudeWebRoot is the durable home for imported Claude cloud transcripts — the
+// claude-web source's RAW truth: one JSONL per conversation under a per-account
+// subdir (<root>/<account>/<conversation-uuid>.jsonl). It lives in the XDG DATA
+// dir, NOT the disposable cache (which holds only rebuildable index dbs):
+// $XDG_DATA_HOME/rawclaw/claude-web, else ~/.local/share/rawclaw/claude-web.
+// Like ConfigDir, it resolves the path without requiring it to exist yet (the
+// importer creates it).
+func ClaudeWebRoot() string {
+	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
+		return filepath.Join(x, "rawclaw", "claude-web")
+	}
+	return expandHome("~/.local/share/rawclaw/claude-web")
+}
+
 // ConfigDir returns the Claude Code config dir: $CLAUDE_CONFIG_DIR if set, else
 // ~/.claude. Unlike ProjectsRoot, this never requires the dir to already exist —
 // a writer (e.g. `rawclaw setup`, which creates settings.json and the hooks dir
