@@ -4,6 +4,17 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-07-21
+
+### Changed
+
+- **`archive init` help now steers you to a remote.** `rawclaw archive init --help` explains the
+  choice a first-time user actually faces: a bare repo over SSH on a box you control is the most
+  private option (transcripts never leave your network, nothing to encrypt); a private
+  GitHub/GitLab/Gitea repo is convenient but stores transcripts **unencrypted**, so it must stay
+  private. It also notes that adding a second machine is the same `init` command, and that machines
+  sharing a hostname need a distinct `--name`. Help text only — no behavior change.
+
 ## [0.7.0] — 2026-07-20
 
 ### Added
