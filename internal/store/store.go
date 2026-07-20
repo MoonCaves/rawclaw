@@ -19,13 +19,13 @@ import (
 // for the durable-retention columns (origin_machine/source_tool/source_path/
 // missing_since): a bump forces Rebuild() to re-walk the live tree and re-prune
 // every already-retained session, defeating retention on the first upgrade. Those
-// columns are added in place by index's migrateDurabilityColumns (D6) instead.
+// columns are added in place by index's migrateDurabilityColumns instead.
 const SchemaVersion = 4
 
 // Schema is the base (non-FTS) DDL. The sessions provenance/retention columns
 // (origin_machine/source_tool/source_path/missing_since) are present here so a
 // fresh or rebuilt db carries them from the start; an existing current-version db
-// gets them via index's in-place migrateDurabilityColumns migration (D6).
+// gets them via index's in-place migrateDurabilityColumns migration.
 const Schema = `
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY, started_at REAL, last_ts REAL,
@@ -71,7 +71,15 @@ DROP TABLE IF EXISTS file_index;`
 // Schema/FTSSQL/dropSQL, so a keyword reindex can't nuke topic rows. Topic rows
 // are keyed by the source-stable message uuid (start_uuid/end_uuid), so they
 // re-map losslessly after a base reindex churns the integer msg ids.
-const TopicSchemaVersion = 1
+//
+// v2 (tags-ride-the-archive): topic_segment gains origin_machine
+// (per-machine attribution for the cross-machine LWW ingest) and a new
+// session_verdict sidecar (the routine verdict + its floor|agent source) joins
+// the gate. Bumping re-runs EnsureTopicSchema, which adds the column in place
+// (PRAGMA-guarded ALTER) and creates session_verdict — NOT a base rebuild, so no
+// transcript re-walk. Like the durability columns, existing NULL-origin rows are
+// this machine's and backfill to MachineID().
+const TopicSchemaVersion = 2
 
 // EnsureTopicSchema creates the topic sidecar (its own gate, separate from the
 // keyword schema) and stamps the topic_schema_version meta key. Idempotent.
@@ -87,7 +95,7 @@ func EnsureTopicSchema(con *sql.DB) error {
 CREATE TABLE IF NOT EXISTS topic_segment (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id TEXT NOT NULL, start_uuid TEXT NOT NULL, end_uuid TEXT,
-  topic TEXT, summary TEXT, tagged_at REAL,
+  topic TEXT, summary TEXT, tagged_at REAL, origin_machine TEXT,
   UNIQUE(session_id, start_uuid)
 );
 CREATE INDEX IF NOT EXISTS idx_topic_session ON topic_segment(session_id);
@@ -101,9 +109,25 @@ END;
 CREATE TRIGGER IF NOT EXISTS topic_au AFTER UPDATE ON topic_segment BEGIN
   INSERT INTO topic_fts(topic_fts, rowid, topic, summary) VALUES ('delete', old.id, old.topic, old.summary);
   INSERT INTO topic_fts(rowid, topic, summary) VALUES (new.id, new.topic, new.summary);
-END;`
+END;
+CREATE TABLE IF NOT EXISTS session_verdict (
+  session_id TEXT PRIMARY KEY,
+  verdict TEXT NOT NULL, source TEXT NOT NULL,
+  origin_machine TEXT, tagged_at REAL
+);`
 	if _, err := con.Exec(topicDDL); err != nil {
 		return fmt.Errorf("create topic schema: %w", err)
+	}
+	// v1→v2 in-place migration: topic_segment predating v2 lacks origin_machine
+	// (the IF NOT EXISTS DDL above leaves an existing table untouched). Add it
+	// PRAGMA-guarded — pure DDL, no provenance. Existing rows keep origin_machine
+	// NULL; a NULL origin is interpreted as "this machine" at export (cross-machine
+	// tags only ever arrive via the explicit-origin ingest path, which always stamps
+	// a non-NULL id), so no provenance-dependent backfill belongs at this layer —
+	// store imports no internal package, matching migrateDurabilityColumns living
+	// in index, not here.
+	if err := migrateTopicOriginColumn(con); err != nil {
+		return err
 	}
 	if _, err := con.Exec(
 		"INSERT OR REPLACE INTO meta(key,value) VALUES('topic_schema_version',?)",
@@ -114,9 +138,55 @@ END;`
 	return nil
 }
 
+// migrateTopicOriginColumn adds topic_segment.origin_machine in place when an
+// existing (v1) table lacks it. Pure, idempotent DDL: a fresh/v2 db already
+// carries the column via the DDL above, so the guard skips the ALTER. No
+// provenance backfill here — see EnsureTopicSchema.
+func migrateTopicOriginColumn(con *sql.DB) error {
+	have, err := columnSet(con, "topic_segment")
+	if err != nil {
+		return err
+	}
+	if _, ok := have["origin_machine"]; !ok {
+		if _, err := con.Exec("ALTER TABLE topic_segment ADD COLUMN origin_machine TEXT"); err != nil {
+			return fmt.Errorf("add topic_segment.origin_machine: %w", err)
+		}
+	}
+	return nil
+}
+
+// columnSet returns the column names of a table via PRAGMA table_info — the
+// guard for additive ALTER TABLE migrations.
+func columnSet(con *sql.DB, table string) (map[string]struct{}, error) {
+	rows, err := con.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return nil, fmt.Errorf("read %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     string
+			notNull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return nil, fmt.Errorf("scan %s column: %w", table, err)
+		}
+		out[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s columns: %w", table, err)
+	}
+	return out, nil
+}
+
 // CacheDir returns the session-search state dir (<cacheHome>/session-search),
 // creating it. It holds the per-project index dbs, the tombstone sidecar, and the
-// machine-id file — and is the discovery surface for orphaned-source dbs (D8).
+// machine-id file — and is the discovery surface for orphaned-source dbs.
 func CacheDir() string {
 	d := filepath.Join(cacheHome(), "session-search")
 	_ = os.MkdirAll(d, 0o755) // best-effort; ignore an existing dir
@@ -153,7 +223,7 @@ func Rebuild(con *sql.DB) error {
 // ConnectRO opens dbp in read-only mode (file:<dbp>?mode=ro). Exported so
 // sibling packages can reuse it.
 //
-// SINGLE-CONN DISCIPLINE (D3): the pool is capped at ONE connection, so a
+// SINGLE-CONN DISCIPLINE: the pool is capped at ONE connection, so a
 // caller MUST fully drain + close a result set (rows.Close) before issuing the
 // next query on the same *sql.DB. Interleaving — opening a second query while
 // rows from the first are still open — blocks forever waiting for a second
@@ -169,9 +239,9 @@ func ConnectRO(dbp string) (*sql.DB, error) {
 }
 
 // ConnectRW opens dbp read-write with WAL + a 10s busy timeout, single-writer.
-// (10s is the D2 unification: the superset of index's old 5s and cli's 10s.)
+// (10s is the unification of index's old 5s and cli's 10s timeouts.)
 //
-// SINGLE-CONN DISCIPLINE (D3): the pool is capped at ONE connection, so a
+// SINGLE-CONN DISCIPLINE: the pool is capped at ONE connection, so a
 // caller MUST fully drain + close a result set (rows.Close) before issuing the
 // next query on the same *sql.DB. Interleaving — opening a second query while
 // rows from the first are still open — blocks forever waiting for a second

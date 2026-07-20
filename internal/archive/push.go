@@ -55,6 +55,16 @@ func (a *Archive) PushLocal(ctx context.Context) (PushReport, error) {
 	}
 	rep.Copied = copied
 
+	// Export this machine's tags into <machine>/tags/ — non-derivable
+	// agent labor that must ride the archive like transcripts. Written under our
+	// own dir only, so it stages with the transcript copies below and never
+	// touches a foreign machine's tags. A nil exporter (feature unwired) skips it.
+	taggedFiles, err := a.exportOwnTags()
+	if err != nil {
+		return rep, err
+	}
+	rep.TagFiles = taggedFiles
+
 	removed, err := a.removeTombstoned(ctx, tombs)
 	if err != nil {
 		return rep, err

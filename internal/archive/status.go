@@ -21,14 +21,15 @@ import (
 // indistinguishable, so per-machine state is reported as the honest
 // LastCommit ("last new content") and nothing more.
 type StatusReport struct {
-	Remote      string          // configured remote URL
-	Clone       string          // local clone path
-	CloneOK     bool            // a COMPLETED clone exists (sentinel present — ensureClone's own predicate)
-	LastPush    time.Time       // last successful push sync from this machine, incl. verified no-ops (zero = never)
-	LastPull    time.Time       // last successful pull on this machine (zero = never)
-	PushOverdue bool            // a recorded push sync exists but is older than the window (never ≠ overdue)
-	PullOverdue bool            // a recorded pull exists but is older than the window (never ≠ overdue)
-	Machines    []MachineStatus // one entry per machine dir in the clone, own first
+	Remote       string          // configured remote URL
+	Clone        string          // local clone path
+	CloneOK      bool            // a COMPLETED clone exists (sentinel present — ensureClone's own predicate)
+	LastPush     time.Time       // last successful push sync from this machine, incl. verified no-ops (zero = never)
+	LastPull     time.Time       // last successful pull on this machine (zero = never)
+	PushOverdue  bool            // a recorded push sync exists but is older than the window (never ≠ overdue)
+	PullOverdue  bool            // a recorded pull exists but is older than the window (never ≠ overdue)
+	Machines     []MachineStatus // one entry per machine dir in the clone, own first
+	TagConflicts []string        // sessions whose cross-machine tags disagreed; the winner is deterministic and every side's tag file is retained
 }
 
 // MachineStatus is one machine dir's recorded state in the clone.
@@ -53,6 +54,7 @@ func (a *Archive) Status(ctx context.Context) (StatusReport, error) {
 	now := time.Now()
 	st.PushOverdue = overdueAt(st.LastPush, now)
 	st.PullOverdue = overdueAt(st.LastPull, now)
+	st.TagConflicts = readTagConflicts() // sessions whose cross-machine tags disagreed
 	// Same marker ensureClone stamps and scope enumeration trusts: no
 	// sentinel → not a VERIFIED clone, so status won't vouch for it. (A
 	// structurally complete pre-sentinel clone gets adopted — stamped — by

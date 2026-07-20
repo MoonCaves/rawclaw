@@ -1,4 +1,4 @@
-// Topic query surface (D6): the topic_segment / topic_fts SQL, moved verbatim
+// Topic query surface: the topic_segment / topic_fts SQL, moved verbatim
 // from internal/index so the sidecar's table/column names live beside its DDL
 // (EnsureTopicSchema in store.go). Ingest orchestration stays in index.
 package store
@@ -11,12 +11,16 @@ import (
 
 // TopicSegment is one tagged segment of a session, returned by TopicsForSession
 // for the outline view. Keyed externally by (session_id, start_uuid).
+// OriginMachine records which machine authored the tag (provenance.MachineID of
+// the tagging machine) — the attribution the cross-machine ingest resolves on.
 type TopicSegment struct {
-	SessionID string
-	StartUUID string
-	EndUUID   string
-	Topic     string
-	Summary   string
+	SessionID     string
+	StartUUID     string
+	EndUUID       string
+	Topic         string
+	Summary       string
+	TaggedAt      float64
+	OriginMachine string
 }
 
 // TopicHit is one topic_fts match resolved to the segment's START message id
@@ -29,9 +33,13 @@ type TopicHit struct {
 }
 
 // UpsertTopicSegment inserts or updates one topic segment, keyed by the stable
-// (session_id, start_uuid). The external-content FTS triggers keep topic_fts in
-// sync — except an ON CONFLICT UPDATE fires the AFTER UPDATE trigger, which
-// re-syncs the changed topic/summary.
+// (session_id, start_uuid). This is the AUTHORING path (local tag-write): the
+// local author's intent wins unconditionally. origin_machine is left NULL — a
+// locally-authored tag is "this machine" by construction, and a NULL origin is
+// interpreted as this machine at export; only the cross-machine INGEST
+// path (ReplaceSessionSegments) ever stamps a non-NULL, foreign origin. The
+// external-content FTS triggers keep topic_fts in sync — an ON CONFLICT UPDATE
+// fires the AFTER UPDATE trigger, which re-syncs the changed topic/summary.
 func UpsertTopicSegment(con *sql.DB, sessionID, startUUID, endUUID, topic, summary string, taggedAt float64) error {
 	_, err := con.Exec(`
 INSERT INTO topic_segment(session_id, start_uuid, end_uuid, topic, summary, tagged_at)
@@ -45,12 +53,70 @@ ON CONFLICT(session_id, start_uuid) DO UPDATE SET
 	return nil
 }
 
+// ReplaceSessionSegments is the cross-machine INGEST primitive. It replaces
+// a session's ENTIRE segment set atomically — DELETE the session's rows, then
+// INSERT the incoming set — mirroring index.ReindexFile's per-session atomic
+// replace. This is deliberately NOT a per-segment merge: two independent taggings
+// of one session with different segment boundaries would interleave into a
+// franken-set under per-key union. The session's tagging is ONE authored unit, so
+// it is applied as one unit.
+//
+// WHICH set wins is decided by the caller (archive ingest) via PROVENANCE
+// AUTHORITY — the machine the session's transcript lives under owns its tags —
+// NOT wall-clock: independent authorings differ in QUALITY, not freshness, and a
+// clock cannot rank quality (and skews across machines). This function just
+// applies the chosen set. Idempotent: replacing a set with an identical set is a
+// no-op net of the FTS trigger churn, so re-ingesting the same files converges.
+//
+// segs carry their own OriginMachine (the authoring machine); an empty segs
+// clears the session's segments (the caller does this only when authority says so).
+func ReplaceSessionSegments(con *sql.DB, sessionID string, segs []TopicSegment) error {
+	tx, err := con.Begin()
+	if err != nil {
+		return fmt.Errorf("begin replace segments: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+	if _, err := tx.Exec("DELETE FROM topic_segment WHERE session_id=?", sessionID); err != nil {
+		return fmt.Errorf("clear session segments: %w", err)
+	}
+	for _, s := range segs {
+		if _, err := tx.Exec(
+			`INSERT INTO topic_segment(session_id, start_uuid, end_uuid, topic, summary, tagged_at, origin_machine)
+			 VALUES(?,?,?,?,?,?,?)`,
+			sessionID, s.StartUUID, s.EndUUID, s.Topic, s.Summary, s.TaggedAt, s.OriginMachine,
+		); err != nil {
+			return fmt.Errorf("insert ingested segment: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit replace segments: %w", err)
+	}
+	return nil
+}
+
+// SessionHasRealSegments reports whether a session carries at least one real topic
+// segment (a non-empty topic) — the read-time signal that "a real tag beats
+// routine" (a routine verdict is inert when real segments exist) and the
+// cross-machine authority tie-break "real beats routine/empty". A missing topic
+// table reads as false (no real tags).
+func SessionHasRealSegments(con *sql.DB, sessionID string) (bool, error) {
+	var n int
+	err := con.QueryRow(
+		"SELECT COUNT(*) FROM topic_segment WHERE session_id=? AND topic IS NOT NULL AND topic<>''",
+		sessionID,
+	).Scan(&n)
+	if err != nil {
+		return false, nil // missing table / read error reads as "no real segments"
+	}
+	return n > 0, nil
+}
+
 // TopicsForSession returns the topic segments for one session, ordered by id
 // (insertion order — roughly chronological as the tagger walks the session).
 // Used by the outline view. A missing topic table reads as "no topics".
 func TopicsForSession(con *sql.DB, sessionID string) ([]TopicSegment, error) {
 	rows, err := con.Query(
-		"SELECT session_id, start_uuid, end_uuid, topic, summary FROM topic_segment WHERE session_id=? ORDER BY id",
+		"SELECT session_id, start_uuid, end_uuid, topic, summary, tagged_at, origin_machine FROM topic_segment WHERE session_id=? ORDER BY id",
 		sessionID)
 	if err != nil {
 		return nil, nil // missing table / read error reads as no topics (non-fatal)
@@ -63,17 +129,72 @@ func TopicsForSession(con *sql.DB, sessionID string) ([]TopicSegment, error) {
 			endU    sql.NullString
 			topic   sql.NullString
 			summary sql.NullString
+			at      sql.NullFloat64
+			origin  sql.NullString
 		)
-		if err := rows.Scan(&seg.SessionID, &seg.StartUUID, &endU, &topic, &summary); err != nil {
+		if err := rows.Scan(&seg.SessionID, &seg.StartUUID, &endU, &topic, &summary, &at, &origin); err != nil {
 			return nil, fmt.Errorf("scan topic segment: %w", err)
 		}
 		seg.EndUUID = endU.String
 		seg.Topic = topic.String
 		seg.Summary = summary.String
+		seg.TaggedAt = at.Float64
+		seg.OriginMachine = origin.String
 		out = append(out, seg)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate topic segments: %w", err)
+	}
+	return out, nil
+}
+
+// SessionIDsIn returns every session id present in a db's sessions table — the
+// set the archive tag-ingest walks to attach pulled tags to their message-bearing
+// session. A missing table reads as none (non-fatal).
+func SessionIDsIn(con *sql.DB) ([]string, error) {
+	rows, err := con.Query("SELECT id FROM sessions")
+	if err != nil {
+		return nil, nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan session id: %w", err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session ids: %w", err)
+	}
+	return out, nil
+}
+
+// TaggedSessionIDs returns the distinct session ids that carry ANY tag — a topic
+// segment or a verdict — in this db. The archive-export walk enumerates
+// these to write one tag file per tagged session. Missing tables read as "none"
+// (non-fatal): a db that predates the topic sidecar simply exports no tags.
+func TaggedSessionIDs(con *sql.DB) ([]string, error) {
+	rows, err := con.Query(`
+SELECT session_id FROM topic_segment
+UNION
+SELECT session_id FROM session_verdict
+ORDER BY session_id`)
+	if err != nil {
+		return nil, nil // missing sidecar tables read as no tagged sessions
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return nil, fmt.Errorf("scan tagged session id: %w", err)
+		}
+		out = append(out, sid)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tagged session ids: %w", err)
 	}
 	return out, nil
 }
