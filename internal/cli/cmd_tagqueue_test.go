@@ -191,6 +191,11 @@ func TestSetupInstallsSessionEndHook(t *testing.T) {
 	if !strings.Contains(string(b), "tag-queue add") {
 		t.Errorf("tagqueue.sh does not call `rawclaw tag-queue add`:\n%s", b)
 	}
+	// The transcript-existence gate: an ephemeral session (SessionEnd fired but
+	// no transcript file ever written) must not reach the queue.
+	if !strings.Contains(string(b), `"transcript_path"`) || !strings.Contains(string(b), `-f "$transcript_path"`) {
+		t.Errorf("tagqueue.sh missing the transcript-file existence gate:\n%s", b)
+	}
 
 	data, err := readJSONFile(cf)
 	if err != nil {

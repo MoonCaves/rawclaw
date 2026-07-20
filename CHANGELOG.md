@@ -2,6 +2,17 @@
 
 All notable changes to RawClaw are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **The tagging queue only accepts sessions that produced a transcript.** Claude Code fires
+  SessionEnd for ephemeral sessions too — opened and closed without a message ever landing —
+  which flooded the queue with hundreds of ids per day that nothing could resolve. The
+  SessionEnd hook now checks the `transcript_path` Claude Code hands it and queues only when
+  that file exists on disk. Pure mechanics, no judgment: a real session has a transcript, an
+  ephemeral one doesn't. Re-run `rawclaw setup` to refresh the installed hook script.
+
 ## [0.5.0] — 2026-07-19
 
 ### Added
