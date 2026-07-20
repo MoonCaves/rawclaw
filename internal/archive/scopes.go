@@ -14,6 +14,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/claudeweb"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -62,6 +63,7 @@ func (a *Archive) Scopes(ctx context.Context, reindex bool) []view.Scope {
 		stale := a.dirStale(ctx, m.Name, now)
 		out = append(out, a.claudeScopes(m, stale, reindex, ingest)...)
 		out = append(out, a.codexScopes(m, stale, reindex, ingest)...)
+		out = append(out, a.claudeWebScopes(m, stale, reindex, ingest)...)
 	}
 	// Apply pulled cross-machine tags into the freshly-ingested foreign dbs,
 	// under the sync lock we hold when ingest is true. Self-gates on tag freshness.
@@ -98,6 +100,7 @@ func (a *Archive) LookupScopes() []view.Scope {
 	for _, m := range a.foreignMachines() {
 		out = append(out, a.claudeScopes(m, false, false, false)...)
 		out = append(out, a.codexScopes(m, false, false, false)...)
+		out = append(out, a.claudeWebScopes(m, false, false, false)...)
 	}
 	return out
 }
@@ -270,6 +273,61 @@ func (a *Archive) codexScopes(m manifest, stale, reindex, ingest bool) []view.Sc
 			DBP:        dbp,
 			CWD:        cwd,
 			Source:     "codex",
+			Origin:     m.MachineID,
+			OriginName: m.Name,
+			Stale:      stale,
+		})
+	}
+	return out
+}
+
+// claudeWebScopes enumerates one foreign machine's imported cloud transcripts
+// (<machine>/claude-web/<account>/*.jsonl — the same materialized tree the local
+// adapter reads), groups them by account, and ingests each into its own
+// namespaced db with the machine's identity as origin — the per-account shape the
+// local claude-web enumeration builds. The transcripts are Claude-shaped JSONL,
+// so they index through the standard container path. claude-web transcripts are
+// the ONLY copy of that cloud history, so archive coverage matters most here.
+// ingest=false (LookupScopes) discovers the accounts without writing their dbs.
+func (a *Archive) claudeWebScopes(m manifest, stale, reindex, ingest bool) []view.Scope {
+	root := filepath.Join(a.clone, m.Name, claudeweb.ID)
+	if !isDir(root) {
+		return nil // the machine pushed no claude-web transcripts
+	}
+	ad := claudeweb.NewRoot(root)
+	containers, err := ad.Discover()
+	if err != nil {
+		slog.Warn("archive: foreign claude-web discover failed", "machine", m.Name, "err", err)
+		return nil
+	}
+
+	byAccount := map[string][]source.Container{}
+	for _, c := range containers {
+		acct := claudeweb.AccountDirName(c.Path)
+		byAccount[acct] = append(byAccount[acct], c)
+	}
+	accts := make([]string, 0, len(byAccount))
+	for acct := range byAccount {
+		accts = append(accts, acct)
+	}
+	sort.Strings(accts)
+
+	out := make([]view.Scope, 0, len(accts))
+	for _, acct := range accts {
+		dbp := archiveScopeDBPath(m.Name, claudeweb.ID, acct)
+		if ingest {
+			if _, _, ierr := index.EnsureIndexedContainers(
+				dbp, reindex, byAccount[acct], ad.Messages, claudeweb.ID, m.MachineID,
+			); ierr != nil {
+				slog.Warn("archive: foreign claude-web scope index failed",
+					"machine", m.Name, "account", acct, "err", ierr)
+			}
+		}
+		out = append(out, view.Scope{
+			Project:    m.Name + "/" + claudeweb.AccountLabel(acct),
+			DBP:        dbp,
+			CWD:        "",
+			Source:     claudeweb.ID,
 			Origin:     m.MachineID,
 			OriginName: m.Name,
 			Stale:      stale,

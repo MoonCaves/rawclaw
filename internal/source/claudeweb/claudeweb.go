@@ -146,6 +146,26 @@ func AccountDirName(path string) string {
 	return filepath.Base(filepath.Dir(path))
 }
 
+// AccountLabel is the slash-free scope label for an account directory:
+// "acct-<uuid8>" (the first 8 alphanumerics of the account dir name); an
+// account-less import ("unknown") yields "acct-unknown". Shared by the local and
+// archive scope layers so both render an account identically.
+func AccountLabel(accountDir string) string {
+	if accountDir == "" || accountDir == "unknown" {
+		return "acct-unknown"
+	}
+	var b strings.Builder
+	for _, r := range accountDir {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			if b.Len() == 8 {
+				break
+			}
+		}
+	}
+	return "acct-" + b.String()
+}
+
 // isDir reports whether path is a directory.
 func isDir(path string) bool {
 	fi, err := os.Stat(path)

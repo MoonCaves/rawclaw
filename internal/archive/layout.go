@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/source/claudeweb"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 )
 
@@ -18,12 +19,15 @@ type sourceTree struct {
 }
 
 // sourceTrees returns the transcript trees this machine pushes: the Claude
-// projects root and the Codex sessions root. Roots that don't exist are
-// enumerated as empty by the copier — an absent runtime is not an error.
+// projects root, the Codex sessions root, and the imported claude-web cloud
+// transcripts. Roots that don't exist are enumerated as empty by the copier — an
+// absent runtime is not an error. claude-web transcripts are the ONLY copy of
+// that cloud history, so pushing them to the archive is their off-machine backup.
 func sourceTrees() []sourceTree {
 	return []sourceTree{
 		{id: "claude", root: paths.ProjectsRoot()},
 		{id: "codex", root: codex.SessionsRoot()},
+		{id: claudeweb.ID, root: paths.ClaudeWebRoot()},
 	}
 }
 
