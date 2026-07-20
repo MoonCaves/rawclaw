@@ -25,7 +25,15 @@ func newArchiveInitCmd() *cobra.Command {
 			"repository: transcripts contain whatever was pasted into sessions.\n\n" +
 			"A shorthand is expanded to a full SSH remote: `user/repo` → " +
 			"git@github.com:user/repo.git, a bare `user` → git@github.com:user/" + defaultArchiveRepo +
-			".git, `host/user[/repo]` likewise. A full URL (git@…, https://…, ssh://…) is used as-is.",
+			".git, `host/user[/repo]` likewise. A full URL (git@…, https://…, ssh://…) is used as-is.\n\n" +
+			"Choosing a remote — any private git remote works, and RawClaw runs no server of its own:\n" +
+			"  - Most private: a bare repo over SSH on a box you control (`git init --bare` on your\n" +
+			"    own server, then use `ssh://you@host/path/archive.git` or `host:path`). Transcripts\n" +
+			"    never leave your network, and there is nothing to encrypt.\n" +
+			"  - Convenient: a private GitHub / GitLab / Gitea repo. Transcripts are stored\n" +
+			"    UNENCRYPTED in the repo, so it MUST stay private.\n" +
+			"Adding a second machine? Run the same `archive init <remote>` on it — it clones what the\n" +
+			"first machine pushed. Give each machine a distinct --name if they share a hostname.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -47,7 +55,7 @@ func newArchiveInitCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "",
-		"machine dir name in the archive (default: sanitized hostname)")
+		"machine dir name in the archive (default: sanitized hostname; give machines that share a hostname distinct names)")
 	return cmd
 }
 
