@@ -157,7 +157,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.BoolVar(&opts.All, "all", false, "cover every project: the search default already, and the widener for bare browse and --stats")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
 	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
-	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex); default searches all")
+	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|claude-web); default searches all")
 	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
 	f.BoolVar(&opts.IncludeTools, "include-tools", false, "also match/show tool calls + tool-only hits")
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
@@ -213,6 +213,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	archiveCmd.AddCommand(newArchiveEnableTimerCmd())
 	root.AddCommand(archiveCmd)
 	root.AddCommand(newLiveCmd())
+	root.AddCommand(newImportCmd())
 	root.AddCommand(newDeleteCmd())
 	root.AddCommand(newSetupCmd())
 	root.AddCommand(newUpgradeCmd(build))
@@ -483,7 +484,7 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	out := cmd.OutOrStdout()
 	ctx := cmd.Context()
 
-	if err := validateChoice("source", o.Source, "claude", "codex"); err != nil {
+	if err := validateChoice("source", o.Source, "claude", "codex", "claude-web"); err != nil {
 		return err
 	}
 

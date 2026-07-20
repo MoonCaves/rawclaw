@@ -10,6 +10,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -18,14 +19,16 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/claudeweb"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
 // All returns Claude ∪ Codex ∪ archive scopes, filtered by sourceFilter
-// ("" = all, "claude", or "codex"). reindex forces a fresh rebuild of the
-// eager (Codex + archive) dbs. Archive scopes are the FOREIGN machine dirs of
+// ("" = all, "claude", "codex", or "claude-web"). reindex forces a fresh
+// rebuild of the eager (Codex + archive) dbs; the claude-web db is built by
+// `rawclaw import`, so it is only surfaced here, never rebuilt. Archive scopes are the FOREIGN machine dirs of
 // the transcript-archive clone, spliced in so a plain search transparently
 // covers other machines' pushed sessions; each carries its Source, so the
 // runtime filter applies to them exactly as to local scopes. ctx bounds the
@@ -44,6 +47,9 @@ func All(ctx context.Context, sourceFilter string, reindex bool) []view.Scope {
 	}
 	if sourceFilter == "" || sourceFilter == "codex" {
 		out = append(out, Codex(reindex)...)
+	}
+	if sourceFilter == "" || sourceFilter == claudeweb.ID {
+		out = append(out, ClaudeWeb()...)
 	}
 	for _, sc := range Archive(ctx, reindex) {
 		if sourceFilter == "" || sc.Source == sourceFilter {
@@ -131,6 +137,10 @@ func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 		if strings.HasPrefix(base, index.ArchiveDBPrefix) {
 			continue // archive-replica dbs are enumerated by Archive(); their
 			// live source is the clone's machine dir, never an orphaned project
+		}
+		if base == filepath.Base(ClaudeWebDBPath()) {
+			continue // the claude-web import db is enumerated by ClaudeWeb(), not
+			// an orphaned Claude project — and has no live dir to reconcile against
 		}
 		if _, covered := liveDBs[dbp]; covered {
 			continue // already a live project scope — don't list it twice
@@ -270,6 +280,30 @@ func isHex8(s string) bool {
 	}
 	return true
 }
+
+// ClaudeWeb surfaces the claude-web scope: cloud conversations imported from a
+// Claude account data-export via `rawclaw import`. Unlike Claude() and Codex(),
+// it does NOT ingest here — the import command already built the db — so this is
+// pure discovery: if the dedicated claude-web db exists, return it as one eager,
+// read-only scope; otherwise nothing has been imported yet and it yields nil.
+// The scope carries no CWD (the export drops the working directory), so it is
+// naturally out of --this-project (which builds only the cwd's Claude project)
+// and reachable on bare/--all search, matching the account-wide, directory-less
+// nature of cloud chats.
+func ClaudeWeb() []view.Scope {
+	dbp := ClaudeWebDBPath()
+	if _, err := os.Stat(dbp); err != nil {
+		return nil // no export imported yet
+	}
+	return []view.Scope{{Project: claudeweb.ID, DBP: dbp, Source: claudeweb.ID}}
+}
+
+// ClaudeWebDBPath is the single cache db that holds every imported claude-web
+// conversation. It is distinctly namespaced (its own stable stem), so it never
+// collides with a Claude project db or a "codex-"/"archive-" db, satisfying
+// index.EnsureIndexedContainers' one-source-per-db contract. Both `rawclaw
+// import` (writer) and ClaudeWeb (reader) resolve the path through here.
+func ClaudeWebDBPath() string { return index.DBPath(claudeweb.ID) }
 
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope
 // (DBP set, e.g. Codex) is (DBP, IndexFresh, nil); a lazy Claude scope ensures
