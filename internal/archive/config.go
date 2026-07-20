@@ -68,7 +68,7 @@ func writeConfig(cfg Config) error {
 		return fmt.Errorf("write %s: %w", p, err)
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp) // no-op once the rename has landed
+	defer func() { _ = os.Remove(tmp) }() // no-op once the rename has landed
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		f.Close()
 		return fmt.Errorf("write %s: %w", tmp, err)
