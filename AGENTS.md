@@ -23,11 +23,15 @@ sovereign and dependency-free:
 - **The archive is any git remote — there is no RawClaw server.** Backup and cross-machine sync are
   a plain private git repo you point at (GitHub, GitLab, self-hosted, or a bare repo over SSH).
   RawClaw shells out to the system `git`; it stores no credentials and runs no daemon.
-- **Transport and encryption ride git's own layers, not RawClaw code.** SSH/HTTPS carry the bytes;
-  for at-rest encryption a repo-level tool (e.g. git-crypt) rides git's clean/smudge filters
-  transparently under RawClaw's existing `git` calls. The core reimplements neither crypto nor
-  transport. If a seam needs a hook (e.g. unlocking an encrypted clone after a rebuild), it's a thin
-  adapter at the edge — never crypto in the core.
+- **Transport rides git; privacy rides the remote.** SSH/HTTPS carry the bytes. At rest, transcripts
+  sit in the remote as ordinary git objects, so **privacy comes from choosing a private remote** —
+  ideally one on a network you control (a bare repo over SSH), which needs no encryption at all.
+  That's the default posture and the strongest one for a zero-dependency tool. RawClaw does **not**
+  encrypt at rest by default and reimplements neither crypto nor transport. Encryption-at-rest, if
+  ever offered, stays **optional and self-contained** — never a mandatory external tool or key
+  server that would break the nothing-to-install promise. (An external transparent-git-crypto tool
+  is a poor fit anyway: RawClaw's clone is a rebuildable cache it re-creates on its own, so ciphertext
+  would come back un-decryptable without an unlock step the core shouldn't own.)
 - **Discovery rides editor hooks.** `rawclaw setup` wires a POSIX-sh SessionStart/SessionEnd hook
   into Claude Code / Codex so a session learns RawClaw exists. It changes no editor behavior and is
   fully removable with `--eject`.
@@ -64,4 +68,4 @@ sovereign and dependency-free:
 - [README.md](README.md) — what RawClaw is and its full verb/flag surface, from the user's side.
 - [ROADMAP.md](ROADMAP.md) — the north-star constraints and the forward plan (planned / exploring / speculative).
 - [CONTRIBUTING.md](CONTRIBUTING.md) — clean checkout → green build: prerequisites, build, test, lint.
-- [design/](design/) — design notes for specific mechanisms.
+- [docs/design/](docs/design/) — design notes for specific mechanisms.
