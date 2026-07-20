@@ -52,6 +52,7 @@ func runAutosyncChild(ctx context.Context, w io.Writer) error {
 		autosyncLogLine(w, "autosync: archive not configured; nothing to do")
 		return nil
 	}
+	a.SetTagExporter(localTagExporter()) // ride this machine's tags along
 
 	var failed error
 	rep, err := a.PushLocal(ctx)

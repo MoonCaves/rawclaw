@@ -24,16 +24,18 @@ import (
 // name, and the local clone the push/pull verbs operate on. Obtain one via
 // Load (nil when the feature is unconfigured) or Init.
 type Archive struct {
-	cfg       Config
-	clone     string     // local clone path, under the state dir
-	machineID string     // this machine's stable id (provenance.MachineID)
-	run       runGitFunc // git seam: the exec adapter, swapped by unit tests
+	cfg        Config
+	clone      string      // local clone path, under the state dir
+	machineID  string      // this machine's stable id (provenance.MachineID)
+	run        runGitFunc  // git seam: the exec adapter, swapped by unit tests
+	exportTags TagExporter // local-tag source for push, injected at the cli seam; nil = skip
 }
 
 // PushReport summarizes one PushLocal run for status output and logging.
 type PushReport struct {
 	Copied    int  // files copied into the clone this push
 	Removed   int  // tombstoned own sessions removed from the clone this push
+	TagFiles  int  // tag files written into <machine>/tags/ this push
 	Committed bool // a commit was created (false = nothing changed)
 	Pushed    bool // the commit reached the remote
 	Retries   int  // rebase-retry rounds needed before the push landed

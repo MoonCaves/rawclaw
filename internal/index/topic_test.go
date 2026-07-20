@@ -47,8 +47,8 @@ func TestEnsureTopicSchemaIdempotentAndStamped(t *testing.T) {
 	if err := con.QueryRow("SELECT value FROM meta WHERE key='topic_schema_version'").Scan(&v); err != nil {
 		t.Fatalf("read topic_schema_version: %v", err)
 	}
-	if v != "1" {
-		t.Fatalf("topic_schema_version = %q, want \"1\"", v)
+	if v != "2" {
+		t.Fatalf("topic_schema_version = %q, want \"2\"", v)
 	}
 }
 

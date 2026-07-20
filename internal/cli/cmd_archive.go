@@ -114,6 +114,7 @@ func newArchivePushCmd() *cobra.Command {
 				fmt.Fprintln(out, "Archive not configured; run `rawclaw archive init <remote-url>` first. Nothing to do.")
 				return nil
 			}
+			a.SetTagExporter(localTagExporter()) // ride this machine's tags along
 			rep, err := a.PushLocal(cmd.Context())
 			if errors.Is(err, archive.ErrBusy) {
 				// Waited the lock's grace window and a sibling process still
@@ -210,6 +211,14 @@ func printArchiveStatus(w io.Writer, st archive.StatusReport) {
 			name += " (this machine)"
 		}
 		fmt.Fprintf(w, "  %-32s last new content %s\n", name, stampLabel(m.LastCommit))
+	}
+	// Surface cross-machine tag conflicts where a human already looks.
+	// Deterministic winner is kept; every side's tag file is retained in the archive.
+	if n := len(st.TagConflicts); n > 0 {
+		fmt.Fprintf(w, "Tag conflicts: %d session(s) with disagreeing cross-machine tags (deterministic winner kept; all tag files retained):\n", n)
+		for _, sid := range st.TagConflicts {
+			fmt.Fprintf(w, "  %s\n", sid)
+		}
 	}
 }
 

@@ -63,6 +63,11 @@ func (a *Archive) Scopes(ctx context.Context, reindex bool) []view.Scope {
 		out = append(out, a.claudeScopes(m, stale, reindex, ingest)...)
 		out = append(out, a.codexScopes(m, stale, reindex, ingest)...)
 	}
+	// Apply pulled cross-machine tags into the freshly-ingested foreign dbs,
+	// under the sync lock we hold when ingest is true. Self-gates on tag freshness.
+	if ingest {
+		a.ingestForeignTags(out, reindex)
+	}
 	return out
 }
 

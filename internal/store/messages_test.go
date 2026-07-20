@@ -47,7 +47,7 @@ func TestBookendMessages(t *testing.T) {
 	msgs := []storetest.Message{
 		{SessionID: "s", Role: "user", Content: "u1", UUID: "a"},
 		{SessionID: "s", Role: "tool", Content: "tool noise", UUID: "b"}, // filtered: role
-		{SessionID: "s", Role: "assistant", Content: "", UUID: "c"},     // filtered: empty
+		{SessionID: "s", Role: "assistant", Content: "", UUID: "c"},      // filtered: empty
 		{SessionID: "s", Role: "assistant", Content: "a1", UUID: "d"},
 		{SessionID: "s", Role: "user", Content: "u2", UUID: "e"},
 		{SessionID: "s", Role: "assistant", Content: "a2", UUID: "f"},
