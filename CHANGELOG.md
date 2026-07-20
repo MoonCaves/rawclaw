@@ -4,6 +4,20 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-07-20
+
+### Fixed
+
+- **`setup`'s discovery hooks now fire regardless of PATH.** The generated SessionStart/SessionEnd
+  hook scripts gated on a bare `command -v rawclaw`. On any machine whose hook PATH doesn't include
+  the binary's directory (e.g. `~/.local/bin` when it isn't on a non-login shell's PATH), that gate
+  failed and the hook silently no-opped: `setup` reported success, but the discovery banner never
+  printed and the agent never learned rawclaw was installed. `setup` now bakes the binary's
+  absolute path into each hook (resolved via `os.Executable`), falls back to a `command -v` PATH
+  lookup if that path later moves (a reinstall or package upgrade), and degrades to a silent no-op
+  only when neither resolves. A hook that was wired but dead now fires. Re-run `rawclaw setup` to
+  refresh the installed hooks.
+
 ## [0.6.0] — 2026-07-20
 
 ### Added
