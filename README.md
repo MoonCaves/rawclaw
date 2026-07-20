@@ -56,6 +56,24 @@ Claude Code quietly saves every conversation you have with it as JSONL transcrip
 - **Reads the full structure, shows the signal.** Subagent threads, tool calls, compaction summaries, and thinking blocks are all indexed, but search defaults to clean human conversation (`--include-tools` / `--include-subagents` to widen).
 - **Built for agents too.** `rawclaw "query"` returns ranked refs with a never-silent completeness envelope; `read <ref>` returns a *bounded excerpt* instead of a whole transcript; `--json` on every command.
 
+## Import your Claude cloud history
+
+RawClaw indexes your **local** Claude Code transcripts out of the box. But the rest of your Claude history — every claude.ai chat, Projects conversation, Cowork, and Desktop session — lives in the **cloud**, tied to your account, where rawclaw can't see it. `rawclaw import` brings it in.
+
+There is **no live sync** — Anthropic exposes no API for consumer chat history — so it's a **batch import of your account data-export**:
+
+1. In Claude, open **Settings → Privacy → Export data** and request your export. You'll get an emailed ZIP (a large account arrives as several `…-batch-NNNN.zip` files).
+2. Point rawclaw at it:
+
+```bash
+rawclaw import ~/Downloads/data-<account>-<date>-batch-0000.zip   # the emailed ZIP (batch parts globbed as one import)
+rawclaw import ~/Downloads/claude-export/                          # …or an already-extracted copy
+```
+
+Every conversation becomes searchable through the same `rawclaw "query"` / `read` / `outline` surface, tagged as the `claude-web` source (`--source claude-web` to scope). Cloud chats have no working directory, so they stay out of `--this-project` and surface on a normal (all-projects) search; a multi-account export auto-separates into per-account scopes (`acct-<id>`) with no configuration.
+
+Each conversation is written as a **raw transcript** under `~/.local/share/rawclaw/claude-web/` (honoring `XDG_DATA_HOME`) and indexed from there — so those files are the durable copy of your cloud history and the search index is just a rebuildable cache. Re-import is **idempotent**: run it again after your next export and only new conversations and messages are added, nothing duplicated. By default a conversation you deleted upstream is kept (labeled retained); `RAWCLAW_RETENTION=mirror` opts into pruning it so the index mirrors your current cloud state. Only transcripts are indexed — your name, email, and phone from the export are never read.
+
 ## Who it's for
 
 - **Anyone who lives in Claude Code** and wants to find a past decision in one search instead of a dozen greps.
@@ -102,6 +120,7 @@ rawclaw --resume <session8>                 # paste-ready `claude --resume` for 
 rawclaw --stats                             # corpus overview (this project; --all for everything)
 rawclaw "query" --json                      # machine-readable output for scripts/agents
 rawclaw "query" --since 2026-01-01 --before 2026-02-01   # date-scoped
+rawclaw import <zip|dir>                    # import your Claude cloud history (data-export) as the claude-web source
 rawclaw --list                              # list searchable projects
 rawclaw delete --yes --files <session8>     # delete a session non-interactively (--files: originals still on disk)
 rawclaw version                             # print the version + build stamp

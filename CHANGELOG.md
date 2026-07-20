@@ -4,6 +4,22 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`rawclaw import <zip|dir>` — bring your Claude cloud history in.** RawClaw indexes local
+  Claude Code transcripts; `import` adds the rest — every claude.ai / Projects / Cowork / Desktop
+  conversation — from your account **data-export** (Settings → Privacy → Export data). It's a batch
+  import, not a sync (there is no consumer chat-history API): point it at the emailed ZIP (multi-part
+  `…-batch-NNNN.zip` exports are globbed as one) or an extracted copy. Each conversation is written
+  as a raw transcript under `~/.local/share/rawclaw/claude-web/` (honoring `XDG_DATA_HOME`) and
+  indexed from there, so the transcripts are the durable copy and the index is a rebuildable cache —
+  and they ride the transcript archive like every other source. Imports are searchable through the
+  normal `"query"` / `read` / `outline` surface as the `claude-web` source (`--source claude-web` to
+  scope); a multi-account export auto-separates into per-account scopes. Re-import is idempotent (only
+  new conversations/messages are added); `RAWCLAW_RETENTION=mirror` prunes conversations deleted
+  upstream (default retains them). Only transcript text is indexed — never name/email/phone from the
+  export.
+
 ## [0.7.1] — 2026-07-21
 
 ### Changed
