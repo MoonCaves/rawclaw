@@ -2,210 +2,168 @@
 
 ## Own your AI history.
 
-**One sovereign, private, searchable corpus for every conversation, agent, and machine.**
+**One sovereign, portable, searchable corpus for every supported conversation, agent, and machine.**
 
-Bring your conversations home from the cloud. Keep a copy you control. Search years of AI work in
-seconds. Back it up and synchronize it through your own infrastructure.
+Stop renting access to your own past. Bring your conversations home from cloud products and local
+agents, preserve them beyond vendor purges, and use them through infrastructure you control.
 
-No account. No internet. No API keys. No models. No daemon. No GPU. The core works locally, on your
-machine.
+### Bring everything
 
-- [Bring cloud conversations home](#bring-cloud-conversations-home)
-- [Keep history after Claude deletes it](#keep-history-after-claude-deletes-it)
-- [Preserve the full record](#preserve-the-full-record)
-- [Search every supported AI agent together](#search-every-supported-ai-agent-together)
-- [Sync privately through any Git remote](#sync-privately-through-any-git-remote)
-- [Turn 76 searches into one](#turn-76-searches-into-one)
-- [Know where every conversation came from](#know-where-every-conversation-came-from)
-- [One owned corpus, countless uses](#one-owned-corpus-countless-uses)
-- [Start local, then upgrade through open seams](#start-local-then-upgrade-through-open-seams)
+- Import conversations from Claude.ai, Claude Desktop, and Cowork.
+- Collect local sessions from Claude Code, Codex, and new agents through source adapters.
+- Search across every project and every machine from one place.
+- Keep the original source, machine, project, and session provenance attached.
 
-## Bring cloud conversations home
+### Keep everything
 
-Your Claude conversations live inside Claude's website and desktop apps. You can read them there,
-but you do not control how they are stored or how long that access will remain available.
+- Keep sessions after Claude Code's default 30-day cleanup removes the original files.
+- Preserve decisions, reversed decisions, mistakes, pivots, tool calls, and dead ends.
+- Treat a missing file as missing — not as permission to delete your history.
+- Propagate explicit deletions so another machine cannot silently restore them.
 
-RawClaw imports conversations from Claude.ai, Claude Desktop, and Cowork. It combines them with local
-sessions from Claude Code and Codex.
+### Run it anywhere
 
-Now you own a local copy. You can search it, move it, back it up, process it, or use it with another
-tool. You do not need to open Claude's website every time you want to access your own history.
+- One static Go binary with a local SQLite FTS5 index.
+- No account. No internet. No API key. No model.
+- No daemon. No GPU. No external runtime. No hosted service.
+- Linux, macOS, and ARM — including small self-hosted machines and Raspberry Pis.
 
-**Stop renting access to your own conversations.**
+### Use it for anything
 
-## Keep history after Claude deletes it
+- Search years of work in seconds.
+- Feed another memory provider or build a personal knowledge base.
+- Create CRM records, project timelines, audits, datasets, and new applications.
+- Move between AI products without leaving your history behind.
 
-Claude Code automatically deletes session files after about 30 days by default.
+**Own the corpus once. Build on it forever.**
 
-RawClaw lets you keep your own copy. When Claude Code removes the original file, your conversation
-remains available and searchable.
+- [Your data lives with you](#1-your-data-lives-with-you)
+- [Take your history with you](#2-take-your-history-with-you)
+- [Choose where it lives and how it moves](#3-choose-where-it-lives-and-how-it-moves)
+- [One corpus can power countless systems](#4-one-corpus-can-power-countless-systems)
+- [Every new agent is an adapter](#5-every-new-agent-is-an-adapter)
+- [Your history should outlive its source](#6-your-history-should-outlive-its-source)
+- [The record is permanent; interpretations are replaceable](#7-the-record-is-permanent-interpretations-are-replaceable)
+- [Agents should retrieve progressively and admit what they missed](#8-agents-should-retrieve-progressively-and-admit-what-they-missed)
 
-You can also mirror Claude Code's behavior if that is what you prefer. The choice belongs to you.
+## Eight opinions behind the architecture
 
-**Claude's 30-day cleanup policy does not have to become your deletion policy.**
+### 1. Your data lives with you
 
-## Preserve the full record
+Many "local" tools still require an account, API key, model, cloud service, or background server.
+RawClaw's core search works fully on your machine.
 
-Memory systems do more than store information. They decide what matters. They summarize, merge,
-rank, and sometimes turn an agent's old statement into a supposed fact.
+- Your history and search index stay local by default.
+- Keyword search needs no network connection or third-party service.
+- There is no required account, API key, model, daemon, GPU, or external runtime.
+- The index is ordinary SQLite, not a proprietary database server.
+- The binary is static, portable, and built without cgo.
 
-Those interpretations can be wrong.
+**Local sovereignty is the architecture, not a privacy setting.**
 
-RawClaw preserves the full historical record:
+### 2. Take your history with you
 
-- Decisions and reversed decisions
-- Questions, doubts, mistakes, and dead ends
-- Pivots, discoveries, and tool calls
-- The path from the first question to the final answer
+Your AI history should not remain trapped inside a website, desktop app, hidden folder, or machine
+you may stop using.
 
-Tags, summaries, and memory systems can still be added on top. RawClaw keeps those interpretations
-separate from the original record, so they can be corrected without rewriting history.
+- Bring conversations home from Claude.ai, Claude Desktop, and Cowork.
+- Combine cloud conversations with Claude Code and Codex sessions.
+- Keep a local copy you can search, move, back up, process, and use with other tools.
+- Change AI products without starting your history from zero.
+- Keep access even when the original interface, account, or product changes.
+
+**Your conversations become data you own — not pages you borrow.**
+
+### 3. Choose where it lives and how it moves
+
+Sovereignty does not mean every user must make the same choice. It means the owner chooses.
+
+- Keep everything on one machine with no network access.
+- Synchronize through GitHub, GitLab, Gitea, a self-hosted Git server, or bare SSH.
+- Use automatic background synchronization or an optional timer.
+- Stay local with Ollama embeddings.
+- Opt into OpenAI, Voyage, or another compatible endpoint when you want hosted embeddings.
+- Disable the archive or vector layer without weakening local keyword search.
+
+**Your machines. Your storage. Your models. Your choice.**
+
+### 4. One corpus can power countless systems
+
+Search is the first application. The owned corpus is the durable asset.
+
+- Search every past project and recover abandoned work.
+- Feed memory providers and personal knowledge bases.
+- Extract people, companies, and relationships into a CRM.
+- Build project histories, decision timelines, and agent audits.
+- Analyze tool usage or create datasets.
+- Build applications we have not imagined yet.
+
+RawClaw is not meant to be the only tool allowed to read your data. It creates a common substrate
+that other tools and agents can use.
+
+**One sovereign corpus. Countless downstream uses. No lock-in.**
+
+### 5. Every new agent is an adapter
+
+AI tools store history in different files and databases. That should not require a new search engine
+for every tool.
+
+- Claude Code and Codex proved the shared Source adapter port.
+- Claude cloud imports feed the same storage and retrieval pipeline.
+- Hermes, OpenClaw, NanoClaw, and other agents can connect through adapters.
+- Search, provenance, progressive reads, and synchronization stay source-independent.
+- New embedding providers connect through a separate optional seam.
+- Embeddings live as BLOBs in SQLite and fuse with the keyword results.
+
+Need another source? [Submit an adapter request](https://github.com/MoonCaves/rawclaw/issues/new) or
+open a pull request. The seam is already there.
+
+**Sovereign by default. Upgradeable by design.**
+
+### 6. Your history should outlive its source
+
+Claude Code automatically removes session files after about 30 days by default. Files also vanish
+when machines go offline, directories move, or products change.
+
+- RawClaw keeps sessions searchable after Claude Code removes the original files.
+- `RAWCLAW_RETENTION=mirror` remains available if you prefer to follow upstream cleanup.
+- A missing source is reported as missing instead of silently treated as a deletion.
+- Deletion is a separate, explicit action with a clear confirmation.
+- Intentional deletions propagate through the archive instead of being resurrected later.
+
+**Claude's cleanup policy does not have to become your deletion policy.**
+
+### 7. The record is permanent; interpretations are replaceable
+
+Memory systems summarize, merge, rank, and decide what mattered. Those interpretations can be
+useful. They can also be wrong.
+
+- Preserve decisions and the evidence around them.
+- Preserve reversals, doubts, mistakes, pivots, and rejected approaches too.
+- Keep the original transcript separate from tags, summaries, and memory layers.
+- Correct or replace an interpretation without rewriting the underlying record.
+- Treat the archive as the durable source and the search index as rebuildable machinery.
 
 **Memory tells you what it thinks mattered. Raw history lets you check.**
 
-## Search every supported AI agent together
+### 8. Agents should retrieve progressively and admit what they missed
 
-Claude Code saves history in one place. Codex saves it somewhere else. Claude's cloud products keep
-conversations inside their own apps. Other AI agents use still more formats.
+Dumping a whole transcript into an agent's context window is expensive and noisy. Returning a
+partial search without saying what was unavailable is worse.
 
-RawClaw brings supported sources into one fast search. Search across Claude.ai, Claude Desktop,
-Cowork, Claude Code, Codex, and every machine you use. Search everything together or narrow the
-results to one agent, source, project, date, or machine.
-
-New AI tools connect through source adapters. If your agent is not supported yet, request it, move
-it up the roadmap, or contribute an adapter.
-
-**One search across your entire AI history — no matter which agent created it.**
-
-## Sync privately through any Git remote
-
-Most products put your data on their servers to make it available across devices.
-
-RawClaw lets you synchronize through any private Git remote you choose: GitHub, GitLab, Gitea, a
-self-hosted Git server, or a bare repository over SSH.
-
-Your machines can push and pull automatically. Optional timers keep machines current even when you
-are not actively searching. The core does not require an account. Optional synchronization uses the
-Git provider and credentials you choose.
-
-**Your machines. Your storage. Your private synchronization path.**
-
-## Turn 76 searches into one
-
-Recovering one past answer can take dozens of searches, file reads, and tool calls. In real recall
-hunts, one past decision took 76 grep calls to recover.
-
-RawClaw reduced it to one search:
+One real recall hunt took 76 grep calls. RawClaw reduced it to one:
 
 ```bash
 rawclaw "where did we land on auth"
 ```
 
-Every result includes the goal, the matching point, and the resolution. Agents receive stable
-references and read only the relevant section first.
+- Search returns ranked matches with the goal, matching point, and resolution.
+- Stable references let an agent read a small excerpt and expand around the same point.
+- Every trim is visible and includes the command needed to retrieve more.
+- Results retain the source tool, machine, project, session, and availability state.
+- The completeness envelope reports what was searched, empty, skipped, stale, or unavailable.
 
-This is progressive disclosure for transcripts: search the full corpus, find the strongest match,
-read a small excerpt, and expand around that exact point only when needed.
-
-No giant transcript dumps. No wasted context window. No endless grep storm.
-
-**Fewer tool calls. Fewer tokens. Faster answers.**
-
-## Know where every conversation came from
-
-Combining everything into one corpus should not erase its origin.
-
-RawClaw keeps the source attached to each conversation: which AI tool created it, which machine it
-came from, which project it belonged to, which original session it represents, and whether that
-source is current, missing, remote, or stale.
-
-You get one unified search without turning your history into an anonymous pile of text.
-
-**Bring everything together. Keep every receipt attached.**
-
-## One owned corpus, countless uses
-
-Once your conversations are local, organized, searchable, and under your control, they become
-infrastructure.
-
-Use the corpus to:
-
-- Search every past project
-- Feed a memory provider or build a personal knowledge base
-- Extract people and companies into a CRM
-- Create project and decision timelines
-- Audit agent actions and analyze tool usage
-- Recover abandoned work or move between AI products
-- Build datasets and new applications on top of your history
-
-RawClaw is not meant to be the only tool allowed to read your data. It creates a common substrate
-that other tools and agents can use.
-
-**Own the corpus once. Build on it forever.**
-
-## The core works fully locally
-
-Keyword search runs locally in a single static Go binary with SQLite FTS5.
-
-- No account
-- No internet connection
-- No API key
-- No AI model
-- No daemon
-- No GPU
-- No external runtime
-- No hosted service
-
-Then you can add capabilities when you want them: private Git synchronization, local Ollama or
-hosted embeddings, semantic and keyword search together, remote live-session access, and more AI
-agent source adapters.
-
-**Local sovereignty is the foundation. Network features are optional upgrades.**
-
-## Start local, then upgrade through open seams
-
-RawClaw keeps the local core small, but it does not trap you inside that core. We built clear
-upgrade seams so new capabilities plug in without replacing the product or taking ownership of your
-data.
-
-- **Source adapters:** Claude Code and Codex proved the adapter shape. Cloud imports use the same
-  ingest path. Hermes, OpenClaw, NanoClaw, and other agents can connect by adding an adapter instead
-  of rebuilding search, storage, and retrieval.
-- **Embedding providers:** stay fully local with Ollama, or connect OpenAI, Voyage, or another
-  OpenAI-compatible endpoint when you choose.
-- **Vector storage:** embeddings live as BLOBs in the same SQLite index and combine with keyword
-  results. Turn vectors off and the local keyword core works exactly as before.
-- **Private synchronization:** use GitHub, GitLab, Gitea, a self-hosted Git server, or a bare remote
-  over SSH.
-
-Need another agent source? [Submit an adapter request](https://github.com/MoonCaves/rawclaw/issues/new)
-or open a pull request. The seam is already there.
-
-**Sovereign by default. Upgradeable by design.**
-
-## Missing does not mean deleted
-
-Files disappear for reasons that have nothing to do with user intent. Claude may clean them up. A
-machine may be offline. A directory may move. A synchronization may be late.
-
-RawClaw does not treat a missing file as permission to erase your history.
-
-Deletion is a separate, explicit action. RawClaw shows what will be removed and asks for
-confirmation. When you intentionally delete a conversation, that deletion follows the archive so
-another machine does not restore it later.
-
-**Missing stays recoverable. Deleted stays deleted. You control both.**
-
-## Every search tells you how complete it was
-
-Imagine searching three machines when one has not synchronized since yesterday. Most tools simply
-return the available results. Neither you nor the agent knows that part of the history was missing.
-
-RawClaw reports what it searched, what contained no matches, what it skipped, what was unavailable,
-and what may be out of date. "I found no result" and "I could not search one of your machines" are
-not the same answer.
-
-**Never mistake a partial search for your full history.**
+**Fewer tool calls. Fewer tokens. Faster answers — without hiding the gaps.**
 
 ## Setup: let your agents discover it
 

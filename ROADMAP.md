@@ -1,9 +1,9 @@
 # Roadmap
 
 Before proposing or building a feature, read the product position in [README.md](README.md), especially
-**Own your AI history**, **Preserve the full record**, and **Start local, then upgrade through open
-seams**. Those sections explain why the local core stays sovereign while sources, embeddings, and
-synchronization remain optional adapters.
+**Own your AI history**, **Your data lives with you**, and **Every new agent is an adapter**. Those
+sections explain why the local core stays sovereign while sources, embeddings, and synchronization
+remain optional adapters.
 
 RawClaw's forward plan. The north star doesn't change: **a single static binary, keyword search by
 default, zero runtime dependencies, no LLM, no API key required.** Every item below is weighed against that —
