@@ -97,6 +97,13 @@ input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 [ -n "$session_id" ] || exit 0
 
+# Only a session that actually produced a transcript is worth tagging. Claude
+# Code fires SessionEnd for ephemeral sessions too (opened and closed without
+# a message ever landing) — those have no transcript file and would flood the
+# queue with ids nothing can resolve.
+transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+[ -n "$transcript_path" ] && [ -f "$transcript_path" ] || exit 0
+
 rawclaw tag-queue add "$session_id" >/dev/null 2>&1 || true
 exit 0
 `
