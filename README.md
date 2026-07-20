@@ -18,6 +18,7 @@ machine.
 - [Turn 76 searches into one](#turn-76-searches-into-one)
 - [Know where every conversation came from](#know-where-every-conversation-came-from)
 - [One owned corpus, countless uses](#one-owned-corpus-countless-uses)
+- [Start local, then upgrade through open seams](#start-local-then-upgrade-through-open-seams)
 
 ## Bring cloud conversations home
 
@@ -160,6 +161,27 @@ hosted embeddings, semantic and keyword search together, remote live-session acc
 agent source adapters.
 
 **Local sovereignty is the foundation. Network features are optional upgrades.**
+
+## Start local, then upgrade through open seams
+
+RawClaw keeps the local core small, but it does not trap you inside that core. We built clear
+upgrade seams so new capabilities plug in without replacing the product or taking ownership of your
+data.
+
+- **Source adapters:** Claude Code and Codex proved the adapter shape. Cloud imports use the same
+  ingest path. Hermes, OpenClaw, NanoClaw, and other agents can connect by adding an adapter instead
+  of rebuilding search, storage, and retrieval.
+- **Embedding providers:** stay fully local with Ollama, or connect OpenAI, Voyage, or another
+  OpenAI-compatible endpoint when you choose.
+- **Vector storage:** embeddings live as BLOBs in the same SQLite index and combine with keyword
+  results. Turn vectors off and the local keyword core works exactly as before.
+- **Private synchronization:** use GitHub, GitLab, Gitea, a self-hosted Git server, or a bare remote
+  over SSH.
+
+Need another agent source? [Submit an adapter request](https://github.com/MoonCaves/rawclaw/issues/new)
+or open a pull request. The seam is already there.
+
+**Sovereign by default. Upgradeable by design.**
 
 ## Missing does not mean deleted
 

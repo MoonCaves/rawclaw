@@ -3,6 +3,19 @@
 Thanks for your interest in RawClaw. This guide gets you from a clean checkout to a
 green build in a few minutes.
 
+## Before you build
+
+Read the opening sections of [README.md](README.md) before designing a feature or changing product
+copy. They define the product direction: user-owned AI history, local sovereignty, raw transcripts
+as the durable record, progressive retrieval for agents, and optional upgrades through open seams.
+
+Then read [ROADMAP.md](ROADMAP.md) for the technical constraints and deliberate non-goals. New source
+support should normally be an adapter behind the existing Source port. New embedding providers
+should use the existing optional embedder seam rather than becoming a dependency of the local core.
+
+Need support for Hermes, OpenClaw, NanoClaw, or another agent? Open an adapter request or contribute
+the adapter; do not fork the retrieval engine for a new transcript format.
+
 ## Prerequisites
 
 - **Go 1.24+** (the `go` directive in `go.mod` is the floor).
