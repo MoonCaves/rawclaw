@@ -40,10 +40,11 @@ type MaterializeResult struct {
 }
 
 // Materialize streams the export at exportPath and writes each conversation as a
-// transcript under root. mirror=true refuses an account-less export (its shared
-// bucket could cross-prune under mirror; F-3). Returns per-account info for the
-// caller's mirror-prune + reindex. Fail-closed: any parse error or refusal
-// leaves the tree untouched.
+// transcript under root. mirror=true refuses an account-less export: without an
+// account, every account-less import shares one bucket, so mirror could prune
+// another import's conversations. Returns per-account info for the caller's
+// mirror-prune + reindex. Fail-closed: any parse error or refusal leaves the
+// tree untouched.
 func Materialize(exportPath, root string, mirror bool) (*MaterializeResult, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, fmt.Errorf("%s: create transcript root: %w", ID, err)

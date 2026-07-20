@@ -425,6 +425,35 @@ func TestReconcileMirror(t *testing.T) {
 	})
 }
 
+// TestDiscoverSkipsStagingDir: a leftover ".import-*" staging dir (from a crash
+// mid-import) must NOT surface as a bogus account scope — Discover skips
+// dot-prefixed entries.
+func TestDiscoverSkipsStagingDir(t *testing.T) {
+	t.Parallel()
+	root, ad := materialize(t, fixtureConversations)
+	// Simulate a crash-leftover staging dir with a staged transcript inside.
+	staging := filepath.Join(root, ".import-leftover")
+	if err := os.MkdirAll(filepath.Join(staging, "acc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "acc", "ghost.jsonl"),
+		[]byte(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"ghost"}]}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := ad.Discover()
+	for _, c := range got {
+		if strings.HasPrefix(AccountDirName(c.Path), ".") {
+			t.Errorf("staging dir surfaced as a scope: %+v", c)
+		}
+		if c.ID == "ghost" {
+			t.Errorf("staged ghost transcript discovered: %+v", c)
+		}
+	}
+	if len(got) != 3 { // only the 3 real fixture conversations
+		t.Errorf("Discover returned %d containers, want 3 (staging excluded)", len(got))
+	}
+}
+
 func TestMapSender(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{"human": "user", "assistant": "assistant", "": "user", "tool": "tool"}

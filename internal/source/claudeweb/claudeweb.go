@@ -63,6 +63,12 @@ func (a *Adapter) Discover() ([]source.Container, error) {
 	sort.Strings(accountDirs)
 	var out []source.Container
 	for _, accDir := range accountDirs {
+		// Skip dot-prefixed entries: a crash mid-import can leave a ".import-*"
+		// staging dir (os.MkdirTemp), which must never surface as a bogus account
+		// scope. filepath.Glob's "*" matches leading dots, so filter here.
+		if strings.HasPrefix(filepath.Base(accDir), ".") {
+			continue
+		}
 		if !isDir(accDir) {
 			continue
 		}

@@ -170,20 +170,6 @@ func decodeConversationArray(r io.Reader, fn func(conversation) error) error {
 	return nil
 }
 
-// messageText flattens a chat_message's searchable text for the FALLBACK case
-// (content blocks absent): the export's flat text field. When content blocks are
-// present they are stored verbatim and this is unused.
-func messageText(m message) string {
-	if len(m.Content) > 0 {
-		if s := parse.ExtractText(map[string]any{
-			"message": map[string]any{"content": m.Content},
-		}); s != "" {
-			return s
-		}
-	}
-	return m.Text
-}
-
 // mapSender maps an export sender onto the messages-table role vocabulary. An
 // empty sender defaults to user (never an empty role); an unrecognized sender
 // passes through untouched, mirroring the codex adapter.

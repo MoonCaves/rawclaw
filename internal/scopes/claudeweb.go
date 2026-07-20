@@ -109,7 +109,7 @@ func ClaudeWebDBPath(account string) string {
 // "acct-<uuid8>", where uuid8 is the first 8 alphanumerics of the account key.
 func accountSlug(account string) string {
 	if account == "" || account == "unknown" {
-		return "acct-unknown" // account-less export (allowed only under keep; see F-3)
+		return "acct-unknown" // account-less export (allowed only under the keep default)
 	}
 	cleaned := strings.Map(func(r rune) rune {
 		switch {

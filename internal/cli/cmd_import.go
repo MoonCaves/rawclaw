@@ -62,7 +62,7 @@ func runImport(w io.Writer, path string, jsonOut bool) error {
 	mirror := retention.RetentionMirror()
 
 	// Materialize the export → raw JSONL transcripts (merged, never-drop;
-	// fail-closed; F-3 refuses an account-less export under mirror).
+	// fail-closed; an account-less export is refused under mirror).
 	res, err := claudeweb.Materialize(path, root, mirror)
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)
