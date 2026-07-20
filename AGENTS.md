@@ -1,7 +1,8 @@
 # RawClaw project guide
 
-Before designing a feature or changing product copy, read the opening sections of `README.md` and
-the constraints in `ROADMAP.md`.
+The current product-positioning draft starts at **Own your AI history** in `README.md`. Read that
+draft before designing a feature or changing product copy, then read the constraints in
+`ROADMAP.md`.
 
 Keep the local keyword core sovereign: no required account, network, API key, model, daemon, or
 hosted service. Add networked and model-backed capabilities through optional seams.
