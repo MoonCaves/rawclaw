@@ -382,7 +382,10 @@ func TestSetupCmd_ScriptContentContainsBanner(t *testing.T) {
 
 	wantLines := []string{
 		"#!/bin/sh",
-		`command -v rawclaw >/dev/null 2>&1 || exit 0`,
+		// The installed script bakes in an absolute rawclaw path and falls back
+		// to a PATH lookup — it no longer gates on a bare `command -v rawclaw`.
+		`RAWCLAW=`,
+		`[ -n "$RAWCLAW" ] && [ -x "$RAWCLAW" ] || RAWCLAW=$(command -v rawclaw 2>/dev/null) || exit 0`,
 		"Raw transcript history for context",
 		"Fast FTS5/BM25 search",
 		"Memory providers",

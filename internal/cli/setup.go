@@ -20,23 +20,26 @@ import (
 // identity check holds on Windows too.
 const rawclawMarker = "hooks/rawclaw/"
 
-// rawclawPrimeScript is installed at <configDir>/hooks/rawclaw/prime.sh and
-// registered as a Claude Code SessionStart hook. POSIX sh only — a SessionStart
-// hook runs with no guaranteed bash. It self-gates on the rawclaw binary being
-// on PATH (a machine with the hook wired but the binary since removed degrades
-// to a silent no-op, never a hook error) and prints the discovery banner at most
-// once per session, keyed on the session_id Claude Code passes on the hook's
-// stdin (undocumented exact schema, so the id is pulled with a tolerant sed
-// scan rather than a full JSON parse — no jq/python dependency assumed).
+// rawclawPrimeScript is the TEMPLATE installed at <configDir>/hooks/rawclaw/
+// prime.sh (via renderHookScript) and registered as a Claude Code SessionStart
+// hook. POSIX sh only — a SessionStart hook runs with no guaranteed bash. It
+// resolves the rawclaw binary from the absolute path `setup` bakes in — a
+// SessionStart hook does NOT inherit an interactive login PATH, so a bare
+// `command -v rawclaw` silently fails even when rawclaw is installed (binary
+// present, its dir simply off the hook's PATH) — falling back to a PATH lookup
+// and degrading to a silent no-op if neither resolves (binary removed). It
+// prints the discovery banner at most once per session, keyed on the session_id
+// Claude Code passes on the hook's stdin (undocumented exact schema, so the id
+// is pulled with a tolerant sed scan rather than a full JSON parse — no
+// jq/python dependency assumed). resolvePlaceholder is swapped for the real
+// binary-resolution preamble at install time.
 const rawclawPrimeScript = `#!/bin/sh
 # Installed by ` + "`rawclaw setup`" + `; removed by ` + "`rawclaw setup --eject`" + ` along with
 # its settings.json entry. Prints a one-time discovery banner on Claude Code
 # SessionStart so the agent knows rawclaw exists.
 set -eu
 
-# No rawclaw on PATH (uninstalled since this hook was wired, or never
-# installed) — silent no-op rather than a hook error.
-command -v rawclaw >/dev/null 2>&1 || exit 0
+@@RAWCLAW_RESOLVE@@
 
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
@@ -69,7 +72,7 @@ BANNER
 # Finished sessions the SessionEnd hook queued for topic tagging: list them so
 # this session's agent tags them first. Silence (no rawclaw output, or an
 # error) means nothing pending — never a hook failure.
-pending=$(rawclaw tag-queue 2>/dev/null | head -n 8) || pending=""
+pending=$("$RAWCLAW" tag-queue 2>/dev/null | head -n 8) || pending=""
 if [ -n "$pending" ]; then
 	printf '[rawclaw] finished sessions awaiting topic tags — tag them before starting other work:\n'
 	printf '%s\n' "$pending" | sed 's/^/  /'
@@ -98,9 +101,10 @@ const rawclawCodexPrimeScript = `#!/bin/sh
 # hook-JSON envelope (Codex rejects a bare '[rawclaw]' banner as invalid JSON).
 set -eu
 
-# No rawclaw on PATH, or no python3 for JSON encoding — silent no-op rather than
-# a hook error (a dropped banner is strictly better than a failing SessionStart).
-command -v rawclaw >/dev/null 2>&1 || exit 0
+@@RAWCLAW_RESOLVE@@
+
+# No python3 for JSON encoding — silent no-op rather than a hook error (a
+# dropped banner is strictly better than a failing SessionStart).
 command -v python3 >/dev/null 2>&1 || exit 0
 
 input=$(cat)
@@ -132,7 +136,7 @@ hold the superseding current truth; rawclaw is the dated raw record underneath i
 If the user seems to want to pick up a past session, offering to resume/fork it can help.
 BANNER
 
-pending=$(rawclaw tag-queue 2>/dev/null | head -n 8) || pending=""
+pending=$("$RAWCLAW" tag-queue 2>/dev/null | head -n 8) || pending=""
 if [ -n "$pending" ]; then
 	printf '[rawclaw] finished sessions awaiting topic tags — tag them before starting other work:\n'
 	printf '%s\n' "$pending" | sed 's/^/  /'
@@ -155,7 +159,7 @@ const rawclawTagQueueScript = `#!/bin/sh
 # Claude Code SessionEnd — the next session's agent picks the queue up.
 set -eu
 
-command -v rawclaw >/dev/null 2>&1 || exit 0
+@@RAWCLAW_RESOLVE@@
 
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
@@ -168,9 +172,63 @@ session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:spac
 transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 [ -n "$transcript_path" ] && [ -f "$transcript_path" ] || exit 0
 
-rawclaw tag-queue add "$session_id" >/dev/null 2>&1 || true
+"$RAWCLAW" tag-queue add "$session_id" >/dev/null 2>&1 || true
 exit 0
 `
+
+// resolvePlaceholder is the token every hook-script template carries where its
+// binary-resolution preamble goes; renderHookScript swaps it for rawclawResolveHead
+// at install time. It never reaches disk.
+const resolvePlaceholder = "@@RAWCLAW_RESOLVE@@"
+
+// shellSingleQuote wraps s as a single POSIX-sh word using single quotes,
+// escaping any embedded single quote via the '\" idiom. An absolute path with
+// a space or shell metacharacter (or an apostrophe, e.g. /Users/o'brien/...)
+// then interpolates into a generated hook as one safe literal word.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// rawclawBinQuoted returns the shell-quoted absolute path of the rawclaw binary
+// running `setup` (selfExe → os.Executable, made absolute), for baking into a
+// generated hook so it fires regardless of the hook's PATH. On any resolution
+// error it returns """ (an empty shell word): rawclawResolveHead's PATH-lookup
+// fallback then covers the hook, so setup never fails over an unresolvable self
+// path.
+func rawclawBinQuoted() string {
+	exe, err := selfExe()
+	if err != nil {
+		return "''"
+	}
+	if abs, aerr := filepath.Abs(exe); aerr == nil {
+		exe = abs
+	}
+	return shellSingleQuote(exe)
+}
+
+// rawclawResolveHead is the POSIX-sh preamble every installed hook opens with.
+// It prefers the absolute rawclaw path setup baked in — a SessionStart/SessionEnd
+// hook does NOT inherit an interactive login PATH, which is exactly where a bare
+// `command -v rawclaw` silently fails (binary installed, its dir off the hook's
+// PATH) — then falls back to a PATH lookup if that path is gone (binary moved or
+// upgraded elsewhere), and finally exits 0 (silent no-op, never a hook error) if
+// neither resolves. quotedBin is a shell-quoted word (possibly """).
+func rawclawResolveHead(quotedBin string) string {
+	return "# Resolve the rawclaw binary. `rawclaw setup` baked in the absolute path of the\n" +
+		"# binary that ran it, so this hook fires regardless of PATH — a SessionStart/\n" +
+		"# SessionEnd hook does not inherit an interactive login PATH, where a bare\n" +
+		"# `command -v rawclaw` can fail even with rawclaw installed. Fall back to a PATH\n" +
+		"# lookup if the baked path is gone (binary moved/upgraded), else silent no-op.\n" +
+		"RAWCLAW=" + quotedBin + "\n" +
+		`[ -n "$RAWCLAW" ] && [ -x "$RAWCLAW" ] || RAWCLAW=$(command -v rawclaw 2>/dev/null) || exit 0`
+}
+
+// renderHookScript turns a hook-script template into the script written to disk,
+// substituting the binary-resolution preamble for resolvePlaceholder. quotedBin
+// is resolved once per install so every script in one install shares it.
+func renderHookScript(tmpl, quotedBin string) string {
+	return strings.ReplaceAll(tmpl, resolvePlaceholder, rawclawResolveHead(quotedBin))
+}
 
 // setupTarget names the agent whose config `rawclaw setup` is wiring into:
 // Claude Code (always targeted) or Codex (targeted when its config dir
@@ -530,15 +588,19 @@ func installRawclawCodexHook(configDir string) error {
 // fails). Shared by both the Claude Code and Codex targets — they differ in
 // which JSON file the entries are merged into and whether the SessionEnd
 // tagging-queue hook is wired (withSessionEnd).
-func installRawclawHookAt(configDir, configFile string, withSessionEnd bool, primeContent string) error {
+func installRawclawHookAt(configDir, configFile string, withSessionEnd bool, primeTemplate string) error {
+	// Resolve this binary's absolute path once and bake it into every script
+	// this install writes, so the hooks fire regardless of the hook's PATH.
+	quotedBin := rawclawBinQuoted()
+
 	scriptPath := hookScriptPath(configDir)
-	if err := writeHookScript(scriptPath, primeContent); err != nil {
+	if err := writeHookScript(scriptPath, renderHookScript(primeTemplate, quotedBin)); err != nil {
 		return fmt.Errorf("install hook script: %w", err)
 	}
 	entries := map[string]string{"SessionStart": scriptPath}
 	if withSessionEnd {
 		tagPath := tagQueueScriptPath(configDir)
-		if err := writeHookScript(tagPath, rawclawTagQueueScript); err != nil {
+		if err := writeHookScript(tagPath, renderHookScript(rawclawTagQueueScript, quotedBin)); err != nil {
 			return fmt.Errorf("install tag-queue hook script: %w", err)
 		}
 		entries["SessionEnd"] = tagPath

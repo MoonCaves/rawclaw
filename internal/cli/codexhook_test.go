@@ -61,8 +61,11 @@ func TestCodexPrimeScript_EmitsValidHookJSON(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Render the template with an empty baked path so resolution falls through
+	// to the PATH stub above — this regression is about the JSON envelope, and
+	// exercising the fallback keeps it independent of this machine's own binary.
 	scriptPath := filepath.Join(t.TempDir(), "prime.sh")
-	if err := os.WriteFile(scriptPath, []byte(rawclawCodexPrimeScript), 0o755); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(renderHookScript(rawclawCodexPrimeScript, "''")), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
