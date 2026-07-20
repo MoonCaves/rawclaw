@@ -177,10 +177,11 @@ func TestMigrateLegacyClaudeWeb_SplitsTwoAccounts(t *testing.T) {
 }
 
 // TestMigrateLegacyClaudeWeb_FailClosedLeavesLegacyIntact is the crown data-
-// safety guarantee: if the split can't complete (here the per-account dbs can't
-// be written because the cache dir is read-only, so the verify pass finds them
-// missing), the migration ABORTS with an error and leaves the legacy db fully
-// intact — never renamed, never partially destroyed. claude-web data is the only
+// safety guarantee: if the split can't complete — here the per-account db can't
+// be CREATED because the cache dir is read-only, so the import WRITE persists
+// nothing and migrateAccount fails closed at the WRITE (before the verify pass
+// runs) — the migration ABORTS with an error and leaves the legacy db fully
+// intact: never renamed, never partially destroyed. claude-web data is the only
 // copy, so a failed migration must lose nothing.
 func TestMigrateLegacyClaudeWeb_FailClosedLeavesLegacyIntact(t *testing.T) {
 	emptyStore(t)

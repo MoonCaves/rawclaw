@@ -5,12 +5,173 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
+
+func setSchemaVersion(t *testing.T, dbp string, v int) {
+	t.Helper()
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open rw: %v", err)
+	}
+	defer con.Close()
+	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", strconv.Itoa(v)); err != nil {
+		t.Fatalf("set schema_version: %v", err)
+	}
+}
+
+func readSchemaVersion(t *testing.T, dbp string) string {
+	t.Helper()
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("open ro: %v", err)
+	}
+	defer con.Close()
+	var v string
+	if err := con.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&v); err != nil {
+		t.Fatalf("read schema_version: %v", err)
+	}
+	return v
+}
+
+// TestEnsureClaudeWebSchema_SurvivesVersionBump is the F-1 durability guarantee:
+// a claude-web db written at an OLDER schema version must SURVIVE a schema-ensure
+// by a newer binary — its rows preserved in place, the version re-stamped — NOT
+// dropped by a rebuild (claude-web is import-only; this db is the only copy).
+func TestEnsureClaudeWebSchema_SurvivesVersionBump(t *testing.T) {
+	dbp := cwDB(t)
+	cwImport(t, dbp, map[string][]model.Message{"c1": {msg("m1", "survive the bump", 1)}}, 100)
+	setSchemaVersion(t, dbp, store.SchemaVersion-1) // simulate a db from a prior binary
+
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureClaudeWebSchema(con); err != nil {
+		t.Fatalf("EnsureClaudeWebSchema: %v", err)
+	}
+	con.Close()
+
+	if n := messageCount(t, dbp, "c1"); n != 1 {
+		t.Errorf("claude-web data LOST across a version bump: c1 has %d messages, want 1", n)
+	}
+	if v := readSchemaVersion(t, dbp); v != strconv.Itoa(store.SchemaVersion) {
+		t.Errorf("schema_version not re-stamped to current: got %q, want %d", v, store.SchemaVersion)
+	}
+}
+
+// TestEnsureClaudeWebSchema_ContrastGenericRebuildEmpties proves the fix MATTERS:
+// the GENERIC EnsureSchema (what claude/codex use) DESTROYS the same db on a
+// version mismatch — so routing claude-web through the in-place path is a real,
+// necessary difference, not a no-op.
+func TestEnsureClaudeWebSchema_ContrastGenericRebuildEmpties(t *testing.T) {
+	dbp := cwDB(t)
+	cwImport(t, dbp, map[string][]model.Message{"c1": {msg("m1", "doomed under generic", 1)}}, 100)
+	setSchemaVersion(t, dbp, store.SchemaVersion-1)
+
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureSchema(con, "claude-web"); err != nil { // the destructive path
+		t.Fatal(err)
+	}
+	con.Close()
+
+	if n := messageCount(t, dbp, "c1"); n != 0 {
+		t.Fatalf("premise check: generic EnsureSchema should REBUILD (empty) on a mismatch, but c1 has %d messages", n)
+	}
+}
+
+// TestEnsureClaudeWebSchema_FreshDbStamps: a fresh db (no version marker) is
+// created in place and stamped current — the everyday import path.
+func TestEnsureClaudeWebSchema_FreshDbStamps(t *testing.T) {
+	dbp := filepath.Join(t.TempDir(), "fresh.db")
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureClaudeWebSchema(con); err != nil {
+		t.Fatalf("fresh ensure: %v", err)
+	}
+	con.Close()
+	if v := readSchemaVersion(t, dbp); v != strconv.Itoa(store.SchemaVersion) {
+		t.Errorf("fresh db schema_version = %q, want %d", v, store.SchemaVersion)
+	}
+}
+
+// TestEnsureClaudeWebSchema_FailsClosedOnUnknownVersion: a stored version this
+// binary can't additively migrate (here a FUTURE version) fails closed with an
+// error and leaves the data untouched — LOUD, never silent drift, never a rebuild.
+func TestEnsureClaudeWebSchema_FailsClosedOnUnknownVersion(t *testing.T) {
+	dbp := cwDB(t)
+	cwImport(t, dbp, map[string][]model.Message{"c1": {msg("m1", "keep me", 1)}}, 100)
+	setSchemaVersion(t, dbp, store.SchemaVersion+1) // a future, un-migratable version
+
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = EnsureClaudeWebSchema(con)
+	con.Close()
+	if err == nil {
+		t.Fatal("must fail closed on an un-migratable version, not silently proceed")
+	}
+	if n := messageCount(t, dbp, "c1"); n != 1 {
+		t.Errorf("fail-closed must not touch data: c1 has %d messages, want 1", n)
+	}
+}
+
+// TestImportClaudeWeb_UUIDlessMessageDedup is the F-2 guard: a message with no
+// uuid must not re-insert on re-import (it dedups by content hash).
+func TestImportClaudeWeb_UUIDlessMessageDedup(t *testing.T) {
+	dbp := cwDB(t)
+	conv := map[string][]model.Message{"c1": {
+		{Role: "user", Text: "has a uuid", TS: 1, UUID: "m1"},
+		{Role: "assistant", Text: "no uuid on this one", TS: 2, UUID: ""},
+	}}
+	cwImport(t, dbp, conv, 100)
+	if n := messageCount(t, dbp, "c1"); n != 2 {
+		t.Fatalf("first import: c1 has %d messages, want 2", n)
+	}
+	cwImport(t, dbp, conv, 100) // re-import the same export
+	if n := messageCount(t, dbp, "c1"); n != 2 {
+		t.Errorf("uuidless message re-inserted on re-import: c1 has %d messages, want 2 (F-2 content-hash dedup)", n)
+	}
+}
+
+// TestImportClaudeWeb_EmptyAccountRefusedUnderMirror is the F-3 guard: an export
+// with no account uuid is refused under mirror (fail-closed, no write) but
+// allowed under the keep default (isolated in the acct-unknown bucket).
+func TestImportClaudeWeb_EmptyAccountRefusedUnderMirror(t *testing.T) {
+	t.Run("mirror refuses", func(t *testing.T) {
+		dbp := cwDB(t)
+		t.Setenv("RAWCLAW_RETENTION", "mirror")
+		cs, msgs := cwSource(map[string][]model.Message{"c1": {msg("m1", "x", 1)}})
+		_, err := ImportClaudeWeb(dbp, cs, msgs, "claude-web", "", 100)
+		if err == nil {
+			t.Fatal("empty account under mirror must be refused")
+		}
+		if _, statErr := os.Stat(dbp); statErr == nil {
+			t.Error("refused import must not create/write the db")
+		}
+	})
+	t.Run("keep allows", func(t *testing.T) {
+		dbp := cwDB(t) // no RAWCLAW_RETENTION → keep
+		cs, msgs := cwSource(map[string][]model.Message{"c1": {msg("m1", "x", 1)}})
+		if _, err := ImportClaudeWeb(dbp, cs, msgs, "claude-web", "", 100); err != nil {
+			t.Fatalf("empty account under keep must be allowed: %v", err)
+		}
+		if n := messageCount(t, dbp, "c1"); n != 1 {
+			t.Errorf("account-less import under keep should land: c1 has %d messages, want 1", n)
+		}
+	})
+}
 
 // cwSource turns a convID -> messages map into the (containers, MessagesFunc)
 // pair ImportClaudeWeb consumes, in deterministic id order. Container.Path is

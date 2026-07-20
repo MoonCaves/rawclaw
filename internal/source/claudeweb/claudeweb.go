@@ -26,12 +26,14 @@ package claudeweb
 
 import (
 	"archive/zip"
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"sync"
 
@@ -263,78 +265,126 @@ func (a *Adapter) load() error {
 }
 
 func (a *Adapter) doLoad() error {
-	data, err := a.readConversations()
-	if err != nil {
-		return err
-	}
-
-	var convs []conversation
-	if err := json.Unmarshal(data, &convs); err != nil {
-		return fmt.Errorf("%s: %s is not a valid conversation array (not a Claude data-export?): %w", ID, conversationsFile, err)
-	}
-
-	a.byID = make(map[string]conversation, len(convs))
-	a.order = make([]string, 0, len(convs))
-	for _, c := range convs {
+	a.byID = make(map[string]conversation)
+	err := a.streamConversations(func(c conversation) error {
 		if c.UUID == "" {
-			continue // a conversation with no uuid cannot be identified — skip it
+			return nil // a conversation with no uuid cannot be identified — skip it
 		}
 		if _, dup := a.byID[c.UUID]; dup {
-			continue // conversation-level dedup within the dump
+			return nil // conversation-level dedup within the dump (and across batches)
 		}
 		a.byID[c.UUID] = c
 		a.order = append(a.order, c.UUID)
+		return nil
+	})
+	if err != nil {
+		// A malformed member fails the WHOLE import atomically: reset any partial
+		// state so no half-loaded export is ever observed (no partial write
+		// downstream, since Discover errors before ImportClaudeWeb runs).
+		a.byID, a.order = nil, nil
+		return err
 	}
 	return nil
 }
 
-// readConversations returns the raw conversations.json bytes. A directory
-// import reads the file directly; a file import is opened as a ZIP export and
-// the member is inflated.
-func (a *Adapter) readConversations() ([]byte, error) {
+// batchMemberRe matches a multi-batch export member: "data-…-batch-NNNN.zip".
+// A large account exports as several batch zips that are ONE logical import.
+var batchMemberRe = regexp.MustCompile(`^(.*-batch-)\d+\.zip$`)
+
+// streamConversations reads every conversations.json source in turn and streams
+// each conversation object to fn WITHOUT loading a whole file into memory (a
+// json.Decoder buffers only the current object). The sources are: one file for
+// a directory import; or, for a zip import, all the batch-sibling zips (globbed
+// when the given zip is part of a "…-batch-NNNN.zip" set) — so a multi-batch
+// export ingests as one.
+func (a *Adapter) streamConversations(fn func(conversation) error) error {
 	info, statErr := os.Stat(a.path)
 	if statErr != nil {
-		return nil, fmt.Errorf("%s: %w", ID, statErr)
+		return fmt.Errorf("%s: %w", ID, statErr)
 	}
 	if info.IsDir() {
-		p := filepath.Join(a.path, conversationsFile)
-		b, readErr := os.ReadFile(p)
-		if readErr != nil {
-			return nil, fmt.Errorf("%s: read %s: %w", ID, conversationsFile, readErr)
+		return streamFile(filepath.Join(a.path, conversationsFile), fn)
+	}
+	for _, zp := range batchSiblings(a.path) {
+		if err := streamZip(zp, fn); err != nil {
+			return err
 		}
-		return b, nil
 	}
-	b, zipErr := readZipMember(a.path, conversationsFile)
-	if zipErr != nil {
-		return nil, zipErr
-	}
-	return b, nil
+	return nil
 }
 
-// readZipMember inflates a single named member from a ZIP, matching either the
-// exact name or the basename at any nesting depth (an export may wrap its
-// members under a top-level directory). A missing member is reported as "not a
-// Claude data-export" rather than a bare not-found.
-func readZipMember(zipPath, member string) ([]byte, error) {
+// batchSiblings returns every zip belonging to zipPath's multi-batch set (all
+// "<prefix>-batch-*.zip" in the same directory), sorted; or just zipPath itself
+// when it is not a batch member.
+func batchSiblings(zipPath string) []string {
+	m := batchMemberRe.FindStringSubmatch(filepath.Base(zipPath))
+	if m == nil {
+		return []string{zipPath}
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(zipPath), m[1]+"*.zip"))
+	if err != nil || len(matches) == 0 {
+		return []string{zipPath}
+	}
+	sort.Strings(matches)
+	return matches
+}
+
+// streamFile streams a directory-import's conversations.json.
+func streamFile(p string, fn func(conversation) error) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return fmt.Errorf("%s: read %s: %w", ID, conversationsFile, err)
+	}
+	defer f.Close()
+	return decodeConversationArray(bufio.NewReader(f), fn)
+}
+
+// streamZip streams conversations.json out of one zip export, matching the
+// member by exact name or basename at any nesting depth. A missing member is a
+// clear "not a Claude data-export" error.
+func streamZip(zipPath string, fn func(conversation) error) error {
 	zr, err := zip.OpenReader(zipPath)
 	if err != nil {
-		return nil, fmt.Errorf("%s: open %s as a ZIP export: %w", ID, filepath.Base(zipPath), err)
+		return fmt.Errorf("%s: open %s as a ZIP export: %w", ID, filepath.Base(zipPath), err)
 	}
 	defer zr.Close()
 	for _, f := range zr.File {
-		if f.Name != member && path.Base(f.Name) != member {
+		if f.Name != conversationsFile && path.Base(f.Name) != conversationsFile {
 			continue
 		}
 		rc, openErr := f.Open()
 		if openErr != nil {
-			return nil, fmt.Errorf("%s: open %s in %s: %w", ID, member, filepath.Base(zipPath), openErr)
+			return fmt.Errorf("%s: open %s in %s: %w", ID, conversationsFile, filepath.Base(zipPath), openErr)
 		}
-		b, readErr := io.ReadAll(rc)
+		err := decodeConversationArray(rc, fn)
 		_ = rc.Close()
-		if readErr != nil {
-			return nil, fmt.Errorf("%s: read %s in %s: %w", ID, member, filepath.Base(zipPath), readErr)
-		}
-		return b, nil
+		return err
 	}
-	return nil, fmt.Errorf("%s: %s not found in %s — not a Claude data-export", ID, member, filepath.Base(zipPath))
+	return fmt.Errorf("%s: %s not found in %s — not a Claude data-export", ID, conversationsFile, filepath.Base(zipPath))
+}
+
+// decodeConversationArray streams a top-level JSON array of conversation objects
+// from r, decoding ONE object at a time (bounded memory, 100 MB+ safe). It
+// requires the body to open with '['; a non-array or a malformed object is a
+// clear error. Prior art: the encoding/json Decoder.Token + Decode-in-a-loop
+// streaming-array pattern.
+func decodeConversationArray(r io.Reader, fn func(conversation) error) error {
+	dec := json.NewDecoder(r)
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("%s: %s is not a valid conversation array (not a Claude data-export?): %w", ID, conversationsFile, err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '[' {
+		return fmt.Errorf("%s: %s is not a JSON array (not a Claude data-export?)", ID, conversationsFile)
+	}
+	for dec.More() {
+		var c conversation
+		if err := dec.Decode(&c); err != nil {
+			return fmt.Errorf("%s: malformed conversation in %s: %w", ID, conversationsFile, err)
+		}
+		if err := fn(c); err != nil {
+			return err
+		}
+	}
+	return nil
 }

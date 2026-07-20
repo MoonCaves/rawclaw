@@ -81,6 +81,9 @@ func legacyClaudeWebDBPath() string { return index.DBPath(claudeWebDBStem) }
 // label (both separators are load-bearing: lineage parent/child, archive
 // machine/project, the read-ref uuid8:uuid8).
 func accountSlug(account string) string {
+	if account == "" {
+		return "acct-unknown" // account-less export (allowed only under keep; see F-3)
+	}
 	cleaned := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
@@ -194,8 +197,17 @@ func migrateAccount(account string, group []legacySession, watermark float64) er
 		msgByID[s.id] = s.msgs
 	}
 	msgs := func(c source.Container) ([]model.Message, error) { return msgByID[c.ID], nil }
-	if _, err := index.ImportClaudeWeb(dbp, cs, msgs, claudeweb.ID, account, watermark); err != nil {
+	stats, err := index.ImportClaudeWeb(dbp, cs, msgs, claudeweb.ID, account, watermark)
+	if err != nil {
 		return err
+	}
+	// The import soft-no-ops if the destination db can't be opened (e.g. a
+	// read-only cache dir). For a migration that MUST persist every conversation,
+	// treat a short write as a HARD failure HERE — so a write problem aborts
+	// fail-closed at the WRITE (before the verify pass), and the legacy db is
+	// never retired.
+	if persisted := stats.AddedConversations + stats.UpdatedConversations + stats.SkippedConversations; persisted < len(group) {
+		return fmt.Errorf("write persisted %d of %d conversations", persisted, len(group))
 	}
 	return restoreMissingSince(dbp, group)
 }

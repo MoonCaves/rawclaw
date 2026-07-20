@@ -100,6 +100,130 @@ func writeZipExport(t *testing.T, body, member string) string {
 	return zp
 }
 
+// writeNamedZip writes a zip named `name` in dir, holding conversations.json.
+func writeNamedZip(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	zp := filepath.Join(dir, name)
+	f, err := os.Create(zp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zw := zip.NewWriter(f)
+	w, err := zw.Create(conversationsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return zp
+}
+
+// TestMultiBatchImportedAsOne: a large account exports as several
+// "…-batch-NNNN.zip" files; pointing import at one globs the whole set and
+// ingests every conversation, nothing dropped.
+func TestMultiBatchImportedAsOne(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeNamedZip(t, dir, "data-acct1-ts-hash-batch-0000.zip",
+		`[{"uuid":"c1","account":{"uuid":"acct1"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"in batch 0"}]}]}]`)
+	writeNamedZip(t, dir, "data-acct1-ts-hash-batch-0001.zip",
+		`[{"uuid":"c2","account":{"uuid":"acct1"},"chat_messages":[{"uuid":"m2","sender":"human","created_at":"2026-07-16T10:00:00Z","content":[{"type":"text","text":"in batch 1"}]}]}]`)
+	// A sibling non-batch zip must NOT be pulled in.
+	writeNamedZip(t, dir, "unrelated.zip", `[{"uuid":"cX","chat_messages":[]}]`)
+
+	got, err := New(filepath.Join(dir, "data-acct1-ts-hash-batch-0000.zip")).Discover()
+	if err != nil {
+		t.Fatalf("Discover(batch): %v", err)
+	}
+	ids := map[string]bool{}
+	for _, c := range got {
+		ids[c.ID] = true
+	}
+	if len(got) != 2 || !ids["c1"] || !ids["c2"] {
+		t.Fatalf("multi-batch import = %v, want exactly {c1,c2} from both batches", ids)
+	}
+	if ids["cX"] {
+		t.Error("an unrelated sibling zip was pulled into the batch import")
+	}
+}
+
+// TestMalformedMidStreamErrorsNoPartial: a conversations.json that goes bad
+// partway through is a clear error and yields NO containers (no partial load →
+// no partial write downstream, since Discover errors before any db is opened).
+func TestMalformedMidStreamErrorsNoPartial(t *testing.T) {
+	t.Parallel()
+	dir := writeDirExport(t, `[{"uuid":"c1","chat_messages":[]},{"uuid":`)
+	got, err := New(dir).Discover()
+	if err == nil {
+		t.Fatal("a malformed conversation mid-stream must error")
+	}
+	if got != nil {
+		t.Errorf("a malformed export must yield no containers (no partial), got %+v", got)
+	}
+}
+
+// TestUsersJSONNeverRead: the adapter reads ONLY conversations.json — a
+// users.json (name/email/phone) beside it is never opened, so its PII can't
+// reach the index. The account axis reads the opaque account uuid only.
+func TestUsersJSONNeverRead(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "users.json"),
+		[]byte(`[{"uuid":"u1","email_address":"secret@example.com","full_name":"Jane Secret","phone_number":"+15550001111"}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, conversationsFile),
+		[]byte(`[{"uuid":"c1","account":{"uuid":"acct-abc"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"hello world"}]}]}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ad := New(dir)
+	msgs, err := ad.Messages(source.Container{ID: "c1"})
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	for _, m := range msgs {
+		for _, pii := range []string{"secret@example.com", "Jane Secret", "+15550001111"} {
+			if contains(m.Text, pii) {
+				t.Errorf("users.json PII %q leaked into a message: %q", pii, m.Text)
+			}
+		}
+	}
+	acct, err := ad.Account()
+	if err != nil || acct != "acct-abc" {
+		t.Errorf("Account() = (%q,%v), want (acct-abc,nil)", acct, err)
+	}
+}
+
+// TestBranchedConversationCreatedAtOrder: a branched conversation
+// (parent_message_uuid present, an edited/regenerated turn) indexes ALL messages
+// in created_at order — no tree walk, matching CLI precedent.
+func TestBranchedConversationCreatedAtOrder(t *testing.T) {
+	t.Parallel()
+	dir := writeDirExport(t, `[{"uuid":"c1","chat_messages":[
+	  {"uuid":"m3","sender":"assistant","created_at":"2026-07-15T10:00:30Z","parent_message_uuid":"m1","content":[{"type":"text","text":"branch two"}]},
+	  {"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","parent_message_uuid":"root","content":[{"type":"text","text":"root turn"}]},
+	  {"uuid":"m2","sender":"assistant","created_at":"2026-07-15T10:00:15Z","parent_message_uuid":"m1","content":[{"type":"text","text":"branch one"}]}
+	]}]`)
+	msgs, err := New(dir).Messages(source.Container{ID: "c1"})
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	want := []string{"root turn", "branch one", "branch two"}
+	if len(msgs) != len(want) {
+		t.Fatalf("want %d messages (all branches), got %d: %+v", len(want), len(msgs), msgs)
+	}
+	for i, w := range want {
+		if msgs[i].Text != w {
+			t.Errorf("message[%d] = %q, want %q (created_at order)", i, msgs[i].Text, w)
+		}
+	}
+}
+
 func TestDiscoverDirExport(t *testing.T) {
 	t.Parallel()
 	dir := writeDirExport(t, fixtureConversations)

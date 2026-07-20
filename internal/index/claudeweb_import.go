@@ -14,7 +14,9 @@ package index
 // the user's mirror setting — guarded so a stale export can't wipe fresher data.
 
 import (
+	"crypto/sha1"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 
@@ -34,6 +36,77 @@ import (
 // zip is inert). Keying per account keeps one account's freshness from gating
 // another's prune.
 const claudeWebWatermarkPrefix = "claudeweb_import_newest_updated_at:"
+
+// sourceClaudeWeb is the source_tool stamped on claude-web rows (parallels
+// sourceClaude). Used by the in-place schema-ensure's durability backfill.
+const sourceClaudeWeb = "claude-web"
+
+// EnsureClaudeWebSchema ensures a claude-web db's schema WITHOUT ever taking the
+// destructive DROP+rebuild path (store.Rebuild) that the generic EnsureSchema
+// uses on a schema-version mismatch. claude-web is the ONLY source with no
+// reconstructible source tree — this db is the SOLE copy of the user's imported
+// cloud history — so a rebuild would erase all of it. Schema evolution here is
+// therefore IN-PLACE and data-preserving only, mirroring migrateDurabilityColumns
+// (additive ALTER + backfill) and EnsureTopicSchema/EnsureVecSchema (own gates,
+// objects outside dropSQL).
+//
+// CONTRACT — loud, not silent:
+//   - fresh / current / OLDER version -> ensure the current objects exist
+//     additively and re-stamp, preserving every row (all base-schema evolution
+//     in this repo is additive: columns added in place, topic/vec on own gates).
+//   - NEWER version (a db written by a future binary) -> FAIL CLOSED: this binary
+//     can't safely read a shape it doesn't know. Never guess, never rebuild.
+//   - unreadable version -> FAIL CLOSED for the same reason.
+//
+// A future NON-additive base change is the one case this can't auto-handle: the
+// maintainer who lands it MUST extend this function with an explicit
+// data-preserving migration (and fail closed for versions below its floor)
+// rather than let an older db silently re-stamp into a mismatched shape.
+func EnsureClaudeWebSchema(con *sql.DB) error {
+	var version string
+	if err := con.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&version); err != nil {
+		// No readable version marker: a fresh (or pre-marker) db. The only "build"
+		// claude-web does is additive CREATE ... IF NOT EXISTS — never a DROP.
+		return ensureClaudeWebSchemaInPlace(con)
+	}
+	v, convErr := strconv.Atoi(version)
+	switch {
+	case convErr != nil:
+		return fmt.Errorf("claude-web: unreadable db schema_version %q — refusing to open (the destructive rebuild path would erase import-only data)", version)
+	case v > store.SchemaVersion:
+		return fmt.Errorf("claude-web: db schema_version %d is NEWER than this binary supports (%d) — refusing to open; upgrade rawclaw (a rebuild would erase import-only data)", v, store.SchemaVersion)
+	default:
+		// current or older -> additive in-place ensure + re-stamp (data-preserving).
+		return ensureClaudeWebSchemaInPlace(con)
+	}
+}
+
+// ensureClaudeWebSchemaInPlace creates any missing base objects (tables, indexes,
+// FTS) additively, runs the in-place durability-column migration, and stamps the
+// current schema_version — never dropping anything. Idempotent on a fresh or a
+// current db.
+func ensureClaudeWebSchemaInPlace(con *sql.DB) error {
+	if _, err := con.Exec(store.Schema); err != nil {
+		return fmt.Errorf("claude-web ensure base schema: %w", err)
+	}
+	if _, err := con.Exec("SELECT 1 FROM messages_fts LIMIT 1"); err != nil {
+		if _, err := con.Exec(store.FTSSQL); err != nil {
+			return fmt.Errorf("claude-web ensure fts: %w", err)
+		}
+	}
+	// Additive, PRAGMA-guarded durability columns (a no-op for claude-web rows,
+	// which ImportClaudeWeb always stamps, but kept for parity with the generic
+	// in-place migration).
+	if err := migrateDurabilityColumns(con, sourceClaudeWeb); err != nil {
+		return fmt.Errorf("claude-web ensure durability columns: %w", err)
+	}
+	if _, err := con.Exec(
+		"INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", strconv.Itoa(store.SchemaVersion),
+	); err != nil {
+		return fmt.Errorf("claude-web stamp schema_version: %w", err)
+	}
+	return nil
+}
 
 // ClaudeWebImportStats is one import's reconciliation outcome, for the summary
 // line. Conversations partition into added (new) / updated (gained messages) /
@@ -72,13 +145,25 @@ type ClaudeWebImportStats struct {
 func ImportClaudeWeb(dbp string, cs []source.Container, msgs MessagesFunc, sourceID, account string, newestUpdatedAt float64) (ClaudeWebImportStats, error) {
 	var stats ClaudeWebImportStats
 
+	// F-3: an export with no account uuid gives every account-less import the
+	// SAME reconcile bucket + watermark (source_path=""), so under mirror one
+	// such import could cross-prune another's conversations. Refuse it under
+	// mirror (fail-closed, before any db side effect); under the keep default the
+	// shared bucket is harmless (keep never prunes), so it is allowed.
+	if account == "" && retention.RetentionMirror() {
+		return stats, fmt.Errorf("claude-web import: refusing an export with no account uuid under RAWCLAW_RETENTION=mirror — account-less imports share one reconcile bucket, so mirror could cross-prune unrelated conversations; import under the default (keep) instead")
+	}
+
 	con, openErr := store.ConnectRW(dbp)
 	if openErr != nil {
 		return stats, nil // can't open (locked) — degrade to a no-op, like the file-scan path
 	}
 	defer con.Close()
 
-	if err := EnsureSchema(con, sourceID); err != nil {
+	// EnsureClaudeWebSchema — NOT the generic EnsureSchema: claude-web is
+	// import-only (this db is the sole copy), so it must NEVER take the
+	// destructive DROP+rebuild path a schema-version mismatch triggers.
+	if err := EnsureClaudeWebSchema(con); err != nil {
 		if isBusy(err) {
 			return stats, nil
 		}
@@ -247,10 +332,29 @@ func loadMessageUUIDs(con *sql.DB) (map[string]map[string]struct{}, error) {
 // conversation is, by definition, not missing. Returns the number of messages
 // appended. A new session inserts all its messages.
 func upsertClaudeWebSession(con *sql.DB, c source.Container, ms []model.Message, sourceID, account string, priorUUIDs map[string]struct{}, existed bool) (added int, err error) {
+	// F-2: a message with a uuid dedups on it (the common path). A uuidLESS
+	// message can't, so on a RE-import it dedups on a content hash against the
+	// session's existing uuidless rows — without this a re-import re-inserts every
+	// uuidless message every time. Within a SINGLE import, identical uuidless
+	// messages are NOT collapsed (they may be genuinely distinct turns — keep
+	// everything); a subsequent re-import still won't duplicate them, since they
+	// all hash to the one existing identity.
+	var emptyHashes map[string]struct{} // existing uuidless content hashes (lazy)
 	for _, m := range ms {
-		if existed && m.UUID != "" {
-			if _, dup := priorUUIDs[m.UUID]; dup {
-				continue // already indexed (idempotent skip)
+		if m.UUID != "" {
+			if existed {
+				if _, dup := priorUUIDs[m.UUID]; dup {
+					continue // already indexed (idempotent skip)
+				}
+			}
+		} else if existed {
+			if emptyHashes == nil {
+				if emptyHashes, err = loadEmptyUUIDHashes(con, c.ID); err != nil {
+					return added, err
+				}
+			}
+			if _, dup := emptyHashes[messageContentHash(m)]; dup {
+				continue // already indexed on a prior import (content-hash dedup)
 			}
 		}
 		if _, err := con.Exec(
@@ -276,8 +380,8 @@ func upsertClaudeWebSession(con *sql.DB, c source.Container, ms []model.Message,
 	}
 	// source_path holds the owning ACCOUNT uuid — for an import source it has no
 	// filesystem meaning, so it carries the reconciliation-scoping account
-	// instead (the slice-02 bridge before slice 03's per-account db). missing_since
-	// NULL: a present conversation is, by definition, not missing.
+	// instead (also how the per-account db self-identifies its account and how the
+	// legacy split groups). missing_since NULL: a present conversation is not missing.
 	if _, err := con.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
 		c.ID, nullFloat(started), nullFloat(last), count, b2i(c.IsSubagent), parentArg, originOr(""), sourceID, account,
@@ -285,6 +389,42 @@ func upsertClaudeWebSession(con *sql.DB, c source.Container, ms []model.Message,
 		return added, fmt.Errorf("claude-web import: upsert session: %w", err)
 	}
 	return added, nil
+}
+
+// messageContentHash is the dedup identity for a uuidless message: a stable hash
+// of its role + content + iso timestamp (a message with none of a uuid, text, or
+// timestamp is degenerate and hashes the same as its twin — correctly deduped).
+func messageContentHash(m model.Message) string {
+	return hashParts(m.Role, m.Text, m.TSISO)
+}
+
+// loadEmptyUUIDHashes returns the content hashes of a session's already-indexed
+// uuidless messages — the existing side of the F-2 content-hash dedup. Usually
+// empty (real exports carry uuids), so this query normally returns no rows.
+func loadEmptyUUIDHashes(con *sql.DB, sessionID string) (map[string]struct{}, error) {
+	rows, err := con.Query(
+		"SELECT role, content, COALESCE(ts_iso,'') FROM messages WHERE session_id=? AND (uuid IS NULL OR uuid='')", sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("claude-web import: load uuidless hashes: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var role, content, tsISO string
+		if err := rows.Scan(&role, &content, &tsISO); err != nil {
+			return nil, err
+		}
+		out[hashParts(role, content, tsISO)] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// hashParts hashes the identity fields of a message, NUL-separated so distinct
+// field splits can't collide.
+func hashParts(role, content, tsISO string) string {
+	sum := sha1.Sum([]byte(role + "\x00" + content + "\x00" + tsISO))
+	return hex.EncodeToString(sum[:])
 }
 
 // deleteSession removes one session's messages and row (mirror-mode prune or an
