@@ -57,11 +57,19 @@ type Adapter struct {
 	path string // the import path: a .zip export or an extracted directory
 
 	once    sync.Once
-	backing string                  // real, stat-able file the containers watermark on
 	byID    map[string]conversation // conversation.uuid -> conversation
 	order   []string                // conversation.uuid in discovery order
 	loadErr error
 }
+
+// pathKey is a container's synthetic, stable Path: a per-conversation identity
+// keyed on the conversation uuid, NOT the transient export file. The export zip
+// is one-shot and non-canonical (a re-export is a different file holding the
+// same conversations), so a file-path watermark can't survive a re-import. The
+// claude-web import path (index.ImportClaudeWeb) reconciles on conversation
+// identity and never stats this value; it is stored as the row's source_path
+// purely as a stable identity.
+func pathKey(convUUID string) string { return ID + ":" + convUUID }
 
 // Compile-time proof the adapter satisfies the ingest port.
 var _ source.Source = (*Adapter)(nil)
@@ -75,12 +83,20 @@ func New(importPath string) *Adapter { return &Adapter{path: importPath} }
 // reads. Unknown fields are ignored (lenient parse), so a future schema tweak
 // that adds fields does not break the import.
 type conversation struct {
-	UUID         string    `json:"uuid"`
-	Name         string    `json:"name"`
-	Summary      string    `json:"summary"`
-	CreatedAt    string    `json:"created_at"`
-	UpdatedAt    string    `json:"updated_at"`
-	ChatMessages []message `json:"chat_messages"`
+	UUID         string     `json:"uuid"`
+	Name         string     `json:"name"`
+	Summary      string     `json:"summary"`
+	CreatedAt    string     `json:"created_at"`
+	UpdatedAt    string     `json:"updated_at"`
+	Account      accountRef `json:"account"`
+	ChatMessages []message  `json:"chat_messages"`
+}
+
+// accountRef is the owning account carried on every conversation. Only its uuid
+// is read — the opaque per-account identity used to scope re-import
+// reconciliation. No email / name / phone from the export is ever read (PII).
+type accountRef struct {
+	UUID string `json:"uuid"`
 }
 
 // message is the subset of an export chat_message this adapter reads. content
@@ -99,10 +115,11 @@ type message struct {
 // conversation: ID is the bare conversation uuid (the source name rides the
 // index's source_tool column, not the id); CWD is "" because the export drops
 // the working directory a Cowork/Code session ran in, so these cloud sessions
-// cannot be project-scoped; they are never subagents or forks. Path is the real
-// export artifact, so the index's file-watermark stat succeeds. A malformed or
-// non-Claude export is a real error (see load); an empty conversation array is
-// not — it yields zero containers.
+// cannot be project-scoped; they are never subagents or forks. Path is a stable
+// synthetic per-conversation key (see pathKey), not the transient export file,
+// so a re-import reconciles on conversation identity. A malformed or non-Claude
+// export is a real error (see load); an empty conversation array is not — it
+// yields zero containers.
 func (a *Adapter) Discover() ([]source.Container, error) {
 	if err := a.load(); err != nil {
 		return nil, err
@@ -111,11 +128,52 @@ func (a *Adapter) Discover() ([]source.Container, error) {
 	for _, id := range a.order {
 		out = append(out, source.Container{
 			ID:   id,
-			Path: a.backing,
+			Path: pathKey(id),
 			CWD:  "",
 		})
 	}
 	return out, nil
+}
+
+// Account returns the export's owning account uuid — the axis that scopes
+// re-import reconciliation so importing one account never touches another's
+// conversations. A Claude data-export is single-account (every conversation
+// carries the same account.uuid), so this returns the first non-empty account
+// uuid found; "" when the export carries none. Only the opaque uuid is read,
+// never the account's email / name / phone (PII).
+func (a *Adapter) Account() (string, error) {
+	if err := a.load(); err != nil {
+		return "", err
+	}
+	for _, id := range a.order {
+		if u := a.byID[id].Account.UUID; u != "" {
+			return u, nil
+		}
+	}
+	return "", nil
+}
+
+// NewestUpdatedAt returns the newest conversation updated_at across the export,
+// as epoch seconds — the staleness signal the import's mirror-prune guard reads
+// so an older re-export can never wipe conversations a newer one established. It
+// falls back to created_at for a conversation with no updated_at, and returns 0
+// for an empty export.
+func (a *Adapter) NewestUpdatedAt() (float64, error) {
+	if err := a.load(); err != nil {
+		return 0, err
+	}
+	var newest float64
+	for _, id := range a.order {
+		c := a.byID[id]
+		ts := parse.ISOToEpoch(c.UpdatedAt)
+		if ts == 0 {
+			ts = parse.ISOToEpoch(c.CreatedAt)
+		}
+		if ts > newest {
+			newest = ts
+		}
+	}
+	return newest, nil
 }
 
 // Messages maps one conversation's chat_messages onto normalized messages in
@@ -205,11 +263,10 @@ func (a *Adapter) load() error {
 }
 
 func (a *Adapter) doLoad() error {
-	data, backing, err := a.readConversations()
+	data, err := a.readConversations()
 	if err != nil {
 		return err
 	}
-	a.backing = backing
 
 	var convs []conversation
 	if err := json.Unmarshal(data, &convs); err != nil {
@@ -231,29 +288,27 @@ func (a *Adapter) doLoad() error {
 	return nil
 }
 
-// readConversations returns the raw conversations.json bytes plus a real,
-// stat-able backing path for the watermark. A directory import reads the file
-// directly; a file import is opened as a ZIP export and the member is inflated.
-func (a *Adapter) readConversations() (data []byte, backing string, err error) {
+// readConversations returns the raw conversations.json bytes. A directory
+// import reads the file directly; a file import is opened as a ZIP export and
+// the member is inflated.
+func (a *Adapter) readConversations() ([]byte, error) {
 	info, statErr := os.Stat(a.path)
 	if statErr != nil {
-		return nil, "", fmt.Errorf("%s: %w", ID, statErr)
+		return nil, fmt.Errorf("%s: %w", ID, statErr)
 	}
 	if info.IsDir() {
 		p := filepath.Join(a.path, conversationsFile)
 		b, readErr := os.ReadFile(p)
 		if readErr != nil {
-			return nil, "", fmt.Errorf("%s: read %s: %w", ID, conversationsFile, readErr)
+			return nil, fmt.Errorf("%s: read %s: %w", ID, conversationsFile, readErr)
 		}
-		return b, p, nil
+		return b, nil
 	}
 	b, zipErr := readZipMember(a.path, conversationsFile)
 	if zipErr != nil {
-		return nil, "", zipErr
+		return nil, zipErr
 	}
-	// The ZIP itself is the stable, real backing file for the watermark; the
-	// member is transient inside it.
-	return b, a.path, nil
+	return b, nil
 }
 
 // readZipMember inflates a single named member from a ZIP, matching either the

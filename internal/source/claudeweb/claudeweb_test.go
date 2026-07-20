@@ -7,6 +7,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/source"
 )
 
@@ -124,8 +125,10 @@ func TestDiscoverDirExport(t *testing.T) {
 		if c.IsSubagent || c.ParentID != "" {
 			t.Errorf("container %q must be a root session, got IsSubagent=%v ParentID=%q", c.ID, c.IsSubagent, c.ParentID)
 		}
-		if _, err := os.Stat(c.Path); err != nil {
-			t.Errorf("container %q Path %q must be a real, stat-able file: %v", c.ID, c.Path, err)
+		// Path is a stable synthetic per-conversation key, not the transient
+		// export file, so a re-import reconciles on conversation identity.
+		if want := "claude-web:" + c.ID; c.Path != want {
+			t.Errorf("container %q Path = %q, want synthetic key %q", c.ID, c.Path, want)
 		}
 	}
 }
@@ -142,9 +145,28 @@ func TestDiscoverZipExport(t *testing.T) {
 		t.Fatalf("want 3 containers from zip, got %d", len(got))
 	}
 	for _, c := range got {
-		if c.Path != zp {
-			t.Errorf("zip-backed container Path = %q, want the zip path %q", c.Path, zp)
+		if want := "claude-web:" + c.ID; c.Path != want {
+			t.Errorf("zip-backed container Path = %q, want synthetic key %q", c.Path, want)
 		}
+	}
+}
+
+func TestNewestUpdatedAt(t *testing.T) {
+	t.Parallel()
+	ad := New(writeDirExport(t, fixtureConversations))
+	got, err := ad.NewestUpdatedAt()
+	if err != nil {
+		t.Fatalf("NewestUpdatedAt: %v", err)
+	}
+	// c3's updated_at 2026-07-17T08:10:00Z is the newest across the fixture.
+	want := parse.ISOToEpoch("2026-07-17T08:10:00Z")
+	if got != want {
+		t.Errorf("NewestUpdatedAt() = %v, want %v (the newest conversation updated_at)", got, want)
+	}
+	// Empty export -> 0 (no staleness signal).
+	empty := New(writeDirExport(t, "[]"))
+	if z, err := empty.NewestUpdatedAt(); err != nil || z != 0 {
+		t.Errorf("NewestUpdatedAt(empty) = (%v,%v), want (0,nil)", z, err)
 	}
 }
 
@@ -257,6 +279,27 @@ func TestEmptyArrayIsNotError(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("want 0 containers for an empty export, got %d", len(got))
+	}
+}
+
+// Account reads the export's opaque account uuid (the reconciliation axis),
+// never the account's email/name (PII).
+func TestAccount(t *testing.T) {
+	t.Parallel()
+	const withAccount = `[
+  {"uuid":"c9","created_at":"2026-07-15T10:00:00Z","account":{"uuid":"acct-xyz","email_address":"secret@example.com"},
+   "chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"hi"}]}]}
+]`
+	got, err := New(writeDirExport(t, withAccount)).Account()
+	if err != nil {
+		t.Fatalf("Account: %v", err)
+	}
+	if got != "acct-xyz" {
+		t.Errorf("Account() = %q, want %q", got, "acct-xyz")
+	}
+	// An export with no account block yields "" (not an error).
+	if a, err := New(writeDirExport(t, `[{"uuid":"c1","chat_messages":[]}]`)).Account(); err != nil || a != "" {
+		t.Errorf("Account(no account block) = (%q,%v), want (\"\",nil)", a, err)
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
-	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/claudeweb"
 	"github.com/spf13/cobra"
 )
@@ -42,18 +41,19 @@ func newImportCmd() *cobra.Command {
 	return cmd
 }
 
-// importResult is the machine-readable summary of one import.
+// importResult is the machine-readable summary of one import: the
+// reconciliation stats plus the source and db path.
 type importResult struct {
-	Source        string `json:"source"`
-	Conversations int    `json:"conversations"`
-	Messages      int    `json:"messages"`
-	DB            string `json:"db"`
+	Source string                     `json:"source"`
+	DB     string                     `json:"db"`
+	Stats  index.ClaudeWebImportStats `json:"stats"`
 }
 
-// runImport parses the export at path, indexes its conversations into the
-// dedicated claude-web db, and prints how many conversations and messages
-// landed. A malformed / non-Claude export surfaces as an error (from Discover),
-// never a silent no-op.
+// runImport parses the export at path and reconciles its conversations into the
+// dedicated claude-web db (idempotent: re-importing appends only new messages
+// and reconciles conversations absent from a newer export). It prints an
+// added / updated / skipped summary. A malformed / non-Claude export surfaces
+// as an error (from Discover), never a silent no-op.
 func runImport(w io.Writer, path string, jsonOut bool) error {
 	ad := claudeweb.New(path)
 
@@ -61,51 +61,32 @@ func runImport(w io.Writer, path string, jsonOut bool) error {
 	if err != nil {
 		return err
 	}
+	newest, err := ad.NewestUpdatedAt()
+	if err != nil {
+		return err
+	}
+	account, err := ad.Account()
+	if err != nil {
+		return err
+	}
 
 	dbp := scopes.ClaudeWebDBPath()
-	// reindex=false: an import upserts into the existing db by conversation id,
-	// so re-importing appends/updates rather than wiping prior imports.
-	//
-	// SLICE BOUNDARY: multi-import reconciliation is NOT handled here yet. The
-	// full semantics — appending only new conversations/messages, tombstoning
-	// conversations absent from a newer export, and per-account separation so one
-	// account's export can't disturb another's — land in a later slice. Until
-	// then a single shared db is passed only its current import's containers, so
-	// under RAWCLAW_RETENTION=mirror an unrelated prior export in the same db
-	// could be pruned; the default (retain) mode is safe. Treat multi-export /
-	// mirror-mode import as unsupported for now.
-	nSessions, _, err := index.EnsureIndexedContainers(dbp, false, containers, ad.Messages, claudeweb.ID, "")
+	stats, err := index.ImportClaudeWeb(dbp, containers, ad.Messages, claudeweb.ID, account, newest)
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)
 	}
 
-	res := importResult{
-		Source:        claudeweb.ID,
-		Conversations: nSessions,
-		Messages:      countMessages(ad.Messages, containers),
-		DB:            dbp,
-	}
+	res := importResult{Source: claudeweb.ID, DB: dbp, Stats: stats}
 	if jsonOut {
 		return EmitJSON(w, res)
 	}
-	fmt.Fprintf(w, "Imported %d conversation(s), %d message(s) as source %q.\n",
-		res.Conversations, res.Messages, res.Source)
-	fmt.Fprintf(w, "Search them with:  rawclaw \"<term>\"   (or --source %s to scope)\n", claudeweb.ID)
-	return nil
-}
-
-// countMessages sums the normalized message count across the discovered
-// conversations for the summary line. The adapter caches its parse, so this
-// second pass over the containers is cheap; a container whose messages fail to
-// load contributes zero, matching what the index actually wrote.
-func countMessages(msgs index.MessagesFunc, containers []source.Container) int {
-	var n int
-	for _, c := range containers {
-		ms, err := msgs(c)
-		if err != nil {
-			continue
-		}
-		n += len(ms)
+	fmt.Fprintf(w, "Imported as source %q: +%d new, ~%d updated, =%d unchanged conversation(s); +%d message(s).\n",
+		res.Source, stats.AddedConversations, stats.UpdatedConversations, stats.SkippedConversations, stats.AddedMessages)
+	if stats.RetainedAbsent > 0 || stats.PrunedAbsent > 0 {
+		fmt.Fprintf(w, "Reconciled conversations absent from this export: %d retained (deleted-upstream), %d pruned.\n",
+			stats.RetainedAbsent, stats.PrunedAbsent)
 	}
-	return n
+	fmt.Fprintf(w, "%d conversation(s) total. Search with:  rawclaw \"<term>\"   (or --source %s to scope)\n",
+		stats.TotalConversations, claudeweb.ID)
+	return nil
 }
