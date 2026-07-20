@@ -7,6 +7,19 @@
 Stop renting access to your own past. Bring your conversations home from cloud products and local
 agents, preserve them beyond vendor purges, and use them through infrastructure you control.
 
+### Let your agent handle it
+
+- One real history hunt took 76 grep calls. RawClaw reduced it to one search.
+- Give your agent this README. It can install RawClaw, run setup, search, read, and keep going.
+- Search is the default command. The agent does not need to learn a dashboard or maintain a filing
+  system.
+- Stable read references return the relevant excerpt first instead of dumping an entire transcript
+  into context.
+- Every result says what was searched, skipped, stale, empty, or unavailable — partial search never
+  pretends to be complete.
+
+**Less grepping. Fewer tool calls. Fewer wasted tokens. No human housekeeping.**
+
 ### Bring everything
 
 - Import conversations from Claude.ai, Claude Desktop, and Cowork.
