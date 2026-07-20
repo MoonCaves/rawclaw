@@ -402,6 +402,30 @@ func TestSetupCmd_ScriptContentContainsBanner(t *testing.T) {
 	}
 }
 
+// TestSetupCmd_Yes_PrintsArchivePointer: a successful setup surfaces the optional
+// archive as one non-blocking next-step line; --eject must NOT print it.
+func TestSetupCmd_Yes_PrintsArchivePointer(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	t.Setenv("HOME", cfg)
+
+	out, err := runCmd(t, newSetupCmd(), "", "--yes")
+	if err != nil {
+		t.Fatalf("setup --yes: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, "rawclaw archive init <your-private-repo>") {
+		t.Errorf("setup output should point at the optional archive; got:\n%s", out)
+	}
+
+	ejectOut, err := runCmd(t, newSetupCmd(), "", "--eject", "--yes")
+	if err != nil {
+		t.Fatalf("setup --eject --yes: %v\nout: %s", err, ejectOut)
+	}
+	if strings.Contains(ejectOut, "archive init <your-private-repo>") {
+		t.Errorf("eject should not print the archive pointer; got:\n%s", ejectOut)
+	}
+}
+
 // TestSetupCmd_Project_WritesToProjectLocalPathAndKeepsForeignEntry drives
 // `rawclaw setup --project --yes` from a sandboxed cwd pre-seeded with a
 // foreign SessionStart hook in the project-local settings file: the rawclaw

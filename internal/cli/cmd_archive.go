@@ -22,16 +22,23 @@ func newArchiveInitCmd() *cobra.Command {
 		Long: "Set up the transcript archive: clone <remote-url> (an empty repo works — it is " +
 			"born on the first push), register this machine under a top-level dir, and write " +
 			"the config that turns the archive feature on. The remote must be a PRIVATE " +
-			"repository: transcripts contain whatever was pasted into sessions.",
+			"repository: transcripts contain whatever was pasted into sessions.\n\n" +
+			"A shorthand is expanded to a full SSH remote: `user/repo` → " +
+			"git@github.com:user/repo.git, a bare `user` → git@github.com:user/" + defaultArchiveRepo +
+			".git, `host/user[/repo]` likewise. A full URL (git@…, https://…, ssh://…) is used as-is.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := archive.Init(cmd.Context(), args[0], name)
+			out := cmd.OutOrStdout()
+			remote := guessArchiveRemote(args[0])
+			if remote != args[0] {
+				fmt.Fprintf(out, "Resolved %q → %s\n", args[0], remote)
+			}
+			a, err := archive.Init(cmd.Context(), remote, name)
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Archive initialized.\n  remote:      %s\n  machine dir: %s\n  local clone: %s\n\n",
 				a.Remote(), a.Name(), a.ClonePath())
 			fmt.Fprintln(out, archive.PrivacyWarning)

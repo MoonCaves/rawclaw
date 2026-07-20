@@ -134,6 +134,12 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 		fmt.Fprintln(out, "Codex not detected — skipped that target.")
 	}
 
+	// Point at the optional cross-machine archive without provisioning it: setup
+	// wires local hooks; `archive init` is a separate opt-in the user runs when
+	// they want backup + sync. One non-blocking line, never a prompt.
+	fmt.Fprintln(out, "\nOptional — back up & sync your transcripts across machines:")
+	fmt.Fprintln(out, "  rawclaw archive init <your-private-repo>   (see the archive section in the README)")
+
 	return nil
 }
 

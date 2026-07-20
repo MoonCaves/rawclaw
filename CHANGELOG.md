@@ -4,6 +4,20 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-07-20
+
+### Added
+
+- **`setup` now points at the optional transcript archive.** After wiring the discovery hooks,
+  `setup` prints one non-blocking line pointing at `rawclaw archive init <your-private-repo>` — so
+  the cross-machine backup/sync feature is discoverable without `setup` ever provisioning it (it
+  wires local hooks; `archive init` stays a separate, opt-in step). Never a prompt.
+- **`archive init` accepts a remote shorthand.** `user/repo` expands to
+  `git@github.com:user/repo.git`, a bare `user` to `git@github.com:user/rawclaw-transcripts.git`,
+  and `host/user[/repo]` (GitLab, Codeberg, sourcehut, …) likewise — always to the SSH form, since
+  rawclaw runs git with credential prompts disabled. A full URL (`git@…`, `https://…`, `ssh://…`)
+  is used as-is. The resolved remote is printed so you see exactly what it became.
+
 ## [0.6.1] — 2026-07-20
 
 ### Fixed

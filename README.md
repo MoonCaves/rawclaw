@@ -155,11 +155,13 @@ Every session gets tagged at its topic-change points with concept keywords, so a
 Raw transcripts die upstream (Claude Code's ~30-day purge) and live on only one machine until they don't. The archive gives them one durable home: any private git remote (GitHub, Gitea, a bare repo over SSH — no rawclaw-specific server).
 
 ```bash
-rawclaw archive init git@github.com:you/my-transcripts.git   # clone + register this machine (--name to pick the dir name)
-rawclaw archive push                                          # upload this machine's Claude + Codex transcripts
-rawclaw archive pull                                          # fetch the other machines' transcripts
-rawclaw archive status                                        # remote, clone, last push/pull, per-machine freshness
+rawclaw archive init git@github.com:you/rawclaw-transcripts.git   # clone + register this machine (--name to pick the dir name)
+rawclaw archive push                                              # upload this machine's Claude + Codex transcripts
+rawclaw archive pull                                              # fetch the other machines' transcripts
+rawclaw archive status                                            # remote, clone, last push/pull, per-machine freshness
 ```
+
+The remote argument accepts a shorthand: `you/rawclaw-transcripts` (or a bare `you`, which assumes a repo named `rawclaw-transcripts`) expands to `git@github.com:you/rawclaw-transcripts.git`; `gitlab.com/you/repo` and `sr.ht/~you/repo` work too. A full URL is used as-is.
 
 Each machine gets a top-level directory in the repo (`<machine>/<source>/...`), so pushes from different machines never conflict on content; concurrent pushes are resolved with a bounded pull-rebase-and-retry. A second push moves only changed files. The local clone lives in the state dir and is a rebuildable cache — deleting it just forces a re-clone (`archive pull` rebuilds everything); a clone left broken by a kill at any point (mid-clone, mid-rebase, even a stale git lock after a power loss) is detected and rebuilt automatically on the next push or pull. Rebuilds are evidence-gated: if the broken clone still holds commits that never reached the remote, rawclaw refuses to wipe it and tells you how to recover them instead.
 
