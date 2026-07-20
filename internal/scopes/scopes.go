@@ -56,6 +56,16 @@ func All(ctx context.Context, sourceFilter string, reindex bool) []view.Scope {
 			out = append(out, sc)
 		}
 	}
+	// An EXPLICIT --source that matched zero scopes must return a non-nil empty
+	// set, never nil: agentproto.Search reads a nil scope as "search everything"
+	// (its nil-scope fallback), so returning nil here would make `--source X`
+	// silently fall back to every source whenever X has no scopes yet — e.g.
+	// claude-web before any import, or codex on a Claude-only machine. A non-nil
+	// empty slice yields zero results, which is what an explicit filter asks for.
+	// With NO filter, nil is preserved so the search-everything fallback applies.
+	if out == nil && sourceFilter != "" {
+		return []view.Scope{}
+	}
 	return out
 }
 

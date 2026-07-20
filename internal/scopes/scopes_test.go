@@ -1,6 +1,7 @@
 package scopes
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -9,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/claudeweb"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -263,6 +266,90 @@ func TestCodexUnionsOrphanedDBs_TombstonedExcluded(t *testing.T) {
 	for _, s := range scs {
 		if s.DBP == dbp {
 			t.Errorf("tombstoned-only codex db resurfaced as a scope: %+v", s)
+		}
+	}
+}
+
+// emptyStore isolates HOME so Claude/Codex/claude-web/archive all enumerate to
+// zero: a temp HOME with no ~/.claude projects, a CODEX_HOME with no sessions/,
+// and an empty cache dir. t.Setenv forbids t.Parallel, so these tests run
+// serially.
+func emptyStore(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "nocodex"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	return home
+}
+
+// TestAll_ExplicitSourceZeroMatchesIsEmptyNotNil is the F1 regression guard: an
+// EXPLICIT --source that matches zero scopes must return a NON-NIL empty slice,
+// so agentproto.Search returns zero results instead of hitting its nil-scope
+// "search everything" fallback. A no-source call must still return nil (the
+// fallback IS the intended behavior there) — F1 must not change that.
+func TestAll_ExplicitSourceZeroMatchesIsEmptyNotNil(t *testing.T) {
+	emptyStore(t)
+	ctx := context.Background()
+
+	for _, src := range []string{"claude", "codex", claudeweb.ID} {
+		got := All(ctx, src, false)
+		if got == nil {
+			t.Errorf("All(--source %q) with no matching scopes returned nil; an explicit filter with zero matches must be a non-nil empty slice (else agentproto falls back to searching every source)", src)
+		}
+		if len(got) != 0 {
+			t.Errorf("All(--source %q) in an empty store = %d scopes, want 0: %+v", src, len(got), got)
+		}
+	}
+
+	// No --source: nil is preserved so the search-everything fallback still fires.
+	if got := All(ctx, "", false); got != nil {
+		t.Errorf("All(no --source) in an empty store = %+v, want nil (preserve the fallback — F1 must not change this)", got)
+	}
+}
+
+// TestAll_ImportedClaudeWebDoesNotLeakAcrossSources is the behavioral half of
+// F1: with only a claude-web import present, `--source claude-web` returns that
+// one scope while `--source codex`/`--source claude` return ZERO (not the
+// imported cloud conversations), and the claude-web db never double-lists into
+// the Claude orphan scan.
+func TestAll_ImportedClaudeWebDoesNotLeakAcrossSources(t *testing.T) {
+	home := emptyStore(t)
+	ctx := context.Background()
+
+	// Seed the claude-web db as `rawclaw import` would (one conversation).
+	backing := filepath.Join(home, "export", "conversations.json")
+	if err := os.MkdirAll(filepath.Dir(backing), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backing, []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cs := []source.Container{{ID: "conv-1", Path: backing, CWD: ""}}
+	msgs := func(source.Container) ([]model.Message, error) {
+		return []model.Message{{Role: "user", Text: "cloud beacon token", TS: 1, TSISO: "2026-07-15T10:00:00Z", UUID: "m1"}}, nil
+	}
+	if _, _, err := index.EnsureIndexedContainers(ClaudeWebDBPath(), true, cs, msgs, claudeweb.ID, ""); err != nil {
+		t.Fatalf("seed claude-web db: %v", err)
+	}
+
+	// --source claude-web: exactly the one imported scope.
+	cw := All(ctx, claudeweb.ID, false)
+	if len(cw) != 1 || cw[0].Source != claudeweb.ID || cw[0].DBP != ClaudeWebDBPath() {
+		t.Fatalf("All(--source claude-web) = %+v, want exactly one claude-web scope on the import db", cw)
+	}
+
+	// --source codex: still zero — the claude-web import must not leak into a
+	// codex-scoped search.
+	if cx := All(ctx, "codex", false); len(cx) != 0 {
+		t.Errorf("All(--source codex) leaked %d scope(s) from the claude-web import: %+v", len(cx), cx)
+	}
+
+	// --source claude: zero, and specifically the claude-web db must not surface
+	// via the orphan-Claude db scan (it globs the cache dir).
+	for _, s := range All(ctx, "claude", false) {
+		if s.DBP == ClaudeWebDBPath() {
+			t.Errorf("claude-web db leaked into --source claude scope: %+v", s)
 		}
 	}
 }

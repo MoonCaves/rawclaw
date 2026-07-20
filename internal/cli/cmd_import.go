@@ -64,8 +64,16 @@ func runImport(w io.Writer, path string, jsonOut bool) error {
 
 	dbp := scopes.ClaudeWebDBPath()
 	// reindex=false: an import upserts into the existing db by conversation id,
-	// so re-importing appends/updates rather than wiping prior imports. The
-	// full-reconciliation semantics (tombstone / mirror-prune) are a later slice.
+	// so re-importing appends/updates rather than wiping prior imports.
+	//
+	// SLICE BOUNDARY: multi-import reconciliation is NOT handled here yet. The
+	// full semantics — appending only new conversations/messages, tombstoning
+	// conversations absent from a newer export, and per-account separation so one
+	// account's export can't disturb another's — land in a later slice. Until
+	// then a single shared db is passed only its current import's containers, so
+	// under RAWCLAW_RETENTION=mirror an unrelated prior export in the same db
+	// could be pruned; the default (retain) mode is safe. Treat multi-export /
+	// mirror-mode import as unsupported for now.
 	nSessions, _, err := index.EnsureIndexedContainers(dbp, false, containers, ad.Messages, claudeweb.ID, "")
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)
