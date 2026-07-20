@@ -1,35 +1,189 @@
 # RawClaw
 
-**Your AI already knew. It just couldn't find it.**
+## Own your AI history.
 
-Every decision your agent ever made is sitting in `~/.claude/projects`. The only way back to it is `grep` — which matches the string you typed, not the decision you meant: your past self phrased it differently, the answer got folded into a compaction summary, and grep walks right past it. So your agent re-derives what it already worked out.
+**One sovereign, private, searchable corpus for every conversation, agent, and machine.**
 
-Here's the cost — real recall hunts from one developer's history:
+Bring your conversations home from the cloud. Keep a copy you control. Search years of AI work in
+seconds. Back it up and synchronize it through your own infrastructure.
 
-| recalling one past decision | grep calls |
-|---|--:|
-| a deployment/auth decision | **76** |
-| how PR-review state got tracked | 68 |
-| where the messaging stack landed | 51 |
-| a git-worktree-per-desk workflow | 49 |
-| model-routing between two services | 26 |
-| handling externalized tool-results | 13 |
+No account. No internet. No API keys. No models. No daemon. No GPU. The core works locally, on your
+machine.
 
-Dozens of greps to recover one fact — and plenty still came up empty. RawClaw replaces the "grep storm" with one search that hands you the whole arc: **goal → match → resolution**.
+- [Bring cloud conversations home](#bring-cloud-conversations-home)
+- [Keep history after Claude deletes it](#keep-history-after-claude-deletes-it)
+- [Preserve the full record](#preserve-the-full-record)
+- [Search every supported AI agent together](#search-every-supported-ai-agent-together)
+- [Sync privately through any Git remote](#sync-privately-through-any-git-remote)
+- [Turn 76 searches into one](#turn-76-searches-into-one)
+- [Know where every conversation came from](#know-where-every-conversation-came-from)
+- [One owned corpus, countless uses](#one-owned-corpus-countless-uses)
 
-**76 → 1.**
+## Bring cloud conversations home
+
+Your Claude conversations live inside Claude's website and desktop apps. You can read them there,
+but you do not control how they are stored or how long that access will remain available.
+
+RawClaw imports conversations from Claude.ai, Claude Desktop, and Cowork. It combines them with local
+sessions from Claude Code and Codex.
+
+Now you own a local copy. You can search it, move it, back it up, process it, or use it with another
+tool. You do not need to open Claude's website every time you want to access your own history.
+
+**Stop renting access to your own conversations.**
+
+## Keep history after Claude deletes it
+
+Claude Code automatically deletes session files after about 30 days by default.
+
+RawClaw lets you keep your own copy. When Claude Code removes the original file, your conversation
+remains available and searchable.
+
+You can also mirror Claude Code's behavior if that is what you prefer. The choice belongs to you.
+
+**Claude's 30-day cleanup policy does not have to become your deletion policy.**
+
+## Preserve the full record
+
+Memory systems do more than store information. They decide what matters. They summarize, merge,
+rank, and sometimes turn an agent's old statement into a supposed fact.
+
+Those interpretations can be wrong.
+
+RawClaw preserves the full historical record:
+
+- Decisions and reversed decisions
+- Questions, doubts, mistakes, and dead ends
+- Pivots, discoveries, and tool calls
+- The path from the first question to the final answer
+
+Tags, summaries, and memory systems can still be added on top. RawClaw keeps those interpretations
+separate from the original record, so they can be corrected without rewriting history.
+
+**Memory tells you what it thinks mattered. Raw history lets you check.**
+
+## Search every supported AI agent together
+
+Claude Code saves history in one place. Codex saves it somewhere else. Claude's cloud products keep
+conversations inside their own apps. Other AI agents use still more formats.
+
+RawClaw brings supported sources into one fast search. Search across Claude.ai, Claude Desktop,
+Cowork, Claude Code, Codex, and every machine you use. Search everything together or narrow the
+results to one agent, source, project, date, or machine.
+
+New AI tools connect through source adapters. If your agent is not supported yet, request it, move
+it up the roadmap, or contribute an adapter.
+
+**One search across your entire AI history — no matter which agent created it.**
+
+## Sync privately through any Git remote
+
+Most products put your data on their servers to make it available across devices.
+
+RawClaw lets you synchronize through any private Git remote you choose: GitHub, GitLab, Gitea, a
+self-hosted Git server, or a bare repository over SSH.
+
+Your machines can push and pull automatically. Optional timers keep machines current even when you
+are not actively searching. The core does not require an account. Optional synchronization uses the
+Git provider and credentials you choose.
+
+**Your machines. Your storage. Your private synchronization path.**
+
+## Turn 76 searches into one
+
+Recovering one past answer can take dozens of searches, file reads, and tool calls. In real recall
+hunts, one past decision took 76 grep calls to recover.
+
+RawClaw reduced it to one search:
 
 ```bash
 rawclaw "where did we land on auth"
 ```
 
----
+Every result includes the goal, the matching point, and the resolution. Agents receive stable
+references and read only the relevant section first.
 
-## Claude Code deletes your history after 30 days
+This is progressive disclosure for transcripts: search the full corpus, find the strongest match,
+read a small excerpt, and expand around that exact point only when needed.
 
-Claude Code removes conversation files older than ~30 days (`cleanupPeriodDays`). RawClaw keeps its own copy: sessions stay searchable and readable after the original file is gone. Results mark them `source file gone — retained history`, and `rawclaw delete` removes them for good.
+No giant transcript dumps. No wasted context window. No endless grep storm.
 
-Want RawClaw to track your Claude Code retention setting instead? Set `RAWCLAW_RETENTION=mirror` and sessions drop when their source file does.
+**Fewer tool calls. Fewer tokens. Faster answers.**
+
+## Know where every conversation came from
+
+Combining everything into one corpus should not erase its origin.
+
+RawClaw keeps the source attached to each conversation: which AI tool created it, which machine it
+came from, which project it belonged to, which original session it represents, and whether that
+source is current, missing, remote, or stale.
+
+You get one unified search without turning your history into an anonymous pile of text.
+
+**Bring everything together. Keep every receipt attached.**
+
+## One owned corpus, countless uses
+
+Once your conversations are local, organized, searchable, and under your control, they become
+infrastructure.
+
+Use the corpus to:
+
+- Search every past project
+- Feed a memory provider or build a personal knowledge base
+- Extract people and companies into a CRM
+- Create project and decision timelines
+- Audit agent actions and analyze tool usage
+- Recover abandoned work or move between AI products
+- Build datasets and new applications on top of your history
+
+RawClaw is not meant to be the only tool allowed to read your data. It creates a common substrate
+that other tools and agents can use.
+
+**Own the corpus once. Build on it forever.**
+
+## The core works fully locally
+
+Keyword search runs locally in a single static Go binary with SQLite FTS5.
+
+- No account
+- No internet connection
+- No API key
+- No AI model
+- No daemon
+- No GPU
+- No external runtime
+- No hosted service
+
+Then you can add capabilities when you want them: private Git synchronization, local Ollama or
+hosted embeddings, semantic and keyword search together, remote live-session access, and more AI
+agent source adapters.
+
+**Local sovereignty is the foundation. Network features are optional upgrades.**
+
+## Missing does not mean deleted
+
+Files disappear for reasons that have nothing to do with user intent. Claude may clean them up. A
+machine may be offline. A directory may move. A synchronization may be late.
+
+RawClaw does not treat a missing file as permission to erase your history.
+
+Deletion is a separate, explicit action. RawClaw shows what will be removed and asks for
+confirmation. When you intentionally delete a conversation, that deletion follows the archive so
+another machine does not restore it later.
+
+**Missing stays recoverable. Deleted stays deleted. You control both.**
+
+## Every search tells you how complete it was
+
+Imagine searching three machines when one has not synchronized since yesterday. Most tools simply
+return the available results. Neither you nor the agent knows that part of the history was missing.
+
+RawClaw reports what it searched, what contained no matches, what it skipped, what was unavailable,
+and what may be out of date. "I found no result" and "I could not search one of your machines" are
+not the same answer.
+
+**Never mistake a partial search for your full history.**
 
 ## Setup: let your agents discover it
 
@@ -45,23 +199,6 @@ rawclaw setup --yes  # non-interactive
 Global by default (rawclaw searches every project); `--project` narrows the note to the current
 project only. Everything else already hooked into your configs is left untouched, and re-running
 never duplicates. `rawclaw setup --eject` removes exactly what setup installed — nothing more.
-
-## What it does
-
-Claude Code quietly saves every conversation you have with it as JSONL transcripts under `~/.claude/projects`. RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type.
-
-- **Goal → match → resolution.** Every hit returns the session's opening (what it set out to do), the matched message in context, and the closing (what was decided) — so one result usually answers the question without opening a file.
-- **All your projects by default.** One query spans every Claude Code folder you've worked in (`--this-project` to narrow).
-- **Natural phrasing works.** Multi-word queries OR their terms and rank by how many match — you don't need the exact wording.
-- **Reads the full structure, shows the signal.** Subagent threads, tool calls, compaction summaries, and thinking blocks are all indexed, but search defaults to clean human conversation (`--include-tools` / `--include-subagents` to widen).
-- **Built for agents too.** `rawclaw "query"` returns ranked refs with a never-silent completeness envelope; `read <ref>` returns a *bounded excerpt* instead of a whole transcript; `--json` on every command.
-
-## Who it's for
-
-- **Anyone who lives in Claude Code** and wants to find a past decision in one search instead of a dozen greps.
-- **AI / agent builders** who need programmatic recall of prior sessions — JSON in, JSON out.
-- **CI / automation / scripts** — non-interactive, composes with `jq`/`fzf`, real exit codes.
-- **Resource-constrained / self-hosted / Raspberry Pi.** A single static binary + SQLite FTS5: low RAM, no GPU, no runtime to install. Keyword search needs no network and no API key.
 
 ---
 
