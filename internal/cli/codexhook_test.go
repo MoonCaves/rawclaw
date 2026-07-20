@@ -98,7 +98,21 @@ func TestCodexPrimeScript_EmitsValidHookJSON(t *testing.T) {
 	if env.HookSpecificOutput.HookEventName != "SessionStart" {
 		t.Errorf("hookEventName = %q, want SessionStart", env.HookSpecificOutput.HookEventName)
 	}
-	if !strings.Contains(env.HookSpecificOutput.AdditionalContext, "[rawclaw] Raw transcript history") {
-		t.Errorf("additionalContext missing the banner text; got %q", env.HookSpecificOutput.AdditionalContext)
+	// Check distinctive lines spanning the whole banner — first, middle, last —
+	// mirroring TestSetupCmd_ScriptContentContainsBanner's multi-line check, so a
+	// python3 envelope that dropped or truncated the banner past its first line is
+	// caught (a single-line Contains would miss partial loss). Full byte-equality
+	// is deliberately NOT asserted: the repo's own banner test rejects duplicating
+	// the banner const.
+	ctx := env.HookSpecificOutput.AdditionalContext
+	for _, want := range []string{
+		"[rawclaw] Raw transcript history",
+		"Fast FTS5/BM25 search",
+		`rawclaw "query"`,
+		"offering to resume/fork it can help",
+	} {
+		if !strings.Contains(ctx, want) {
+			t.Errorf("additionalContext missing banner line %q; got %q", want, ctx)
+		}
 	}
 }
