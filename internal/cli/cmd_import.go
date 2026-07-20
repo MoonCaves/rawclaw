@@ -70,7 +70,15 @@ func runImport(w io.Writer, path string, jsonOut bool) error {
 		return err
 	}
 
-	dbp := scopes.ClaudeWebDBPath()
+	// Split any legacy single db into per-account dbs FIRST (fail-closed), so a
+	// pre-per-account db's conversations aren't stranded when this import writes
+	// to the account db. A failure here blocks the import rather than risk a
+	// split-brain across the two db layouts.
+	if err := scopes.MigrateLegacyClaudeWeb(); err != nil {
+		return fmt.Errorf("import %s: claude-web migration: %w", path, err)
+	}
+
+	dbp := scopes.ClaudeWebDBPath(account)
 	stats, err := index.ImportClaudeWeb(dbp, containers, ad.Messages, claudeweb.ID, account, newest)
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)

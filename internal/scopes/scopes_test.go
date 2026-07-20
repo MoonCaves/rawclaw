@@ -314,29 +314,23 @@ func TestAll_ExplicitSourceZeroMatchesIsEmptyNotNil(t *testing.T) {
 // imported cloud conversations), and the claude-web db never double-lists into
 // the Claude orphan scan.
 func TestAll_ImportedClaudeWebDoesNotLeakAcrossSources(t *testing.T) {
-	home := emptyStore(t)
+	emptyStore(t)
 	ctx := context.Background()
 
-	// Seed the claude-web db as `rawclaw import` would (one conversation).
-	backing := filepath.Join(home, "export", "conversations.json")
-	if err := os.MkdirAll(filepath.Dir(backing), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(backing, []byte("[]"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cs := []source.Container{{ID: "conv-1", Path: backing, CWD: ""}}
+	// Seed one account's claude-web db as `rawclaw import` would (one conversation).
+	const account = "a1b2c3d4-1111-2222-3333-444455556666"
+	cs := []source.Container{{ID: "conv-1"}}
 	msgs := func(source.Container) ([]model.Message, error) {
 		return []model.Message{{Role: "user", Text: "cloud beacon token", TS: 1, TSISO: "2026-07-15T10:00:00Z", UUID: "m1"}}, nil
 	}
-	if _, _, err := index.EnsureIndexedContainers(ClaudeWebDBPath(), true, cs, msgs, claudeweb.ID, ""); err != nil {
+	if _, err := index.ImportClaudeWeb(ClaudeWebDBPath(account), cs, msgs, claudeweb.ID, account, 100); err != nil {
 		t.Fatalf("seed claude-web db: %v", err)
 	}
 
-	// --source claude-web: exactly the one imported scope.
+	// --source claude-web: exactly the one imported account scope.
 	cw := All(ctx, claudeweb.ID, false)
-	if len(cw) != 1 || cw[0].Source != claudeweb.ID || cw[0].DBP != ClaudeWebDBPath() {
-		t.Fatalf("All(--source claude-web) = %+v, want exactly one claude-web scope on the import db", cw)
+	if len(cw) != 1 || cw[0].Source != claudeweb.ID || cw[0].DBP != ClaudeWebDBPath(account) {
+		t.Fatalf("All(--source claude-web) = %+v, want exactly one claude-web scope on the account db", cw)
 	}
 
 	// --source codex: still zero — the claude-web import must not leak into a
@@ -348,7 +342,7 @@ func TestAll_ImportedClaudeWebDoesNotLeakAcrossSources(t *testing.T) {
 	// --source claude: zero, and specifically the claude-web db must not surface
 	// via the orphan-Claude db scan (it globs the cache dir).
 	for _, s := range All(ctx, "claude", false) {
-		if s.DBP == ClaudeWebDBPath() {
+		if s.DBP == ClaudeWebDBPath(account) {
 			t.Errorf("claude-web db leaked into --source claude scope: %+v", s)
 		}
 	}

@@ -309,6 +309,19 @@ func nullFloat(v sql.NullFloat64) float64 {
 	return 0
 }
 
+// ReadClaudeWebWatermark reads an account's stored newest-updated_at watermark
+// from the db at dbp (0 when the db, meta row, or value is absent/unreadable).
+// Exported for the legacy single-db -> per-account-db migration, which carries
+// each account's staleness watermark forward into its new db.
+func ReadClaudeWebWatermark(dbp, account string) float64 {
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		return 0
+	}
+	defer con.Close()
+	return readWatermark(con, account)
+}
+
 // readWatermark reads an account's stored newest-updated_at watermark (0 when
 // unset).
 func readWatermark(con *sql.DB, account string) float64 {

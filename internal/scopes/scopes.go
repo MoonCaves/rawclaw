@@ -10,7 +10,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -148,9 +147,11 @@ func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 			continue // archive-replica dbs are enumerated by Archive(); their
 			// live source is the clone's machine dir, never an orphaned project
 		}
-		if base == filepath.Base(ClaudeWebDBPath()) {
-			continue // the claude-web import db is enumerated by ClaudeWeb(), not
-			// an orphaned Claude project — and has no live dir to reconcile against
+		if strings.HasPrefix(base, claudeWebDBStem) {
+			continue // claude-web import dbs (legacy single + per-account) are
+			// enumerated by ClaudeWeb(), not orphaned Claude projects — and have
+			// no live dir to reconcile against. A real Claude project db base is a
+			// path-encoding starting with "-", so it never shares this prefix.
 		}
 		if _, covered := liveDBs[dbp]; covered {
 			continue // already a live project scope — don't list it twice
@@ -291,29 +292,8 @@ func isHex8(s string) bool {
 	return true
 }
 
-// ClaudeWeb surfaces the claude-web scope: cloud conversations imported from a
-// Claude account data-export via `rawclaw import`. Unlike Claude() and Codex(),
-// it does NOT ingest here — the import command already built the db — so this is
-// pure discovery: if the dedicated claude-web db exists, return it as one eager,
-// read-only scope; otherwise nothing has been imported yet and it yields nil.
-// The scope carries no CWD (the export drops the working directory), so it is
-// naturally out of --this-project (which builds only the cwd's Claude project)
-// and reachable on bare/--all search, matching the account-wide, directory-less
-// nature of cloud chats.
-func ClaudeWeb() []view.Scope {
-	dbp := ClaudeWebDBPath()
-	if _, err := os.Stat(dbp); err != nil {
-		return nil // no export imported yet
-	}
-	return []view.Scope{{Project: claudeweb.ID, DBP: dbp, Source: claudeweb.ID}}
-}
-
-// ClaudeWebDBPath is the single cache db that holds every imported claude-web
-// conversation. It is distinctly namespaced (its own stable stem), so it never
-// collides with a Claude project db or a "codex-"/"archive-" db, satisfying
-// index.EnsureIndexedContainers' one-source-per-db contract. Both `rawclaw
-// import` (writer) and ClaudeWeb (reader) resolve the path through here.
-func ClaudeWebDBPath() string { return index.DBPath(claudeweb.ID) }
+// The claude-web scope axis (ClaudeWeb, ClaudeWebDBPath, per-account db
+// namespacing, and the legacy single-db migration) lives in claudeweb.go.
 
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope
 // (DBP set, e.g. Codex) is (DBP, IndexFresh, nil); a lazy Claude scope ensures
