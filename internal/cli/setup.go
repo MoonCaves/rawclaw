@@ -375,9 +375,10 @@ func stripJSON5(s string) string {
 			continue
 		}
 		if inString {
-			if ch == '\\' {
+			switch ch {
+			case '\\':
 				escaped = true
-			} else if ch == '"' {
+			case '"':
 				inString = false
 			}
 			b.WriteByte(ch)
