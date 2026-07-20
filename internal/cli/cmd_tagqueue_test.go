@@ -176,7 +176,7 @@ func TestSetupInstallsSessionEndHook(t *testing.T) {
 	dir := t.TempDir()
 	cf := settingsPath(dir)
 
-	if err := installRawclawHookAt(dir, cf, true); err != nil {
+	if err := installRawclawHookAt(dir, cf, true, rawclawPrimeScript); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	for _, p := range []string{hookScriptPath(dir), tagQueueScriptPath(dir)} {
@@ -227,7 +227,7 @@ func TestSetupCodexGetsNoSessionEndHook(t *testing.T) {
 	dir := t.TempDir()
 	cf := codexHooksPath(dir)
 
-	if err := installRawclawHookAt(dir, cf, false); err != nil {
+	if err := installRawclawHookAt(dir, cf, false, rawclawPrimeScript); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if _, err := os.Stat(tagQueueScriptPath(dir)); !os.IsNotExist(err) {

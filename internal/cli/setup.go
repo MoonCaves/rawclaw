@@ -78,6 +78,70 @@ if [ -n "$pending" ]; then
 fi
 `
 
+// rawclawCodexPrimeScript is the Codex variant of the SessionStart discovery
+// script (installed at <configDir>/hooks/rawclaw/prime.sh for the Codex target).
+// It exists because Codex's hook-output parser rejects any hook stdout that
+// starts with '[' or '{' unless it is a valid hook-JSON object: the plain
+// '[rawclaw]…' banner the Claude script prints is silently dropped by Codex.
+// This variant emits the identical banner but delivered as a valid SessionStart
+// hook-JSON object (additionalContext), so Codex accepts it. The banner text is
+// deliberately kept byte-identical to rawclawPrimeScript's — edit both together.
+//
+// JSON is built with python3 (its buffer.read().decode(...,"replace") tolerates
+// invalid UTF-8, which would otherwise emit lone surrogates serde rejects). If
+// python3 is absent the banner is skipped rather than erroring the hook — the
+// same silent-degrade posture as the missing-binary guard. Same POSIX-sh +
+// once-per-session marker as the Claude script.
+const rawclawCodexPrimeScript = `#!/bin/sh
+# Installed by ` + "`rawclaw setup`" + ` (Codex target); removed by ` + "`rawclaw setup --eject`" + `.
+# Prints a one-time discovery banner on Codex SessionStart, wrapped in Codex's
+# hook-JSON envelope (Codex rejects a bare '[rawclaw]' banner as invalid JSON).
+set -eu
+
+# No rawclaw on PATH, or no python3 for JSON encoding — silent no-op rather than
+# a hook error (a dropped banner is strictly better than a failing SessionStart).
+command -v rawclaw >/dev/null 2>&1 || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+
+input=$(cat)
+session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+
+if [ -n "$session_id" ]; then
+	marker_dir="${TMPDIR:-/tmp}/rawclaw-prime"
+	mkdir -p "$marker_dir" 2>/dev/null || true
+	marker="$marker_dir/$session_id"
+	if [ -f "$marker" ]; then
+		exit 0
+	fi
+	: > "$marker" 2>/dev/null || true
+fi
+
+# Build the banner + pending-tags text, then wrap it as a SessionStart hook-JSON
+# object so Codex ingests it as additionalContext instead of rejecting it.
+{
+cat <<'BANNER'
+[rawclaw] Raw transcript history for context — the receipts + thought process behind past
+sessions, across every project on this machine (not just this one's native session folder).
+Fast FTS5/BM25 search: cheaper than grepping your own agent's session folders (Claude Code
+projects/, Codex sessions/) — use rawclaw instead and save tokens + greps. Memory providers
+hold the superseding current truth; rawclaw is the dated raw record underneath it.
+  rawclaw "query"              search every session  (--this-project / --include-path <re> to scope; --sort newest)
+  rawclaw read <ref>           the matched message whole, with context  (--more / --around to expand)
+  rawclaw outline <sess8>      a session's goal -> resolution arc
+--json for structured output; --help for the rest.
+If the user seems to want to pick up a past session, offering to resume/fork it can help.
+BANNER
+
+pending=$(rawclaw tag-queue 2>/dev/null | head -n 8) || pending=""
+if [ -n "$pending" ]; then
+	printf '[rawclaw] finished sessions awaiting topic tags — tag them before starting other work:\n'
+	printf '%s\n' "$pending" | sed 's/^/  /'
+	printf 'For each id: rawclaw tag-prep <id> (read, split into topic segments), then rawclaw tag-write <id>.\n'
+	printf 'A session that will not resolve or is not worth tagging: rawclaw tag-queue remove <id>.\n'
+fi
+} | python3 -c 'import json,sys; sys.stdout.write(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": sys.stdin.buffer.read().decode("utf-8","replace")}}))'
+`
+
 // rawclawTagQueueScript is installed at <configDir>/hooks/rawclaw/tagqueue.sh
 // and registered as a Claude Code SessionEnd hook: it queues the finished
 // session for topic tagging (the SessionStart banner above surfaces the queue
@@ -445,7 +509,7 @@ func addRawclawHooks(data map[string]any, entries map[string]string) error {
 // <configDir>/settings.json — the Claude Code target: the SessionStart
 // discovery banner plus the SessionEnd tagging-queue hook.
 func installRawclawHook(configDir string) error {
-	return installRawclawHookAt(configDir, settingsPath(configDir), true)
+	return installRawclawHookAt(configDir, settingsPath(configDir), true, rawclawPrimeScript)
 }
 
 // installRawclawCodexHook writes the (shared) discovery script and registers
@@ -457,7 +521,7 @@ func installRawclawHook(configDir string) error {
 // never fire) helps nobody, so the tagging queue stays Claude-fed until
 // Codex's own event surface is verified.
 func installRawclawCodexHook(configDir string) error {
-	return installRawclawHookAt(configDir, codexHooksPath(configDir), false)
+	return installRawclawHookAt(configDir, codexHooksPath(configDir), false, rawclawCodexPrimeScript)
 }
 
 // installRawclawHookAt writes the hook scripts under configDir and registers
@@ -466,9 +530,9 @@ func installRawclawCodexHook(configDir string) error {
 // fails). Shared by both the Claude Code and Codex targets — they differ in
 // which JSON file the entries are merged into and whether the SessionEnd
 // tagging-queue hook is wired (withSessionEnd).
-func installRawclawHookAt(configDir, configFile string, withSessionEnd bool) error {
+func installRawclawHookAt(configDir, configFile string, withSessionEnd bool, primeContent string) error {
 	scriptPath := hookScriptPath(configDir)
-	if err := writeHookScript(scriptPath, rawclawPrimeScript); err != nil {
+	if err := writeHookScript(scriptPath, primeContent); err != nil {
 		return fmt.Errorf("install hook script: %w", err)
 	}
 	entries := map[string]string{"SessionStart": scriptPath}
