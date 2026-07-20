@@ -4,8 +4,27 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-07-20
+
+### Added
+
+- **Topic tags and verdicts now sync across your machines.** Tags — the topic segments a session
+  is split into, plus a `routine` verdict — used to live only in each machine's local index. They
+  now ride the transcript archive: each machine writes its tags to per-machine files beside its
+  transcripts, `archive push`/`pull` carry them, and a pull ingests every other machine's tags. If
+  two machines tag the same session differently, ingest keeps one deterministic winner and surfaces
+  the disagreement in `rawclaw archive status` — and every machine's tag file is retained, so
+  nothing is lost. Agent tagging labor now travels with the archive the way raw transcripts already
+  do.
+
 ### Fixed
 
+- **Codex accepts the rawclaw discovery banner again.** On Codex, `setup`'s SessionStart hook
+  printed a `[rawclaw]…` banner that Codex's hook parser rejected as invalid JSON (it treats stdout
+  starting with `[` as a JSON object), so the banner was silently dropped. The Codex hook now
+  delivers the banner as a proper SessionStart hook-JSON object; Claude Code is unchanged. Re-run
+  `rawclaw setup` to refresh the installed hook. (Uses `python3` for the JSON encoding; if it's
+  absent the banner is skipped rather than erroring the hook.)
 - **The tagging queue only accepts sessions that produced a transcript.** Claude Code fires
   SessionEnd for ephemeral sessions too — opened and closed without a message ever landing —
   which flooded the queue with hundreds of ids per day that nothing could resolve. The
