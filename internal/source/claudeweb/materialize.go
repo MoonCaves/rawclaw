@@ -93,6 +93,11 @@ func Materialize(exportPath, root string, mirror bool) (*MaterializeResult, erro
 
 	// Commit: rename each staged file into the real tree (atomic per file; same
 	// filesystem since staging is under root). Only reached after a clean parse.
+	// The staged files were already fsync'd (mergeTranscriptFile), so a crash
+	// after the rename can't leave a renamed-but-empty transcript — the exact
+	// "only copy" durability class. Each account dir is fsync'd after its renames
+	// so the directory entries themselves survive a power loss.
+	dirsToSync := map[string]struct{}{}
 	for dest, src := range staged {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return nil, fmt.Errorf("%s: create account dir: %w", ID, err)
@@ -100,8 +105,27 @@ func Materialize(exportPath, root string, mirror bool) (*MaterializeResult, erro
 		if err := os.Rename(src, dest); err != nil {
 			return nil, fmt.Errorf("%s: commit transcript: %w", ID, err)
 		}
+		dirsToSync[filepath.Dir(dest)] = struct{}{}
+	}
+	for dir := range dirsToSync {
+		if err := fsyncDir(dir); err != nil {
+			return nil, fmt.Errorf("%s: fsync account dir: %w", ID, err)
+		}
 	}
 	return res, nil
+}
+
+// fsyncDir flushes a directory's entries to disk so a rename survives a crash.
+func fsyncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		_ = d.Close()
+		return err
+	}
+	return d.Close()
 }
 
 // newestMarker holds an account's freshest imported updated_at (epoch), the
@@ -244,6 +268,13 @@ func mergeTranscriptFile(stagedPath, destPath string, c conversation) (int, erro
 			f.Close()
 			return 0, fmt.Errorf("%s: write record: %w", ID, err)
 		}
+	}
+	// fsync BEFORE the caller renames this staged file into the tree: the
+	// contents must be durable before the rename, so a crash can't leave a
+	// renamed-but-truncated transcript (the only copy of this conversation).
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return 0, fmt.Errorf("%s: fsync transcript: %w", ID, err)
 	}
 	if err := f.Close(); err != nil {
 		return 0, err

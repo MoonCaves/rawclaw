@@ -386,33 +386,41 @@ func TestReconcileMirror(t *testing.T) {
 	oneConvFresh := `[{"uuid":"c1","updated_at":"2026-07-20T10:00:00Z","account":{"uuid":"` + acc + `"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-20T10:00:00Z","content":[{"type":"text","text":"keep"}]}]}]`
 	oneConvStale := `[{"uuid":"c1","updated_at":"2026-07-10T10:00:00Z","account":{"uuid":"` + acc + `"},"chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-10T10:00:00Z","content":[{"type":"text","text":"keep"}]}]}]`
 
-	reconcile := func(t *testing.T, root, body string) {
-		res, err := Materialize(writeDirExport(t, body), root, true)
+	reconcile := func(t *testing.T, root, body string, mirror bool) {
+		res, err := Materialize(writeDirExport(t, body), root, mirror)
 		if err != nil {
 			t.Fatalf("materialize: %v", err)
 		}
 		for _, ai := range res.Accounts {
-			if err := Reconcile(ai, true); err != nil {
+			if err := Reconcile(ai, mirror); err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
 		}
 	}
 	c2File := func(root string) string { return filepath.Join(root, acc, "c2.jsonl") }
 
-	t.Run("fresher export prunes the absent conversation", func(t *testing.T) {
+	t.Run("mirror + fresher export prunes the absent conversation", func(t *testing.T) {
 		root := t.TempDir()
-		reconcile(t, root, twoConvs)     // establishes c1,c2 (watermark 07-15)
-		reconcile(t, root, oneConvFresh) // fresher (07-20), c2 absent → pruned
+		reconcile(t, root, twoConvs, true)     // establishes c1,c2 (watermark 07-15)
+		reconcile(t, root, oneConvFresh, true) // fresher (07-20), c2 absent → pruned
 		if _, err := os.Stat(c2File(root)); !os.IsNotExist(err) {
 			t.Error("c2 not pruned under mirror by a fresher export")
 		}
 	})
-	t.Run("stale export does not prune", func(t *testing.T) {
+	t.Run("mirror + stale export does not prune", func(t *testing.T) {
 		root := t.TempDir()
-		reconcile(t, root, twoConvs)     // watermark 07-15
-		reconcile(t, root, oneConvStale) // STALE (07-10), c2 absent → must KEEP
+		reconcile(t, root, twoConvs, true)     // watermark 07-15
+		reconcile(t, root, oneConvStale, true) // STALE (07-10), c2 absent → must KEEP
 		if _, err := os.Stat(c2File(root)); err != nil {
 			t.Errorf("c2 pruned by a STALE export (staleness guard failed): %v", err)
+		}
+	})
+	t.Run("keep never prunes an absent conversation", func(t *testing.T) {
+		root := t.TempDir()
+		reconcile(t, root, twoConvs, false)     // c1,c2 under keep
+		reconcile(t, root, oneConvFresh, false) // fresher, c2 absent — but keep retains it
+		if _, err := os.Stat(c2File(root)); err != nil {
+			t.Errorf("c2 pruned under keep (keep must retain absent conversations): %v", err)
 		}
 	})
 }
