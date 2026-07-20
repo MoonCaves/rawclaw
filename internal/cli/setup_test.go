@@ -568,7 +568,7 @@ func TestEjectKeepsConfigFileWithNonHookKeys(t *testing.T) {
 	if err := os.WriteFile(cf, []byte(`{"model": "opus"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := installRawclawHookAt(dir, cf, true); err != nil {
+	if err := installRawclawHookAt(dir, cf, true, rawclawPrimeScript); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if _, err := ejectRawclawHookAt(dir, cf); err != nil {
@@ -592,7 +592,7 @@ func TestEjectKeepsConfigFileWithNonHookKeys(t *testing.T) {
 func TestEjectSparesUserFilesInScriptDir(t *testing.T) {
 	dir := t.TempDir()
 	cf := settingsPath(dir)
-	if err := installRawclawHookAt(dir, cf, true); err != nil {
+	if err := installRawclawHookAt(dir, cf, true, rawclawPrimeScript); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	userFile := filepath.Join(filepath.Dir(hookScriptPath(dir)), "notes.txt")
@@ -647,7 +647,7 @@ func TestInstallRefusesNonObjectHooksValue(t *testing.T) {
 	if err := os.WriteFile(cf, orig, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := installRawclawHookAt(dir, cf, true); err == nil {
+	if err := installRawclawHookAt(dir, cf, true, rawclawPrimeScript); err == nil {
 		t.Fatal("want an error on non-object hooks value, got nil (silent clobber)")
 	}
 	b, err := os.ReadFile(cf)
