@@ -392,7 +392,7 @@ func TestReconcileMirror(t *testing.T) {
 			t.Fatalf("materialize: %v", err)
 		}
 		for _, ai := range res.Accounts {
-			if err := Reconcile(ai, mirror); err != nil {
+			if err := Commit(ai, PrunePlan(ai, mirror)); err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
 		}

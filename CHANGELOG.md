@@ -17,8 +17,9 @@ All notable changes to RawClaw are documented in this file.
   normal `"query"` / `read` / `outline` surface as the `claude-web` source (`--source claude-web` to
   scope); a multi-account export auto-separates into per-account scopes. Re-import is idempotent (only
   new conversations/messages are added); `RAWCLAW_RETENTION=mirror` prunes conversations deleted
-  upstream (default retains them). Only transcript text is indexed — never name/email/phone from the
-  export.
+  upstream — but never silently: it lists exactly which conversations would be deleted and asks for
+  confirmation first (`--yes` to approve non-interactively; `--json` refuses rather than prompt). The
+  default retains everything. Only transcript text is indexed — never name/email/phone from the export.
 
 ## [0.7.1] — 2026-07-21
 

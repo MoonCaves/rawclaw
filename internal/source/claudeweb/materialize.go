@@ -61,8 +61,11 @@ func Materialize(exportPath, root string, mirror bool) (*MaterializeResult, erro
 	staged := map[string]string{} // committed-dest path -> staged path
 
 	streamErr := newExport(exportPath).streamConversations(func(c conversation) error {
-		if c.UUID == "" {
-			return nil // a conversation with no uuid cannot be identified — skip it
+		// Skip a conversation with no uuid, or a uuid that cannot safely become a
+		// filename — a crafted or corrupt export must never steer a transcript
+		// write outside the account tree (path traversal).
+		if !safeConvUUID(c.UUID) {
+			return nil
 		}
 		if c.Account.UUID == "" && mirror {
 			return fmt.Errorf("%s: refusing an export with no account uuid under RAWCLAW_RETENTION=mirror — account-less imports share one bucket, so mirror could cross-prune unrelated conversations; import under the default (keep) instead", ID)
@@ -134,29 +137,46 @@ func fsyncDir(dir string) error {
 // never reads it as a transcript.
 const newestMarker = ".newest"
 
-// Reconcile finalizes one account's import: under mirror, it deletes transcript
-// files whose conversation is ABSENT from this export (the user's cloud-side
-// deletion), but ONLY when this export is at least as fresh as the last import
-// for the account — a stale re-export can neither prune nor rewind the watermark.
-// Under the keep default it prunes nothing; either way the freshness watermark
-// advances to the newest seen.
-func Reconcile(ai *AccountImport, mirror bool) error {
-	marker := filepath.Join(ai.Dir, newestMarker)
-	stored := readNewestMarker(marker)
-	fresh := ai.Newest >= stored
+// PrunePlan reports the conversation uuids that mirror mode WOULD delete for this
+// account: transcripts on disk that are ABSENT from the export just imported (a
+// cloud-side deletion). It deletes NOTHING — the caller shows the plan and gets
+// the user's approval (a y/N prompt, or --yes) before Commit removes them, since
+// a silent delete would contradict the archive promise. The plan is empty unless
+// mirror is on AND this export is at least as fresh as the last import for the
+// account (a stale re-export can never propose a prune). Under the keep default
+// the plan is always empty.
+func PrunePlan(ai *AccountImport, mirror bool) []string {
+	if !mirror {
+		return nil
+	}
+	if ai.Newest < readNewestMarker(filepath.Join(ai.Dir, newestMarker)) {
+		return nil // stale export — cannot propose deletions
+	}
+	files, _ := filepath.Glob(filepath.Join(ai.Dir, "*"+transcriptExt))
+	var prune []string
+	for _, f := range files {
+		uuid := convUUIDFromFile(f)
+		if _, present := ai.ConvUUIDs[uuid]; present {
+			continue
+		}
+		prune = append(prune, uuid)
+	}
+	return prune
+}
 
-	if mirror && fresh {
-		files, _ := filepath.Glob(filepath.Join(ai.Dir, "*"+transcriptExt))
-		for _, f := range files {
-			if _, present := ai.ConvUUIDs[convUUIDFromFile(f)]; present {
-				continue
-			}
-			if err := os.Remove(f); err != nil {
-				return fmt.Errorf("%s: mirror-prune %s: %w", ID, filepath.Base(f), err)
-			}
+// Commit finalizes one account's import: it deletes exactly the APPROVED prune
+// set (the uuids the caller confirmed — pass nil to delete nothing), then advances
+// the freshness watermark to the newest seen. Removing a uuid whose file is
+// already gone is not an error (idempotent).
+func Commit(ai *AccountImport, approvedPrune []string) error {
+	for _, uuid := range approvedPrune {
+		f := filepath.Join(ai.Dir, uuid+transcriptExt)
+		if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s: mirror-prune %s: %w", ID, uuid, err)
 		}
 	}
-	if ai.Newest > stored {
+	marker := filepath.Join(ai.Dir, newestMarker)
+	if ai.Newest > readNewestMarker(marker) {
 		return writeNewestMarker(marker, ai.Newest)
 	}
 	return nil
@@ -209,6 +229,24 @@ func accountDir(account string) string {
 			return '-'
 		}
 	}, account)
+}
+
+// safeConvUUID reports whether a conversation uuid is safe to use as a transcript
+// filename segment. Real uuids are hex + hyphens; anything else — a path
+// separator, "..", an empty or "."/".." value — is rejected so a crafted or
+// corrupt export can never steer the transcript write outside the account tree.
+func safeConvUUID(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // mergeTranscriptFile writes one conversation's transcript to stagedPath, MERGED

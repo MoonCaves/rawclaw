@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
@@ -62,7 +63,7 @@ func TestImportSearchRoundTrip(t *testing.T) {
 	isolate(t)
 	exp := writeExport(t, `[{"uuid":"c1111111-1111-1111-1111-111111111111","account":{"uuid":"acc00001-0000-0000-0000-000000000000"},"created_at":"2026-07-15T10:00:00Z","updated_at":"2026-07-15T10:00:00Z","chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"needleinthecloudhaystack"}]}]}]`)
 
-	if err := runImport(io.Discard, exp, false); err != nil {
+	if err := runImport(io.Discard, nil, exp, false, false); err != nil {
 		t.Fatalf("import: %v", err)
 	}
 	if ids := searchClaudeWeb(t, "needleinthecloudhaystack"); !contains(ids, "c1111111-1111-1111-1111-111111111111") {
@@ -83,13 +84,14 @@ func TestImportSearchMirrorAndKeep(t *testing.T) {
 	t.Run("mirror prunes the absent conversation from search", func(t *testing.T) {
 		isolate(t)
 		t.Setenv("RAWCLAW_RETENTION", "mirror")
-		if err := runImport(io.Discard, writeExport(t, twoConvs), false); err != nil {
+		if err := runImport(io.Discard, nil, writeExport(t, twoConvs), false, false); err != nil {
 			t.Fatal(err)
 		}
 		if ids := searchClaudeWeb(t, "pruneneedle"); !contains(ids, "c2") {
 			t.Fatalf("c2 not searchable after first import: %v", ids)
 		}
-		if err := runImport(io.Discard, writeExport(t, fresherOne), false); err != nil {
+		// mirror prune now requires approval — --yes approves it non-interactively.
+		if err := runImport(io.Discard, nil, writeExport(t, fresherOne), false, true); err != nil {
 			t.Fatal(err)
 		}
 		if ids := searchClaudeWeb(t, "pruneneedle"); contains(ids, "c2") {
@@ -102,14 +104,68 @@ func TestImportSearchMirrorAndKeep(t *testing.T) {
 
 	t.Run("keep retains the absent conversation in search", func(t *testing.T) {
 		isolate(t) // no RAWCLAW_RETENTION → keep
-		if err := runImport(io.Discard, writeExport(t, twoConvs), false); err != nil {
+		if err := runImport(io.Discard, nil, writeExport(t, twoConvs), false, false); err != nil {
 			t.Fatal(err)
 		}
-		if err := runImport(io.Discard, writeExport(t, fresherOne), false); err != nil {
+		if err := runImport(io.Discard, nil, writeExport(t, fresherOne), false, false); err != nil {
 			t.Fatal(err)
 		}
 		if ids := searchClaudeWeb(t, "pruneneedle"); !contains(ids, "c2") {
 			t.Errorf("c2 was dropped under keep (keep must retain absent conversations): %v", ids)
+		}
+	})
+}
+
+// TestImportMirrorApprovalGate covers the approval card itself (not the --yes
+// bypass): under mirror a conversation dropped from a fresher export is deleted
+// ONLY on approval — answering "n" keeps it, "y" prunes it, and --json refuses to
+// prune without --yes rather than delete silently.
+func TestImportMirrorApprovalGate(t *testing.T) {
+	const acc = `"account":{"uuid":"acc00003-0000-0000-0000-000000000000"}`
+	twoConvs := `[` +
+		`{"uuid":"c1",` + acc + `,"updated_at":"2026-07-15T10:00:00Z","chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"keepneedle"}]}]},` +
+		`{"uuid":"c2",` + acc + `,"updated_at":"2026-07-15T10:00:00Z","chat_messages":[{"uuid":"m2","sender":"human","created_at":"2026-07-15T10:00:00Z","content":[{"type":"text","text":"pruneneedle"}]}]}]`
+	fresherOne := `[{"uuid":"c1",` + acc + `,"updated_at":"2026-07-20T10:00:00Z","chat_messages":[{"uuid":"m1","sender":"human","created_at":"2026-07-20T10:00:00Z","content":[{"type":"text","text":"keepneedle"}]}]}]`
+
+	t.Run("declining the prompt keeps the absent conversation", func(t *testing.T) {
+		isolate(t)
+		t.Setenv("RAWCLAW_RETENTION", "mirror")
+		if err := runImport(io.Discard, nil, writeExport(t, twoConvs), false, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := runImport(io.Discard, strings.NewReader("n\n"), writeExport(t, fresherOne), false, false); err != nil {
+			t.Fatal(err)
+		}
+		if ids := searchClaudeWeb(t, "pruneneedle"); !contains(ids, "c2") {
+			t.Errorf("c2 was deleted despite declining the prompt: %v", ids)
+		}
+	})
+
+	t.Run("approving the prompt deletes the absent conversation", func(t *testing.T) {
+		isolate(t)
+		t.Setenv("RAWCLAW_RETENTION", "mirror")
+		if err := runImport(io.Discard, nil, writeExport(t, twoConvs), false, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := runImport(io.Discard, strings.NewReader("y\n"), writeExport(t, fresherOne), false, false); err != nil {
+			t.Fatal(err)
+		}
+		if ids := searchClaudeWeb(t, "pruneneedle"); contains(ids, "c2") {
+			t.Errorf("c2 survived an approved mirror prune: %v", ids)
+		}
+	})
+
+	t.Run("--json refuses to prune without --yes", func(t *testing.T) {
+		isolate(t)
+		t.Setenv("RAWCLAW_RETENTION", "mirror")
+		if err := runImport(io.Discard, nil, writeExport(t, twoConvs), true, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := runImport(io.Discard, nil, writeExport(t, fresherOne), true, false); err == nil {
+			t.Fatal("a --json import that would prune must refuse without --yes, got nil")
+		}
+		if ids := searchClaudeWeb(t, "pruneneedle"); !contains(ids, "c2") {
+			t.Errorf("c2 deleted on a refused --json prune: %v", ids)
 		}
 	})
 }
