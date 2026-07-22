@@ -88,8 +88,7 @@ func TestTagQueueAddRejectsGarbage(t *testing.T) {
 }
 
 // TestTagQueueEmptiedFileIsDeleted: removing the last entry deletes the queue
-// file instead of leaving a zero-byte husk (the SessionStart hook keys its
-// pending note on output, but a lingering empty file is still clutter).
+// file instead of leaving a zero-byte husk.
 func TestTagQueueEmptiedFileIsDeleted(t *testing.T) {
 	fakeQueueHome(t)
 

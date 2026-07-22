@@ -39,6 +39,13 @@ func TestInstallCodex_WritesEnvelopedScript(t *testing.T) {
 	if strings.Contains(string(claudeScript), "hookSpecificOutput") {
 		t.Error("Claude prime script unexpectedly carries the Codex JSON envelope")
 	}
+	for name, script := range map[string][]byte{"Claude": claudeScript, "Codex": codexScript} {
+		for _, forbidden := range []string{"tag-queue", "tag-prep", "tag-write", "finished sessions awaiting"} {
+			if strings.Contains(string(script), forbidden) {
+				t.Errorf("%s SessionStart script still assigns old-session tagging via %q", name, forbidden)
+			}
+		}
+	}
 }
 
 // TestCodexPrimeScript_EmitsValidHookJSON is the Codex-hook regression: run the Codex
@@ -55,8 +62,8 @@ func TestCodexPrimeScript_EmitsValidHookJSON(t *testing.T) {
 		t.Skip("no python3 (the script itself self-skips without it)")
 	}
 
-	// Stub `rawclaw` on PATH: command -v must find it; `rawclaw tag-queue` returns
-	// nothing so no pending block is appended.
+	// Stub `rawclaw` on PATH so the generated hook's binary-resolution fallback
+	// succeeds without depending on this machine's installed binary.
 	stubDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -116,6 +123,11 @@ func TestCodexPrimeScript_EmitsValidHookJSON(t *testing.T) {
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("additionalContext missing banner line %q; got %q", want, ctx)
+		}
+	}
+	for _, forbidden := range []string{"tag-queue", "tag-prep", "tag-write", "finished sessions awaiting"} {
+		if strings.Contains(ctx, forbidden) {
+			t.Errorf("additionalContext still assigns old-session tagging via %q; got %q", forbidden, ctx)
 		}
 	}
 }
