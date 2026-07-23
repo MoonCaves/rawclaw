@@ -28,8 +28,9 @@ func newSetupCmd() *cobra.Command {
 			"in every agent runtime detected on this machine, so a session announces rawclaw " +
 			"exists. For Claude Code a second, SessionEnd hook is wired too: it queues each " +
 			"finished session for later topic tagging. The SessionStart discovery banner does " +
-			"not surface that queue or ask a new session to tag an older one. Rawclaw itself " +
-			"never calls a model. " +
+			"not surface that queue or ask a new session to tag an older one. It instead tells " +
+			"the current agent to delegate its own closeout tagging to a background subagent " +
+			"when the user signals that the session is ending. Rawclaw itself never calls a model. " +
 			"Claude Code is always targeted; Codex is targeted too when its config dir " +
 			"already exists (honors $CODEX_HOME, else ~/.codex) — a machine with no Codex install " +
 			"is left untouched for that target rather than having a Codex tree created for it. " +

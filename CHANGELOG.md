@@ -7,9 +7,11 @@ All notable changes to RawClaw are documented in this file.
 ### Changed
 
 - **SessionStart no longer assigns old-session tagging to the new agent.** The Claude Code and
-  Codex discovery banners no longer inspect or print the pending topic-tag queue, session ids, or
-  `tag-prep` / `tag-write` instructions. Claude Code's silent SessionEnd queue remains unchanged
-  while its eventual consumer is decided separately.
+  Codex discovery banners no longer inspect or print the pending topic-tag queue or its session ids.
+  Instead they tell the current agent to delegate its own `tag-prep` → `tag-write` closeout work to
+  a background subagent whenever the user signals that the session is ending, keeping the main agent
+  available. Claude Code's silent SessionEnd queue remains unchanged while its eventual consumer is
+  decided separately.
 
 ## [0.7.1] — 2026-07-21
 
