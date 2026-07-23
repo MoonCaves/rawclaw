@@ -40,9 +40,20 @@ func TestInstallCodex_WritesEnvelopedScript(t *testing.T) {
 		t.Error("Claude prime script unexpectedly carries the Codex JSON envelope")
 	}
 	for name, script := range map[string][]byte{"Claude": claudeScript, "Codex": codexScript} {
-		for _, forbidden := range []string{"tag-queue", "tag-prep", "tag-write", "finished sessions awaiting"} {
+		for _, want := range []string{
+			"Session closeout: whenever the user signals",
+			"background subagent",
+			"rawclaw tag-prep <full-session-id>",
+			"rawclaw tag-write <full-session-id>",
+			"RawClaw has no supersession",
+		} {
+			if !strings.Contains(string(script), want) {
+				t.Errorf("%s SessionStart script missing approved closeout wording %q", name, want)
+			}
+		}
+		for _, forbidden := range []string{"tag-queue", "finished sessions awaiting", "future session"} {
 			if strings.Contains(string(script), forbidden) {
-				t.Errorf("%s SessionStart script still assigns old-session tagging via %q", name, forbidden)
+				t.Errorf("%s SessionStart script still carries cross-session tagging via %q", name, forbidden)
 			}
 		}
 	}
@@ -120,14 +131,19 @@ func TestCodexPrimeScript_EmitsValidHookJSON(t *testing.T) {
 		"Fast FTS5/BM25 search",
 		`rawclaw "query"`,
 		"offering to resume/fork it can help",
+		"Session closeout: whenever the user signals",
+		"background subagent",
+		"rawclaw tag-prep <full-session-id>",
+		"rawclaw tag-write <full-session-id>",
+		"RawClaw has no supersession",
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("additionalContext missing banner line %q; got %q", want, ctx)
 		}
 	}
-	for _, forbidden := range []string{"tag-queue", "tag-prep", "tag-write", "finished sessions awaiting"} {
+	for _, forbidden := range []string{"tag-queue", "finished sessions awaiting", "future session"} {
 		if strings.Contains(ctx, forbidden) {
-			t.Errorf("additionalContext still assigns old-session tagging via %q; got %q", forbidden, ctx)
+			t.Errorf("additionalContext still carries cross-session tagging via %q; got %q", forbidden, ctx)
 		}
 	}
 }
