@@ -10,20 +10,20 @@ import (
 
 // newTagQueueCmd wires `rawclaw tag-queue`: the pending-tags queue behind
 // automatic topic tagging. The SessionEnd hook `rawclaw setup` installs calls
-// `tag-queue add` when a session finishes; the SessionStart banner lists the
-// queue so the next agent session tags what's pending (tag-prep → tag-write;
-// tag-write dequeues on success). Bare `tag-queue` prints one 8-char session
-// id per line — silence means an empty queue.
+// `tag-queue add` when a session finishes. The queue is available to later
+// topic-tagging workflows (tag-prep → tag-write; tag-write dequeues on success).
+// Bare `tag-queue` prints one 8-char session id per line — silence means an
+// empty queue.
 func newTagQueueCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "tag-queue",
 		Short: "List sessions queued for topic tagging (add/remove to manage)",
 		Long: "The pending-tags queue behind automatic topic tagging. `rawclaw setup` wires a SessionEnd " +
-			"hook that queues each finished session here; the session-start banner lists the queue so the " +
-			"next agent session tags what's pending (`tag-prep` → `tag-write`; a successful `tag-write` " +
-			"dequeues its session). Bare `tag-queue` prints one 8-char session id per line — no output " +
-			"means an empty queue. rawclaw calls NO LLM: the agent reading the banner does the tagging.",
+			"hook that queues each finished session here. The SessionStart discovery banner does not surface " +
+			"this queue or ask a new session to tag an older one. A successful `tag-write` dequeues its session. " +
+			"Bare `tag-queue` prints one 8-char session id per line — no output means an empty queue. " +
+			"rawclaw calls NO LLM.",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -74,7 +74,7 @@ func newTagQueueCmd() *cobra.Command {
 
 // runTagQueueList prints the queue, one 8-char session id per line (the form
 // tag-prep/tag-write take), oldest first. An empty queue prints nothing and
-// exits 0 — the SessionStart hook keys its pending note on any output at all.
+// exits 0.
 func runTagQueueList(w io.Writer, jsonOut bool) error {
 	ids, err := readTagQueue()
 	if err != nil {
