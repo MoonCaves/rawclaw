@@ -67,18 +67,14 @@ hold the superseding current truth; rawclaw is the dated raw record underneath i
   rawclaw outline <sess8>      a session's goal -> resolution arc
 --json for structured output; --help for the rest.
 If the user seems to want to pick up a past session, offering to resume/fork it can help.
-BANNER
 
-# Finished sessions the SessionEnd hook queued for topic tagging: list them so
-# this session's agent tags them first. Silence (no rawclaw output, or an
-# error) means nothing pending — never a hook failure.
-pending=$("$RAWCLAW" tag-queue 2>/dev/null | head -n 8) || pending=""
-if [ -n "$pending" ]; then
-	printf '[rawclaw] finished sessions awaiting topic tags — tag them before starting other work:\n'
-	printf '%s\n' "$pending" | sed 's/^/  /'
-	printf 'For each id: rawclaw tag-prep <id> (read, split into topic segments), then rawclaw tag-write <id>.\n'
-	printf 'A session that will not resolve or is not worth tagging: rawclaw tag-queue remove <id>.\n'
-fi
+Session closeout: whenever the user signals that the current session is ending or should be
+closed out, immediately delegate tagging to a background subagent so the main agent stays
+available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + `, chooses a few topic segments,
+then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
+what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
+systems own current truth. RawClaw only points to where something was discussed.
+BANNER
 `
 
 // rawclawCodexPrimeScript is the Codex variant of the SessionStart discovery
@@ -120,8 +116,8 @@ if [ -n "$session_id" ]; then
 	: > "$marker" 2>/dev/null || true
 fi
 
-# Build the banner + pending-tags text, then wrap it as a SessionStart hook-JSON
-# object so Codex ingests it as additionalContext instead of rejecting it.
+# Wrap the banner as a SessionStart hook-JSON object so Codex ingests it as
+# additionalContext instead of rejecting it.
 {
 cat <<'BANNER'
 [rawclaw] Raw transcript history for context — the receipts + thought process behind past
@@ -134,29 +130,28 @@ hold the superseding current truth; rawclaw is the dated raw record underneath i
   rawclaw outline <sess8>      a session's goal -> resolution arc
 --json for structured output; --help for the rest.
 If the user seems to want to pick up a past session, offering to resume/fork it can help.
-BANNER
 
-pending=$("$RAWCLAW" tag-queue 2>/dev/null | head -n 8) || pending=""
-if [ -n "$pending" ]; then
-	printf '[rawclaw] finished sessions awaiting topic tags — tag them before starting other work:\n'
-	printf '%s\n' "$pending" | sed 's/^/  /'
-	printf 'For each id: rawclaw tag-prep <id> (read, split into topic segments), then rawclaw tag-write <id>.\n'
-	printf 'A session that will not resolve or is not worth tagging: rawclaw tag-queue remove <id>.\n'
-fi
+Session closeout: whenever the user signals that the current session is ending or should be
+closed out, immediately delegate tagging to a background subagent so the main agent stays
+available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + `, chooses a few topic segments,
+then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
+what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
+systems own current truth. RawClaw only points to where something was discussed.
+BANNER
 } | python3 -c 'import json,sys; sys.stdout.write(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": sys.stdin.buffer.read().decode("utf-8","replace")}}))'
 `
 
 // rawclawTagQueueScript is installed at <configDir>/hooks/rawclaw/tagqueue.sh
 // and registered as a Claude Code SessionEnd hook: it queues the finished
-// session for topic tagging (the SessionStart banner above surfaces the queue
-// to the next agent session, which does the actual tagging — rawclaw calls no
-// model). Same POSIX-sh posture and tolerant session_id extraction as the
-// prime script; every failure path is a silent exit 0, because a tagging queue
-// is never worth breaking a session's shutdown over.
+// session for later topic tagging. The SessionStart discovery hook deliberately
+// does not surface that queue or assign older sessions to the new agent. Same
+// POSIX-sh posture and tolerant session_id extraction as the prime script;
+// every failure path is a silent exit 0, because a tagging queue is never worth
+// breaking a session's shutdown over.
 const rawclawTagQueueScript = `#!/bin/sh
 # Installed by ` + "`rawclaw setup`" + `; removed by ` + "`rawclaw setup --eject`" + ` along with
 # its settings.json entry. Queues the finished session for topic tagging on
-# Claude Code SessionEnd — the next session's agent picks the queue up.
+# Claude Code SessionEnd.
 set -eu
 
 @@RAWCLAW_RESOLVE@@
