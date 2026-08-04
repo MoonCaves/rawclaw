@@ -574,3 +574,83 @@ func TestModuleConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestStripEnvelopes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "whole-message notification disappears",
+			in:   "<task-notification>agent finished</task-notification>",
+			want: "",
+		},
+		{
+			name: "envelope removed, surrounding prose kept",
+			in:   "before <system-reminder>do the thing</system-reminder> after",
+			want: "before  after",
+		},
+		{
+			name: "unclosed envelope owns the rest of the record",
+			in:   "kept <system-reminder>truncated mid stream",
+			want: "kept ",
+		},
+		{
+			name: "opener with attributes still matches",
+			in:   `x <command-message id="7">run</command-message> y`,
+			want: "x  y",
+		},
+		{
+			name: "unknown tag is left completely alone",
+			in:   "<mytag>real content</mytag>",
+			want: "<mytag>real content</mytag>",
+		},
+		{
+			name: "a tag merely PREFIXED by a known name is not stripped",
+			in:   "<command-nameplate>keep me</command-nameplate>",
+			want: "<command-nameplate>keep me</command-nameplate>",
+		},
+		{
+			name: "plain prose untouched",
+			in:   "no angle brackets here at all",
+			want: "no angle brackets here at all",
+		},
+		{
+			name: "json a user pasted stays searchable",
+			in:   `{"deployment":"rollback","count":3}`,
+			want: `{"deployment":"rollback","count":3}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := StripEnvelopes(tt.in); got != tt.want {
+				t.Fatalf("StripEnvelopes(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestStripGeneratedLeavesHumanText is the property the search haystack relies
+// on: a record built only from generated material collapses to nothing (so it
+// cannot match), while a record with any real prose keeps that prose.
+func TestStripGeneratedLeavesHumanText(t *testing.T) {
+	onlyGenerated := []string{
+		"<task-notification>done</task-notification>",
+		"[TOOL_RESULT] some output",
+		"<command-name>/loop</command-name><command-args>5m</command-args>",
+	}
+	for _, s := range onlyGenerated {
+		if got := strings.TrimSpace(StripGenerated(s)); got != "" {
+			t.Errorf("StripGenerated(%q) = %q, want empty (generated-only record)", s, got)
+		}
+	}
+	mixed := "here is my actual question <system-reminder>ignore</system-reminder>"
+	got := StripGenerated(mixed)
+	if !strings.Contains(got, "here is my actual question") {
+		t.Errorf("StripGenerated(%q) = %q, dropped the human text", mixed, got)
+	}
+	if strings.Contains(got, "ignore") {
+		t.Errorf("StripGenerated(%q) = %q, kept the envelope body", mixed, got)
+	}
+}
