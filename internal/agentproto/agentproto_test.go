@@ -1269,3 +1269,65 @@ func TestSearchDiscoversOrphanedProject(t *testing.T) {
 		t.Fatal("read returned no content for the retained orphan session")
 	}
 }
+
+// TestTopicsCollapsesRepeatedLabel covers the duplicate-row defect: a tagger
+// often cuts one long conversation into several segments carrying the SAME
+// label, and every one of them was a separate row. Observed live, one session
+// filled four of the result slots with four identical labels, differing only in
+// which message each read-ref pointed at.
+//
+// The session below has three segments labelled "shared label" and one labelled
+// "distinct label". The repeats must collapse to a single row while the distinct
+// label survives as its own row — collapsing must not hide real coverage.
+func TestTopicsCollapsesRepeatedLabel(t *testing.T) {
+	proj := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	// One session, four messages, so segments can start at distinct anchors.
+	uuids := []string{
+		"aaaaaaaa-1111-2222-3333-000000000001",
+		"aaaaaaaa-1111-2222-3333-000000000002",
+		"aaaaaaaa-1111-2222-3333-000000000003",
+		"aaaaaaaa-1111-2222-3333-000000000004",
+	}
+	var lines []string
+	for i, u := range uuids {
+		lines = append(lines, `{"type":"user","uuid":"`+u+`","timestamp":"2026-06-01T10:0`+
+			string(rune('0'+i))+`:00Z","message":{"role":"user","content":"message `+string(rune('a'+i))+`"}}`)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "sessdup.jsonl"),
+		[]byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	dbp, _, _, err := index.EnsureIndexed(proj, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+	con := openCacheRW(t, dbp)
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
+	}
+	labels := []string{"shared label", "shared label", "shared label", "distinct label"}
+	for i, lbl := range labels {
+		if err := store.UpsertTopicSegment(con, "sessdup", uuids[i], "", lbl, "", 1.0); err != nil {
+			t.Fatalf("UpsertTopicSegment %d: %v", i, err)
+		}
+	}
+	con.Close()
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	res, err := Topics("label", scope, 10, "")
+	if err != nil {
+		t.Fatalf("Topics: %v", err)
+	}
+	counts := map[string]int{}
+	for _, h := range res.Hits {
+		counts[h.Topic]++
+	}
+	if counts["shared label"] != 1 {
+		t.Errorf("repeated label appeared %d times, want 1 (hits: %+v)", counts["shared label"], res.Hits)
+	}
+	if counts["distinct label"] != 1 {
+		t.Errorf("distinct label appeared %d times, want 1 (hits: %+v)", counts["distinct label"], res.Hits)
+	}
+}
