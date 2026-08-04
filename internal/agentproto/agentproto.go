@@ -1423,6 +1423,18 @@ type TopicsResult struct {
 	Note  string     `json:"note,omitempty"`
 }
 
+// topicFetch is how many topic rows to pull from each project's database for a
+// requested result limit. The surplus is what collapsing repeats consumes; it
+// mirrors the keyword search fetch window (8x, floor 30) rather than inventing
+// a second rule.
+func topicFetch(limit int) int {
+	f := limit * 8
+	if f < 30 {
+		f = 30
+	}
+	return f
+}
+
 // topicsEmptyNote is the empty-state hint printed/emitted when no topic rows
 // exist anywhere in scope — tells the agent how topics get tagged.
 const topicsEmptyNote = "no topics tagged yet — a session is tagged via the rawclaw-topic-tagger subagent"
@@ -1459,6 +1471,10 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 	type scored struct {
 		hit   TopicHit
 		score float64
+		// dedupKey identifies the (conversation, label) pair this hit represents:
+		// the session's lineage root rather than its id, so a resumed or forked
+		// session counts as the one conversation it is.
+		dedupKey string
 	}
 	var ranked []scored
 	anyTopics := false
@@ -1478,7 +1494,11 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 		if store.TopicRowsExist(con) {
 			anyTopics = true
 		}
-		thits, _ := store.MatchTopics(con, query, limit)
+		// Over-fetch per project, the same way search does, so collapsing repeats
+		// has material to work with: a project whose top `limit` segments all
+		// carry ONE label would otherwise dedup down to a single row and hide
+		// every distinct topic sitting below them.
+		thits, _ := store.MatchTopics(con, query, topicFetch(limit))
 		for _, h := range thits {
 			uuid := store.MessageUUID(con, h.MsgID)
 			if uuid == "" {
@@ -1490,7 +1510,8 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 					Project: sc.Project,
 					ReadRef: fmtRef(h.SessionID, uuid),
 				},
-				score: h.Score,
+				score:    h.Score,
+				dedupKey: sc.Project + "\x00" + retrieve.LineageRoot(con, h.SessionID) + "\x00" + h.Topic,
 			})
 		}
 		_ = con.Close()
@@ -1500,12 +1521,32 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 	// Ties keep the order the scopes were swept in (stable sort) — deterministic
 	// across runs rather than dependent on map iteration.
 	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score < ranked[j].score })
-	if len(ranked) > limit {
-		ranked = ranked[:limit]
-	}
+
+	// Collapse repeats BEFORE the cap, so duplicates cannot eat the result slots
+	// — the same ordering search uses (build every distinct hit, then cap).
+	//
+	// A long conversation is often cut into many segments that a tagger gave the
+	// SAME label, one per stretch of the discussion. Each of those segments is a
+	// separate row here, so one heavily-segmented session could fill the list:
+	// observed on the live corpus, `topics "tagging"` returned four identical
+	// rows for one session, differing only in which message each read-ref pointed
+	// at. Keying on lineage root plus label collapses those to one row while
+	// leaving a session that genuinely carries several DIFFERENT labels with one
+	// row per label. Sorting first means the surviving row is the best-scoring
+	// one, and so the read-ref points at that session's strongest match.
+	seenTopic := map[string]struct{}{}
 	hits := make([]TopicHit, 0, len(ranked))
 	for _, r := range ranked {
+		if r.dedupKey != "" {
+			if _, dup := seenTopic[r.dedupKey]; dup {
+				continue
+			}
+			seenTopic[r.dedupKey] = struct{}{}
+		}
 		hits = append(hits, r.hit)
+		if len(hits) == limit {
+			break
+		}
 	}
 
 	res := TopicsResult{Query: query, Hits: hits}
