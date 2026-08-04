@@ -30,6 +30,11 @@ type TopicHit struct {
 	MsgID     int
 	SessionID string
 	Topic     string
+	// Score is the raw bm25 value for this match: NEGATIVE, more negative =
+	// better. Carried out of the per-database query so a caller sweeping many
+	// project databases can order the union by match quality instead of by
+	// whichever database it happened to open first.
+	Score float64
 }
 
 // UpsertTopicSegment inserts or updates one topic segment, keyed by the stable
@@ -199,6 +204,25 @@ ORDER BY session_id`)
 	return out, nil
 }
 
+// topic_fts indexes two columns and `ORDER BY rank` weights them equally, which
+// is wrong for this verb: the topic is the LABEL a tagger chose (3-7 words, high
+// signal), the summary is a sentence of surrounding context. Under equal
+// weighting a passing mention inside a long summary outranks a segment whose
+// label IS the query — observed on a real corpus, where `topics "adversarial"`
+// put a segment whose LABEL does not contain the query (it appears
+// only in its summary) above sixteen segments with "Adversarial" in the label.
+//
+// The imbalance grows with summary coverage: a corpus where a quarter of
+// segments carry a summary hides it; one where every segment does exposes it.
+// So weight the label an order of magnitude above the summary — the summary
+// still contributes recall, it just stops outvoting the thing it describes.
+// bm25() scores are negative (more negative = better), and ORDER BY ascending
+// matches `rank`'s own direction.
+const (
+	topicColumnWeight   = "10.0"
+	summaryColumnWeight = "1.0"
+)
+
 // MatchTopics runs an FTS query over topic_fts and, for each matched segment,
 // resolves its START message to a live rowid (messages join on
 // session_id+start_uuid). A segment whose start message is gone (churned/never
@@ -224,12 +248,12 @@ func MatchTopics(con *sql.DB, query string, limit int) ([]TopicHit, error) {
 	}
 	match := strings.Join(terms, " OR ")
 	rows, err := con.Query(`
-SELECT m.id, ts.session_id, ts.topic
+SELECT m.id, ts.session_id, ts.topic, bm25(topic_fts, `+topicColumnWeight+`, `+summaryColumnWeight+`)
 FROM topic_fts
 JOIN topic_segment ts ON ts.id = topic_fts.rowid
 JOIN messages m ON m.session_id = ts.session_id AND m.uuid = ts.start_uuid
 WHERE topic_fts MATCH ?
-ORDER BY rank
+ORDER BY bm25(topic_fts, `+topicColumnWeight+`, `+summaryColumnWeight+`)
 LIMIT ?`, match, limit)
 	if err != nil {
 		return nil, nil // missing table / malformed query reads as no hits (non-fatal)
@@ -241,7 +265,7 @@ LIMIT ?`, match, limit)
 			h     TopicHit
 			topic sql.NullString
 		)
-		if err := rows.Scan(&h.MsgID, &h.SessionID, &topic); err != nil {
+		if err := rows.Scan(&h.MsgID, &h.SessionID, &topic, &h.Score); err != nil {
 			return nil, fmt.Errorf("scan topic hit: %w", err)
 		}
 		h.Topic = topic.String

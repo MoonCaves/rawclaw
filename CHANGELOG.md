@@ -4,6 +4,23 @@ All notable changes to RawClaw are documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **`topics` now ranks across every project, not within each one.** The sweep
+  opens one SQLite file per project and used to append each project's hits in
+  iteration order, so whichever project was opened first owned the top of the
+  list however weak its matches were — `topics "adversarial"` led with two
+  segments that only mention the word inside a summary while sixteen segments
+  *labelled* "Adversarial …" sat below them. Each hit now carries its bm25 score
+  out of its own database and the union is ranked before the cap.
+- `topics` also weights the `topic` column an order of magnitude above
+  `summary`, so a segment whose LABEL is your query beats one that merely
+  mentions it in passing. Summaries still contribute recall.
+
+### Changed
+- **`topics --limit` now caps the combined list, not each project.** It
+  previously returned up to `limit` hits *per project*, which made asking for a
+  global "top N" impossible. Help text updated to match.
+
 ### Removed
 - **The tag queue is gone.** `rawclaw tag-queue` (and its `add` / `remove`
   subcommands), the SessionEnd `tagqueue.sh` hook `setup` installed, and

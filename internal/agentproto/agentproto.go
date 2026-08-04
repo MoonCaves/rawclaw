@@ -1308,7 +1308,16 @@ type TopicsResult struct {
 const topicsEmptyNote = "no topics tagged yet — a session is tagged via the rawclaw-topic-tagger subagent"
 
 // Topics searches ONLY the topic layer across scope (nil = all projects),
-// returning hits ordered per-project by FTS rank, capped at limit per project.
+// returning hits ordered by match quality ACROSS every project, capped at limit.
+//
+// Ordering is global on purpose. Each project is a separate SQLite file, so the
+// sweep queries them one at a time; appending each project's hits in iteration
+// order (what this did before) meant the first project opened owned the top of
+// the list no matter how weak its matches were. Observed on a real corpus:
+// `topics "adversarial"` led with two segments that merely mention the word in a
+// summary, while sixteen segments LABELLED "Adversarial …" sat below them —
+// purely because they lived in a project that sorted later. Each hit now carries
+// its bm25 score out of its own database and the union is ranked before the cap.
 // Each hit resolves the segment's START message id (what MatchTopics returns) to
 // its uuid for a read-ref. It never touches the keyword/vector ranking — this is
 // the separate, on-demand finder. anyTopics reports whether ANY topic rows exist
@@ -1325,7 +1334,13 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 		scope = filterScopeByPath(scope, includePath, "")
 	}
 
-	hits := []TopicHit{}
+	// scored pairs a hit with the bm25 value from its own database, so the union
+	// can be ranked before rendering (TopicHit itself stays a display type).
+	type scored struct {
+		hit   TopicHit
+		score float64
+	}
+	var ranked []scored
 	anyTopics := false
 	for _, sc := range scope {
 		dbp, _, err := scopes.Resolve(sc, false)
@@ -1349,13 +1364,28 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 			if uuid == "" {
 				continue // can't build a read-ref without the message uuid
 			}
-			hits = append(hits, TopicHit{
-				Topic:   h.Topic,
-				Project: sc.Project,
-				ReadRef: fmtRef(h.SessionID, uuid),
+			ranked = append(ranked, scored{
+				hit: TopicHit{
+					Topic:   h.Topic,
+					Project: sc.Project,
+					ReadRef: fmtRef(h.SessionID, uuid),
+				},
+				score: h.Score,
 			})
 		}
 		_ = con.Close()
+	}
+
+	// bm25 is negative and more-negative is better, so ascending is best-first.
+	// Ties keep the order the scopes were swept in (stable sort) — deterministic
+	// across runs rather than dependent on map iteration.
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score < ranked[j].score })
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	hits := make([]TopicHit, 0, len(ranked))
+	for _, r := range ranked {
+		hits = append(hits, r.hit)
 	}
 
 	res := TopicsResult{Query: query, Hits: hits}

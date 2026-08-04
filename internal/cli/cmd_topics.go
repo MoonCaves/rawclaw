@@ -28,7 +28,10 @@ func newTopicsCmd() *cobra.Command {
 		Long: "Search ONLY the topic layer — the concept labels a tagging subagent attached to past sessions — " +
 			"and print, per hit, `<topic> · <project> · read ref=<sess8>:<uuid8>` pointing at where that topic " +
 			"begins. Topics are NOT in the default search ranking; reach for this when a normal `rawclaw \"query\"` " +
-			"is ambiguous. Searches every project by default; --this-project (with --dir) to narrow.",
+			"is ambiguous. Searches every project by default; --this-project (with --dir) to narrow. " +
+			"Hits are ranked by match quality across ALL projects — a segment whose LABEL is your query " +
+			"outranks one that merely mentions it in a summary, wherever each lives — and --limit caps the " +
+			"combined list, not each project.",
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -38,7 +41,7 @@ func newTopicsCmd() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
-	f.IntVar(&limit, "limit", 8, "max topic hits per project")
+	f.IntVar(&limit, "limit", 8, "max topic hits returned, best-matching first across all projects")
 	f.BoolVar(&thisProject, "this-project", false, "limit to this project (default: all projects)")
 	f.StringVar(&dir, "dir", cwd(), "project working dir for --this-project")
 	f.StringVar(&includePath, "include-path", "", "only search projects whose working dir matches this regex")
