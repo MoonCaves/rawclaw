@@ -1443,17 +1443,29 @@ type TopicsResult struct {
 	Note  string     `json:"note,omitempty"`
 }
 
+// topicFetch is how many topic rows to pull from each project's database for a
+// requested result limit. The surplus is what collapsing repeats consumes; it
+// mirrors the keyword search fetch window (8x, floor 30) rather than inventing
+// a second rule.
+func topicFetch(limit int) int {
+	f := limit * 8
+	if f < 30 {
+		f = 30
+	}
+	return f
+}
+
 // topicsEmptyNote is the empty-state hint printed/emitted when no topic rows
 // exist anywhere in scope — tells the agent how topics get tagged.
 const topicsEmptyNote = "no topics tagged yet — a session is tagged via the rawclaw-topic-tagger subagent"
 
 // Topics searches ONLY the topic layer across scope (nil = all projects),
-// returning hits ordered per-project by FTS rank, capped at limit per project.
-// Each hit resolves the segment's START message id (what MatchTopics returns) to
-// its uuid for a read-ref. It never touches the keyword/vector ranking — this is
-// the separate, on-demand finder. anyTopics reports whether ANY topic rows exist
-// in scope (regardless of query match), so the caller can tell "no match" apart
-// from "nothing tagged yet".
+// returning hits ordered per-project by FTS rank, capped at limit per project,
+// at one row per conversation per label. Each hit resolves the segment's START
+// message id (what MatchTopics returns) to its uuid for a read-ref. It never
+// touches the keyword/vector ranking — this is the separate, on-demand finder.
+// anyTopics reports whether ANY topic rows exist in scope (regardless of query
+// match), so the caller can tell "no match" apart from "nothing tagged yet".
 //
 // Ordering is deliberately PER-PROJECT, not global. Each project is its own
 // SQLite file, and raw bm25 scores are NOT comparable across independent
@@ -1490,17 +1502,56 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 		if store.TopicRowsExist(con) {
 			anyTopics = true
 		}
-		thits, _ := store.MatchTopics(con, query, limit)
+		// Over-fetch per project, the same way search does, so collapsing repeats
+		// has material to work with: a project whose top `limit` segments all
+		// carry ONE label would otherwise dedup down to a single row and hide
+		// every distinct topic sitting below them.
+		thits, _ := store.MatchTopics(con, query, topicFetch(limit))
+
+		// Collapse repeats BEFORE this project's cap, so duplicates cannot eat
+		// its result slots — the same ordering search uses (build every distinct
+		// hit, then cap).
+		//
+		// A long conversation is often cut into many segments that a tagger gave
+		// the SAME label, one per stretch of the discussion. Each of those
+		// segments is a separate row here, so one heavily-segmented session could
+		// fill the list: observed on the live corpus, `topics "tagging"` returned
+		// four identical rows for one session, differing only in which message
+		// each read-ref pointed at. Keying on lineage root plus label collapses
+		// those to one row — the root rather than the session id, so a resumed or
+		// forked session counts as the one conversation it is — while leaving a
+		// session that genuinely carries several DIFFERENT labels with one row per
+		// label. MatchTopics returns best-first, so the surviving row is that
+		// conversation's strongest match for the label.
+		//
+		// The map is per-project because that is the only place dedup is sound
+		// here: it is keyed on a lineage root read from THIS database, and the
+		// rank order it consumes is only comparable within it.
+		seenTopic := map[string]struct{}{}
+		kept := 0
 		for _, h := range thits {
 			uuid := store.MessageUUID(con, h.MsgID)
 			if uuid == "" {
 				continue // can't build a read-ref without the message uuid
 			}
+			root := retrieve.LineageRoot(con, h.SessionID)
+			if root == "" {
+				root = h.SessionID // no lineage resolved: collapse only exact repeats
+			}
+			key := root + "\x00" + h.Topic
+			if _, dup := seenTopic[key]; dup {
+				continue
+			}
+			seenTopic[key] = struct{}{}
 			hits = append(hits, TopicHit{
 				Topic:   h.Topic,
 				Project: sc.Project,
 				ReadRef: fmtRef(h.SessionID, uuid),
 			})
+			kept++
+			if kept == limit {
+				break // the cap is per-project, matching the documented contract
+			}
 		}
 		_ = con.Close()
 	}
