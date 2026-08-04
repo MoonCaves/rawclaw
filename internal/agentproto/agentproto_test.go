@@ -917,11 +917,16 @@ func openCacheRW(t *testing.T, dbp string) *sql.DB {
 	return con
 }
 
-// TestSearchNeverCarriesTopic locks the design change: topics are OUT of the
-// search ranking and output. A keyword hit on a topic-tagged message must come
-// back with an EMPTY Topic field (topics live only in the separate `topics`
-// command) — the non-fused (nil embedder) path no longer attaches a topic.
-func TestSearchNeverCarriesTopic(t *testing.T) {
+// TestSearchCarriesTopicLabel supersedes the former TestSearchNeverCarriesTopic,
+// which asserted the opposite: that a search hit must carry an EMPTY topic.
+//
+// That earlier rule came from a concern about RANKING — that a label sharing a
+// word with the query could mis-route which conversation won. The label is now
+// attached after ranking has finished (see attachTopics), so it cannot do that,
+// and the label is worth showing: it is the one field that says what a session
+// was about without opening it. The ranking property the old rule was really
+// protecting is held directly by TestTopicLabelDoesNotAffectOrdering below.
+func TestSearchCarriesTopicLabel(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
 	writeSession(t, proj, "sessone", "11111111-aaaa-bbbb-cccc-000000000001", "discussing the deployment rollback procedure")
@@ -945,8 +950,105 @@ func TestSearchNeverCarriesTopic(t *testing.T) {
 	if len(env.Results) == 0 {
 		t.Fatalf("expected a match for 'deployment', got none")
 	}
+	if env.Results[0].Topic != "deployment rollback" {
+		t.Fatalf("result Topic = %q, want %q", env.Results[0].Topic, "deployment rollback")
+	}
+}
+
+// TestSearchUntaggedSessionHasEmptyTopic keeps the untagged corpus honest: with
+// no topic rows at all, every hit's label is empty and the JSON stays identical
+// to a pre-topic corpus (the field is omitempty).
+func TestSearchUntaggedSessionHasEmptyTopic(t *testing.T) {
+	proj := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	writeSession(t, proj, "sessone", "11111111-aaaa-bbbb-cccc-000000000001", "discussing the deployment rollback procedure")
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	env := Search("deployment", scope, SearchOpts{}, nil)
+	if len(env.Results) == 0 {
+		t.Fatalf("expected a match for 'deployment', got none")
+	}
 	if env.Results[0].Topic != "" {
-		t.Fatalf("result Topic = %q, want empty (topics must not surface in search)", env.Results[0].Topic)
+		t.Fatalf("untagged result Topic = %q, want empty", env.Results[0].Topic)
+	}
+}
+
+// TestTopicLabelDoesNotAffectOrdering is the property the old never-carry rule
+// was actually defending, asserted directly.
+//
+// The corpus is built so that a topic label is the WORST possible influence: the
+// query word appears in the label of a session whose message text matches the
+// query only weakly, while a different session matches strongly in its text. If
+// the label were reaching the ranking, tagging would reorder the results. The
+// test records the order with no topic rows present, inserts the adversarial
+// labels, searches again, and requires the identical sequence of read-refs.
+func TestTopicLabelDoesNotAffectOrdering(t *testing.T) {
+	proj := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	// Strong textual match for "deployment": the word appears repeatedly.
+	writeSession(t, proj, "sessstrong", "22222222-aaaa-bbbb-cccc-000000000001",
+		"deployment deployment deployment notes about the deployment")
+	// Weak textual match: the word appears once, amid unrelated text.
+	writeSession(t, proj, "sessweak", "33333333-aaaa-bbbb-cccc-000000000001",
+		"mostly unrelated chatter that mentions deployment once in passing")
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+
+	before := Search("deployment", scope, SearchOpts{}, nil)
+	if len(before.Results) < 2 {
+		t.Fatalf("expected both sessions to match, got %d", len(before.Results))
+	}
+	beforeOrder := make([]string, len(before.Results))
+	for i, r := range before.Results {
+		beforeOrder[i] = r.ReadRef
+		if r.Topic != "" {
+			t.Fatalf("pre-tagging result %d already carries a topic %q", i, r.Topic)
+		}
+	}
+
+	dbp, _, _, err := index.EnsureIndexed(proj, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+	con := openCacheRW(t, dbp)
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
+	}
+	// Load the query word into the WEAK session's label, and keep it out of the
+	// strong one's — the arrangement most likely to flip the order if labels leak.
+	if err := store.UpsertTopicSegment(con, "sessweak",
+		"33333333-aaaa-bbbb-cccc-000000000001", "", "deployment deployment deployment", "", 1.0); err != nil {
+		t.Fatalf("UpsertTopicSegment weak: %v", err)
+	}
+	if err := store.UpsertTopicSegment(con, "sessstrong",
+		"22222222-aaaa-bbbb-cccc-000000000001", "", "unrelated label", "", 1.0); err != nil {
+		t.Fatalf("UpsertTopicSegment strong: %v", err)
+	}
+	con.Close()
+
+	after := Search("deployment", scope, SearchOpts{}, nil)
+	afterOrder := make([]string, len(after.Results))
+	for i, r := range after.Results {
+		afterOrder[i] = r.ReadRef
+	}
+	if len(afterOrder) != len(beforeOrder) {
+		t.Fatalf("result count changed after tagging: %d → %d", len(beforeOrder), len(afterOrder))
+	}
+	for i := range beforeOrder {
+		if beforeOrder[i] != afterOrder[i] {
+			t.Fatalf("tagging reordered results at %d: %q → %q (full: %v → %v)",
+				i, beforeOrder[i], afterOrder[i], beforeOrder, afterOrder)
+		}
+	}
+	// And the labels really did land — otherwise this test would pass vacuously.
+	labelled := false
+	for _, r := range after.Results {
+		if r.Topic != "" {
+			labelled = true
+		}
+	}
+	if !labelled {
+		t.Fatal("no result carried a topic label after tagging — test would be vacuous")
 	}
 }
 
