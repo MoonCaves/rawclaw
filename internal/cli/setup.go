@@ -141,36 +141,6 @@ BANNER
 } | python3 -c 'import json,sys; sys.stdout.write(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": sys.stdin.buffer.read().decode("utf-8","replace")}}))'
 `
 
-// rawclawTagQueueScript is installed at <configDir>/hooks/rawclaw/tagqueue.sh
-// and registered as a Claude Code SessionEnd hook: it queues the finished
-// session for later topic tagging. The SessionStart discovery hook deliberately
-// does not surface that queue or assign older sessions to the new agent. Same
-// POSIX-sh posture and tolerant session_id extraction as the prime script;
-// every failure path is a silent exit 0, because a tagging queue is never worth
-// breaking a session's shutdown over.
-const rawclawTagQueueScript = `#!/bin/sh
-# Installed by ` + "`rawclaw setup`" + `; removed by ` + "`rawclaw setup --eject`" + ` along with
-# its settings.json entry. Queues the finished session for topic tagging on
-# Claude Code SessionEnd.
-set -eu
-
-@@RAWCLAW_RESOLVE@@
-
-input=$(cat)
-session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-[ -n "$session_id" ] || exit 0
-
-# Only a session that actually produced a transcript is worth tagging. Claude
-# Code fires SessionEnd for ephemeral sessions too (opened and closed without
-# a message ever landing) — those have no transcript file and would flood the
-# queue with ids nothing can resolve.
-transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-[ -n "$transcript_path" ] && [ -f "$transcript_path" ] || exit 0
-
-"$RAWCLAW" tag-queue add "$session_id" >/dev/null 2>&1 || true
-exit 0
-`
-
 // resolvePlaceholder is the token every hook-script template carries where its
 // binary-resolution preamble goes; renderHookScript swaps it for rawclawResolveHead
 // at install time. It never reaches disk.
@@ -291,10 +261,10 @@ func hookScriptPath(configDir string) string {
 	return filepath.Join(configDir, "hooks", "rawclaw", "prime.sh")
 }
 
-// tagQueueScriptPath is the fixed location `rawclaw setup` installs the
-// SessionEnd tagging-queue hook to — same rawclaw-owned dir as the discovery
-// script.
-func tagQueueScriptPath(configDir string) string {
+// legacyTagQueueScriptPath is where rawclaw <= v0.5.x installed its SessionEnd
+// tagging-queue hook. The queue is gone; this path survives only so install and
+// eject can delete a script an older version left behind.
+func legacyTagQueueScriptPath(configDir string) string {
 	return filepath.Join(configDir, "hooks", "rawclaw", "tagqueue.sh")
 }
 
@@ -563,7 +533,7 @@ func addRawclawHooks(data map[string]any, entries map[string]string) error {
 // <configDir>/settings.json — the Claude Code target: the SessionStart
 // discovery banner plus the SessionEnd tagging-queue hook.
 func installRawclawHook(configDir string) error {
-	return installRawclawHookAt(configDir, settingsPath(configDir), true, rawclawPrimeScript)
+	return installRawclawHookAt(configDir, settingsPath(configDir), rawclawPrimeScript)
 }
 
 // installRawclawCodexHook writes the (shared) discovery script and registers
@@ -575,7 +545,7 @@ func installRawclawHook(configDir string) error {
 // never fire) helps nobody, so the tagging queue stays Claude-fed until
 // Codex's own event surface is verified.
 func installRawclawCodexHook(configDir string) error {
-	return installRawclawHookAt(configDir, codexHooksPath(configDir), false, rawclawCodexPrimeScript)
+	return installRawclawHookAt(configDir, codexHooksPath(configDir), rawclawCodexPrimeScript)
 }
 
 // installRawclawHookAt writes the hook scripts under configDir and registers
@@ -584,7 +554,7 @@ func installRawclawCodexHook(configDir string) error {
 // fails). Shared by both the Claude Code and Codex targets — they differ in
 // which JSON file the entries are merged into and whether the SessionEnd
 // tagging-queue hook is wired (withSessionEnd).
-func installRawclawHookAt(configDir, configFile string, withSessionEnd bool, primeTemplate string) error {
+func installRawclawHookAt(configDir, configFile, primeTemplate string) error {
 	// Resolve this binary's absolute path once and bake it into every script
 	// this install writes, so the hooks fire regardless of the hook's PATH.
 	quotedBin := rawclawBinQuoted()
@@ -594,12 +564,14 @@ func installRawclawHookAt(configDir, configFile string, withSessionEnd bool, pri
 		return fmt.Errorf("install hook script: %w", err)
 	}
 	entries := map[string]string{"SessionStart": scriptPath}
-	if withSessionEnd {
-		tagPath := tagQueueScriptPath(configDir)
-		if err := writeHookScript(tagPath, renderHookScript(rawclawTagQueueScript, quotedBin)); err != nil {
-			return fmt.Errorf("install tag-queue hook script: %w", err)
-		}
-		entries["SessionEnd"] = tagPath
+
+	// Migration: rawclaw <= v0.5.x also installed a SessionEnd tagqueue.sh.
+	// Sessions now self-tag at closeout, so delete the stale script here. Its
+	// settings entry needs no special case — addRawclawHooks strips every
+	// rawclaw-owned entry across every event before re-adding, so simply not
+	// listing SessionEnd unregisters it on the next setup run.
+	if err := os.Remove(legacyTagQueueScriptPath(configDir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove legacy tag-queue hook script: %w", err)
 	}
 
 	data, err := readJSONFile(configFile)
@@ -674,7 +646,7 @@ func (o ejectOutcome) didAnything() bool {
 // was never installed (or ejecting twice) is a clean no-op, never an error.
 func ejectRawclawHookAt(configDir, configFile string) (ejectOutcome, error) {
 	scriptPath := hookScriptPath(configDir)
-	tagScriptPath := tagQueueScriptPath(configDir)
+	tagScriptPath := legacyTagQueueScriptPath(configDir)
 	scriptDir := filepath.Dir(scriptPath)     // configDir/hooks/rawclaw — ours alone
 	hooksParentDir := filepath.Dir(scriptDir) // configDir/hooks — may hold siblings
 

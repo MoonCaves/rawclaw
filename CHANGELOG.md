@@ -2,6 +2,22 @@
 
 All notable changes to RawClaw are documented in this file.
 
+## Unreleased
+
+### Removed
+- **The tag queue is gone.** `rawclaw tag-queue` (and its `add` / `remove`
+  subcommands), the SessionEnd `tagqueue.sh` hook `setup` installed, and
+  `tag-write`'s dequeue side-effect have all been removed. Sessions self-tag at
+  closeout, which the SessionStart banner already instructs; a queue of
+  stragglers earned nothing but drift — it had reached 883 entries on one
+  machine, ~830 of them for sessions that never wrote a transcript and so could
+  never resolve. The topic layer itself (`tag-prep`, `tag-write`, `topics`) is
+  untouched.
+- Upgrading is automatic: `rawclaw setup` deletes a `tagqueue.sh` left by an
+  earlier version and unregisters its SessionEnd entry, so no install is left
+  calling a verb that no longer exists. `setup --eject` still removes it too.
+
+
 ## [Unreleased]
 
 ### Changed
