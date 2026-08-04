@@ -537,3 +537,104 @@ func Disp(content string, includeTools bool, cap int) string {
 	}
 	return capRunes(collapseSpaces(t), cap)
 }
+
+// envelopeTags are the XML-ish wrappers a runtime INJECTS into a transcript as
+// a user-role record: notifications, slash-command plumbing, captured shell IO
+// and reminder blocks. They are machinery, not anything a person or a model
+// said, yet they are stored with role="user" and so rank as conversation.
+//
+// The list is closed and measured rather than guessed. Across 34,704 user rows
+// sampled from the live corpus, 84.6% opened with a generated marker: 28,581
+// were [TOOL_RESULT] (already handled by StripTools) and the remainder were
+// these tags, led by <task-notification> at 412 and <command-message> at 108.
+//
+// Deliberately NOT included: <skill>, which appeared once and may carry content
+// worth finding. When a tag's status is unclear the safer default is to leave it
+// searchable — hiding a real message is the worse failure.
+var envelopeTags = []string{
+	"task-notification",
+	"system-reminder",
+	"command-message",
+	"command-name",
+	"command-args",
+	"local-command-caveat",
+	"local-command-stdout",
+	"local-command-stderr",
+	"bash-input",
+	"bash-stdout",
+	"bash-stderr",
+	"environment_context",
+}
+
+// StripEnvelopes removes every injected-envelope run (see envelopeTags) from
+// text. A run ends at its closing tag; an unclosed run — the shape a truncated
+// or streamed record leaves behind — runs to the end of the text, since these
+// wrappers are whole-message in practice.
+//
+// Nothing is deleted from the index: this is a DISPLAY-and-RANKING predicate.
+// The record stays stored and stays readable by ref, and --include-tools puts it
+// back in the haystack. Keeping everything and showing what answers the question
+// are separate dials.
+func StripEnvelopes(text string) string {
+	if !strings.Contains(text, "<") {
+		return text
+	}
+	var out strings.Builder
+	i := 0
+	for i < len(text) {
+		if text[i] != '<' {
+			out.WriteByte(text[i])
+			i++
+			continue
+		}
+		tag, hdrLen := envelopeTagAt(text, i)
+		if tag == "" {
+			out.WriteByte(text[i])
+			i++
+			continue
+		}
+		closing := "</" + tag + ">"
+		if end := strings.Index(text[i+hdrLen:], closing); end >= 0 {
+			i = i + hdrLen + end + len(closing)
+			continue
+		}
+		i = len(text) // unclosed: the wrapper owns the rest of the record
+	}
+	return out.String()
+}
+
+// envelopeTagAt reports the envelope tag opening at position i, plus the length
+// of the opening tag consumed. It returns ("", 0) when no known tag starts here.
+// An opener may carry attributes, so the match ends at the first '>'.
+func envelopeTagAt(text string, i int) (string, int) {
+	rest := text[i:]
+	for _, tag := range envelopeTags {
+		if !strings.HasPrefix(rest, "<"+tag) {
+			continue
+		}
+		after := len(tag) + 1
+		if after >= len(rest) {
+			continue
+		}
+		// The character after the name must end the name — '>' for a bare tag,
+		// whitespace for one carrying attributes. This stops "<command-name" from
+		// matching a longer, unrelated tag that merely starts with those letters.
+		c := rest[after]
+		if c != '>' && c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			continue
+		}
+		if close := strings.IndexByte(rest, '>'); close >= 0 {
+			return tag, close + 1
+		}
+	}
+	return "", 0
+}
+
+// StripGenerated removes everything a runtime generated into a record — tool
+// runs and injected envelopes both — leaving only what a person or a model
+// actually wrote. This is the haystack the default search matches against, so a
+// record consisting ONLY of generated material has nothing left to match and
+// drops out of results by the same rule that already excluded tool-only hits.
+func StripGenerated(text string) string {
+	return collapseSpaces(StripEnvelopes(removeToolRuns(text)))
+}

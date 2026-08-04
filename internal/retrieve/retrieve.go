@@ -378,9 +378,13 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 		if p.IncludeTools {
 			disp = strings.TrimSpace(reWhitespace.ReplaceAllString(h.Snippet, " "))
 		} else {
-			// Rebuild the snippet from tool-stripped content; a tool-ONLY match
-			// (no human text) is excluded by default.
-			haystack := parse.StripTools(h.Content)
+			// Rebuild the snippet from content with everything the runtime
+			// generated removed — tool runs AND injected envelopes
+			// (<task-notification>, <system-reminder>, slash-command plumbing,
+			// captured shell IO). A record made only of that has nothing left to
+			// match and drops out, the same rule that already excluded tool-only
+			// hits. Nothing is deleted: --include-tools puts it back.
+			haystack := parse.StripGenerated(h.Content)
 			s, present := query.MakeSnippet(haystack, terms)
 			if !present {
 				continue
@@ -419,7 +423,7 @@ func haystackFor(includeTools bool, content string) string {
 	if includeTools {
 		return content
 	}
-	return parse.StripTools(content)
+	return parse.StripGenerated(content)
 }
 
 // LinearFallback is the FTS5-absent linear scan over a project's JSONL, honoring
@@ -469,7 +473,7 @@ func LinearFallback(transcriptDir, q string, limit int, p SearchParams) []Hit {
 			if p.IncludeTools {
 				hay = strings.ToLower(text)
 			} else {
-				hay = strings.ToLower(parse.StripTools(text))
+				hay = strings.ToLower(parse.StripGenerated(text))
 			}
 			if !containsAll(hay, terms) { // AND; phrases as substrings (adjacency)
 				continue
@@ -481,7 +485,7 @@ func LinearFallback(transcriptDir, q string, limit int, p SearchParams) []Hit {
 			}
 			base := text
 			if !p.IncludeTools {
-				base = parse.StripTools(text)
+				base = parse.StripGenerated(text)
 			}
 			snip, present := query.MakeSnippet(base, terms)
 			if !present { // tool-only match — excluded by default
@@ -617,7 +621,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 		if p.IncludeTools {
 			disp = strings.TrimSpace(reWhitespace.ReplaceAllString(a.Snippet, " "))
 		} else {
-			haystack := parse.StripTools(a.Content)
+			haystack := parse.StripGenerated(a.Content)
 			s, present := query.MakeSnippet(haystack, terms)
 			if !present {
 				continue
