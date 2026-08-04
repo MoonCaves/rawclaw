@@ -57,7 +57,11 @@ type SearchRef struct {
 	ISO       string `json:"iso"`
 	Snippet   string `json:"snippet"`
 	ReadRef   string `json:"read_ref"`
-	Topic     string `json:"topic,omitempty"` // unused in search output (topics are a separate on-demand `topics` command); omitempty keeps JSON identical to pre-topic
+	// Topic is the topic-layer label covering the matched message, attached
+	// after ranking as a display-only annotation (see attachTopics). It never
+	// participates in matching or ordering. Empty for an untagged session;
+	// omitempty then keeps the JSON identical to an untagged corpus.
+	Topic string `json:"topic,omitempty"`
 
 	// Missing is true when this conversation's backing source file is gone but its
 	// content was retained in the index (durable retention, D1). Surfaced so a
@@ -358,6 +362,10 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	// (#2), so an agent that sees N of many knows the set is incomplete.
 	seen := map[string]struct{}{}
 	all := []SearchRef{}
+	// picked stays index-parallel to all: the anchor each ref was built from,
+	// kept so the post-ranking topic pass can reach that anchor's database and
+	// message uuid without re-running the search.
+	picked := []retrieve.Anchor{}
 	for _, r := range cands {
 		// A uuid-less anchor (e.g. a summary record) is searchable but not a
 		// citeable read anchor — skip it rather than emit an unresolvable ref.
@@ -377,14 +385,21 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			ReadRef:   fmtRef(r.SessionID, r.UUID),
 			Missing:   r.MissingSince > 0,
 		})
+		picked = append(picked, r)
 	}
 
 	results := all
 	truncated := false
 	if limit >= 0 && len(all) > limit {
 		results = all[:limit]
+		picked = picked[:limit]
 		truncated = true
 	}
+
+	// Topic labels are attached HERE — after collection, fusion, sorting, dedup
+	// and capping have all finished — so the label cannot influence which
+	// conversations come back or in what order. See attachTopics.
+	attachTopics(results, picked)
 
 	// Never-silent truncation: an agent that sees N must learn the set is larger.
 	// total is the distinct count within the fetch window; if a scope hit the fetch
@@ -613,6 +628,45 @@ func collectCandidates(
 		reports = append(reports, rep)
 	}
 	return cands, reports, hitCeiling
+}
+
+// attachTopics fills in each result's Topic label, in place. refs and anchors
+// are index-parallel: anchors[i] is the anchor refs[i] was built from.
+//
+// The label is a DISPLAY-ONLY annotation. It is looked up strictly after the
+// result set has been chosen and ordered, keyed on the message that was already
+// selected, so it cannot change which conversations are returned or where they
+// rank. This is what makes putting the label back on the hit line safe: the
+// original objection to carrying topics in search was that a label sharing a
+// word with the query would mis-route the ranking, and a lookup that runs after
+// ranking has no way to do that. TestTopicLabelDoesNotAffectOrdering holds the
+// property.
+//
+// Lookups are grouped by database so a result set spanning several projects
+// opens each project's database once. Any failure is silent: an untagged
+// session, a missing topic table, or an unreadable database all leave the label
+// empty, which renders exactly as it did before topics existed.
+func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
+	if len(refs) == 0 || len(refs) != len(anchors) {
+		return
+	}
+	byDB := map[string][]int{}
+	for i := range anchors {
+		if anchors[i].DBP == "" || anchors[i].UUID == "" {
+			continue
+		}
+		byDB[anchors[i].DBP] = append(byDB[anchors[i].DBP], i)
+	}
+	for dbp, idxs := range byDB {
+		con, err := store.ConnectRO(dbp)
+		if err != nil {
+			continue
+		}
+		for _, i := range idxs {
+			refs[i].Topic = store.TopicForMessage(con, anchors[i].SessionID, anchors[i].UUID)
+		}
+		_ = con.Close()
+	}
 }
 
 // sortCandidates orders the merged candidates: newest/oldest sort by ISO;
@@ -1177,7 +1231,9 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 	for _, r := range env.Results {
 		// timefmt seam: search results are agent-parsed — render the stored ISO
 		// as marked UTC (unparseable stamps pass through verbatim).
-		iso := timefmt.UTCFromISO(r.ISO)
+		// Compact marked-UTC stamp: seconds cost line width that the topic label
+		// uses better, and the "Z" stays so the stamp is never ambiguous.
+		iso := timefmt.UTCShortFromISO(r.ISO)
 		if iso == "" {
 			iso = "?"
 		}
@@ -1185,7 +1241,15 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		if r.Missing {
 			miss = " · source file gone — retained history"
 		}
-		fmt.Fprintf(w, "  ━━ %s · %s · %s%s\n", iso, sid8(r.SessionID), r.Project, miss)
+		// The topic label answers "what was this session about?" on the header
+		// line, so an agent can choose a hit without opening it. Quoted to mark
+		// it as an authored label rather than another identifier, and omitted
+		// entirely for an untagged session rather than rendered as an empty slot.
+		topic := ""
+		if r.Topic != "" {
+			topic = fmt.Sprintf(" · %q", r.Topic)
+		}
+		fmt.Fprintf(w, "  ━━ %s · %s · %s%s%s\n", iso, sid8(r.SessionID), r.Project, topic, miss)
 		fmt.Fprintf(w, "     …%s…\n", r.Snippet)
 		fmt.Fprintf(w, "     read ref=%s\n", r.ReadRef)
 		fmt.Fprintln(w)
