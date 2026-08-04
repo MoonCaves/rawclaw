@@ -24,6 +24,12 @@ const (
 	utcLayout = "2006-01-02T15:04:05Z"
 	// utcClockLayout renders a bare wall-clock with the same explicit marker.
 	utcClockLayout = "15:04:05Z"
+	// utcShortLayout renders a date and minute-precision time, still with the
+	// explicit marker. For scan-dense listings (search hit headers) where the
+	// full RFC3339 instant costs more line width than the seconds are worth.
+	// Dropping the marker instead of the seconds was rejected: an unmarked
+	// stamp is the ambiguity this package exists to prevent.
+	utcShortLayout = "2006-01-02 15:04Z"
 	// localLayout renders a human table stamp: minute precision plus the zone
 	// abbreviation, so a local time never reads as an unmarked/ambiguous one.
 	localLayout = "2006-01-02 15:04 MST"
@@ -36,6 +42,10 @@ func UTC(t time.Time) string { return t.UTC().Format(utcLayout) }
 // UTCClock renders t's wall-clock as marked UTC ("15:04:05Z") — for compact
 // per-message clocks on agent-parsed surfaces (live stream).
 func UTCClock(t time.Time) string { return t.UTC().Format(utcClockLayout) }
+
+// UTCShort renders t as a marked-UTC date and minute ("2026-01-02 15:04Z") —
+// the compact form for dense listings that still must not be ambiguous.
+func UTCShort(t time.Time) string { return t.UTC().Format(utcShortLayout) }
 
 // Local renders t in local time with the zone abbreviation
 // ("2026-01-02 15:04 PST") — the format for human browse tables and
@@ -63,6 +73,21 @@ func UTCFromISO(iso string) string {
 	for _, layout := range isoLayouts {
 		if t, err := time.Parse(layout, iso); err == nil {
 			return UTC(t)
+		}
+	}
+	return iso
+}
+
+// UTCShortFromISO normalizes a stored ISO timestamp to the compact marked-UTC
+// display form ("2026-01-02 15:04Z"). Like UTCFromISO, an empty or unparseable
+// input is returned verbatim rather than guessed at.
+func UTCShortFromISO(iso string) string {
+	if iso == "" {
+		return iso
+	}
+	for _, layout := range isoLayouts {
+		if t, err := time.Parse(layout, iso); err == nil {
+			return UTCShort(t)
 		}
 	}
 	return iso

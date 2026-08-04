@@ -31,8 +31,15 @@ func TestOutlineHeaderIsMarkedUTC(t *testing.T) {
 }
 
 // TestRenderSearchTimestampsMarkedUTC pins the policy for human search
-// results: a stored transcript ISO (fractional, Z) is normalized to the
-// marked-UTC seconds form by the timefmt seam.
+// results: a stored transcript ISO (fractional, Z) is normalized by the timefmt
+// seam to a UTC stamp that always carries its marker.
+//
+// The rendered shape changed when the hit header gained the topic label: search
+// now uses the COMPACT marked-UTC form ("2026-06-01 10:00Z") instead of the full
+// RFC3339 instant, trading the seconds for line width. The policy itself did not
+// change and is asserted in two parts below — the instant is UTC (not the host's
+// local time) and it is marked. Outline keeps the full instant; see
+// TestOutlineHeaderIsMarkedUTC.
 func TestRenderSearchTimestampsMarkedUTC(t *testing.T) {
 	env := SearchEnvelope{
 		Results: []SearchRef{{
@@ -46,7 +53,15 @@ func TestRenderSearchTimestampsMarkedUTC(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	renderSearch(&buf, env, "q", "across all projects")
-	if !strings.Contains(buf.String(), "━━ 2026-06-01T10:00:00Z ·") {
-		t.Errorf("search result header not normalized to marked UTC:\n%s", buf.String())
+	got := buf.String()
+	// Part 1: the instant is the UTC one, rendered compactly.
+	if !strings.Contains(got, "━━ 2026-06-01 10:00Z ·") {
+		t.Errorf("search header not the compact marked-UTC instant:\n%s", got)
+	}
+	// Part 2: no unmarked stamp. A bare "2026-06-01 10:00 " with no Z would be
+	// the ambiguity this policy exists to prevent — catch it explicitly rather
+	// than relying on the positive match above.
+	if strings.Contains(got, "2026-06-01 10:00 ") {
+		t.Errorf("search header carries an unmarked timestamp:\n%s", got)
 	}
 }
