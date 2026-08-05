@@ -208,8 +208,8 @@ ORDER BY session_id`)
 // is wrong for this verb: the topic is the LABEL a tagger chose (3-7 words, high
 // signal), the summary is a sentence of surrounding context. Under equal
 // weighting a passing mention inside a long summary outranks a segment whose
-// label IS the query — observed on a real corpus, where `topics "adversarial"`
-// put a segment whose LABEL does not contain the query (it appears
+// label IS the query — observed on a large real-world corpus, where `topics "adversarial"`
+// put a segment whose LABEL does not contain the query (the word appears
 // only in its summary) above sixteen segments with "Adversarial" in the label.
 //
 // The imbalance grows with summary coverage: a corpus where a quarter of

@@ -5,6 +5,15 @@ All notable changes to RawClaw are documented in this file.
 ## Unreleased
 
 ### Fixed
+- **The same session id is now ONE session, however many projects hold a row.**
+  Continue a session from a different directory and the agent writes a second
+  transcript under the new project while keeping the id; delete the first
+  directory and durable retention keeps its row as a stub. `read`, `outline` and
+  `tag` reported that as an ambiguity and advised "give a longer prefix" — which
+  cannot help, because the full ids are byte-identical. The session was simply
+  unreachable. Rows sharing a full id now collapse to one, preferring the row
+  whose source file is still live and then the one holding more messages. A real
+  prefix collision between DIFFERENT ids still raises, as it should.
 - **`topics` now ranks across every project, not within each one.** The sweep
   opens one SQLite file per project and used to append each project's hits in
   iteration order, so whichever project was opened first owned the top of the
