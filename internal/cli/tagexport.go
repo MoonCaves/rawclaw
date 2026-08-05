@@ -40,11 +40,19 @@ func localTagExporter() archive.TagExporter {
 	}
 }
 
-// tagLocalScopes lists the local Claude + Codex scopes (including orphaned
-// source-gone dbs, whose retained tags still deserve to ride the archive). The
-// archive's foreign scopes are deliberately NOT enumerated here.
+// tagLocalScopes lists the consolidated store FIRST, then the local Claude +
+// Codex scopes (including orphaned source-gone dbs, whose retained tags still
+// deserve to ride the archive). The archive's foreign scopes are deliberately
+// NOT enumerated here.
+//
+// The consolidated store leads because session lookup resolves there, so that
+// is where `tag-write` now lands a newly authored tag. Leaving it out would
+// have written tags nothing ever exports. The per-project dbs stay in the list
+// behind it: they still hold every tag authored before the one store existed,
+// and "first db wins" keeps the fresher consolidated copy when both have one.
 func tagLocalScopes() []view.Scope {
-	out := scopes.Claude()
+	out := []view.Scope{{DBP: index.ConsolidatedPath()}}
+	out = append(out, scopes.Claude()...)
 	return append(out, scopes.Codex(false)...)
 }
 
