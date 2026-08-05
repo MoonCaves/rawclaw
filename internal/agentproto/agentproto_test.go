@@ -407,15 +407,31 @@ func TestRenderSearch(t *testing.T) {
 			t.Errorf("empty iso should render ?: %q", out)
 		}
 	})
-	t.Run("topics are never in search output", func(t *testing.T) {
-		// Topics were pulled OUT of search ranking/display — even a populated Topic
-		// field must not render an "in:" line (topics are the separate `topics` cmd).
+	t.Run("a topic rides the header, never its own line", func(t *testing.T) {
+		// This subtest used to assert that topics never appear in search output at
+		// all. That rule was superseded: the label now rides the header as context
+		// on the hit (see TestSearchCarriesTopicLabel). What survives of it is the
+		// narrower rule — the label costs no VERTICAL space, because a fourth line
+		// per hit is the whole reason it was kept out of search in the first place.
+		//
+		// Asserting the header placement too is what stops this passing vacuously:
+		// the old form only checked that an "in: " line was absent, which would
+		// stay true even if the label were dropped entirely.
 		var buf bytes.Buffer
 		renderSearch(&buf, SearchEnvelope{Complete: true, Results: []SearchRef{
 			{Project: "proj", SessionID: "aaaa", ISO: "2026", Snippet: "s", ReadRef: "aaaa:9f", Topic: "deployment rollback"},
 		}}, "kw", "x")
-		if strings.Contains(buf.String(), "     in: ") {
-			t.Errorf("search must not render a topic line: %q", buf.String())
+		out := buf.String()
+		if strings.Contains(out, "     in: ") {
+			t.Errorf("the topic took a line of its own: %q", out)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, "deployment rollback") && !strings.Contains(line, "━━") {
+				t.Errorf("the topic rendered off the header line: %q", line)
+			}
+		}
+		if !strings.Contains(out, "deployment rollback") {
+			t.Errorf("the topic was dropped from the output entirely: %q", out)
 		}
 	})
 	t.Run("incomplete scope footer", func(t *testing.T) {

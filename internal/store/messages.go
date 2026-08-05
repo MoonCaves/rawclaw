@@ -256,8 +256,9 @@ func LastMessages(con *sql.DB, sid string, limit int) ([]SessionMessage, error) 
 // the caller degraded to "no turn found" without saying so. A predicate has no
 // window to be wrong about.
 //
-// The NOT LIKE list is the one the untagged-session census already validated on this corpus, plus the interruption
-// marker. length>2 drops bare punctuation acks.
+// The NOT LIKE list is the one the untagged-session census already validated on
+// this corpus, plus the interruption marker. length>2 drops bare punctuation
+// acks.
 func NewestHumanMessageID(con *sql.DB, sid string) (int, error) {
 	var id sql.NullInt64
 	err := con.QueryRow(`
