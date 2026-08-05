@@ -195,6 +195,52 @@ SELECT session_id, role, content, ts, ts_iso, uuid FROM (
 )
 `
 
+// topicNewer is the precedence rule between two taggings of the SAME segment
+// (one session, one start anchor). Tagging is a re-runnable act — a segment can
+// be re-tagged with a better label — so the later tagging wins. Equal or
+// missing timestamps leave the copy already in the store alone, which keeps the
+// pass order-independent.
+const topicNewer = `COALESCE(excluded.tagged_at,0) > COALESCE(topic_segment.tagged_at,0)`
+
+// mergeTopicsSQL folds one attached db's topic segments into the consolidated
+// store, keyed by the (session_id, start_uuid) identity the segment already
+// carries. Without this the one store answers every topic query with nothing:
+// the tags live only in the per-project dbs that produced them, so a reader
+// that resolves to the store would report an untagged corpus.
+//
+// As with messages, the segment id is deliberately not carried over — it is an
+// AUTOINCREMENT rowid that doubles as the topic_fts rowid, so two sources' id 1
+// would silently overwrite each other's search entry. Inserting without it lets
+// the topic_ai / topic_au triggers assign a fresh rowid and keep topic_fts in
+// step, which is why nothing here writes topic_fts directly.
+var mergeTopicsSQL = `
+INSERT INTO main.topic_segment
+  (session_id,start_uuid,end_uuid,topic,summary,tagged_at,origin_machine)
+SELECT session_id,start_uuid,end_uuid,topic,summary,tagged_at,origin_machine
+FROM src.topic_segment
+WHERE true
+ON CONFLICT(session_id,start_uuid) DO UPDATE SET
+  end_uuid       = CASE WHEN ` + topicNewer + ` THEN excluded.end_uuid       ELSE topic_segment.end_uuid END,
+  topic          = CASE WHEN ` + topicNewer + ` THEN excluded.topic          ELSE topic_segment.topic END,
+  summary        = CASE WHEN ` + topicNewer + ` THEN excluded.summary        ELSE topic_segment.summary END,
+  origin_machine = CASE WHEN ` + topicNewer + ` THEN excluded.origin_machine ELSE topic_segment.origin_machine END,
+  tagged_at      = MAX(COALESCE(topic_segment.tagged_at,0), COALESCE(excluded.tagged_at,0))
+`
+
+// mergeVerdictsSQL folds the session-verdict sidecar in on the same rule: one
+// row per session, the later verdict wins. It rides with the topic merge
+// because it is the same tagging act's other half.
+const mergeVerdictsSQL = `
+INSERT INTO main.session_verdict(session_id,verdict,source,origin_machine,tagged_at)
+SELECT session_id,verdict,source,origin_machine,tagged_at FROM src.session_verdict
+WHERE true
+ON CONFLICT(session_id) DO UPDATE SET
+  verdict        = CASE WHEN COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0) THEN excluded.verdict        ELSE session_verdict.verdict END,
+  source         = CASE WHEN COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0) THEN excluded.source         ELSE session_verdict.source END,
+  origin_machine = CASE WHEN COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0) THEN excluded.origin_machine ELSE session_verdict.origin_machine END,
+  tagged_at      = MAX(COALESCE(session_verdict.tagged_at,0), COALESCE(excluded.tagged_at,0))
+`
+
 // recountSQL restates each session's message_count from the union that actually
 // landed, replacing the per-source counts carried in by the merge.
 const recountSQL = `
@@ -224,6 +270,13 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 	defer con.Close()
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return st, fmt.Errorf("ensure consolidated schema: %w", err)
+	}
+	// The topic layer is gated separately from the keyword schema, so it has to
+	// be asked for explicitly. Creating it unconditionally means a topic query
+	// against the one store can answer "nothing is tagged yet" instead of
+	// failing on a missing table.
+	if err := store.EnsureTopicSchema(con); err != nil {
+		return st, fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 
 	for _, src := range srcPaths {
@@ -265,6 +318,9 @@ func SyncConsolidatedFrom(srcPath string) error {
 	defer con.Close()
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return fmt.Errorf("ensure consolidated schema: %w", err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		return fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 	if _, _, err := consolidateOne(con, srcPath); err != nil {
 		return fmt.Errorf("consolidate %s: %w", filepath.Base(srcPath), err)
@@ -334,6 +390,18 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 		return 0, true, cErr
 	}
 
+	// Whether this source has a topic layer at all: the topic tables are created
+	// on demand by the tagging path, so a project nobody has tagged simply has
+	// no such table and its merge steps are skipped.
+	hasTopics, err := srcHasTable(con, "topic_segment")
+	if err != nil {
+		return 0, true, err
+	}
+	hasVerdicts, err := srcHasTable(con, "session_verdict")
+	if err != nil {
+		return 0, true, err
+	}
+
 	mark := ""
 	if err := con.QueryRow(
 		`SELECT (SELECT COUNT(*) FROM src.sessions) || ':' ||
@@ -342,6 +410,21 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	).Scan(&mark); err != nil {
 		return 0, true, fmt.Errorf("read source watermark: %w", err)
 	}
+	// The topic layer joins the watermark, because tagging changes a source
+	// without touching a single session or message row. Left out, a re-tagged
+	// project would read as unchanged and its new labels would never arrive.
+	// The latest tagging time rides along with the count: re-tagging a segment
+	// in place replaces a label without changing how many there are, so a count
+	// alone would still miss it.
+	topicMark := "0"
+	if hasTopics {
+		if err := con.QueryRow(
+			`SELECT COUNT(*) || '@' || COALESCE(MAX(tagged_at),0) FROM src.topic_segment`,
+		).Scan(&topicMark); err != nil {
+			return 0, true, fmt.Errorf("read source topic watermark: %w", err)
+		}
+	}
+	mark += ":t" + topicMark
 	if err := con.QueryRow("SELECT COUNT(*) FROM src.sessions").Scan(&offered); err != nil {
 		return 0, true, fmt.Errorf("count source sessions: %w", err)
 	}
@@ -363,6 +446,16 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	}
 	if _, err := con.Exec(mergeMessagesSQL); err != nil {
 		return 0, true, fmt.Errorf("merge messages: %w", err)
+	}
+	if hasTopics {
+		if _, err := con.Exec(mergeTopicsSQL); err != nil {
+			return 0, true, fmt.Errorf("merge topics: %w", err)
+		}
+	}
+	if hasVerdicts {
+		if _, err := con.Exec(mergeVerdictsSQL); err != nil {
+			return 0, true, fmt.Errorf("merge verdicts: %w", err)
+		}
 	}
 	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
 		return 0, true, fmt.Errorf("stamp sync watermark: %w", err)
@@ -404,6 +497,23 @@ func syncMarkKey(src string) string { return "sync:" + filepath.Base(src) }
 
 // hasScopeColumns reports whether the ATTACHed source carries the project/cwd
 // columns the merge selects.
+// srcHasTable reports whether the ATTACHed source carries a given table. The
+// topic layer is created on demand rather than by the base schema, so a source
+// that was never tagged genuinely has no topic tables and its topic merge must
+// be skipped rather than fail the whole pass.
+func srcHasTable(con *sql.DB, name string) (bool, error) {
+	var one int
+	err := con.QueryRow(
+		"SELECT 1 FROM src.sqlite_master WHERE type='table' AND name=?", name).Scan(&one)
+	switch {
+	case err == sql.ErrNoRows:
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("look for source table %s: %w", name, err)
+	}
+	return true, nil
+}
+
 func hasScopeColumns(con *sql.DB) (bool, error) {
 	rows, err := con.Query("PRAGMA src.table_info(sessions)")
 	if err != nil {
