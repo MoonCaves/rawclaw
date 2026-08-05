@@ -281,7 +281,7 @@ func SessionLastActivity(con *sql.DB, sessionID string) string {
 		if strings.TrimSpace(parse.StripGenerated(m.Content)) == "" {
 			continue
 		}
-		if isInterruptionMarker(m.Content) {
+		if IsInterruptionMarker(m.Content) {
 			continue
 		}
 		if text := parse.Disp(m.Content, false, browsePreviewCap); text != "" {
@@ -291,7 +291,7 @@ func SessionLastActivity(con *sql.DB, sessionID string) string {
 	return ""
 }
 
-// isInterruptionMarker reports whether a record is the runtime's "the operator
+// IsInterruptionMarker reports whether a record is the runtime's "the operator
 // stopped me" note rather than anything either party said. It survives
 // StripGenerated (it carries no tool marker and no envelope tag) but captioning
 // a session with it says nothing about what that session is doing.
@@ -300,7 +300,12 @@ func SessionLastActivity(con *sql.DB, sessionID string) string {
 // session: 51 tails ended on this marker. [THINKING] (470) and [SYSTEM] (53) are
 // deliberately NOT filtered — reasoning is often the truest statement of what a
 // session is working on right now, and a [SYSTEM] note is real injected content.
-func isInterruptionMarker(content string) bool {
+//
+// Exported alongside SessionLastActivity because every reader that walks a
+// session tail looking for something a PERSON said has to step over it —
+// including the one that finds where the caller's live turn began
+// (agentproto.currentTurnStart).
+func IsInterruptionMarker(content string) bool {
 	return strings.HasPrefix(strings.TrimSpace(content), "[Request interrupted by user")
 }
 
