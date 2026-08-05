@@ -9,6 +9,7 @@ package view
 import (
 	"database/sql"
 	"sort"
+	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -40,12 +41,26 @@ type AnchoredView struct {
 	MessagesAfter  int       `json:"messages_after"`
 }
 
-// BrowseRow is one recent-session preview row.
+// BrowseRow is one recent-session row.
+//
+// Preview and Last answer two different questions and neither substitutes for
+// the other. Preview is the session's OPENING — what it was set up to do, which
+// is its identity and stays true forever. Last is its most recent real activity
+// — what it is doing NOW, which is the whole point of a recency-ordered list.
+//
+// Keeping both is OpenClaw's split: its session store carries `firstUserMessage`
+// and `lastMessagePreview` as separate fields and its session-list tool exposes
+// them as `derivedTitle` and `lastMessagePreview` (src/gateway/session-utils.fs.ts,
+// src/agents/tools/sessions-list-tool.ts). Showing only the opening — which is
+// what this did, and what Hermes' `sessions list` still does — answers "what is
+// this desk saying right now" with the prompt it was given a thousand messages
+// ago.
 type BrowseRow struct {
 	SessionID string  `json:"session_id"`
 	LastTS    float64 `json:"last_ts"`
 	N         int     `json:"n"`
 	Preview   string  `json:"preview"`
+	Last      string  `json:"last,omitempty"`
 }
 
 // Scope is one searchable unit discovery/scroll iterate over. A Claude scope is
@@ -227,11 +242,60 @@ func BrowseDB(dbp string, limit int, since, before string) []BrowseRow {
 		out = append(out, BrowseRow{SessionID: s.SessionID, LastTS: s.LastTS, N: s.MessageCount})
 	}
 
-	// Connection is now free — fill each preview with its own query.
+	// Connection is now free — fill each row's two texts with their own queries.
 	for i := range out {
 		out[i].Preview = sessionPreview(con, out[i].SessionID)
+		out[i].Last = sessionLastActivity(con, out[i].SessionID)
 	}
 	return out
+}
+
+// lastActivityScan is how many trailing messages sessionLastActivity inspects
+// before giving up. A busy session's tail is mostly tool results and injected
+// envelopes, so the window has to clear those to reach real conversation —
+// but it stays bounded, matching OpenClaw's 20-line tail cap
+// (LAST_MSG_MAX_LINES, src/gateway/session-utils.fs.ts). Wider than 20 here
+// because our rows include tool results that its transcript lines don't.
+const lastActivityScan = 40
+
+// sessionLastActivity returns the session's most recent REAL activity: the
+// newest message that still has content once tool runs and injected envelopes
+// are stripped (parse.StripGenerated). Walking newest-first and skipping
+// generated rows is OpenClaw's selectBoundedActiveTailRecords in miniature.
+//
+// Returns "" when the whole scanned tail is machinery — honest silence beats
+// captioning a session with a tool result. The row still renders; it just has
+// no "now" line, and Preview still says what the session was for.
+func sessionLastActivity(con *sql.DB, sessionID string) string {
+	msgs, err := store.LastMessages(con, sessionID, lastActivityScan)
+	if err != nil {
+		return ""
+	}
+	for _, m := range msgs {
+		if strings.TrimSpace(parse.StripGenerated(m.Content)) == "" {
+			continue
+		}
+		if isInterruptionMarker(m.Content) {
+			continue
+		}
+		if text := parse.Disp(m.Content, false, browsePreviewCap); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+// isInterruptionMarker reports whether a record is the runtime's "the operator
+// stopped me" note rather than anything either party said. It survives
+// StripGenerated (it carries no tool marker and no envelope tag) but captioning
+// a session with it says nothing about what that session is doing.
+//
+// Measured across the live corpus by sampling the last three records of every
+// session: 51 tails ended on this marker. [THINKING] (470) and [SYSTEM] (53) are
+// deliberately NOT filtered — reasoning is often the truest statement of what a
+// session is working on right now, and a [SYSTEM] note is real injected content.
+func isInterruptionMarker(content string) bool {
+	return strings.HasPrefix(strings.TrimSpace(content), "[Request interrupted by user")
 }
 
 // previewScan is how many early user messages sessionPreview considers before

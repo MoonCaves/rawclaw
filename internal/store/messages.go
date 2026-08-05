@@ -210,3 +210,36 @@ func MessageMeta(con *sql.DB, msgID int) (iso, parent string, isSubagent bool, m
 	}
 	return isoN.String, parentN.String, isSub != 0, missing.Float64, true
 }
+
+// LastMessages returns a session's final `limit` messages as (role, content),
+// newest first. Bounded on purpose: answering "what is this session doing now"
+// only needs the tail, and a session can hold thousands of rows.
+//
+// Ported from OpenClaw's tail-preview reader
+// (src/gateway/session-utils.fs.ts, readLastMessagePreviewFromOpenTranscript),
+// which seeks to size-16KB in the transcript file and keeps the last 20 lines.
+// We have an index, so the bounded byte read becomes a bounded ORDER BY DESC —
+// same contract, cheaper. Both roles are returned: the newest thing that
+// happened is as often the agent's reply as the operator's instruction.
+func LastMessages(con *sql.DB, sid string, limit int) ([]SessionMessage, error) {
+	rows, err := con.Query(
+		`SELECT id, role, content FROM messages WHERE session_id=?
+		   AND length(content)>0 ORDER BY id DESC LIMIT ?`,
+		sid, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SessionMessage
+	for rows.Next() {
+		var (
+			id           int
+			role, conten sql.NullString
+		)
+		if err := rows.Scan(&id, &role, &conten); err != nil {
+			return nil, err
+		}
+		out = append(out, SessionMessage{ID: id, Role: role.String, Content: conten.String})
+	}
+	return out, rows.Err()
+}
