@@ -19,6 +19,9 @@ All notable changes to RawClaw are documented in this file.
   transcript no longer exists anywhere on disk, still labelled as retained-but-gone. Sessions you
   deleted stay deleted — the rebuild reads the same tombstone the delete wrote. Copies of *other*
   machines' sessions are never vaulted locally, so a teammate's delete still propagates to you.
+- **`rawclaw delete` removes the vaulted copy too**, so "removed RawClaw's copy" stays literally
+  true. The tombstone already stopped a rebuild from bringing a deleted session back; now the
+  bytes go with it.
 
 ### Removed
 
