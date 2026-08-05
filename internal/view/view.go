@@ -256,6 +256,16 @@ func BrowseDB(dbp string, limit int, since, before string) []BrowseRow {
 // but it stays bounded, matching OpenClaw's 20-line tail cap
 // (LAST_MSG_MAX_LINES, src/gateway/session-utils.fs.ts). Wider than 20 here
 // because our rows include tool results that its transcript lines don't.
+//
+// A fixed window is the shape that once shipped the current-turn exclusion
+// inert, so this one was measured rather than assumed. Across ~550 sessions of
+// >50 records in five live project stores (four Claude, one Codex), the newest
+// displayable record sat at depth 1 for the median session, 4 at p99, and 12 at
+// the worst case — no session in the sample came back empty at 40, and none had
+// no displayable record at any depth. The reason the margin is this wide:
+// unlike the current-turn scan, this one accepts ANY side of the conversation,
+// and an assistant message almost always sits within a few rows of the tail
+// even when the trailing user rows are all machinery.
 const lastActivityScan = 40
 
 // SessionLastActivity returns the session's most recent REAL activity: the
@@ -284,11 +294,40 @@ func SessionLastActivity(con *sql.DB, sessionID string) string {
 		if IsInterruptionMarker(m.Content) {
 			continue
 		}
-		if text := parse.Disp(m.Content, false, browsePreviewCap); text != "" {
-			return text
+		text := parse.Disp(m.Content, false, browsePreviewCap)
+		if text == "" || isBareBlockMarker(text) {
+			continue
 		}
+		return text
 	}
 	return ""
+}
+
+// isBareBlockMarker reports whether a record's whole display text is one of
+// parse's block labels with nothing after it — the record announces a block and
+// then carries no content.
+//
+// This is overwhelmingly the redacted-thinking case. A model that withholds its
+// reasoning still emits a thinking block, and the parser writes the label with
+// an empty body, so the row stores literally "[THINKING] " and eleven bytes.
+// Measured on the live corpus: 15,535 of 15,613 thinking records in the largest
+// store sampled are bare, 11,339 of 11,357 in the next, and 2,676 of 2,684 in a
+// third — about 99.5% everywhere. So this is the common shape, not an edge
+// case, and a tail that ends on one used to caption its session "now →
+// [THINKING]", which tells a reader nothing at all.
+//
+// Only the EMPTY ones are skipped. Thinking that actually carries text is often
+// the truest statement of what a session is doing right now, and it still
+// captions the row.
+func isBareBlockMarker(text string) bool {
+	t := strings.TrimSpace(text)
+	for _, marker := range []string{"[THINKING]", "[SYSTEM]", "[TOOL_RESULT]"} {
+		if t == marker {
+			return true
+		}
+	}
+	return strings.HasPrefix(t, "[TOOL:") && strings.HasSuffix(t, "]") &&
+		!strings.Contains(t[1:len(t)-1], "]")
 }
 
 // IsInterruptionMarker reports whether a record is the runtime's "the operator
@@ -298,8 +337,15 @@ func SessionLastActivity(con *sql.DB, sessionID string) string {
 //
 // Measured across the live corpus by sampling the last three records of every
 // session: 51 tails ended on this marker. [THINKING] (470) and [SYSTEM] (53) are
-// deliberately NOT filtered — reasoning is often the truest statement of what a
-// session is working on right now, and a [SYSTEM] note is real injected content.
+// deliberately NOT filtered here — reasoning that carries text is often the
+// truest statement of what a session is working on right now, and a [SYSTEM]
+// note is real injected content.
+//
+// Corrected 2026-08-05: that reasoning holds only for blocks that carry text,
+// and on this corpus almost none do — about 99.5% of thinking records are the
+// bare label with an empty body (redacted reasoning). Those are skipped by
+// isBareBlockMarker, which filters on emptiness rather than on block type, so
+// the rule above is unchanged for any block that actually says something.
 //
 // Exported alongside SessionLastActivity because every reader that walks a
 // session tail looking for something a PERSON said has to step over it —

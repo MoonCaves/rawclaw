@@ -4,6 +4,34 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **A search hit now says what the session was ABOUT and where it ENDED UP.** A hit used to carry a
+  timestamp, a session id, a project and a matched snippet — nothing that let you pick the right
+  session without opening several refs. Two facts are added to the hit line. The topic label the
+  tagging layer already stored rides the header (measured on the live corpus: 96.2% of messages in
+  tagged sessions fall inside a labeled segment, so most hits carry one). And a `now →` line reports
+  the session's most recent real activity, because a hit is a point in the MIDDLE of a conversation:
+  the top hit for "adversarial review" matched on *"write me a prompt for an adversarial review"*
+  while that session's actual last word was *"closeout is complete."* Both facts are looked up
+  AFTER collection, fusion, sorting, dedup and capping, keyed on results already chosen, so neither
+  can reach ranking — asserted by tests that build the corpus so the query word sits in the WEAKEST
+  match's label and tail, the arrangement most likely to reorder results if either leaked. An
+  untagged session or a machinery-only tail simply omits its line. The header stamp shortens to a
+  compact marked-UTC form (`2026-06-01 10:00Z`) to pay for the width: seconds went, the `Z` stayed.
+- **`browse` shows what a session is doing NOW, not only what it opened with.** "Go look at what
+  the myproject desk is saying right now" was answered with the prompt that desk was given 1552
+  messages ago, because a recency-ordered list previewed each session's OPENING message. The
+  opening is kept — it is the session's identity and stays true forever — and the newest real
+  message is added beside it as a second field, which is OpenClaw's `firstUserMessage` /
+  `lastMessagePreview` split ported onto our index. Records that are only machinery are stepped
+  over: tool runs, injected envelopes, the runtime's "operator stopped me" marker, and a block
+  label with an empty body (a model that withholds its reasoning still emits a thinking block —
+  about 99.5% of stored thinking records are that empty shell, and a row captioned `now →
+  [THINKING]` tells a reader nothing). Reasoning that carries text still captions the row. When the
+  whole tail is machinery the row gets no `now` line at all — honest silence beats captioning a
+  session with a tool result.
+
 ### Removed
 
 - **The `tag-queue` command is gone.** `rawclaw tag-queue` (and its `add` / `remove`
@@ -20,6 +48,27 @@ All notable changes to RawClaw are documented in this file.
 
 ### Fixed
 
+- **Search stops ranking injected envelopes as conversation.** A runtime writes records into a
+  transcript that no person and no model authored — `<task-notification>`, `<system-reminder>`,
+  slash-command plumbing, captured shell IO — and stores them with `role="user"`, so search ranked
+  and displayed them as discussion. Searching "task-notification" returned raw XML blocks instead
+  of the conversations about them. Tool runs were already handled this way, so the same path was
+  extended rather than a second filter added: a record made only of generated material now has
+  nothing left to match and drops out by the rule that already existed. The tag list is closed and
+  measured, not guessed — across 34,704 live user rows, 84.6% opened with a generated marker.
+  Nothing leaves the index: the records stay stored, stay readable by ref, and `--include-tools`
+  puts them back in the haystack.
+- **A search run inside a live session no longer hands back the caller's own prompt.** The prompt is
+  the freshest, densest match for the query it contains, so it won on relevance every time — and it
+  is the one record the caller already has. The exclusion is scoped to the TURN in flight, never the
+  session and never the lineage: earlier parts of the same conversation are legitimate history,
+  often the most relevant there is, and stay searchable. The boundary is found by a predicate over
+  the whole session rather than by walking a fixed window back from the tail, because that window
+  was the bug — roughly 85% of `role=user` rows are machinery, the newest human-typed record sat 65
+  rows back in the session that exposed this, and a window that finds nothing silently means "do
+  not exclude", so the feature was inert while every test stayed green. `--current-session off`
+  still searches the live turn deliberately. An empty result that withheld rows now says so and
+  names that flag, instead of sending you after a wording problem that does not exist.
 - **A bare browse now honors `--include-path` / `--exclude-path` instead of silently ignoring
   them.** `rawclaw --include-path myproject --sort newest` with no query browsed the shell's working
   directory and printed "2 most-recent sessions on tmp" — one question's flags over another
@@ -48,6 +97,18 @@ All notable changes to RawClaw are documented in this file.
 
 ### Changed
 
+- **Search footer notes are structured warnings, not prose.** The footer used to be English the
+  renderer assembled from conditions it evaluated itself, which cost twice: an agent could only
+  consume it by pattern-matching prose, and the text path and `--json` path each held their own copy
+  of the conditions — which is how `--json` came to report a withheld-record count while the text
+  above it said "No matches". The envelope now carries a `warnings` array, each entry a stable
+  `code`, the `facts` that triggered it, and the human `message`. They are built once during the
+  search, so the two surfaces cannot drift apart without a test failing. Order is reading order:
+  what changes your next command first (`recency_skew`, `broad_query`, `current_turn_excluded`),
+  what qualifies the result set next (`scope_incomplete`, `project_spread`), the standing
+  `raw_history` caveat last. `scope_incomplete` stays unconditional — the others are hints you may
+  ignore, but a result set that silently omits a project reads as complete, and acting on it is
+  acting on a lie.
 - **The cross-project browse `--json` shape reports its scope.** Alongside `scope` and `sessions`
   it now carries `projects` (how many survived the scope flags) and echoes `include_path` /
   `exclude_path` when set, so an agent reading `sessions: []` can tell an empty corpus from a
