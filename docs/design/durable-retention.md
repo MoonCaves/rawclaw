@@ -142,6 +142,43 @@ re-walking a source that is gone.
   with only tombstoned/empty sessions must be excluded so deletes still read as
   deleted.
 
+### D9 — Raw transcripts on disk are the durable truth; the index is a cache  (added 2026-08-05)
+D1–D8 make the index db the ONLY place a purged session survives, which puts the
+whole guarantee inside a file that is otherwise disposable — and the consolidation
+work makes that one file. A single store treated as a rebuildable cache cannot
+also be the last copy of retained history. So every source now materializes a
+raw transcript rawclaw owns, and the db is rebuildable from it.
+- **Where:** `internal/durable` writes the vault at
+  `$XDG_DATA_HOME/rawclaw/transcripts` (else `~/.local/share/rawclaw/transcripts`)
+  — the DATA dir, deliberately not the cache dir that holds the dbs, so deleting
+  the cache costs nothing.
+- **Shape:** Claude record-shape JSONL, the same format `claude-web import`
+  already materializes its imported sessions into. A Claude-shaped source is
+  copied byte for byte (the rebuild re-parses it, so any normalization would show
+  up as a diff against the live index); a source that hands rawclaw flattened
+  messages is rendered into that shape, with a role the indexer does not
+  recognize carried as a `system` record whose `message.role` keeps the truth.
+- **Sidecar:** a `.meta.json` beside each transcript carries what the file itself
+  cannot — the scope columns, the `missing_since` watermark, and the ORIGINAL
+  source path/mtime/size/fingerprint. The watermark is why a rebuilt store still
+  labels a retained session correctly; the source path is why the next live pass
+  does not mistake a rebuilt row for an absent file and stamp it missing.
+- **Delete:** an explicit tombstone removes the vault copy too, and the rebuild
+  re-reads the tombstone sidecar. A user delete has to survive a rebuild, and the
+  tombstone lives beside the db rather than inside it precisely so it does.
+- **Replicas are never vaulted:** a session read out of an archive clone belongs
+  to the machine that wrote it; a durable local copy would resurrect it here after
+  its owner deletes it, which is the propagation E5 exists to honor.
+- **Consequence:** durability no longer requires `archive init`. The git archive
+  becomes purely a sync mechanism.
+- **Rebuild:** `rawclaw consolidate --from-transcripts` removes the store and
+  rebuilds it from the vault alone. There is deliberately no retention pass in
+  that path — retention reconciles against a live source scan, and this pass has
+  none; the sidecars already carry the verdict a previous scan reached.
+- **Tradeoff:** a second copy of every transcript on disk. Bounded by the
+  unchanged-source skip (same path/size/fingerprint → no rewrite), so a full
+  reindex does not re-copy the corpus.
+
 ## Deferred — central-store topology (forward hook, NOT built here)
 The provenance from D3 serves either of two verified topologies; picking one is a
 later feature. Both consume `(origin_machine, source_tool, source_path)`
