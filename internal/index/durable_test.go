@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -188,6 +189,10 @@ func TestRebuildReplacesTheOldStore(t *testing.T) {
 	}
 	con.Close()
 
+	// This rebuild deliberately shrinks the store, which is exactly what the
+	// lose-history guard refuses by default. Opt in, the way a user recovering
+	// from a store they know is junk would.
+	t.Setenv("RAWCLAW_REBUILD_FORCE", "1")
 	if _, err := RebuildFromTranscripts(dbp); err != nil {
 		t.Fatalf("RebuildFromTranscripts: %v", err)
 	}
@@ -483,5 +488,49 @@ func TestRebuildRestoresContainerSession(t *testing.T) {
 	}
 	if got := scalar(t, rcon, "SELECT cwd FROM sessions WHERE id='c1'"); got != "/w/billing" {
 		t.Errorf("cwd = %q, want /w/billing", got)
+	}
+}
+
+// TestRebuildRefusesToLoseHistory is the guard for the upgrade case: a machine
+// with a large existing store and a vault that has not filled yet. The vault
+// only gains a session when that session is indexed, so running the recovery
+// path too early would delete real history and restore almost none of it.
+func TestRebuildRefusesToLoseHistory(t *testing.T) {
+	isolateCache(t)
+	proj := t.TempDir()
+	writeJSONL(t, filepath.Join(proj, "kept.jsonl"), `{"type":"user","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"vaulted"}}`)
+	con, dbp := openTestDB(t)
+	if err := UpdateIndex(con, proj); err != nil {
+		t.Fatal(err)
+	}
+	// Two sessions the vault never saw — the shape of a store that predates it.
+	for _, id := range []string{"older-a", "older-b"} {
+		if _, err := con.Exec("INSERT INTO sessions(id,started_at,last_ts,message_count,is_subagent) VALUES(?,1,1,0,0)", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	con.Close()
+
+	_, err := RebuildFromTranscripts(dbp)
+	if !errors.Is(err, ErrRebuildWouldLoseHistory) {
+		t.Fatalf("rebuild should have refused to shrink the store; err = %v", err)
+	}
+
+	// The refusal has to leave the store alone: a guard that still deleted the
+	// db would be worse than no guard.
+	rcon, cerr := store.ConnectRO(dbp)
+	if cerr != nil {
+		t.Fatalf("store gone after a refused rebuild: %v", cerr)
+	}
+	t.Cleanup(func() { rcon.Close() })
+	if got := scalar(t, rcon, "SELECT COUNT(*) FROM sessions"); got != "3" {
+		t.Errorf("refused rebuild changed the store (sessions=%s, want 3)", got)
+	}
+
+	// And the override still works, because a user whose store is junk has to
+	// be able to say so.
+	t.Setenv("RAWCLAW_REBUILD_FORCE", "1")
+	if _, ferr := RebuildFromTranscripts(dbp); ferr != nil {
+		t.Fatalf("forced rebuild: %v", ferr)
 	}
 }

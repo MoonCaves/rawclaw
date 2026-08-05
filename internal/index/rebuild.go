@@ -2,6 +2,7 @@ package index
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 
@@ -17,6 +18,43 @@ type RebuildStats struct {
 	Missing    int // of those sessions, ones whose original source file is gone
 	Tombstoned int // vaulted sessions skipped because the user deleted them
 	Unreadable int // vaulted transcripts that could not be read (reported, never silent)
+}
+
+// ErrRebuildWouldLoseHistory reports a rebuild refused because the vault holds
+// fewer sessions than the store it was about to replace. Callers match on it to
+// print the override rather than a bare failure.
+var ErrRebuildWouldLoseHistory = errors.New("rebuild would lose history")
+
+// rebuildForceEnv is the override for that refusal. It is an environment
+// variable rather than a flag because the honest use for it is a scripted
+// recovery on a machine whose store is already known to be junk.
+const rebuildForceEnv = "RAWCLAW_REBUILD_FORCE"
+
+// rebuildForced reports whether the user asked to rebuild anyway.
+func rebuildForced() bool {
+	v := os.Getenv(rebuildForceEnv)
+	return v != "" && v != "0"
+}
+
+// storedSessionCount reads how many sessions the store at dbp currently holds,
+// WITHOUT touching its schema. EnsureSchema must never run here: it rebuilds a
+// database whose schema_version does not match, which would drop the very rows
+// this count exists to protect. A missing or unreadable store counts as zero,
+// so a genuine recovery from nothing is never blocked.
+func storedSessionCount(dbp string) (int, error) {
+	if _, err := os.Stat(dbp); err != nil {
+		return 0, err
+	}
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		return 0, err
+	}
+	defer con.Close()
+	var n int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // RebuildFromTranscripts rebuilds the index db at dbp from the durable
@@ -47,6 +85,19 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 	tombstoned, terr := lifecycle.LoadTombstones("")
 	if terr != nil {
 		tombstoned = map[string]struct{}{}
+	}
+
+	// Refuse to trade a populated store for a thinner vault. The vault only
+	// fills as sessions are indexed, so on a machine that already had a large
+	// corpus before the vault existed it starts out empty or sparse — and this
+	// command deletes the store outright. Recovering less history than you had
+	// is not recovery, so a rebuild that would lose sessions stops and says by
+	// how much instead. ErrRebuildWouldLoseHistory names the escape hatch.
+	have, herr := storedSessionCount(dbp)
+	if herr == nil && have > len(vaulted) && !rebuildForced() {
+		return st, fmt.Errorf("%w: the store holds %d sessions but the transcript vault holds %d; "+
+			"rebuilding now would lose %d. Index normally to fill the vault first, or set %s=1 to override",
+			ErrRebuildWouldLoseHistory, have, len(vaulted), have-len(vaulted), rebuildForceEnv)
 	}
 
 	for _, suffix := range []string{"", "-wal", "-shm"} {
