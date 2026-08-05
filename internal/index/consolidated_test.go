@@ -12,10 +12,15 @@ import (
 )
 
 // isolateCache points HOME at a temp dir so ConsolidatedPath, the per-project
-// dbs, and the tombstone sidecar all land under the test's own tree.
+// dbs, and the tombstone sidecar all land under the test's own tree. The XDG
+// data dir is pinned under the same tree, or the durable transcript vault would
+// keep resolving to whatever XDG_DATA_HOME the process inherited and every test
+// would share one vault.
 func isolateCache(t *testing.T) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 }
 
 // indexProject writes a one-file project dir, indexes it to its own cache db
