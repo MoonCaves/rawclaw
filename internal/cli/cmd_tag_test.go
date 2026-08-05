@@ -2,11 +2,15 @@ package cli
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/store/storetest"
+	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
 // newTagTestDB builds a fresh writable db with the base + topic schema, returning
@@ -189,5 +193,61 @@ func TestRunTagWriteNoMessages(t *testing.T) {
 	jsonIn := `[{"start_uuid":"x","topic":"t","summary":"s"}]`
 	if _, err := runTagWrite(con, "missing-session", strings.NewReader(jsonIn), 1.0); err == nil {
 		t.Fatal("expected an error writing to a session with no messages")
+	}
+}
+
+// writeTaggableSession writes a transcript whose messages carry uuids (tag-write
+// keys segments by uuid prefix), indexes it, and returns the project dir.
+func writeTaggableSession(t *testing.T, root, project, id string, uuids ...string) string {
+	t.Helper()
+	dir := filepath.Join(root, project)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir project dir: %v", err)
+	}
+	var b strings.Builder
+	for i, u := range uuids {
+		b.WriteString(`{"type":"user","uuid":"` + u + `","timestamp":"2026-06-01T10:00:0` +
+			string(rune('0'+i)) + `Z","message":{"role":"user","content":"advancing the retention watermark"}}` + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	if _, _, _, err := index.EnsureIndexed(dir, false); err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+	return dir
+}
+
+// TestRunTagWriteFoldsIntoTheOneStore locks the write-through: a topic tagged
+// today must be visible to the readers that query the consolidated store, not
+// only to the project db it was written into. Without the fold, `topics` would
+// keep missing every tag until the next full consolidate run.
+func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
+	root := newCfgRoot(t)
+	sid := "9f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
+	dir := writeTaggableSession(t, root, "proj-tag", sid,
+		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
+
+	scope := []view.Scope{{Project: "proj-tag", TDir: dir}}
+	jsonIn := `[{"start_uuid":"11111111","topic":"watermark","summary":"how the watermark is advanced"}]`
+	var out strings.Builder
+	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope); err != nil {
+		t.Fatalf("runTagWriteCmd: %v\nout: %s", err, out.String())
+	}
+
+	con, err := store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated store: %v", err)
+	}
+	defer con.Close()
+	hits, err := store.MatchTopics(con, "watermark", 8, nil)
+	if err != nil {
+		t.Fatalf("MatchTopics on the consolidated store: %v", err)
+	}
+	if len(hits) != 1 || hits[0].Topic != "watermark" {
+		t.Fatalf("consolidated store topic hits = %+v, want the freshly written watermark tag", hits)
+	}
+	if hits[0].Project != "proj-tag" {
+		t.Errorf("hit project = %q, want proj-tag", hits[0].Project)
 	}
 }
