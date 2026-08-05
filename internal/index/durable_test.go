@@ -8,6 +8,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/model"
+	"github.com/MoonCaves/rawclaw/internal/retention"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
@@ -119,6 +120,87 @@ func TestVaultFlagFollowsRetention(t *testing.T) {
 	}
 	if v := vaultOf(t, "s"); v.MissingSince != 0 {
 		t.Errorf("source reappeared but the vault sidecar is still flagged: %v", v.MissingSince)
+	}
+}
+
+// TestApplyRetentionToVaultMirrorsEveryVerdict exercises the mirror directly,
+// because two of its three branches cannot be provoked through an indexing pass:
+// the vault write-through already leaves a correct sidecar behind, so the mirror
+// is the second line of defense for the pass where that write failed. The
+// origin gate is checked here too — a replica verdict must not reach the vault's
+// delete path, where a colliding id would destroy an own session's only copy.
+func TestApplyRetentionToVaultMirrorsEveryVerdict(t *testing.T) {
+	isolateCache(t)
+	for _, id := range []string{"stamp", "clear", "prune", "replica"} {
+		if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude"},
+			[]model.Message{{Role: "user", Text: "x", TSISO: "2026-06-01T10:00:00Z"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := durable.SetMissingSince("clear", 1780000000); err != nil {
+		t.Fatal(err)
+	}
+
+	res := retention.Result{Stamped: []string{"stamp"}, Cleared: []string{"clear"}, Pruned: []string{"prune"}}
+	// A replica verdict is dropped wholesale, whichever branch names it.
+	applyRetentionToVault(retention.Result{
+		Stamped: []string{"replica"}, Cleared: []string{"clear"}, Pruned: []string{"replica"},
+	}, 1790000000, "other-machine")
+	applyRetentionToVault(res, 1790000000, "")
+
+	got := map[string]durable.Session{}
+	list, err := durable.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range list {
+		got[v.ID] = v
+	}
+	if v, ok := got["stamp"]; !ok || v.MissingSince != 1790000000 {
+		t.Errorf("stamped session sidecar = %+v, want missing_since 1790000000", v)
+	}
+	if v, ok := got["clear"]; !ok || v.MissingSince != 0 {
+		t.Errorf("cleared session sidecar = %+v, want missing_since 0", v)
+	}
+	if _, ok := got["prune"]; ok {
+		t.Error("pruned session still has a durable copy — a rebuild would resurrect it")
+	}
+	if v, ok := got["replica"]; !ok || v.MissingSince != 0 {
+		t.Errorf("a replica verdict reached the vault: %+v (present=%v)", v, ok)
+	}
+}
+
+// TestRebuildReplacesTheOldStore: the rebuilt store is a pure function of the
+// vault. A row left over from the store being replaced would otherwise survive
+// as a session no transcript backs.
+func TestRebuildReplacesTheOldStore(t *testing.T) {
+	isolateCache(t)
+	proj := t.TempDir()
+	writeJSONL(t, filepath.Join(proj, "kept.jsonl"), `{"type":"user","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"vaulted"}}`)
+	con, dbp := openTestDB(t)
+	if err := UpdateIndex(con, proj); err != nil {
+		t.Fatal(err)
+	}
+	// A session that exists ONLY in the store — never vaulted, so the rebuild
+	// has no reason to keep it.
+	if _, err := con.Exec("INSERT INTO sessions(id,started_at,last_ts,message_count,is_subagent) VALUES('stale',1,1,0,0)"); err != nil {
+		t.Fatal(err)
+	}
+	con.Close()
+
+	if _, err := RebuildFromTranscripts(dbp); err != nil {
+		t.Fatalf("RebuildFromTranscripts: %v", err)
+	}
+	rcon, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rcon.Close() })
+	if got := scalar(t, rcon, "SELECT COUNT(*) FROM sessions WHERE id='stale'"); got != "0" {
+		t.Errorf("a session with no transcript survived the rebuild (count=%s)", got)
+	}
+	if got := scalar(t, rcon, "SELECT COUNT(*) FROM sessions WHERE id='kept'"); got != "1" {
+		t.Errorf("the vaulted session is missing from the rebuilt store (count=%s)", got)
 	}
 }
 
