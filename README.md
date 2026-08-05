@@ -98,6 +98,7 @@ rawclaw --this-project "auth"               # narrow to the current project
 rawclaw read <session8>:<uuid8>             # bounded excerpt around a ref (--more/--around/--budget/--focus)
 rawclaw outline <session8>                  # the session's goal → resolution arc
 rawclaw                                      # browse: your most recent sessions
+rawclaw --include-path <regex>              # browse only the projects whose working dir matches
 rawclaw --resume <session8>                 # paste-ready `claude --resume` for that session
 rawclaw --stats                             # corpus overview (this project; --all for everything)
 rawclaw "query" --json                      # machine-readable output for scripts/agents

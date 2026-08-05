@@ -319,7 +319,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	// BEFORE indexing them. Role / date bounds / min-messages push into the SQL
 	// WHERE via SearchParams. None of these flag VALUES reach the FTS5 query (#1).
 	if opts.IncludePath != "" || opts.ExcludePath != "" {
-		scope = filterScopeByPath(scope, opts.IncludePath, opts.ExcludePath)
+		scope = scopes.FilterByPath(scope, opts.IncludePath, opts.ExcludePath)
 		if len(scope) == 0 {
 			return SearchEnvelope{Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true}
 		}
@@ -536,20 +536,6 @@ func OutlineAndRender(w io.Writer, session8 string, scope []view.Scope, includeT
 	}
 	renderOutline(w, result)
 	return nil
-}
-
-// filterScopeByPath keeps only the scopes whose project working dir satisfies the
-// include/exclude path predicate — the same predicate the default discovery path
-// applies, evaluated against paths.ProjectCWD(scope.TDir).
-func filterScopeByPath(scope []view.Scope, include, exclude string) []view.Scope {
-	pred := query.PathPredicate(include, exclude)
-	out := make([]view.Scope, 0, len(scope))
-	for _, sc := range scope {
-		if pred(scopes.CWD(sc)) {
-			out = append(out, sc)
-		}
-	}
-	return out
 }
 
 // scopesComplete reports whether every scope was searched fresh (none skipped or
@@ -1481,7 +1467,7 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 		scope = allScope()
 	}
 	if includePath != "" {
-		scope = filterScopeByPath(scope, includePath, "")
+		scope = scopes.FilterByPath(scope, includePath, "")
 	}
 
 	hits := []TopicHit{}
