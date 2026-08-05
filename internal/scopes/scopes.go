@@ -17,6 +17,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/archive"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/store"
@@ -295,6 +296,27 @@ func CWD(sc view.Scope) string {
 		return sc.CWD
 	}
 	return paths.ProjectCWD(sc.TDir)
+}
+
+// FilterByPath keeps only the scopes whose working dir satisfies the
+// include/exclude path predicate — the structural Scope filter behind
+// --include-path / --exclude-path. Both patterns empty returns scope unchanged.
+//
+// It lives here, next to CWD, because more than one shape needs it (search and
+// the no-query browse) and it must prune BEFORE Resolve: a dropped scope is one
+// fewer db to index and open, so narrowing a run also makes it cheaper.
+func FilterByPath(scope []view.Scope, include, exclude string) []view.Scope {
+	if include == "" && exclude == "" {
+		return scope
+	}
+	pred := query.PathPredicate(include, exclude)
+	out := make([]view.Scope, 0, len(scope))
+	for _, sc := range scope {
+		if pred(CWD(sc)) {
+			out = append(out, sc)
+		}
+	}
+	return out
 }
 
 // codexDBPath returns a cache db path for a Codex cwd group, prefixed "codex-"

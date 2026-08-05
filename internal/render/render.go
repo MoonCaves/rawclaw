@@ -58,15 +58,21 @@ func printLastActivity(w io.Writer, last string) {
 	fmt.Fprintf(w, "      now → %s\n", last)
 }
 
-// PrintBrowseAll renders the cross-project (--all) recent-sessions list: the
-// same row shape as PrintBrowse, each row additionally naming its project.
-func PrintBrowseAll(w io.Writer, rows []view.BrowseAllRow) {
+// PrintBrowseAll renders the cross-project recent-sessions list: the same row
+// shape as PrintBrowse, each row additionally naming its project.
+//
+// scope names the universe the rows came from ("all projects", or the narrower
+// one the caller's scope flags left). The header states it rather than assuming
+// "all projects", which stops being true the moment --include-path narrows the
+// run — a header naming a scope nobody asked for is how a browse passes off one
+// question's answer as another's.
+func PrintBrowseAll(w io.Writer, rows []view.BrowseAllRow, scope string) {
 	if len(rows) == 0 {
-		fmt.Fprintln(w, "No sessions in any project. Try --list to see the searchable projects.")
+		fmt.Fprintf(w, "No sessions across %s. Try --list to see the searchable projects.\n", scope)
 		return
 	}
 
-	fmt.Fprintf(w, "%d most-recent sessions across all projects:\n\n", len(rows))
+	fmt.Fprintf(w, "%d most-recent sessions across %s:\n\n", len(rows), scope)
 	for _, r := range rows {
 		fmt.Fprintf(w, "  · %s · %s · %d msgs · %s\n", sid8(r.SessionID), r.Project, r.N, r.Preview)
 		printLastActivity(w, r.Last)
