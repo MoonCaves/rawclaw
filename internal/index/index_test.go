@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -614,5 +615,248 @@ func TestUpdateIndexMsgIDDeterministic(t *testing.T) {
 		if second[content][0].(int) != v[0].(int) {
 			t.Errorf("msg_id for %q not reproducible: %d vs %d", content, v[0], second[content][0])
 		}
+	}
+}
+
+// TestEnsureSchemaAddsTrigramIndexInPlace pins the migration decision: a db
+// already at the current schema version gains the substring index WITHOUT a
+// rebuild. Rebuilding to get it would drop the messages table and force a
+// re-walk of the live transcript tree, which re-prunes every session retained
+// after its source was purged — so the test asserts the existing rows are still
+// there afterwards, and that the backfill covered them.
+func TestEnsureSchemaAddsTrigramIndexInPlace(t *testing.T) {
+	dbp := filepath.Join(t.TempDir(), "current.db")
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("store.ConnectRW: %v", err)
+	}
+	t.Cleanup(func() { con.Close() })
+
+	// A db at the CURRENT version that predates the substring index: build the
+	// full current shape, then drop the trigram objects to reproduce it.
+	if err := EnsureSchema(con, "claude"); err != nil {
+		t.Fatalf("EnsureSchema (seed): %v", err)
+	}
+	if _, err := con.Exec(`INSERT INTO sessions(id,message_count,is_subagent) VALUES('ledger',1,0);
+		INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid)
+		VALUES('ledger','user','the reconciliation finished cleanly',100,'2026-01-01T10:00:00Z','uuid-l1');`); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+	if _, err := con.Exec(`DROP TRIGGER messages_tri_ai; DROP TRIGGER messages_tri_ad;
+		DROP TRIGGER messages_tri_au; DROP TABLE messages_fts_trigram;
+		DELETE FROM meta WHERE key='trigram_backfill_done';`); err != nil {
+		t.Fatalf("strip trigram objects: %v", err)
+	}
+
+	if err := EnsureSchema(con, "claude"); err != nil {
+		t.Fatalf("EnsureSchema must add the substring index in place, got: %v", err)
+	}
+
+	// No rebuild: the pre-existing row survived and the version never moved.
+	var n int
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("messages = %d rows after migration, want 1 — the db was rebuilt, not migrated", n)
+	}
+	var v string
+	con.QueryRow("SELECT value FROM meta WHERE key='schema_version'").Scan(&v)
+	if v != strconv.Itoa(store.SchemaVersion) {
+		t.Errorf("schema_version = %q, want %d", v, store.SchemaVersion)
+	}
+
+	// The backfill covered the row that was already there: "iliat" sits inside
+	// "reconciliation", so only the substring index can find it.
+	var hits int
+	if err := con.QueryRow(
+		`SELECT COUNT(*) FROM messages_fts_trigram WHERE messages_fts_trigram MATCH '"iliat"'`).Scan(&hits); err != nil {
+		t.Fatalf("query substring index: %v", err)
+	}
+	if hits != 1 {
+		t.Errorf("substring index = %d hits for a pre-existing message, want 1 (backfill did not run)", hits)
+	}
+
+	// A row inserted after the migration arrives through the re-created triggers.
+	if _, err := con.Exec(
+		`INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid)
+		 VALUES('ledger','user','the settlement finished cleanly',200,'2026-01-02T10:00:00Z','uuid-l2')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := con.QueryRow(
+		`SELECT COUNT(*) FROM messages_fts_trigram WHERE messages_fts_trigram MATCH '"tleme"'`).Scan(&hits); err != nil {
+		t.Fatalf("query substring index: %v", err)
+	}
+	if hits != 1 {
+		t.Errorf("substring index = %d hits for a post-migration message, want 1 (triggers not re-created)", hits)
+	}
+}
+
+// TestTrigramBackfillRunsOnce pins the marker: once the substring index is
+// filled, a later EnsureSchema must not empty and re-fill it. The re-fill is
+// only cheap on a fresh db — on a real corpus it is the whole index rebuilt on
+// every invocation.
+func TestTrigramBackfillRunsOnce(t *testing.T) {
+	con, _ := openTestDB(t)
+	if _, err := con.Exec(
+		`INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid)
+		 VALUES('ledger','user','the reconciliation finished cleanly',100,'2026-01-01T10:00:00Z','uuid-l1')`); err != nil {
+		t.Fatal(err)
+	}
+	var done string
+	if err := con.QueryRow("SELECT value FROM meta WHERE key='trigram_backfill_done'").Scan(&done); err != nil || done != "1" {
+		t.Fatalf("trigram_backfill_done = %q (%v), want \"1\" — a fresh db must be stamped as filled", done, err)
+	}
+
+	// Empty the index behind the marker's back. A second EnsureSchema honors the
+	// marker and leaves it empty; if it re-filled, the marker is being ignored.
+	if _, err := con.Exec(store.TrigramResetSQL); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureSchema(con, "claude"); err != nil {
+		t.Fatalf("second EnsureSchema: %v", err)
+	}
+	var hits int
+	con.QueryRow(`SELECT COUNT(*) FROM messages_fts_trigram WHERE messages_fts_trigram MATCH '"iliat"'`).Scan(&hits)
+	if hits != 0 {
+		t.Errorf("substring index re-filled despite the done marker (%d hits) — every run would rebuild it", hits)
+	}
+}
+
+// TestTrigramBackfillResumesFromWatermark pins the property that makes the
+// backfill survivable: a run killed part-way leaves a watermark, and the next
+// run continues from it rather than starting over. On a large corpus the whole
+// fill takes longer than the CLI watchdog allows one run to live, so a pass
+// that restarted would be killed at the same point every time and never finish.
+func TestTrigramBackfillResumesFromWatermark(t *testing.T) {
+	con, _ := openTestDB(t)
+	if _, err := con.Exec(
+		`INSERT INTO sessions(id,message_count,is_subagent) VALUES('ledger',3,0);
+		 INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES
+		   ('ledger','user','the reconciliation finished cleanly',100,'2026-01-01T10:00:00Z','uuid-1'),
+		   ('ledger','user','the settlement finished cleanly',200,'2026-01-02T10:00:00Z','uuid-2'),
+		   ('ledger','user','the adjustment finished cleanly',300,'2026-01-03T10:00:00Z','uuid-3');`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reproduce what a killed backfill leaves behind: the index holds exactly
+	// the rows the watermark claims, the done marker is absent. The entry for
+	// row 1 is given content the message does NOT have, which is how the test
+	// can tell resuming from starting over — a pass that re-read row 1 would
+	// overwrite the sentinel, a pass that resumed leaves it alone.
+	if _, err := con.Exec(
+		`DELETE FROM meta WHERE key='trigram_backfill_done';
+		 DELETE FROM messages_fts_trigram;
+		 INSERT INTO messages_fts_trigram(rowid, content) VALUES (1, 'sentinelmarker');
+		 INSERT OR REPLACE INTO meta(key,value) VALUES('trigram_backfill_at','1');`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := EnsureSchema(con, "claude"); err != nil {
+		t.Fatalf("resumed EnsureSchema: %v", err)
+	}
+
+	// Every message is indexed exactly once: the resumed pass covered 2 and 3,
+	// and did not duplicate 1.
+	var total int
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages_fts_trigram").Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 {
+		t.Errorf("substring index holds %d entries, want 3", total)
+	}
+	// The sentinel survived, so the pass started above the watermark instead of
+	// re-doing work already committed.
+	var kept int
+	if err := con.QueryRow(
+		`SELECT COUNT(*) FROM messages_fts_trigram WHERE messages_fts_trigram MATCH '"tinelma"'`).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 1 {
+		t.Errorf("the entry below the watermark was re-read — the pass restarted instead of resuming")
+	}
+	for _, probe := range []string{`"tleme"`, `"justme"`} {
+		var n int
+		if err := con.QueryRow(
+			"SELECT COUNT(*) FROM messages_fts_trigram WHERE messages_fts_trigram MATCH ?", probe).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n != 1 {
+			t.Errorf("probe %s = %d hits, want 1 (the resumed batch missed it)", probe, n)
+		}
+	}
+	// Finished: the marker is set and the resume point is gone.
+	var done string
+	con.QueryRow("SELECT value FROM meta WHERE key='trigram_backfill_done'").Scan(&done)
+	if done != "1" {
+		t.Errorf("done marker = %q, want \"1\"", done)
+	}
+	var at string
+	if err := con.QueryRow("SELECT value FROM meta WHERE key='trigram_backfill_at'").Scan(&at); err == nil {
+		t.Errorf("resume point %q left behind after the fill finished", at)
+	}
+}
+
+// TestTrigramBackfillToleratesRowsAlreadyIndexed pins the one collision the
+// batched fill can meet in the wild: another process writing a message during
+// the backfill indexes it through the insert trigger, so a later batch copies a
+// row that is already there. That must be a no-op, not a failed migration.
+func TestTrigramBackfillToleratesRowsAlreadyIndexed(t *testing.T) {
+	con, _ := openTestDB(t)
+	if _, err := con.Exec(
+		`INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid)
+		 VALUES('ledger','user','the reconciliation finished cleanly',100,'2026-01-01T10:00:00Z','uuid-1')`); err != nil {
+		t.Fatal(err)
+	}
+	// The row is already indexed (the trigger did it) but the watermark says
+	// the fill has not reached it yet — exactly the concurrent-writer state.
+	if _, err := con.Exec(
+		`DELETE FROM meta WHERE key='trigram_backfill_done';
+		 INSERT OR REPLACE INTO meta(key,value) VALUES('trigram_backfill_at','0');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureSchema(con, "claude"); err != nil {
+		t.Fatalf("EnsureSchema over an already-indexed row: %v", err)
+	}
+	var n int
+	con.QueryRow("SELECT COUNT(*) FROM messages_fts_trigram").Scan(&n)
+	if n != 1 {
+		t.Errorf("substring index holds %d entries, want 1", n)
+	}
+}
+
+// TestTrigramBatchIsAtomic pins that a batch's rows and its resume point land
+// together or not at all. If the rows could commit without the watermark, a
+// kill between the two would leave the index holding work no watermark claims —
+// and the next run, seeing no watermark, would throw that work away.
+//
+// The failure is injected at the stamp: with meta renamed out from under it the
+// watermark write fails, and the rows written moments earlier must roll back
+// with it.
+func TestTrigramBatchIsAtomic(t *testing.T) {
+	con, _ := openTestDB(t)
+	if _, err := con.Exec(
+		`INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES
+		   ('ledger','user','the reconciliation finished cleanly',100,'2026-01-01T10:00:00Z','uuid-1'),
+		   ('ledger','user','the settlement finished cleanly',200,'2026-01-02T10:00:00Z','uuid-2');`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("ALTER TABLE meta RENAME TO meta_hidden"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := migrateTrigramIndex(con); err == nil {
+		t.Fatal("migrateTrigramIndex must fail when it cannot record its resume point")
+	}
+
+	if _, err := con.Exec("ALTER TABLE meta_hidden RENAME TO meta"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages_fts_trigram").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("substring index holds %d rows the watermark cannot account for, want 0 — the batch did not roll back", n)
 	}
 }
