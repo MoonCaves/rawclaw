@@ -63,6 +63,12 @@ type Options struct {
 	DirSet           bool // --dir explicitly passed (the arbitrary-folder opt-in)
 }
 
+// pathScoped reports whether either path Scope flag is set — the flags that
+// bound WHICH projects a run covers, as opposed to which rows come back.
+func (o *Options) pathScoped() bool {
+	return o.IncludePath != "" || o.ExcludePath != ""
+}
+
 // params builds the retrieve.SearchParams the search shapes read, carrying the
 // boolean→FTS5 raw-match expr (empty when the query has no operators, which
 // takes the plain search path).
@@ -169,8 +175,8 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.StringVar(&opts.Before, "before", "", "only results on/before this date")
 	f.BoolVar(&opts.NoVector, "no-vector", false, "force keyword-only (ignore any configured embedder)")
 	f.BoolVar(&opts.ReindexVectors, "reindex-vectors", false, "build/update the semantic index for the scope (needs RAWCLAW_EMBED_ENDPOINT)")
-	f.StringVar(&opts.IncludePath, "include-path", "", "only search projects whose working dir matches this regex")
-	f.StringVar(&opts.ExcludePath, "exclude-path", "", "skip projects whose working dir matches this regex (e.g. /tmp, test)")
+	f.StringVar(&opts.IncludePath, "include-path", "", "only cover projects whose working dir matches this regex (search AND bare browse)")
+	f.StringVar(&opts.ExcludePath, "exclude-path", "", "skip projects whose working dir matches this regex, e.g. /tmp (search AND bare browse)")
 	f.IntVar(&opts.MinMessages, "min-messages", 0, "only sessions with >= N messages (drops thin/bootstrap threads)")
 	f.BoolVar(&opts.DebugSearch, "debug-search", false, "explain WHY each hit ranked where it did (LLM-free scoring breakdown)")
 	_ = f.MarkHidden("debug-search")
@@ -898,11 +904,34 @@ func runStatsFleet(ctx context.Context, w io.Writer, o *Options) error {
 }
 
 // runBrowse handles the no-query case: list recent sessions for this project,
-// or — under --all — for every project (same scope enumeration search uses).
-// An explicit --this-project wins over --all, same precedence runStats applies.
+// or — under --all or a path scope — across the projects those flags select
+// (the same scope enumeration search uses). An explicit --this-project wins
+// over --all, same precedence runStats applies.
+//
+// --include-path / --exclude-path are structural SCOPE flags: they bound which
+// projects a run covers, and they compose with the rest rather than being
+// consumed by one shape. They name projects by working dir, so — like search,
+// whose universe is every project unless --this-project — a path flag browses
+// ACROSS projects; --this-project first narrows the universe to the cwd and the
+// predicate then applies to that one project alone. Browse used to accept both
+// flags and browse the cwd anyway: `rawclaw --include-path myproject` answered
+// from /tmp with two throwaway /tmp sessions under the header "2 most-recent
+// sessions on tmp", i.e. a different question's answer wearing the caller's
+// flags. A flag accepted and silently ignored is the worst outcome for an agent
+// caller, which trusts it and moves on wrong.
 func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
-	if o.All && !o.ThisProject {
-		return runBrowseAll(ctx, w, o)
+	if o.pathScoped() || (o.All && !o.ThisProject) {
+		var universe []view.Scope
+		if o.ThisProject {
+			sc, _, ok := thisScope(w, o)
+			if !ok {
+				return nil
+			}
+			universe = sc
+		} else {
+			universe = allScope(ctx, o.Source, o.Reindex)
+		}
+		return runBrowseScoped(w, o, universe)
 	}
 	sc, td, ok := thisScope(w, o)
 	if !ok {
@@ -920,12 +949,20 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 	return nil
 }
 
-// runBrowseAll is the --all shape of the no-query browse: recent sessions
-// across every project (Claude + Codex + retained scopes — the same
-// enumeration search uses), merged newest-first and capped at --limit.
-func runBrowseAll(ctx context.Context, w io.Writer, o *Options) error {
+// runBrowseScoped is the cross-project shape of the no-query browse: recent
+// sessions across the scopes the Scope flags leave standing (Claude + Codex +
+// retained — the same enumeration search uses), merged newest-first and capped
+// at --limit. universe is what --all / --this-project selected; the path
+// predicate prunes it BEFORE any scope resolves, so a narrowed browse also
+// opens fewer dbs.
+func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
+	scope := scopes.FilterByPath(universe, o.IncludePath, o.ExcludePath)
+	if o.pathScoped() && len(scope) == 0 {
+		return browseNoScopeMatch(w, o, len(universe))
+	}
+
 	rows := []view.BrowseAllRow{} // non-nil so --json emits [] rather than null
-	for _, sc := range allScope(ctx, o.Source, o.Reindex) {
+	for _, sc := range scope {
 		dbp, _, err := scopes.Resolve(sc, o.Reindex)
 		if err != nil {
 			continue // an unresolvable scope can't contribute rows; others still can
@@ -941,13 +978,71 @@ func runBrowseAll(ctx context.Context, w io.Writer, o *Options) error {
 		rows = rows[:o.Limit]
 	}
 	if o.JSON {
-		return EmitJSON(w, struct {
-			Scope    string              `json:"scope"`
-			Sessions []view.BrowseAllRow `json:"sessions"`
-		}{"all", rows})
+		return EmitJSON(w, browseScopeJSON(o, len(scope), rows))
 	}
-	render.PrintBrowseAll(w, rows)
+	render.PrintBrowseAll(w, rows, browseScopeLabel(o))
 	return nil
+}
+
+// browseNoScopeMatch reports a path scope that kept no project at all. Scope
+// never relaxes: rather than quietly widening back to the cwd or to every
+// project — the silent rewrite this whole contract exists to kill — the empty
+// is printed WITH its real boundary, the size of the universe the predicate ran
+// against, plus the verb that lists the working dirs it was matched on. Exit 0:
+// an honestly empty scope is an answer, not an error.
+func browseNoScopeMatch(w io.Writer, o *Options, universe int) error {
+	if o.JSON {
+		return EmitJSON(w, browseScopeJSON(o, 0, []view.BrowseAllRow{}))
+	}
+	fmt.Fprintf(w, "No project matches %s (0 of %d searchable). Try --list to see their working dirs.\n",
+		pathScopePhrase(o), universe)
+	return nil
+}
+
+// pathScopePhrase echoes the path Scope flags back verbatim, so every message
+// about them names what the caller actually typed.
+func pathScopePhrase(o *Options) string {
+	var parts []string
+	if o.IncludePath != "" {
+		parts = append(parts, "--include-path "+o.IncludePath)
+	}
+	if o.ExcludePath != "" {
+		parts = append(parts, "--exclude-path "+o.ExcludePath)
+	}
+	return strings.Join(parts, " ")
+}
+
+// browseScopeLabel names the universe a cross-project browse actually covered.
+// "all projects" is true only while nothing narrowed it — a header must never
+// name a scope the caller did not ask for.
+func browseScopeLabel(o *Options) string {
+	label := "all projects"
+	if o.ThisProject {
+		label = "this project"
+	}
+	if !o.pathScoped() {
+		return label
+	}
+	return label + " matching " + pathScopePhrase(o)
+}
+
+// browseScopeJSON is the machine shape of a cross-project browse. Beyond the
+// rows it reports the scope actually covered — the path flags verbatim and how
+// many projects survived them — so an agent reading `sessions: []` can tell an
+// empty corpus from a filter that matched no project at all. Same
+// incompleteness-as-data posture as the search envelope's scope reports.
+func browseScopeJSON(o *Options, projects int, rows []view.BrowseAllRow) any {
+	scope := "all"
+	if o.ThisProject {
+		scope = "project"
+	}
+	return struct {
+		Scope       string              `json:"scope"`
+		IncludePath string              `json:"include_path,omitempty"`
+		ExcludePath string              `json:"exclude_path,omitempty"`
+		Projects    int                 `json:"projects"`
+		Sessions    []view.BrowseAllRow `json:"sessions"`
+	}{scope, o.IncludePath, o.ExcludePath, projects, rows}
 }
 
 // runSearch dispatches a query to the FALLBACK / BRIEF / DISCOVERY shapes.

@@ -20,6 +20,23 @@ All notable changes to RawClaw are documented in this file.
 
 ### Fixed
 
+- **A bare browse now honors `--include-path` / `--exclude-path` instead of silently ignoring
+  them.** `rawclaw --include-path myproject --sort newest` with no query browsed the shell's working
+  directory and printed "2 most-recent sessions on tmp" — one question's flags over another
+  question's answer. The path flags bound WHICH projects a run covers, so like search they now
+  select across projects; `--this-project` still pins the universe to the cwd, and the predicate
+  then applies to that one project. A scope that matches nothing is reported as empty with its real
+  boundary (`No project matches --include-path X (0 of 111 searchable)`) and exits 0 — never
+  widened back out, never answered from the cwd. The header names the scope actually covered, so
+  "across all projects" no longer appears over a narrowed run.
+- **`topics` returns one row per conversation per label.** A long session is cut into many
+  segments, and a tagger often gives several of them the SAME label — each of which was a separate
+  row here, so one heavily-segmented session could fill the list (observed live: `topics "tagging"`
+  returned four identical rows for one session, differing only in which message each read-ref
+  pointed at). Repeats now collapse on the session's lineage root plus the label, so a resumed or
+  forked session counts as the one conversation it is, and the surviving row points at that
+  conversation's strongest match. A session carrying several DIFFERENT labels still gets one row
+  per label. Ordering and `--limit` remain per-project, as documented.
 - **The same session id is now ONE session, however many projects hold a row.** Continue a
   session from a different directory and the agent writes a second transcript under the new
   project while keeping the id; delete the first directory and durable retention keeps its row
@@ -31,6 +48,10 @@ All notable changes to RawClaw are documented in this file.
 
 ### Changed
 
+- **The cross-project browse `--json` shape reports its scope.** Alongside `scope` and `sessions`
+  it now carries `projects` (how many survived the scope flags) and echoes `include_path` /
+  `exclude_path` when set, so an agent reading `sessions: []` can tell an empty corpus from a
+  filter that matched no project.
 - **SessionStart no longer assigns old-session tagging to the new agent.** The Claude Code and
   Codex discovery banners no longer inspect or print a pending tag queue or its session ids.
   Instead they tell the current agent to delegate its own `tag-prep` → `tag-write` closeout work
