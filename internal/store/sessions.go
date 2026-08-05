@@ -99,6 +99,26 @@ func SessionMeta(con *sql.DB, sid string) (lastTS float64, msgCount int, ok bool
 	return ts.Float64, int(mc.Int64), true
 }
 
+// SessionRowQuality reports the two facts that decide which row should
+// represent a session when the SAME session id exists in more than one project
+// database. That happens for real: continue a session from a different
+// directory and the agent writes a second transcript under the new project
+// while keeping the id, so the sweep sees two rows for one conversation. If the
+// first directory is later deleted, durable retention keeps its row with a
+// missing_since watermark — one live row, one retained stub, one session.
+//
+// sourceLive is false once missing_since is set (the backing file is gone).
+// ok is false when the session isn't in this database at all.
+func SessionRowQuality(con *sql.DB, sid string) (msgCount int, sourceLive bool, ok bool) {
+	var mc sql.NullInt64
+	var missing sql.NullFloat64
+	row := con.QueryRow("SELECT message_count, missing_since FROM sessions WHERE id=?", sid)
+	if err := row.Scan(&mc, &missing); err != nil {
+		return 0, false, false
+	}
+	return int(mc.Int64), !missing.Valid, true
+}
+
 // ParentOf returns a session's parent_id, or "" when the session is missing,
 // the parent is NULL/empty, or the read fails — the lineage walk treats all
 // three identically as "root reached". [retrieve.LineageRoot]
