@@ -107,3 +107,21 @@ func TestLocateSessionStillFlagsDistinctIDCollision(t *testing.T) {
 		}
 	}
 }
+
+// TestCoalescePrefersLocalOverForeignReplica pins that a replicated (foreign)
+// scope never wins the coalesce, even when its row is live and larger. Tag
+// export skips foreign databases, so resolving there would send tag-write at a
+// replica whose writes never sync back.
+func TestCoalescePrefersLocalOverForeignReplica(t *testing.T) {
+	local := sessionCand{SessionID: "s", Project: "local", dbp: "/local.db", foreign: false}
+	remote := sessionCand{SessionID: "s", Project: "remote", dbp: "/remote.db", foreign: true}
+
+	// Foreign swept FIRST so insertion order cannot be what saves us.
+	got := coalesceSameSession([]sessionCand{remote, local})
+	if len(got) != 1 {
+		t.Fatalf("want 1 coalesced candidate, got %d", len(got))
+	}
+	if got[0].foreign {
+		t.Errorf("resolved to the foreign replica %q; the local scope must win", got[0].Project)
+	}
+}
