@@ -121,6 +121,107 @@ func TestSearchHitsFilters(t *testing.T) {
 	}
 }
 
+// seedScopedCorpus builds a corpus that spans projects and sources, which is
+// what the one store looks like:
+//
+//	ledger  (project "ledger",  source "claude"): "needle in the ledger"
+//	billing (project "billing", source "claude"): "needle in billing"
+//	rollout (project "billing", source "codex"):  "needle in the rollout"
+//	nolabel (no project, no source):              "needle with no label"
+func seedScopedCorpus(t *testing.T) *sql.DB {
+	t.Helper()
+	con, _ := storetest.NewDB(t)
+	rows := []struct {
+		id, project, source, text string
+	}{
+		{"ledger", "ledger", "claude", "needle in the ledger"},
+		{"billing", "billing", "claude", "needle in billing"},
+		{"rollout", "billing", "codex", "needle in the rollout"},
+		{"nolabel", "", "", "needle with no label"},
+	}
+	for i, r := range rows {
+		storetest.InsertSession(t, con, storetest.Session{
+			ID: r.id, MessageCount: 1, Project: r.project, SourceTool: r.source})
+		storetest.InsertMessage(t, con, storetest.Message{
+			SessionID: r.id, Role: "user", Content: r.text,
+			TS: float64(100 * (i + 1)), ISO: "2026-01-01T10:00:00Z", UUID: "uuid-" + r.id})
+	}
+	return con
+}
+
+func TestSearchHitsScopeFilters(t *testing.T) {
+	con := seedScopedCorpus(t)
+
+	// No scope set searches every project — including the rows that carry no
+	// label at all, which is the whole point of the default being empty.
+	hits, err := store.SearchHits(con, "needle", store.Filter{}, store.SortRelevance, 10)
+	if err != nil {
+		t.Fatalf("SearchHits: %v", err)
+	}
+	if len(hits) != 4 {
+		t.Fatalf("unscoped = %d (%v), want all 4", len(hits), hitSessions(hits))
+	}
+
+	// One project narrows to that project's sessions.
+	hits, _ = store.SearchHits(con, "needle", store.Filter{Projects: []string{"ledger"}}, store.SortRelevance, 10)
+	if len(hits) != 1 || hits[0].SessionID != "ledger" {
+		t.Errorf("one project = %v, want [ledger]", hitSessions(hits))
+	}
+
+	// Several projects union, and one project holding two sessions returns both.
+	hits, _ = store.SearchHits(con, "needle", store.Filter{Projects: []string{"ledger", "billing"}}, store.SortNewest, 10)
+	if len(hits) != 3 {
+		t.Errorf("two projects = %v, want ledger + both billing rows", hitSessions(hits))
+	}
+	for _, h := range hits {
+		if h.SessionID == "nolabel" {
+			t.Error("an unlabeled row answered a project-scoped search")
+		}
+	}
+
+	// A project nobody has reads as empty, not as everything.
+	if hits, err := store.SearchHits(con, "needle", store.Filter{Projects: []string{"absent"}}, store.SortRelevance, 10); err != nil || len(hits) != 0 {
+		t.Errorf("unknown project = %v (%v), want empty", hitSessions(hits), err)
+	}
+
+	// Source narrows independently, and composes with project: "billing" holds
+	// one claude session and one codex session, so together they pick out one.
+	hits, _ = store.SearchHits(con, "needle", store.Filter{SourceTool: "codex"}, store.SortRelevance, 10)
+	if len(hits) != 1 || hits[0].SessionID != "rollout" {
+		t.Errorf("source filter = %v, want [rollout]", hitSessions(hits))
+	}
+	hits, _ = store.SearchHits(con, "needle", store.Filter{Projects: []string{"billing"}, SourceTool: "claude"}, store.SortRelevance, 10)
+	if len(hits) != 1 || hits[0].SessionID != "billing" {
+		t.Errorf("project+source = %v, want [billing]", hitSessions(hits))
+	}
+
+	// Anchors compose the same filters as hits.
+	anchors, err := store.SearchAnchors(con, "needle", store.Filter{Projects: []string{"ledger"}}, store.SortRelevance, 10)
+	if err != nil || len(anchors) != 1 || anchors[0].SessionID != "ledger" {
+		t.Errorf("scoped anchors = %v (%v), want the one ledger row", anchors, err)
+	}
+}
+
+func TestDistinctProjects(t *testing.T) {
+	con := seedScopedCorpus(t)
+
+	got, err := store.DistinctProjects(con)
+	if err != nil {
+		t.Fatalf("DistinctProjects: %v", err)
+	}
+	// Sorted, deduplicated, and the unlabeled row contributes nothing — there is
+	// no label there for a caller's pattern to match against.
+	want := []string{"billing", "ledger"}
+	if len(got) != len(want) {
+		t.Fatalf("DistinctProjects = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("DistinctProjects = %v, want %v", got, want)
+		}
+	}
+}
+
 func TestSearchHitsSortVariants(t *testing.T) {
 	con := seedSearchCorpus(t)
 
