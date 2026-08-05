@@ -755,6 +755,12 @@ func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status
 // owner's identity, while the local path keeps its derived db and local stamp.
 // Reindex + busy-lock semantics are identical to EnsureIndexed.
 func EnsureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions int, status IndexStatus, err error) {
+	nSessions, status, err = ensureIndexedTree(dbp, tdir, reindex, origin)
+	writeThroughConsolidated(dbp, err)
+	return nSessions, status, err
+}
+
+func ensureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions int, status IndexStatus, err error) {
 	if reindex {
 		if _, statErr := os.Stat(dbp); statErr == nil {
 			_ = os.Remove(dbp) // best-effort; ignore a remove error

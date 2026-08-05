@@ -37,6 +37,12 @@ type MessagesFunc func(source.Container) ([]model.Message, error)
 // own, distinctly-namespaced cache file, so one source's set is never
 // "incomplete" relative to another's rows.
 func EnsureIndexedContainers(dbp string, reindex bool, cs []source.Container, msgs MessagesFunc, sourceID, origin string) (nSessions int, status IndexStatus, err error) {
+	nSessions, status, err = ensureIndexedContainers(dbp, reindex, cs, msgs, sourceID, origin)
+	writeThroughConsolidated(dbp, err)
+	return nSessions, status, err
+}
+
+func ensureIndexedContainers(dbp string, reindex bool, cs []source.Container, msgs MessagesFunc, sourceID, origin string) (nSessions int, status IndexStatus, err error) {
 	if reindex {
 		if _, statErr := os.Stat(dbp); statErr == nil {
 			_ = os.Remove(dbp) // best-effort; ignore a remove error
