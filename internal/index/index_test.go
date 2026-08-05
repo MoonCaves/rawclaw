@@ -860,3 +860,76 @@ func TestTrigramBatchIsAtomic(t *testing.T) {
 		t.Errorf("substring index holds %d rows the watermark cannot account for, want 0 — the batch did not roll back", n)
 	}
 }
+
+// TestTrigramSurvivesRebuildByAnOlderBinary pins the cross-version hazard the
+// done marker creates. A binary that predates the substring index rebuilds a db
+// by dropping messages — taking the trigram triggers with it — but leaves the
+// trigram table and the done marker behind, because its drop list never named
+// them. The next run by a current binary must not believe that marker: it is
+// vouching for an index full of rows whose messages are gone, and re-created
+// triggers would collide with those rows on a reused id.
+func TestTrigramSurvivesRebuildByAnOlderBinary(t *testing.T) {
+	con, _ := openTestDB(t)
+	if _, err := con.Exec(
+		`INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES
+		   ('ledger','user','the reconciliation finished cleanly',100,'2026-01-01T10:00:00Z','uuid-1');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureSchema(con, "claude"); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	// What an older binary's Rebuild leaves behind: messages and its triggers
+	// gone, the trigram table and its marker untouched.
+	if _, err := con.Exec(`
+		DROP TRIGGER messages_tri_ai;
+		DROP TRIGGER messages_tri_ad;
+		DROP TRIGGER messages_tri_au;
+		DELETE FROM messages;`); err != nil {
+		t.Fatal(err)
+	}
+	if n := trigramRowCount(t, con); n != 1 {
+		t.Fatalf("setup: orphaned index holds %d rows, want the 1 stale row", n)
+	}
+
+	// A current binary takes over and re-indexes, reusing id 1.
+	if err := EnsureSchema(con, "claude"); err != nil {
+		t.Fatalf("EnsureSchema after an older binary's rebuild: %v", err)
+	}
+	if _, err := con.Exec(
+		`INSERT INTO messages(id,session_id,role,content,ts,ts_iso,uuid) VALUES
+		   (1,'ledger','user','the settlement finished cleanly',200,'2026-01-02T10:00:00Z','uuid-2');`); err != nil {
+		t.Fatalf("re-indexing a reused id must not collide with a stale index entry: %v", err)
+	}
+
+	if n := trigramProbeCount(t, con, `"nciliat"`); n != 0 {
+		t.Errorf("stale entry for the dropped message is still indexed (%d rows), want 0", n)
+	}
+	if n := trigramProbeCount(t, con, `"tlement"`); n != 1 {
+		t.Errorf("re-indexed message = %d rows in the substring index, want 1", n)
+	}
+}
+
+// trigramRowCount counts every entry in the substring index, stale ones
+// included — a plain COUNT(*) rather than a probe.
+func trigramRowCount(t *testing.T, con *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages_fts_trigram").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// trigramProbeCount counts the entries the substring index holds for a probe,
+// reading the index directly so an entry left behind for an already-deleted
+// message is visible — a join back to messages would hide exactly that.
+func trigramProbeCount(t *testing.T, con *sql.DB, probe string) int {
+	t.Helper()
+	var n int
+	if err := con.QueryRow(
+		"SELECT COUNT(*) FROM messages_fts_trigram WHERE messages_fts_trigram MATCH ?", probe).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
