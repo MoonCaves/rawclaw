@@ -467,3 +467,59 @@ func TestSessionLastActivityEmptyWhenTailIsAllMachinery(t *testing.T) {
 		t.Errorf("Last = %q, want empty (tail is all machinery)", rows[0].Last)
 	}
 }
+
+// TestSessionLastActivitySkipsRedactedThinking: a model that withholds its
+// reasoning still emits a thinking block, and the parser writes the label with
+// an empty body. That row survives the machinery strip — it is model output,
+// not a tool run or an injected envelope — so it used to caption a session
+// "now → [THINKING]", which says nothing.
+//
+// This is the common shape, not an edge case: about 99.5% of thinking records
+// in the live stores are bare. The fix filters on emptiness rather than on
+// block type, so thinking that carries text still captions the row — asserted
+// in the second half of this test, which is what keeps the fix from
+// overreaching into "hide all reasoning".
+func TestSessionLastActivitySkipsRedactedThinking(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	lines := []string{
+		`{"type":"user","uuid":"33333333-0000-0000-0000-000000000001","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"reconcile the spec"}}`,
+		`{"type":"assistant","uuid":"33333333-0000-0000-0000-000000000002","timestamp":"2026-06-01T10:05:00Z","message":{"role":"assistant","content":"the eight commits are on the branch"}}`,
+		`{"type":"assistant","uuid":"33333333-0000-0000-0000-000000000003","timestamp":"2026-06-01T10:06:00Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":""}]}}`,
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sessredact.jsonl"),
+		[]byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rows := Browse(dir, 10, "", "")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(rows))
+	}
+	if strings.Contains(rows[0].Last, "[THINKING]") {
+		t.Errorf("Last = %q, captioned the session with a bare block label", rows[0].Last)
+	}
+	if !strings.Contains(rows[0].Last, "eight commits are on the branch") {
+		t.Errorf("Last = %q, want the newest message that actually says something", rows[0].Last)
+	}
+
+	// The other half of the contract: reasoning WITH text is real activity and
+	// must still caption the row. Without this, the fix above would pass just as
+	// well if it hid every thinking block.
+	dir2 := t.TempDir()
+	lines2 := []string{
+		`{"type":"user","uuid":"44444444-0000-0000-0000-000000000001","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"reconcile the spec"}}`,
+		`{"type":"assistant","uuid":"44444444-0000-0000-0000-000000000002","timestamp":"2026-06-01T10:05:00Z","message":{"role":"assistant","content":"an older reply"}}`,
+		`{"type":"assistant","uuid":"44444444-0000-0000-0000-000000000003","timestamp":"2026-06-01T10:06:00Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"the cross-database merge is unsound"}]}}`,
+	}
+	if err := os.WriteFile(filepath.Join(dir2, "sessthink.jsonl"),
+		[]byte(strings.Join(lines2, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rows2 := Browse(dir2, 10, "", "")
+	if len(rows2) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(rows2))
+	}
+	if !strings.Contains(rows2[0].Last, "cross-database merge is unsound") {
+		t.Errorf("Last = %q, want the populated thinking block", rows2[0].Last)
+	}
+}
