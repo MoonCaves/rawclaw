@@ -938,6 +938,7 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 	if len(cands) == 0 {
 		cands = collect(false)
 	}
+	cands = coalesceSameSession(cands)
 
 	switch len(cands) {
 	case 0:
@@ -948,6 +949,61 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 	default:
 		return "", "", "", &ErrAmbiguousSession{Prefix: session8, Candidates: cands}
 	}
+}
+
+// coalesceSameSession collapses candidates that share the SAME full session id
+// down to one row, because they ARE one session.
+//
+// This is not a prefix collision. Continue a session from a different directory
+// and the agent writes a second transcript under the new project while keeping
+// the session id, so the scope sweep finds a row in each project. Delete the
+// first directory and durable retention keeps its row with a missing_since
+// watermark. Either way it is one conversation, and reporting it as an
+// ambiguity was unhelpable advice: the error said "give a longer prefix" when
+// the full ids are byte-identical and no prefix can ever separate them, leaving
+// the session unreachable to read, outline and tag.
+//
+// Which row represents it: prefer one whose backing source file is still live
+// over a retained stub, then the one holding more messages. That picks the
+// current transcript rather than the abandoned half. Rows for genuinely
+// DIFFERENT ids are left alone, so a real prefix collision still raises.
+func coalesceSameSession(cands []sessionCand) []sessionCand {
+	if len(cands) < 2 {
+		return cands
+	}
+	type ranked struct {
+		cand  sessionCand
+		live  bool
+		count int
+	}
+	best := make(map[string]ranked, len(cands))
+	order := make([]string, 0, len(cands))
+
+	for _, c := range cands {
+		live, count := false, 0
+		if con, err := store.ConnectRO(c.dbp); err == nil {
+			if mc, isLive, ok := store.SessionRowQuality(con, c.SessionID); ok {
+				live, count = isLive, mc
+			}
+			_ = con.Close()
+		}
+		prev, seen := best[c.SessionID]
+		if !seen {
+			order = append(order, c.SessionID)
+			best[c.SessionID] = ranked{cand: c, live: live, count: count}
+			continue
+		}
+		// A live source always beats a retained stub; among equals, more messages wins.
+		if (live && !prev.live) || (live == prev.live && count > prev.count) {
+			best[c.SessionID] = ranked{cand: c, live: live, count: count}
+		}
+	}
+
+	out := make([]sessionCand, 0, len(order))
+	for _, sid := range order {
+		out = append(out, best[sid].cand)
+	}
+	return out
 }
 
 // LocateSession resolves a session8 prefix to its (db path, full session id)
@@ -1313,7 +1369,7 @@ const topicsEmptyNote = "no topics tagged yet — a session is tagged via the ra
 // Ordering is global on purpose. Each project is a separate SQLite file, so the
 // sweep queries them one at a time; appending each project's hits in iteration
 // order (what this did before) meant the first project opened owned the top of
-// the list no matter how weak its matches were. Observed on a real corpus:
+// the list no matter how weak its matches were. Observed on a large real-world corpus:
 // `topics "adversarial"` led with two segments that merely mention the word in a
 // summary, while sixteen segments LABELLED "Adversarial …" sat below them —
 // purely because they lived in a project that sorted later. Each hit now carries

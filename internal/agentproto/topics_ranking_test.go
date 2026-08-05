@@ -14,7 +14,7 @@ import (
 // Each project is its own SQLite file, so Topics sweeps them one at a time.
 // It used to append each project's hits in iteration order, which meant the
 // FIRST project swept owned the top of the list however weak its matches were.
-// Observed on a real corpus 2026-08-02: `topics "adversarial"` led with two
+// Observed on a large real-world corpus: `topics "adversarial"` led with two
 // segments that only mention the word inside a summary, while sixteen segments
 // LABELLED "Adversarial …" sat below them — purely because those lived in a
 // project that sorted later.
@@ -39,8 +39,7 @@ func TestTopicsRanksAcrossProjectsNotByScopeOrder(t *testing.T) {
 	tagProject(t, weakProj, "sessweak", weakUUID,
 		"Release checklist for the next tag",
 		"Walked the release checklist end to end, re-read the tagging conventions, and "+
-			"drafted the notes summarizing the wrapper design so it could get an "+
-			"adversarial read later.")
+			"drafted the notes summarizing the wrapper design so it could get an adversarial read later.")
 
 	// Strong: the query word IS the label.
 	tagProject(t, strongProj, "sessstrong", strongUUID,
