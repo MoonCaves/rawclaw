@@ -96,6 +96,45 @@ type ScopeReport struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+// Warning codes. A code is the stable identity of an advisory — the string an
+// agent branches on — so the human sentence beside it can be reworded without
+// breaking a caller.
+const (
+	// WarnRecencySkew: relevance put an older hit on top while a much newer match
+	// exists. Facts: newest (date of the freshest match).
+	WarnRecencySkew = "recency_skew"
+	// WarnBroadQuery: the terms are corpus-common, so the hit that matters is
+	// buried under incidental mentions. Facts: matches, matches_is_lower_bound.
+	WarnBroadQuery = "broad_query"
+	// WarnCurrentTurnExcluded: candidates from the caller's own live turn were
+	// withheld. Facts: excluded (how many).
+	WarnCurrentTurnExcluded = "current_turn_excluded"
+	// WarnScopeIncomplete: at least one project was not searched, or was served
+	// from a possibly-stale cached index. Facts: scopes, incomplete, errored, stale.
+	WarnScopeIncomplete = "scope_incomplete"
+	// WarnProjectSpread: the hits span several projects, so the set is wider than
+	// one context. Facts: projects, sample.
+	WarnProjectSpread = "project_spread"
+	// WarnRawHistory: the standing reminder that these are raw transcripts, not
+	// current truth. No facts — it is a property of the corpus, not of this query.
+	WarnRawHistory = "raw_history"
+)
+
+// Warning is one advisory carried as data rather than prose (the "warnings are
+// data, not prose" doctrine recorded in our own prior-art survey, from CASS's
+// robot mode).
+//
+// Code is what an agent branches on. Facts carries the measurement that made the
+// warning fire, so a caller can apply its own threshold instead of inheriting
+// ours. Message is the same statement in English, and exists so the text
+// renderer holds no copy of its own — the two surfaces cannot drift because
+// there is only one string.
+type Warning struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Facts   map[string]any `json:"facts,omitempty"`
+}
+
 // SearchEnvelope wraps the ranked results with the per-scope completeness
 // report. Complete is false if any scope was skipped, served from a stale
 // fallback, or had matches the limit/fetch window hid.
@@ -118,16 +157,13 @@ type SearchEnvelope struct {
 	HasMore           bool   `json:"has_more"`
 	NextCommand       string `json:"next_command,omitempty"`
 
-	// RecencyHint fires in the default relevance order when the freshest match is
-	// well newer than the top-ranked one — so a buried "what just happened" result
-	// announces itself instead of staying hidden behind relevance.
-	RecencyHint string `json:"recency_hint,omitempty"`
-
-	// NarrowHint fires when a query matches MANY conversations — the terms are
-	// corpus-common, so the important/derived hit is buried under incidental
-	// mentions (relevance ranks by token match, not importance). Steers to a
-	// distinctive token + scoping, and warns against skipping on the snippet alone.
-	NarrowHint string `json:"narrow_hint,omitempty"`
+	// Warnings carries every advisory the search wants to raise, as data. Each
+	// entry states a code, the fact that triggered it, and the human line — so an
+	// agent can branch on Code instead of pattern-matching English, and the text
+	// renderer has nothing to decide beyond printing what is present. Empty means
+	// the search had nothing to warn about, which is the common case for a narrow
+	// query with clean hits.
+	Warnings []Warning `json:"warnings,omitempty"`
 
 	// ExcludedCurrentTurn counts the candidates withheld as the caller's own live
 	// turn (SearchOpts.CurrentSession). Reported rather than dropped quietly: an
@@ -445,54 +481,156 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		nextCmd = fmt.Sprintf("rawclaw %q --limit %d", rawQuery, wider)
 	}
 
-	// Recency hint: in the default relevance order, if the freshest match is well
-	// newer than the top-ranked hit, recency is buried — surface it and offer the
-	// one flag that reorders, rather than silently ranking by relevance alone.
-	recencyHint := ""
-	if opts.Sort == "" && len(results) > 0 {
-		newest := ""
-		for _, r := range all {
-			if r.ISO > newest {
-				newest = r.ISO
-			}
+	// Newest match in the whole candidate set, for the recency-skew warning below.
+	newestISO := ""
+	for _, r := range all {
+		if r.ISO > newestISO {
+			newestISO = r.ISO
 		}
-		if tn, err := time.Parse(time.RFC3339, newest); err == nil {
-			if tt, err2 := time.Parse(time.RFC3339, results[0].ISO); err2 == nil && tn.Sub(tt) > 24*time.Hour {
-				recencyHint = fmt.Sprintf("relevance-ranked; newest match is %s — add --sort newest for latest-first", newest[:10])
-			}
-		}
-	}
-	// Drowning steer (F4): a query matching many conversations has terms too common —
-	// the important/derived hit is buried under incidental mentions, and relevance
-	// ranks by token match, not importance. Steer to a distinctive token + scoping,
-	// and tell the agent NOT to skip on the snippet alone (the snippet hides which
-	// hit actually matters).
-	// Drowning steer: too-broad query → the derived/important hit is buried under
-	// incidental mentions (relevance ranks by token match, not importance). Grounded
-	// in the github-search atlas's universal breadth recipe: narrow with SCOPE FILTERS
-	// first (the workhorse — path/project/date), keep to a few distinctive/literal
-	// terms (atlas "<=3 terms for signal"), and don't judge on the snippet alone.
-	// Fires on a real boundary — the fetch ceiling — OR many distinct matches.
-	narrowHint := ""
-	if hitCeiling || total >= 20 {
-		narrowHint = "broad query — scope it first: --include-path <re> / --this-project / --since <date>; " +
-			"then keep to a few distinctive terms (a filename, flag, error, or \"quoted phrase\") — " +
-			"3 or fewer. Open a ref to judge; the snippet hides which hit is the important one."
 	}
 
 	return SearchEnvelope{
-		Results:             results,
-		Scopes:              reports,
-		Complete:            scopesComplete(reports) && !hasMore,
-		Count:               len(results),
-		TotalMatches:        total,
-		TotalIsLowerBound:   hitCeiling,
-		HasMore:             hasMore,
-		NextCommand:         nextCmd,
-		RecencyHint:         recencyHint,
-		NarrowHint:          narrowHint,
+		Results:           results,
+		Scopes:            reports,
+		Complete:          scopesComplete(reports) && !hasMore,
+		Count:             len(results),
+		TotalMatches:      total,
+		TotalIsLowerBound: hitCeiling,
+		HasMore:           hasMore,
+		NextCommand:       nextCmd,
+		Warnings: buildWarnings(warningInputs{
+			results:     results,
+			reports:     reports,
+			sort:        opts.Sort,
+			newestISO:   newestISO,
+			total:       total,
+			hitCeiling:  hitCeiling,
+			droppedTurn: droppedTurn,
+		}),
 		ExcludedCurrentTurn: droppedTurn,
 	}
+}
+
+// warningInputs is the measured state buildWarnings decides from. Passing one
+// struct keeps the decision in a single pure function that a test can drive
+// directly, rather than spreading conditions through the envelope literal.
+type warningInputs struct {
+	results     []SearchRef
+	reports     []ScopeReport
+	sort        string
+	newestISO   string
+	total       int
+	hitCeiling  bool
+	droppedTurn int
+}
+
+// broadQueryMatches is the distinct-match count at which a query is called
+// broad. At this width the hit that matters is buried under incidental
+// mentions, because relevance ranks by token match and not by importance.
+const broadQueryMatches = 20
+
+// recencySkewGap is how far the freshest match must lead the top-ranked hit
+// before relevance ordering is worth flagging. A day is the point where "newer"
+// stops being noise inside one working session and starts being a different
+// piece of history.
+const recencySkewGap = 24 * time.Hour
+
+// buildWarnings turns measured facts into the envelope's advisories. Ordering is
+// fixed and meaningful: what changes what the agent should DO next comes first,
+// what qualifies the result set comes second, and the standing corpus caveat
+// comes last. Nothing here is unconditional except that caveat — a narrow query
+// with clean hits carries no advisories at all, which is the point.
+func buildWarnings(in warningInputs) []Warning {
+	var out []Warning
+
+	// Recency skew: in the default relevance order, a much newer match can sit
+	// below an older one. Say so and name the one flag that reorders, rather than
+	// letting a "what just happened" result stay buried.
+	if in.sort == "" && len(in.results) > 0 && in.newestISO != "" {
+		tn, err := time.Parse(time.RFC3339, in.newestISO)
+		tt, err2 := time.Parse(time.RFC3339, in.results[0].ISO)
+		if err == nil && err2 == nil && tn.Sub(tt) > recencySkewGap {
+			out = append(out, Warning{
+				Code:  WarnRecencySkew,
+				Facts: map[string]any{"newest": in.newestISO[:10]},
+				Message: fmt.Sprintf("relevance-ranked; newest match is %s — add --sort newest for latest-first",
+					in.newestISO[:10]),
+			})
+		}
+	}
+
+	// Broad query: grounded in the github-search atlas's breadth recipe — narrow
+	// with SCOPE FILTERS first (path/project/date are the workhorses), then keep
+	// to a few distinctive literal terms, and judge by opening a ref rather than
+	// by the snippet, which hides which hit is the important one. Fires on a real
+	// boundary (the fetch ceiling) or on many distinct matches.
+	if in.hitCeiling || in.total >= broadQueryMatches {
+		out = append(out, Warning{
+			Code: WarnBroadQuery,
+			Facts: map[string]any{
+				"matches":                in.total,
+				"matches_is_lower_bound": in.hitCeiling,
+			},
+			Message: "broad query — scope it first: --include-path <re> / --this-project / --since <date>; " +
+				"then keep to a few distinctive terms (a filename, flag, error, or \"quoted phrase\") — " +
+				"3 or fewer. Open a ref to judge; the snippet hides which hit is the important one.",
+		})
+	}
+
+	// Current-turn exclusion: reported rather than dropped quietly, so an agent
+	// that knows a record was withheld can ask for it instead of seeing a hole.
+	if in.droppedTurn > 0 {
+		out = append(out, Warning{
+			Code:    WarnCurrentTurnExcluded,
+			Facts:   map[string]any{"excluded": in.droppedTurn},
+			Message: currentTurnLine(in.droppedTurn),
+		})
+	}
+
+	// Incompleteness stays unconditional: whenever a scope was skipped or served
+	// stale, the result MUST NOT read as complete. This is the one warning whose
+	// absence would be a correctness bug rather than a missing hint.
+	errored, stale := 0, 0
+	for _, s := range in.reports {
+		switch s.Status {
+		case ScopeSkippedError:
+			errored++
+		case ScopeStaleFallback:
+			stale++
+		}
+	}
+	if skipped := errored + stale; skipped > 0 {
+		out = append(out, Warning{
+			Code: WarnScopeIncomplete,
+			Facts: map[string]any{
+				"scopes":     len(in.reports),
+				"incomplete": skipped,
+				"errored":    errored,
+				"stale":      stale,
+			},
+			Message: fmt.Sprintf("%d of %d projects incomplete (%d error, %d stale) — results may be incomplete",
+				skipped, len(in.reports), errored, stale),
+		})
+	}
+
+	// Project spread: a factual signal, not a heuristic — when the hits cross
+	// project boundaries the set is wider than one context, and the narrowing
+	// flags are worth naming.
+	if projects, sample := projectSpread(in.results); projects >= 2 {
+		out = append(out, Warning{
+			Code:  WarnProjectSpread,
+			Facts: map[string]any{"projects": projects, "sample": sample},
+			Message: fmt.Sprintf("matches span %d projects: %s — narrow with --this-project or read a specific ref.",
+				projects, strings.Join(sample, ", ")),
+		})
+	}
+
+	// The standing caveat, last, and only when there is history to caveat: with
+	// no results there is nothing to verify against current state.
+	if len(in.results) > 0 {
+		out = append(out, Warning{Code: WarnRawHistory, Message: freshnessNote})
+	}
+	return out
 }
 
 // SearchAndRender runs Search and writes the result to w: the agent envelope as
@@ -1403,13 +1541,13 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		// shows the withheld rows. This is also the case where staying silent
 		// would be a lie — "No matches" over a set we chose not to return.
 		if env.ExcludedCurrentTurn > 0 {
-			fmt.Fprintf(w, "No matches outside the turn you are in now — %s\n", currentTurnLine(env.ExcludedCurrentTurn))
+			fmt.Fprintf(w, "No matches outside the turn you are in now — %d record(s) of it matched and were withheld; the rest of that session was searched.\n", env.ExcludedCurrentTurn)
 			fmt.Fprintln(w, "To see them anyway, re-run with --current-session off.")
-			renderScopeFooter(w, env)
+			renderWarnings(w, env.Warnings, WarnCurrentTurnExcluded)
 			return
 		}
 		fmt.Fprintln(w, "No matches. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.")
-		renderScopeFooter(w, env)
+		renderWarnings(w, env.Warnings)
 		return
 	}
 	fmt.Fprintf(w, "%d conversation(s) matching '%s' %s:\n\n", len(env.Results), query, scopeLabel)
@@ -1452,25 +1590,27 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		}
 		fmt.Fprintf(w, "showing %d of %s matches — see more: %s\n", env.Count, total, env.NextCommand)
 	}
-	if env.RecencyHint != "" {
-		fmt.Fprintf(w, "note: %s\n", env.RecencyHint)
-	}
-	if env.NarrowHint != "" {
-		fmt.Fprintf(w, "note: %s\n", env.NarrowHint)
-	}
-	if env.ExcludedCurrentTurn > 0 {
-		fmt.Fprintf(w, "note: %s\n", currentTurnLine(env.ExcludedCurrentTurn))
-	}
-	renderScopeFooter(w, env)
+	// Every footer line comes from the warnings the envelope already carries, in
+	// the order it carries them. The renderer holds no conditions of its own —
+	// that is what keeps the text and --json surfaces from drifting.
+	renderWarnings(w, env.Warnings)
+}
 
-	// Cheap disambiguation: when the matches span 2+ distinct projects, say so and
-	// point at the narrowing flags — a factual spread signal, no new heuristic.
-	if line := projectSpreadLine(env.Results); line != "" {
-		fmt.Fprintln(w, line)
+// renderWarnings prints one "note:" line per warning, skipping any code in
+// suppress. Suppression exists for the empty-result path, where a warning has
+// already been stated in full as the primary message and repeating it as a
+// footnote would read as two separate findings.
+func renderWarnings(w io.Writer, ws []Warning, suppress ...string) {
+	skip := make(map[string]struct{}, len(suppress))
+	for _, c := range suppress {
+		skip[c] = struct{}{}
 	}
-	// Freshness: the last footer line, always — these are raw transcripts, not the
-	// current state of the world.
-	fmt.Fprintln(w, freshnessNote)
+	for _, warn := range ws {
+		if _, dup := skip[warn.Code]; dup {
+			continue
+		}
+		fmt.Fprintf(w, "note: %s\n", warn.Message)
+	}
 }
 
 // currentTurnLine states what the current-turn exclusion withheld. It names the
@@ -1481,12 +1621,16 @@ func currentTurnLine(n int) string {
 }
 
 // freshnessNote is the standing reminder that search/read results are raw session
-// history, not current truth — appended as the last footer line of both renderers.
-const freshnessNote = "note: raw session history — verify against current state before acting."
+// history, not current truth. Search carries it as the WarnRawHistory warning;
+// Read prints it directly. It holds no "note: " prefix of its own — the prefix
+// belongs to whichever renderer emits it, so the string can be reused as a
+// warning Message without doubling up.
+const freshnessNote = "raw session history — verify against current state before acting."
 
-// projectSpreadLine returns a one-line "matches span N projects: …" hint when the
-// results cover 2+ distinct projects (listing up to 5), or "" for a single project.
-func projectSpreadLine(results []SearchRef) string {
+// projectSpread returns how many distinct projects the results cover and a
+// sample of up to five of their names, in first-seen order. 0 or 1 project means
+// there is no spread worth reporting.
+func projectSpread(results []SearchRef) (int, []string) {
 	seen := map[string]struct{}{}
 	var distinct []string
 	for _, r := range results {
@@ -1496,38 +1640,11 @@ func projectSpreadLine(results []SearchRef) string {
 		seen[r.Project] = struct{}{}
 		distinct = append(distinct, r.Project)
 	}
-	if len(distinct) < 2 {
-		return ""
+	sample := distinct
+	if len(sample) > 5 {
+		sample = sample[:5]
 	}
-	shown := distinct
-	if len(shown) > 5 {
-		shown = shown[:5]
-	}
-	return fmt.Sprintf("matches span %d projects: %s — narrow with --this-project or read a specific ref.",
-		len(distinct), strings.Join(shown, ", "))
-}
-
-// renderScopeFooter prints the incompleteness footer when any scope was skipped
-// or served from a stale fallback.
-func renderScopeFooter(w io.Writer, env SearchEnvelope) {
-	if env.Complete {
-		return
-	}
-	errored, stale := 0, 0
-	for _, s := range env.Scopes {
-		switch s.Status {
-		case ScopeSkippedError:
-			errored++
-		case ScopeStaleFallback:
-			stale++
-		}
-	}
-	skipped := errored + stale
-	if skipped == 0 {
-		return
-	}
-	fmt.Fprintf(w, "note: %d of %d projects incomplete (%d error, %d stale) — results may be incomplete\n",
-		skipped, len(env.Scopes), errored, stale)
+	return len(distinct), sample
 }
 
 // fmtChars renders a char count compactly: 1800 → "1.8k", 950 → "950".
@@ -1594,7 +1711,7 @@ func renderRead(w io.Writer, r *ReadResult) {
 		fmt.Fprintf(w, "\n  keep reading:  rawclaw read %s --more   (or --around N to shift)\n", r.ReadRef)
 	}
 	// Freshness: the last footer line, always.
-	fmt.Fprintln(w, freshnessNote)
+	fmt.Fprintf(w, "note: %s\n", freshnessNote)
 }
 
 // renderOutline prints the human-readable outline output.
