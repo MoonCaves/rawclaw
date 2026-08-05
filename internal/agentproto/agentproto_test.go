@@ -419,21 +419,51 @@ func TestRenderSearch(t *testing.T) {
 		}
 	})
 	t.Run("incomplete scope footer", func(t *testing.T) {
+		// The footer is now DERIVED once, into the envelope's warnings, and the
+		// renderer only prints what it is given — so this drives the real path
+		// (buildWarnings → renderSearch) rather than a hand-written envelope that
+		// could disagree with what a live search would produce.
+		reports := []ScopeReport{
+			{Project: "p", Status: ScopeSearched},
+			{Project: "q", Status: ScopeSkippedError, Detail: "boom"},
+			{Project: "r", Status: ScopeStaleFallback},
+		}
+		results := []SearchRef{{Project: "p", SessionID: "aaaa", ISO: "2026", Snippet: "s", ReadRef: "aaaa:9f"}}
+		warns := buildWarnings(warningInputs{results: results, reports: reports})
+
 		var buf bytes.Buffer
 		renderSearch(&buf, SearchEnvelope{
 			Complete: false,
-			Results:  []SearchRef{{Project: "p", SessionID: "aaaa", ISO: "2026", Snippet: "s", ReadRef: "aaaa:9f"}},
-			Scopes: []ScopeReport{
-				{Project: "p", Status: ScopeSearched},
-				{Project: "q", Status: ScopeSkippedError, Detail: "boom"},
-				{Project: "r", Status: ScopeStaleFallback},
-			},
+			Results:  results,
+			Scopes:   reports,
+			Warnings: warns,
 		}, "kw", "across all projects")
-		out := buf.String()
-		if !strings.Contains(out, "note: 2 of 3 projects incomplete (1 error, 1 stale)") {
+		if out := buf.String(); !strings.Contains(out, "note: 2 of 3 projects incomplete (1 error, 1 stale)") {
 			t.Errorf("missing incompleteness footer: %q", out)
 		}
+		// ...and the same fact is available as data, not only as that sentence.
+		w := findWarning(warns, WarnScopeIncomplete)
+		if w == nil {
+			t.Fatalf("no %s warning built from %d reports", WarnScopeIncomplete, len(reports))
+		}
+		for key, want := range map[string]any{"scopes": 3, "incomplete": 2, "errored": 1, "stale": 1} {
+			if got := w.Facts[key]; got != want {
+				t.Errorf("facts[%q] = %v, want %v", key, got, want)
+			}
+		}
 	})
+}
+
+// findWarning returns the warning carrying code, or nil. Tests assert on the
+// code they care about rather than on slice position, so adding a warning
+// elsewhere in the order does not break unrelated tests.
+func findWarning(ws []Warning, code string) *Warning {
+	for i := range ws {
+		if ws[i].Code == code {
+			return &ws[i]
+		}
+	}
+	return nil
 }
 
 func TestRenderRead(t *testing.T) {
