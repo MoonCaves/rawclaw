@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -991,25 +992,13 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	// DEFAULT (agent envelope) — a bare `rawclaw "query"` IS the search:
 	// ranked refs + never-silent envelope. Search is the default verb.
 	// Org-wide unless --this-project. Path include/exclude is applied inside
-	// agentproto.Search (via opts), so the unfiltered this/all scope is passed here.
-	var scope []view.Scope
-	label := ""
-	if o.ThisProject {
-		sc, td, ok := thisScope(w, o)
-		if !ok {
-			return nil
-		}
-		scope = sc
-		label = "on " + paths.ProjectLabel(td)
-	} else {
-		scope = allScope(ctx, o.Source, o.Reindex)
-		label = "across all projects"
-	}
-	var emb embed.Embedder
-	if !o.NoVector {
-		emb = adapters.GetEmbedder()
-	}
-	return agentproto.SearchAndRender(w, q, scope, agentproto.SearchOpts{
+	// agentproto.Search (via opts).
+	//
+	// The scope is passed as a FUNCTION, not a list: the one consolidated store
+	// answers this search with a single query, and enumerating every project to
+	// build a scope list it would never use costs seconds of directory walking and
+	// git probing. The function is called only if the store cannot answer.
+	sopts := agentproto.SearchOpts{
 		Limit:            o.Limit,
 		Role:             o.Role,
 		Sort:             o.Sort,
@@ -1020,7 +1009,64 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		MinMessages:      o.MinMessages,
 		IncludePath:      o.IncludePath,
 		ExcludePath:      o.ExcludePath,
-	}, emb, label, o.JSON)
+		Source:           o.Source,
+	}
+	label := ""
+	if o.ThisProject {
+		sc, td, ok := thisScope(w, o)
+		if !ok {
+			return nil
+		}
+		// --this-project narrows the one store by project LABEL. The label is the
+		// same paths.ProjectLabel value the indexer stamps on the row, so it matches
+		// the column exactly; the scope list still travels for the fallback.
+		sopts.Project = paths.ProjectLabel(td)
+		sopts.ScopeFallback = func() []view.Scope { return sc }
+		label = "on " + paths.ProjectLabel(td)
+	} else {
+		sopts.ScopeFallback = func() []view.Scope { return allScope(ctx, o.Source, o.Reindex) }
+		label = "across all projects"
+	}
+
+	// Keep the project you are working in searchable. The one store is fed by
+	// indexing runs, and a search that no longer indexes anything would never see
+	// the conversation happening right now. Refreshing the CURRENT project alone
+	// costs one project's file scan instead of every project's, and it is the one
+	// whose newest sessions a search is most likely to be asking about.
+	refreshThisProject(o)
+
+	var emb embed.Embedder
+	if !o.NoVector {
+		emb = adapters.GetEmbedder()
+	}
+
+	// An explicit --reindex asks for the transcripts to be re-read, which only the
+	// per-project path does; hand it a real scope so the request is honored rather
+	// than answered from a store it never rebuilt.
+	var scope []view.Scope
+	if o.Reindex {
+		scope = sopts.ScopeFallback()
+		if len(scope) == 0 {
+			scope = []view.Scope{}
+		}
+	}
+	return agentproto.SearchAndRender(w, q, scope, sopts, emb, label, o.JSON)
+}
+
+// refreshThisProject indexes the project this command is running in, so a search
+// answered from the one store still sees the session happening right now. It is
+// advisory: a project with no transcript history, or an index that fails or is
+// locked, leaves the store as it was — the search still runs, it just answers
+// from what was already folded in. The indexing run's own write-through is what
+// carries the new rows into the store.
+func refreshThisProject(o *Options) {
+	td := resolveTDir(o.Dir, o.DirSet)
+	if td == "" || !isDir(td) {
+		return
+	}
+	if _, _, err := scopes.Resolve(view.Scope{Project: paths.ProjectLabel(td), TDir: td}, false); err != nil {
+		slog.Debug("search: current-project refresh failed", "project", paths.ProjectLabel(td), "err", err)
+	}
 }
 
 // runDebugSearch handles the --debug-search shape: a read-only LLM-free scoring
