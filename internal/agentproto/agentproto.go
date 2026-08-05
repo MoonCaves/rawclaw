@@ -392,7 +392,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	)
 
 	if scope == nil {
-		cands, reports, hitCeiling, storeNote, answered = searchOneStore(rawQuery, fetch, p, qvec, opts)
+		cands, reports, hitCeiling, storeNote, answered = searchOneStore(rawQuery, fetch, limit, p, qvec, opts)
 	}
 
 	if !answered {
@@ -541,7 +541,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 // produced the list.
 func searchOneStore(
 	rawQuery string,
-	fetch int,
+	fetch, limit int,
 	p retrieve.SearchParams,
 	qvec []float64,
 	opts SearchOpts,
@@ -566,12 +566,12 @@ func searchOneStore(
 	p.Projects = projects
 	p.SourceTool = opts.Source
 
-	rows := retrieve.MatchAnchors(con, rawQuery, fetch, p)
-	if len(rows) >= fetch {
-		// The single query filled its fetch window, so any total derived from these
-		// rows is a floor. Measured pre-fusion, like the fan-out does.
-		hitCeiling = true
-	}
+	rows, exhausted := storeAnchors(con, rawQuery, fetch, limit, p)
+	// Unless the widening PROVED there was nothing more to find, the totals
+	// derived from these rows are a floor: the window stopped where it had enough
+	// conversations, not where the matches ran out. Measured pre-fusion, as the
+	// fan-out measures its own ceiling.
+	hitCeiling = !exhausted
 	if qvec != nil {
 		rows = semantic.Fuse(con, rows, qvec, fetch, p.IncludeSubagents)
 	}
@@ -608,6 +608,64 @@ func searchOneStore(
 		}
 	}
 	return cands, reports, hitCeiling, "", true
+}
+
+// maxStoreWindow caps how far storeAnchors will widen its candidate window. It
+// is a bound on work, not on recall: the widening stops on its own as soon as a
+// wider window stops finding anything new, and on this corpus a query exhausts
+// its matches long before the cap. The cap exists so a term matching a large
+// fraction of every message can never turn one search into an unbounded read.
+const maxStoreWindow = 20000
+
+// storeAnchors runs the anchor query against the one store, widening its
+// candidate window until the window holds enough DISTINCT conversations to fill
+// the caller's limit. It returns the anchors and the window that produced them.
+//
+// The widening exists because one query over the whole corpus spends its
+// candidate window very differently from one query per project. The fan-out
+// funded EVERY project with the full window, so a search for 8 conversations had
+// as many windows as there were projects to find them in. A single global window
+// of that size collapses to a handful of conversations: the top anchors are
+// often several messages of the SAME conversation, and more are dropped later
+// where the match survives only inside stripped tool output. Without the
+// widening, moving to one store would hand back a visibly thinner answer than
+// the fan-out for the same query — the one outcome this work must not produce.
+//
+// Distinct SESSIONS is the stopping measure, not distinct results: results
+// collapse further, by lineage root, and computing a root costs a query per row.
+// Sessions are already on the row, so the loop stays cheap; the two differ only
+// where a conversation was resumed.
+//
+// The second return value says whether the corpus was EXHAUSTED — proved, by a
+// wider window that found nothing new, rather than assumed. Anything else leaves
+// the totals a floor, because a window that stopped as soon as it had enough
+// conversations says nothing about how many more there were.
+func storeAnchors(con *sql.DB, rawQuery string, fetch, limit int, p retrieve.SearchParams) ([]retrieve.Anchor, bool) {
+	window := fetch
+	rows := retrieve.MatchAnchors(con, rawQuery, window, p)
+	for distinctSessions(rows) < limit && window < maxStoreWindow {
+		window *= 4
+		if window > maxStoreWindow {
+			window = maxStoreWindow
+		}
+		wider := retrieve.MatchAnchors(con, rawQuery, window, p)
+		if len(wider) <= len(rows) {
+			// A wider window found nothing new — every match this query has is
+			// already in hand, so the totals derived from it are exact.
+			return rows, true
+		}
+		rows = wider
+	}
+	return rows, false
+}
+
+// distinctSessions counts the conversations an anchor list covers.
+func distinctSessions(rows []retrieve.Anchor) int {
+	seen := map[string]struct{}{}
+	for _, r := range rows {
+		seen[r.SessionID] = struct{}{}
+	}
+	return len(seen)
 }
 
 // fallbackScope builds the per-project scope list for a nil-scope search the one
