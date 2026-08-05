@@ -867,6 +867,10 @@ type sessionCand struct {
 	SessionID string
 	Project   string
 	dbp       string
+	// foreign marks a scope replicated from another machine (view.Scope.Origin
+	// non-empty). A foreign database is a read replica: tag export deliberately
+	// skips it, so writing a tag there would be dropped at sync time.
+	foreign bool
 }
 
 // ErrAmbiguousSession is returned when a session8 prefix matches more than one
@@ -928,7 +932,7 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 				continue
 			}
 			for _, sid := range sids {
-				cs = append(cs, sessionCand{SessionID: sid, Project: sc.Project, dbp: dbpC})
+				cs = append(cs, sessionCand{SessionID: sid, Project: sc.Project, dbp: dbpC, foreign: sc.Origin != ""})
 			}
 		}
 		return cs
@@ -976,6 +980,23 @@ func coalesceSameSession(cands []sessionCand) []sessionCand {
 		live  bool
 		count int
 	}
+	// better reports whether a beats b. Order matters and is deliberate:
+	//   1. LOCAL beats foreign. A foreign scope is a replica of another machine's
+	//      database; tag export skips foreign databases, so resolving here to a
+	//      foreign row would send `tag-write` at a database whose new rows never
+	//      sync back — the tag would be silently dropped or overwritten on the
+	//      next ingest.
+	//   2. A live source beats a retained stub (the transcript still exists).
+	//   3. More messages wins (the fuller half of a continued session).
+	better := func(a, b ranked) bool {
+		if a.cand.foreign != b.cand.foreign {
+			return !a.cand.foreign
+		}
+		if a.live != b.live {
+			return a.live
+		}
+		return a.count > b.count
+	}
 	best := make(map[string]ranked, len(cands))
 	order := make([]string, 0, len(cands))
 
@@ -993,9 +1014,8 @@ func coalesceSameSession(cands []sessionCand) []sessionCand {
 			best[c.SessionID] = ranked{cand: c, live: live, count: count}
 			continue
 		}
-		// A live source always beats a retained stub; among equals, more messages wins.
-		if (live && !prev.live) || (live == prev.live && count > prev.count) {
-			best[c.SessionID] = ranked{cand: c, live: live, count: count}
+		if cur := (ranked{cand: c, live: live, count: count}); better(cur, prev) {
+			best[c.SessionID] = cur
 		}
 	}
 
@@ -1364,21 +1384,19 @@ type TopicsResult struct {
 const topicsEmptyNote = "no topics tagged yet — a session is tagged via the rawclaw-topic-tagger subagent"
 
 // Topics searches ONLY the topic layer across scope (nil = all projects),
-// returning hits ordered by match quality ACROSS every project, capped at limit.
-//
-// Ordering is global on purpose. Each project is a separate SQLite file, so the
-// sweep queries them one at a time; appending each project's hits in iteration
-// order (what this did before) meant the first project opened owned the top of
-// the list no matter how weak its matches were. Observed on a large real-world corpus:
-// `topics "adversarial"` led with two segments that merely mention the word in a
-// summary, while sixteen segments LABELLED "Adversarial …" sat below them —
-// purely because they lived in a project that sorted later. Each hit now carries
-// its bm25 score out of its own database and the union is ranked before the cap.
+// returning hits ordered per-project by FTS rank, capped at limit per project.
 // Each hit resolves the segment's START message id (what MatchTopics returns) to
 // its uuid for a read-ref. It never touches the keyword/vector ranking — this is
 // the separate, on-demand finder. anyTopics reports whether ANY topic rows exist
 // in scope (regardless of query match), so the caller can tell "no match" apart
 // from "nothing tagged yet".
+//
+// Ordering is deliberately PER-PROJECT, not global. Each project is its own
+// SQLite file, and raw bm25 scores are NOT comparable across independent
+// databases — bm25 folds in per-database corpus statistics, so a weak hit in a
+// small database can outscore a strong hit in a large one. Merging by score was
+// tried and reverted for exactly that reason. A correct global ranking needs one
+// shared index, not a smarter merge; that is tracked as the consolidation work.
 func Topics(query string, scope []view.Scope, limit int, includePath string) (TopicsResult, error) {
 	if limit <= 0 {
 		limit = DefaultSearchLimit
@@ -1390,13 +1408,7 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 		scope = filterScopeByPath(scope, includePath, "")
 	}
 
-	// scored pairs a hit with the bm25 value from its own database, so the union
-	// can be ranked before rendering (TopicHit itself stays a display type).
-	type scored struct {
-		hit   TopicHit
-		score float64
-	}
-	var ranked []scored
+	hits := []TopicHit{}
 	anyTopics := false
 	for _, sc := range scope {
 		dbp, _, err := scopes.Resolve(sc, false)
@@ -1420,28 +1432,13 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 			if uuid == "" {
 				continue // can't build a read-ref without the message uuid
 			}
-			ranked = append(ranked, scored{
-				hit: TopicHit{
-					Topic:   h.Topic,
-					Project: sc.Project,
-					ReadRef: fmtRef(h.SessionID, uuid),
-				},
-				score: h.Score,
+			hits = append(hits, TopicHit{
+				Topic:   h.Topic,
+				Project: sc.Project,
+				ReadRef: fmtRef(h.SessionID, uuid),
 			})
 		}
 		_ = con.Close()
-	}
-
-	// bm25 is negative and more-negative is better, so ascending is best-first.
-	// Ties keep the order the scopes were swept in (stable sort) — deterministic
-	// across runs rather than dependent on map iteration.
-	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score < ranked[j].score })
-	if len(ranked) > limit {
-		ranked = ranked[:limit]
-	}
-	hits := make([]TopicHit, 0, len(ranked))
-	for _, r := range ranked {
-		hits = append(hits, r.hit)
 	}
 
 	res := TopicsResult{Query: query, Hits: hits}
