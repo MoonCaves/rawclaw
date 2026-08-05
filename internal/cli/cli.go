@@ -522,7 +522,7 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 		return nil
 	}
 
-	if err := runSearch(ctx, out, o, args); err != nil {
+	if err := runSearch(ctx, out, cmd.ErrOrStderr(), o, args); err != nil {
 		return err
 	}
 	// Results are already printed; the sync-on-invoke trigger fires last so
@@ -531,13 +531,20 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	return nil
 }
 
+// noHistoryHint prints the "No transcript history" hint (naming both
+// escapes: --list to see the projects, --all to cover every project) — the
+// shared miss message for --dir/--this-project resolution across search,
+// stats, and browse (any runtime).
+func noHistoryHint(w io.Writer, o *Options) {
+	fmt.Fprintf(w, "No transcript history for --dir %s. Try --list, or --all for every project.\n", realpathExpand(o.Dir))
+}
+
 // thisScope resolves --dir to its transcript dir; on miss, it prints the
-// "No transcript history" hint (naming both escapes: --list to see the
-// projects, --all to cover every project) and returns ok=false.
+// "No transcript history" hint and returns ok=false.
 func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool) {
 	td = resolveTDir(o.Dir, o.DirSet)
 	if td == "" || !isDir(td) {
-		fmt.Fprintf(w, "No transcript history for --dir %s. Try --list, or --all for every project.\n", realpathExpand(o.Dir))
+		noHistoryHint(w, o)
 		return nil, "", false
 	}
 	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}, td, true
@@ -900,9 +907,21 @@ func runStatsFleet(ctx context.Context, w io.Writer, o *Options) error {
 // runBrowse handles the no-query case: list recent sessions for this project,
 // or — under --all — for every project (same scope enumeration search uses).
 // An explicit --this-project wins over --all, same precedence runStats applies.
+// A no-query invocation is a BROWSE, not an error — "show me recent sessions"
+// — and honors every scoping flag a query would: --this-project/--all,
+// --source, --since/--before, --limit, --sort.
 func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 	if o.All && !o.ThisProject {
 		return runBrowseAll(ctx, w, o)
+	}
+	// --source narrows to a runtime OTHER than Claude's own directory
+	// encoding (the one thisScope resolves): today only "codex" has a
+	// per-directory scope to match against --dir (Codex groups sessions by
+	// cwd). claude-web sessions carry no cwd at all, so this-project browsing
+	// under --source claude-web falls through to the same honest no-history
+	// hint as an unmatched --dir.
+	if o.Source != "" && o.Source != "claude" {
+		return runBrowseThisProjectSource(w, o)
 	}
 	sc, td, ok := thisScope(w, o)
 	if !ok {
@@ -910,6 +929,7 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 	}
 	_ = sc
 	rows := view.Browse(td, o.Limit, o.Since, o.Before)
+	sortBrowseRows(rows, o.Sort)
 	if o.JSON {
 		return EmitJSON(w, struct {
 			Project  string           `json:"project"`
@@ -920,9 +940,61 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 	return nil
 }
 
+// runBrowseThisProjectSource is the this-project (non---all) shape of the
+// no-query browse when --source picks a runtime with no Claude-style encoded
+// directory: it finds the Codex cwd-group scope matching --dir and browses
+// that instead of thisScope's Claude tdir — what makes
+// `rawclaw --source codex --this-project` browse Codex sessions for the
+// current directory rather than silently reporting the (irrelevant) Claude
+// history, or none at all.
+func runBrowseThisProjectSource(w io.Writer, o *Options) error {
+	if o.Source != "codex" {
+		noHistoryHint(w, o) // claude-web has no cwd — nothing to match --dir against
+		return nil
+	}
+	target := realpathExpand(o.Dir)
+	var sc *view.Scope
+	for _, s := range scopes.Codex(o.Reindex) {
+		if s.CWD != "" && realpathExpand(s.CWD) == target {
+			cp := s
+			sc = &cp
+			break
+		}
+	}
+	if sc == nil {
+		noHistoryHint(w, o)
+		return nil
+	}
+	dbp, _, err := scopes.Resolve(*sc, o.Reindex)
+	if err != nil {
+		noHistoryHint(w, o)
+		return nil
+	}
+	rows := view.BrowseDB(dbp, o.Limit, o.Since, o.Before)
+	sortBrowseRows(rows, o.Sort)
+	if o.JSON {
+		return EmitJSON(w, struct {
+			Project  string           `json:"project"`
+			Sessions []view.BrowseRow `json:"sessions"`
+		}{sc.Project, rows})
+	}
+	render.PrintBrowse(w, rows, sc.Project)
+	return nil
+}
+
+// sortBrowseRows reorders browse rows per --sort. BrowseSessions' query is
+// already newest-first, so "" and "newest" are no-ops; "oldest" reverses it.
+func sortBrowseRows(rows []view.BrowseRow, mode string) {
+	if mode != "oldest" {
+		return
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].LastTS < rows[j].LastTS })
+}
+
 // runBrowseAll is the --all shape of the no-query browse: recent sessions
 // across every project (Claude + Codex + retained scopes — the same
-// enumeration search uses), merged newest-first and capped at --limit.
+// enumeration search uses), merged newest-first (oldest-first under --sort
+// oldest) and capped at --limit.
 func runBrowseAll(ctx context.Context, w io.Writer, o *Options) error {
 	rows := []view.BrowseAllRow{} // non-nil so --json emits [] rather than null
 	for _, sc := range allScope(ctx, o.Source, o.Reindex) {
@@ -934,9 +1006,14 @@ func runBrowseAll(ctx context.Context, w io.Writer, o *Options) error {
 			rows = append(rows, view.BrowseAllRow{Project: sc.Project, BrowseRow: r})
 		}
 	}
-	// Newest-first across projects; each scope contributed at most --limit rows,
-	// so the merge only has to re-sort and cap.
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].LastTS > rows[j].LastTS })
+	// Newest-first across projects (oldest-first under --sort oldest); each
+	// scope contributed at most --limit rows, so the merge only has to
+	// re-sort and cap.
+	if o.Sort == "oldest" {
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].LastTS < rows[j].LastTS })
+	} else {
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].LastTS > rows[j].LastTS })
+	}
 	if len(rows) > o.Limit {
 		rows = rows[:o.Limit]
 	}
@@ -951,7 +1028,11 @@ func runBrowseAll(ctx context.Context, w io.Writer, o *Options) error {
 }
 
 // runSearch dispatches a query to the FALLBACK / BRIEF / DISCOVERY shapes.
-func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) error {
+// errW is the run's stderr: the low-result recovery hint (F: never let an
+// agent fall back to grepping raw sessions because rawclaw under-served a
+// query) always writes there, never into w — so it never lands in --json
+// stdout, which must stay parseable on its own.
+func runSearch(ctx context.Context, w, errW io.Writer, o *Options, args []string) error {
 	q := strings.Join(args, " ")
 	ftsExpr, usedOps := query.BooleanToFTS5(q)
 	rawMatch := ""
@@ -972,6 +1053,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		}
 		_ = sc
 		res := retrieve.LinearFallback(td, q, o.Limit, p)
+		printLowResultHint(errW, len(res))
 		if o.JSON {
 			return EmitJSON(w, rowsToJSON(res))
 		}
@@ -1008,7 +1090,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	if !o.NoVector {
 		emb = adapters.GetEmbedder()
 	}
-	return agentproto.SearchAndRender(w, q, scope, agentproto.SearchOpts{
+	env, err := agentproto.SearchAndRender(w, q, scope, agentproto.SearchOpts{
 		Limit:            o.Limit,
 		Role:             o.Role,
 		Sort:             o.Sort,
@@ -1020,6 +1102,29 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		IncludePath:      o.IncludePath,
 		ExcludePath:      o.ExcludePath,
 	}, emb, label, o.JSON)
+	if err != nil {
+		return err
+	}
+	printLowResultHint(errW, env.TotalMatches)
+	return nil
+}
+
+// lowResultThreshold is the "zero or very few hits" bar for the stderr
+// recovery hint: 0, 1, or 2 distinct matches count as thin enough that an
+// agent should be steered to retry rather than fall back to grepping raw
+// session files.
+const lowResultThreshold = 3
+
+// printLowResultHint writes a ONE-LINE recovery hint to errW (the run's
+// stderr) when a query under-serves — naming the escapes an agent should try
+// instead of grepping: broaden the terms, drop --this-project, or read
+// --help. It NEVER writes to stdout, so --json output stays parseable on its
+// own even when the hint fires.
+func printLowResultHint(errW io.Writer, total int) {
+	if total >= lowResultThreshold {
+		return
+	}
+	fmt.Fprintf(errW, "[hint] %d hit(s) — broaden the terms, drop --this-project, or run `rawclaw --help` for other shapes.\n", total)
 }
 
 // runDebugSearch handles the --debug-search shape: a read-only LLM-free scoring

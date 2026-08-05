@@ -387,13 +387,13 @@ func TestSetupCmd_ScriptContentContainsBanner(t *testing.T) {
 		`RAWCLAW=`,
 		`[ -n "$RAWCLAW" ] && [ -x "$RAWCLAW" ] || RAWCLAW=$(command -v rawclaw 2>/dev/null) || exit 0`,
 		"Raw transcript history for context",
-		"Fast FTS5/BM25 search",
+		"Blazing-fast FTS5/BM25 search",
 		"Memory providers",
 		`rawclaw "query"`,
 		"rawclaw read <ref>",
 		"rawclaw outline <sess8>",
 		"--json for structured output",
-		"offering to resume/fork it can help",
+		"Where you left off",
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(content, want) {

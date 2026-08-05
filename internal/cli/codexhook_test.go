@@ -128,14 +128,18 @@ func TestCodexPrimeScript_EmitsValidHookJSON(t *testing.T) {
 	ctx := env.HookSpecificOutput.AdditionalContext
 	for _, want := range []string{
 		"[rawclaw] Raw transcript history",
-		"Fast FTS5/BM25 search",
+		"Blazing-fast FTS5/BM25 search",
 		`rawclaw "query"`,
+<<<<<<< Updated upstream
 		"offering to resume/fork it can help",
 		"Session closeout: whenever the user signals",
 		"background subagent",
 		"rawclaw tag-prep <full-session-id>",
 		"rawclaw tag-write <full-session-id>",
 		"RawClaw has no supersession",
+=======
+		"Where you left off",
+>>>>>>> Stashed changes
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("additionalContext missing banner line %q; got %q", want, ctx)

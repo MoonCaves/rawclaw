@@ -455,7 +455,9 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 // text, or as JSON when wantJSON. This is the exported entry the default CLI path
 // calls so a bare `rawclaw "query"` IS the search — search is the default verb.
 // scopeLabel is the human-facing "across all projects" / "on <project>"
-// suffix in the text header.
+// suffix in the text header. The envelope is also returned (even on the JSON
+// path, after it's been written) so the caller can inspect it — e.g. the CLI's
+// low-result stderr hint reads env.TotalMatches without re-running the search.
 func SearchAndRender(
 	w io.Writer,
 	query string,
@@ -464,13 +466,13 @@ func SearchAndRender(
 	embedder embed.Embedder,
 	scopeLabel string,
 	wantJSON bool,
-) error {
+) (SearchEnvelope, error) {
 	env := Search(query, scope, opts, embedder)
 	if wantJSON {
-		return emit(w, env)
+		return env, emit(w, env)
 	}
 	renderSearch(w, env, query, scopeLabel)
-	return nil
+	return env, nil
 }
 
 // ReadAndRender resolves ref within scope and writes the bounded excerpt to w

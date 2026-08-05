@@ -57,14 +57,16 @@ if [ -n "$session_id" ]; then
 fi
 
 cat <<'BANNER'
-[rawclaw] Raw transcript history for context — the receipts + thought process behind past
-sessions, across every project on this machine (not just this one's native session folder).
-Fast FTS5/BM25 search: cheaper than grepping your own agent's session folders (Claude Code
-projects/, Codex sessions/) — use rawclaw instead and save tokens + greps. Memory providers
-hold the superseding current truth; rawclaw is the dated raw record underneath it.
+[rawclaw] Raw transcript history for context — the receipts behind past sessions:
+the good, the bad, and the no-longer-true. Every thought behind a past decision,
+some of it since overtaken — spanning your other projects and machines, not just
+this session's own folder.
+Blazing-fast FTS5/BM25 search — a query engine, not grep, and far cheaper: reach for
+it before you grep session folders and spend a fraction of the tokens and tool calls.
   rawclaw "query"              search every session  (--this-project / --include-path <re> to scope; --sort newest)
   rawclaw read <ref>           the matched message whole, with context  (--more / --around to expand)
   rawclaw outline <sess8>      a session's goal -> resolution arc
+<<<<<<< Updated upstream
 --json for structured output; --help for the rest.
 If the user seems to want to pick up a past session, offering to resume/fork it can help.
 
@@ -75,6 +77,23 @@ then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief 
 what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
 systems own current truth. RawClaw only points to where something was discussed.
 BANNER
+=======
+--json for structured output; --help for the rest — run it before you give up and fall back to grep.
+Memory providers hold the superseding current truth; rawclaw is the dated raw record underneath it.
+Where you left off / what got done / what's next is a rawclaw query too: --since <date>, --source claude|codex, --sort newest; drop --this-project to sweep across projects.
+BANNER
+
+# Finished sessions the SessionEnd hook queued for topic tagging: list them so
+# this session's agent tags them first. Silence (no rawclaw output, or an
+# error) means nothing pending — never a hook failure.
+pending=$("$RAWCLAW" tag-queue 2>/dev/null | head -n 8) || pending=""
+if [ -n "$pending" ]; then
+	printf '[rawclaw] finished sessions queued for topic tagging — do NOT tag inline; never make the user wait on this:\n'
+	printf '%s\n' "$pending" | sed 's/^/  /'
+	printf 'When you have a spare moment, hand each to a cheap background tagging subagent: rawclaw tag-prep <id> (read, split into topic segments), then rawclaw tag-write <id>.\n'
+	printf 'A session that will not resolve or is not worth tagging: rawclaw tag-queue remove <id>.\n'
+fi
+>>>>>>> Stashed changes
 `
 
 // rawclawCodexPrimeScript is the Codex variant of the SessionStart discovery
@@ -120,14 +139,16 @@ fi
 # additionalContext instead of rejecting it.
 {
 cat <<'BANNER'
-[rawclaw] Raw transcript history for context — the receipts + thought process behind past
-sessions, across every project on this machine (not just this one's native session folder).
-Fast FTS5/BM25 search: cheaper than grepping your own agent's session folders (Claude Code
-projects/, Codex sessions/) — use rawclaw instead and save tokens + greps. Memory providers
-hold the superseding current truth; rawclaw is the dated raw record underneath it.
+[rawclaw] Raw transcript history for context — the receipts behind past sessions:
+the good, the bad, and the no-longer-true. Every thought behind a past decision,
+some of it since overtaken — spanning your other projects and machines, not just
+this session's own folder.
+Blazing-fast FTS5/BM25 search — a query engine, not grep, and far cheaper: reach for
+it before you grep session folders and spend a fraction of the tokens and tool calls.
   rawclaw "query"              search every session  (--this-project / --include-path <re> to scope; --sort newest)
   rawclaw read <ref>           the matched message whole, with context  (--more / --around to expand)
   rawclaw outline <sess8>      a session's goal -> resolution arc
+<<<<<<< Updated upstream
 --json for structured output; --help for the rest.
 If the user seems to want to pick up a past session, offering to resume/fork it can help.
 
@@ -138,6 +159,20 @@ then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief 
 what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
 systems own current truth. RawClaw only points to where something was discussed.
 BANNER
+=======
+--json for structured output; --help for the rest — run it before you give up and fall back to grep.
+Memory providers hold the superseding current truth; rawclaw is the dated raw record underneath it.
+Where you left off / what got done / what's next is a rawclaw query too: --since <date>, --source claude|codex, --sort newest; drop --this-project to sweep across projects.
+BANNER
+
+pending=$("$RAWCLAW" tag-queue 2>/dev/null | head -n 8) || pending=""
+if [ -n "$pending" ]; then
+	printf '[rawclaw] finished sessions queued for topic tagging — do NOT tag inline; never make the user wait on this:\n'
+	printf '%s\n' "$pending" | sed 's/^/  /'
+	printf 'When you have a spare moment, hand each to a cheap background tagging subagent: rawclaw tag-prep <id> (read, split into topic segments), then rawclaw tag-write <id>.\n'
+	printf 'A session that will not resolve or is not worth tagging: rawclaw tag-queue remove <id>.\n'
+fi
+>>>>>>> Stashed changes
 } | python3 -c 'import json,sys; sys.stdout.write(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": sys.stdin.buffer.read().decode("utf-8","replace")}}))'
 `
 
