@@ -148,6 +148,9 @@ const trigramBatch = 20000
 // steady-state cost at one meta read: without it, every invocation would have
 // to ask the db how far the fill got.
 func migrateTrigramIndex(con *sql.DB) error {
+	if err := clearOrphanedTrigramMarker(con); err != nil {
+		return err
+	}
 	if _, err := con.Exec(store.TrigramSQL); err != nil {
 		return fmt.Errorf("create trigram index: %w", err)
 	}
@@ -178,6 +181,39 @@ func migrateTrigramIndex(con *sql.DB) error {
 		"INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1'); DELETE FROM meta WHERE key='"+trigramWatermarkKey+"'",
 		trigramBackfillKey); err != nil {
 		return fmt.Errorf("stamp %s: %w", trigramBackfillKey, err)
+	}
+	return nil
+}
+
+// clearOrphanedTrigramMarker forgets a done marker the db can no longer honor.
+//
+// A binary older than the substring index rebuilds a db by dropping messages,
+// which takes OUR triggers with it, while leaving messages_fts_trigram and the
+// done marker standing — its drop list never named them. What survives claims to
+// be a filled index but describes messages that no longer exist, and the damage
+// is not merely stale results: re-indexing restarts ids from 1, so once the new
+// ids reach the old range the re-created insert trigger hits a rowid the orphan
+// table already holds and the INSERT INTO messages fails outright, breaking
+// indexing rather than degrading search.
+//
+// The triggers are what the marker actually vouches for, so a table standing
+// without its triggers means the marker is lying. Clearing both meta keys sends
+// this pass down the reset-and-refill path, which is the only state that is
+// knowably correct. The check is two lookups in sqlite_master, which SQLite
+// answers from the schema it already has in memory.
+func clearOrphanedTrigramMarker(con *sql.DB) error {
+	var table, trigger int
+	if err := con.QueryRow(`SELECT
+	  COALESCE(SUM(name='messages_fts_trigram'),0),
+	  COALESCE(SUM(name='messages_tri_ai'),0)
+	FROM sqlite_master WHERE name IN ('messages_fts_trigram','messages_tri_ai')`).Scan(&table, &trigger); err != nil {
+		return fmt.Errorf("inspect trigram objects: %w", err)
+	}
+	if table == 0 || trigger == 1 {
+		return nil // never created, or intact — nothing to disbelieve
+	}
+	if _, err := con.Exec("DELETE FROM meta WHERE key IN (?,?)", trigramBackfillKey, trigramWatermarkKey); err != nil {
+		return fmt.Errorf("clear orphaned trigram markers: %w", err)
 	}
 	return nil
 }
