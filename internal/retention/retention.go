@@ -14,6 +14,17 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/provenance"
 )
 
+// Result reports which sessions a reconcile pass acted on, by id. The pass
+// owns the decision but not everything that has to follow it: the durable
+// transcript vault keeps its own copy of the missing watermark, and a pruned
+// session's vault copy has to go too or the next rebuild resurrects it. Rather
+// than teach this package about the vault, hand the caller the outcome.
+type Result struct {
+	Cleared []string // missing_since un-flagged: the source reappeared
+	Stamped []string // retained + flagged: own source newly absent
+	Pruned  []string // rows deleted: tombstone, replica absence, or mirror mode
+}
+
 // ReconcileRetention reconciles the indexed sessions against the live scan,
 // implementing durable retention (D1/D2/D5). It REPLACES the old prune that
 // deleted any session whose backing file was absent from the disk walk. For each
@@ -42,8 +53,10 @@ import (
 // setting in the environment (a live-verified data-loss footgun). replica
 // marks an ARCHIVE-replica scope (the scanned tree is a synced copy of
 // another machine's data inside the archive clone): there, absence from the
-// scan is authoritative — see DecideRetention.
-func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now float64, mirror, replica bool) error {
+// scan is authoritative — see DecideRetention. The returned Result names the
+// sessions each branch acted on, for callers that keep state outside the db.
+func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now float64, mirror, replica bool) (Result, error) {
+	var res Result
 	type fiRow struct {
 		path      string
 		sessionID string
@@ -55,7 +68,7 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 		   FROM file_index fi
 		   LEFT JOIN sessions s ON s.id = fi.session_id`)
 	if err != nil {
-		return fmt.Errorf("scan file_index for retention: %w", err)
+		return res, fmt.Errorf("scan file_index for retention: %w", err)
 	}
 	// Read fully into memory first so the UPDATE/DELETEs below don't mutate a live
 	// cursor.
@@ -64,13 +77,13 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 		var r fiRow
 		if err := rows.Scan(&r.path, &r.sessionID, &r.origin, &r.missing); err != nil {
 			rows.Close()
-			return fmt.Errorf("scan retention row: %w", err)
+			return res, fmt.Errorf("scan retention row: %w", err)
 		}
 		all = append(all, r)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return fmt.Errorf("iterate retention rows: %w", err)
+		return res, fmt.Errorf("iterate retention rows: %w", err)
 	}
 	rows.Close()
 
@@ -81,20 +94,23 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 		switch DecideRetention(present, isMember(tombstoned, r.sessionID), own, r.missing.Valid, mirror, replica) {
 		case ActClear: // reappeared — un-flag
 			if _, err := con.Exec("UPDATE sessions SET missing_since=NULL WHERE id=?", r.sessionID); err != nil {
-				return fmt.Errorf("clear missing_since: %w", err)
+				return res, fmt.Errorf("clear missing_since: %w", err)
 			}
+			res.Cleared = append(res.Cleared, r.sessionID)
 		case ActPrune: // replica absence, explicit tombstone, or own-source under mirror
 			if err := pruneSession(con, r.sessionID, r.path); err != nil {
-				return err
+				return res, err
 			}
+			res.Pruned = append(res.Pruned, r.sessionID)
 		case ActStamp: // own-source, newly absent — retain + flag (D1)
 			if _, err := con.Exec("UPDATE sessions SET missing_since=? WHERE id=?", now, r.sessionID); err != nil {
-				return fmt.Errorf("mark missing_since: %w", err)
+				return res, fmt.Errorf("mark missing_since: %w", err)
 			}
+			res.Stamped = append(res.Stamped, r.sessionID)
 		case ActNone:
 		}
 	}
-	return nil
+	return res, nil
 }
 
 // RetentionAction is the decision for one indexed row during a retention pass:

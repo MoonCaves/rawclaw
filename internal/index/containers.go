@@ -3,8 +3,10 @@ package index
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 
+	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/provenance"
@@ -134,9 +136,12 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 	// foreign-origin row is never a candidate (D1/D2/D5). An ARCHIVE-replica
 	// scan (origin set) instead treats absence as authoritative — the owner's
 	// delete propagated through the archive (E5); see DecideRetention.
-	if err := retention.ReconcileRetention(con, onDisk, tombstoned, nowEpoch(), retention.RetentionMirror(), origin != ""); err != nil {
+	now := nowEpoch()
+	res, err := retention.ReconcileRetention(con, onDisk, tombstoned, now, retention.RetentionMirror(), origin != "")
+	if err != nil {
 		return err
 	}
+	applyRetentionToVault(res, now, origin)
 	return nil
 }
 
@@ -186,7 +191,37 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 	); err != nil {
 		return false
 	}
+
+	// Vault rawclaw's own copy, same as the Claude walk does — the container's
+	// source is not Claude-shaped, so the already-flattened messages are
+	// rendered INTO that shape rather than byte-copied. Own sessions only, and a
+	// failure withholds the watermark so the next pass retries (see vaultFile).
+	if origin == "" {
+		if err := vaultContainer(c, ms, sourceID, projectArg, cwdArg); err != nil {
+			slog.Warn("durable transcript not written", "session", c.ID, "err", err)
+			return false
+		}
+	}
 	return true
+}
+
+// vaultContainer stores rawclaw's own copy of a container-sourced session.
+func vaultContainer(c source.Container, ms []model.Message, sourceID string, projectArg, cwdArg any) error {
+	m := durable.Meta{
+		ID:         c.ID,
+		Source:     sourceID,
+		Project:    strOf(projectArg),
+		CWD:        strOf(cwdArg),
+		IsSubagent: c.IsSubagent,
+		ParentID:   c.ParentID,
+		SourcePath: realpath(c.Path),
+	}
+	if st, err := os.Stat(c.Path); err == nil {
+		m.SourceMTime = mtimeOf(st)
+		m.SourceSize = st.Size()
+		m.SourceFP = provenance.FileFingerprint(c.Path, st.Size())
+	}
+	return durable.StoreMessages(m, ms)
 }
 
 // b2i maps a bool to the 0/1 the is_subagent column stores.

@@ -46,6 +46,18 @@ func ConfigDir() string {
 	return expandHome("~/.claude")
 }
 
+// TranscriptsRoot is the durable home for rawclaw's OWN copy of every session
+// it indexes — the transcript vault. It lives in the XDG DATA dir, NOT the
+// disposable cache (which holds only rebuildable index dbs), because the vault
+// is the truth the dbs are rebuilt FROM: deleting the cache must cost nothing.
+// $XDG_DATA_HOME/rawclaw/transcripts, else ~/.local/share/rawclaw/transcripts.
+func TranscriptsRoot() string {
+	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
+		return filepath.Join(x, "rawclaw", "transcripts")
+	}
+	return expandHome("~/.local/share/rawclaw/transcripts")
+}
+
 // FindTranscriptDir resolves the projects subdir for `cwd` by matching the cwd
 // recorded inside transcripts (authoritative), falling back to path encoding.
 // Returns "" if none found.
