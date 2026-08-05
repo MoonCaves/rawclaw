@@ -32,7 +32,9 @@ func NewDB(t testing.TB) (*sql.DB, string) {
 }
 
 // Session is one sessions-row fixture. ParentID "" inserts SQL NULL (matching
-// the indexer's missing-parent behavior).
+// the indexer's missing-parent behavior), and so do Project, CWD, and
+// SourceTool — a row from before the scope columns existed has no label, and a
+// fixture that leaves them blank reproduces that row exactly.
 type Session struct {
 	ID           string
 	StartedAt    float64
@@ -40,6 +42,9 @@ type Session struct {
 	MessageCount int
 	IsSubagent   bool
 	ParentID     string
+	Project      string // "" = SQL NULL (unscoped row)
+	CWD          string // "" = SQL NULL
+	SourceTool   string // "" = SQL NULL
 }
 
 // InsertSession inserts one session row (INSERT OR IGNORE, so repeated inserts
@@ -55,10 +60,20 @@ func InsertSession(t testing.TB, con *sql.DB, s Session) {
 		isSub = 1
 	}
 	if _, err := con.Exec(
-		"INSERT OR IGNORE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id) VALUES(?,?,?,?,?,?)",
-		s.ID, s.StartedAt, s.LastTS, s.MessageCount, isSub, parent); err != nil {
+		"INSERT OR IGNORE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,project,cwd,source_tool) VALUES(?,?,?,?,?,?,?,?,?)",
+		s.ID, s.StartedAt, s.LastTS, s.MessageCount, isSub, parent,
+		nullIfEmpty(s.Project), nullIfEmpty(s.CWD), nullIfEmpty(s.SourceTool)); err != nil {
 		t.Fatalf("storetest: insert session %q: %v", s.ID, err)
 	}
+}
+
+// nullIfEmpty maps "" onto SQL NULL, so an unset fixture field reads back the
+// way an unstamped production row does rather than as an empty string.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // Message is one messages-row fixture. The FTS sync triggers index Content
