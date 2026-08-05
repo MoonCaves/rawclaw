@@ -1051,9 +1051,16 @@ func TestOutlineListsTopics(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	writeSession(t, proj, "sesstwo", "22222222-aaaa-bbbb-cccc-000000000002", "an opening message for the outline")
 
-	dbp, _, _, err := index.EnsureIndexed(proj, false)
-	if err != nil {
+	if _, _, _, err := index.EnsureIndexed(proj, false); err != nil {
 		t.Fatalf("EnsureIndexed: %v", err)
+	}
+
+	// Author the tag in the db the READ path resolves to — the same one tag-write
+	// opens. Writing it anywhere else would be testing a tag no reader can see.
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	dbp, _, _, err := locateSession(scope, "sesstwo")
+	if err != nil {
+		t.Fatalf("locateSession: %v", err)
 	}
 	con := openCacheRW(t, dbp)
 	if err := store.EnsureTopicSchema(con); err != nil {
@@ -1065,7 +1072,6 @@ func TestOutlineListsTopics(t *testing.T) {
 	}
 	con.Close()
 
-	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
 	res, err := Outline("sesstwo", scope, false)
 	if err != nil {
 		t.Fatalf("Outline: %v", err)
