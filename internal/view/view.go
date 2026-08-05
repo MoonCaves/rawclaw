@@ -245,12 +245,12 @@ func BrowseDB(dbp string, limit int, since, before string) []BrowseRow {
 	// Connection is now free — fill each row's two texts with their own queries.
 	for i := range out {
 		out[i].Preview = sessionPreview(con, out[i].SessionID)
-		out[i].Last = sessionLastActivity(con, out[i].SessionID)
+		out[i].Last = SessionLastActivity(con, out[i].SessionID)
 	}
 	return out
 }
 
-// lastActivityScan is how many trailing messages sessionLastActivity inspects
+// lastActivityScan is how many trailing messages SessionLastActivity inspects
 // before giving up. A busy session's tail is mostly tool results and injected
 // envelopes, so the window has to clear those to reach real conversation —
 // but it stays bounded, matching OpenClaw's 20-line tail cap
@@ -258,7 +258,7 @@ func BrowseDB(dbp string, limit int, since, before string) []BrowseRow {
 // because our rows include tool results that its transcript lines don't.
 const lastActivityScan = 40
 
-// sessionLastActivity returns the session's most recent REAL activity: the
+// SessionLastActivity returns the session's most recent REAL activity: the
 // newest message that still has content once tool runs and injected envelopes
 // are stripped (parse.StripGenerated). Walking newest-first and skipping
 // generated rows is OpenClaw's selectBoundedActiveTailRecords in miniature.
@@ -266,7 +266,13 @@ const lastActivityScan = 40
 // Returns "" when the whole scanned tail is machinery — honest silence beats
 // captioning a session with a tool result. The row still renders; it just has
 // no "now" line, and Preview still says what the session was for.
-func sessionLastActivity(con *sql.DB, sessionID string) string {
+//
+// Exported because a browse row is not the only place the question "and then
+// what?" gets asked: a search hit is a point in the middle of a conversation,
+// so the same tail read answers where that conversation ended up
+// (agentproto.attachLastActivity). One definition of "real activity" for both,
+// or the two surfaces drift.
+func SessionLastActivity(con *sql.DB, sessionID string) string {
 	msgs, err := store.LastMessages(con, sessionID, lastActivityScan)
 	if err != nil {
 		return ""
