@@ -444,3 +444,140 @@ func seedSessionDB(t *testing.T, name string, rows ...sessionRow) string {
 	}
 	return dbp
 }
+
+// tagSession writes one topic segment into a per-project db, the way the
+// tagging path does, so the consolidation tests have a topic layer to fold.
+func tagSession(t *testing.T, dbp, sessionID, startUUID, topic, summary string, taggedAt float64) {
+	t.Helper()
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open %s for tagging: %v", dbp, err)
+	}
+	defer con.Close()
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("ensure topic schema: %v", err)
+	}
+	if err := store.UpsertTopicSegment(con, sessionID, startUUID, "", topic, summary, taggedAt); err != nil {
+		t.Fatalf("tag %s: %v", sessionID, err)
+	}
+}
+
+// firstSessionID returns the one session id a single-transcript project db
+// holds, so a test can tag it without hardcoding the derived id.
+func firstSessionID(t *testing.T, dbp string) string {
+	t.Helper()
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("open %s: %v", dbp, err)
+	}
+	defer con.Close()
+	return scalar(t, con, "SELECT id FROM sessions LIMIT 1")
+}
+
+// TestConsolidate_FoldsTheTopicLayer is the precondition for topics reading the
+// one store: tags live only in the per-project db that produced them, so
+// without this fold a reader on the store reports an untagged corpus. The
+// searchable half matters as much as the rows — topic_fts is an external-content
+// index, so a fold that inserted rows without driving the triggers would leave
+// the labels present but unfindable.
+func TestConsolidate_FoldsTheTopicLayer(t *testing.T) {
+	isolateCache(t)
+	a := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+	b := indexProject(t, "-w-billing",
+		`{"type":"user","cwd":"/w/billing","timestamp":"2026-06-02T10:00:00Z","uuid":"u-b1","message":{"role":"user","content":"invoice retries keep firing"}}`)
+	tagSession(t, a, firstSessionID(t, a), "u-a1", "invoice reconciliation", "totals did not line up", 100)
+	tagSession(t, b, firstSessionID(t, b), "u-b1", "retry storm", "retries fired in a loop", 100)
+
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment"); got != "2" {
+		t.Fatalf("topic_segment holds %s rows, want both projects' tags", got)
+	}
+	if got := scalar(t, con,
+		"SELECT COUNT(*) FROM topic_fts WHERE topic_fts MATCH 'retry'"); got != "1" {
+		t.Errorf("topic_fts matched %s rows for a folded label, want 1 — the fold bypassed the triggers", got)
+	}
+}
+
+// TestConsolidate_RefoldsAfterRetagging pins the watermark: tagging changes a
+// source without touching one session or message row, so a watermark built from
+// those counts alone would read a re-tagged project as unchanged and its new
+// labels would never arrive.
+func TestConsolidate_RefoldsAfterRetagging(t *testing.T) {
+	isolateCache(t)
+	a := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+	sid := firstSessionID(t, a)
+
+	if _, err := ConsolidateFrom([]string{a}, false); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	tagSession(t, a, sid, "u-a1", "invoice reconciliation", "totals did not line up", 100)
+	if _, err := ConsolidateFrom([]string{a}, false); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT topic FROM topic_segment WHERE session_id=?", sid); got != "invoice reconciliation" {
+		t.Fatalf("topic after re-tag = %q, want the label added between passes", got)
+	}
+}
+
+// TestConsolidate_LaterTaggingWinsForOneSegment covers the re-tag rule: the
+// same segment tagged twice keeps the later label, whichever order the sources
+// are folded in, so the pass stays order-independent.
+func TestConsolidate_LaterTaggingWinsForOneSegment(t *testing.T) {
+	isolateCache(t)
+	a := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+	sid := firstSessionID(t, a)
+
+	tagSession(t, a, sid, "u-a1", "first guess", "", 100)
+	if _, err := ConsolidateFrom([]string{a}, false); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	tagSession(t, a, sid, "u-a1", "better label", "", 200)
+	if _, err := ConsolidateFrom([]string{a}, false); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT topic FROM topic_segment WHERE session_id=?", sid); got != "better label" {
+		t.Errorf("topic = %q, want the later tagging to win", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment"); got != "1" {
+		t.Errorf("topic_segment holds %s rows, want the re-tag to update in place", got)
+	}
+	// The external-content index must follow the update, or the store keeps
+	// answering with a label the rows no longer carry.
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_fts WHERE topic_fts MATCH 'guess'"); got != "0" {
+		t.Errorf("topic_fts still matched the replaced label %s times, want 0", got)
+	}
+}
+
+// TestConsolidate_SkipsASourceWithNoTopicLayer keeps an untagged project from
+// failing the whole pass: the topic tables are created on demand, so a project
+// nobody tagged genuinely has none.
+func TestConsolidate_SkipsASourceWithNoTopicLayer(t *testing.T) {
+	isolateCache(t)
+	a := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+
+	st, err := ConsolidateFrom([]string{a}, false)
+	if err != nil {
+		t.Fatalf("ConsolidateFrom over an untagged source: %v", err)
+	}
+	if st.Sessions != 1 {
+		t.Fatalf("consolidated %d sessions, want 1", st.Sessions)
+	}
+	// The store still has the topic tables, so a topic query answers "nothing is
+	// tagged yet" rather than failing on a missing table.
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment"); got != "0" {
+		t.Errorf("topic_segment = %s rows, want 0", got)
+	}
+}
