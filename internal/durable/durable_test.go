@@ -128,10 +128,12 @@ func TestStoreMessagesKeepsUnindexableRoleSearchable(t *testing.T) {
 }
 
 // TestPathForStaysInsideRoot: a session id is not a trusted path component. A
-// ".." segment must land as a file in the vault, never above it.
+// ".." segment must land as a file in the vault, never above it, and every
+// remaining character must be one a path component can portably hold — a
+// backslash is a separator on the other platform this has to work on.
 func TestPathForStaysInsideRoot(t *testing.T) {
 	root := isolate(t)
-	for _, id := range []string{"../escape", "..", "a/../../b", "with space/x"} {
+	for _, id := range []string{"../escape", "..", "a/../../b", "with space/x", `w\in\dows`, "nul\x00byte", "sess:1|2"} {
 		p, err := PathFor(id)
 		if err != nil {
 			t.Fatalf("PathFor(%q): %v", id, err)
@@ -139,7 +141,24 @@ func TestPathForStaysInsideRoot(t *testing.T) {
 		if !strings.HasPrefix(filepath.Clean(p), filepath.Clean(root)+string(filepath.Separator)) {
 			t.Errorf("PathFor(%q) = %q, escapes the vault root %q", id, p, root)
 		}
+		rel := strings.TrimPrefix(filepath.Clean(p), filepath.Clean(root)+string(filepath.Separator))
+		for _, seg := range strings.Split(rel, string(filepath.Separator)) {
+			if strings.ContainsFunc(seg, unportable) {
+				t.Errorf("PathFor(%q) = %q: segment %q holds a character a path component cannot portably carry", id, p, seg)
+			}
+		}
 	}
+}
+
+// unportable reports a rune that has no business in a vault path component.
+func unportable(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return false
+	case r == '.' || r == '_' || r == '-':
+		return false
+	}
+	return true
 }
 
 // TestSubagentIDNestsAsDirectories: a lineage-namespaced id carries a slash, and
