@@ -58,11 +58,27 @@ func orderClause(s Sort) string {
 	}
 }
 
+// ftsTable names which of the two FTS5 indexes a query reads. Both cover the
+// same content of the same message rows and differ only in tokenizer, so
+// choosing between them is a table name and nothing more. Every value is a
+// constant defined here — a table name cannot be a bound parameter in SQL, and
+// none of these ever comes from a caller's input.
+type ftsTable string
+
+const (
+	// wordTable is the word-tokenized index: the default, and the one whose
+	// bm25 ranking every existing result order is built on.
+	wordTable ftsTable = "messages_fts"
+	// trigramTable is the substring index, for the queries wordTable cannot
+	// answer because they do not fall on token boundaries.
+	trigramTable ftsTable = "messages_fts_trigram"
+)
+
 // ftsWhere composes the shared WHERE clause list + args for an FTS query:
 // MATCH first, then the optional filters in the consumers' exact order
 // (subagent, role, min-messages, since, before).
-func ftsWhere(match string, f Filter) (where []string, args []any) {
-	where = []string{"messages_fts MATCH ?"}
+func ftsWhere(tbl ftsTable, match string, f Filter) (where []string, args []any) {
+	where = []string{string(tbl) + " MATCH ?"}
 	args = []any{match}
 	if !f.IncludeSubagents {
 		where = append(where, "s.is_subagent=0")
@@ -146,10 +162,24 @@ type SearchHit struct {
 // format — snippet(messages_fts,0,'>>>','<<<','…',16) — is part of the output
 // contract and stays byte-identical. [retrieve.searchScored]
 func SearchHits(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
-	where, args := ftsWhere(match, f)
+	return searchHits(con, wordTable, match, f, s, limit)
+}
+
+// SearchHitsSubstring is SearchHits against the trigram index instead of the
+// word index: same filters, same order, same row shape. `match` is an FTS5
+// phrase, which the trigram tokenizer answers as a literal substring of the
+// content — so this reaches the hits a word-boundary tokenizer cannot.
+func SearchHitsSubstring(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
+	return searchHits(con, trigramTable, match, f, s, limit)
+}
+
+// searchHits is the shared body: identical SQL for both indexes, with the FTS
+// table it joins and snippets from selected by tbl.
+func searchHits(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
+	where, args := ftsWhere(tbl, match, f)
 	sqlText := `SELECT m.session_id, m.role, m.ts_iso, s.is_subagent, s.parent_id, m.content,
-	                   snippet(messages_fts,0,'>>>','<<<','…',16) AS snip
-	            FROM messages_fts JOIN messages m ON m.id=messages_fts.rowid
+	                   snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip
+	            FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
 	            JOIN sessions s ON s.id=m.session_id
 	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
 	args = append(args, limit)
@@ -206,10 +236,21 @@ type SearchAnchor struct {
 // as SearchHits, returning message ids + uuid + missing_since for the view
 // layer to expand into bookend windows. [retrieve.MatchAnchors]
 func SearchAnchors(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
-	where, args := ftsWhere(match, f)
+	return searchAnchors(con, wordTable, match, f, s, limit)
+}
+
+// SearchAnchorsSubstring is SearchAnchors against the trigram index — the
+// anchor-recall half of SearchHitsSubstring.
+func SearchAnchorsSubstring(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
+	return searchAnchors(con, trigramTable, match, f, s, limit)
+}
+
+// searchAnchors is the shared body for both indexes; see searchHits.
+func searchAnchors(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
+	where, args := ftsWhere(tbl, match, f)
 	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content, s.missing_since,
-	                   snippet(messages_fts,0,'>>>','<<<','…',16) AS snip
-	            FROM messages_fts JOIN messages m ON m.id=messages_fts.rowid
+	                   snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip
+	            FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
 	            JOIN sessions s ON s.id=m.session_id
 	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
 	args = append(args, limit)
