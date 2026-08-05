@@ -168,10 +168,15 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 	if c.ParentID != "" {
 		parentArg = c.ParentID
 	} // else nil → SQL NULL
-	// Stamp provenance (D3); missing_since NULL — a (re)indexed container is present.
+	// Stamp provenance (D3) and scope; missing_since NULL — a (re)indexed
+	// container is present. A Container already carries the cwd its source read
+	// out of the transcript, so no fallback directory is needed here: a container
+	// with no recorded cwd has no directory that stands for one either (a Codex
+	// rollout lives in a date-sharded path, not a project dir).
+	projectArg, cwdArg := scopeOf(c.CWD, "")
 	if _, err := con.Exec(
-		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
-		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, originOr(origin), sourceID, realpath(c.Path),
+		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
+		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, originOr(origin), sourceID, realpath(c.Path), projectArg, cwdArg,
 	); err != nil {
 		return false
 	}

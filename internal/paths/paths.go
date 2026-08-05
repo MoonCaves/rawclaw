@@ -201,6 +201,12 @@ func ResolveSession(prefix string) []SessionHit {
 	return hits
 }
 
+// FileCWD returns the working directory a single transcript file records, or ""
+// when the file is unreadable or records none. It is firstCWD's exported form:
+// the scope helpers above answer "what cwd does this PROJECT DIR have", while a
+// per-session backfill needs the cwd of one named file.
+func FileCWD(jsonlPath string) string { return firstCWD(jsonlPath) }
+
 // firstCWD reads jsonlPath line by line and returns the first non-empty string
 // `cwd` (top-level, else nested under "message"). Returns "" on any failure.
 func firstCWD(jsonlPath string) string {
