@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -15,7 +16,31 @@ import (
 // machine with a real archive configured, the trigger would otherwise exec
 // the TEST BINARY as a detached sync child against the real state dir.
 // Autosync's own tests re-enable per-test via t.Setenv.
+//
+// It also pins the XDG data dir to a scratch directory. Tests here already
+// point HOME at a fixture home, but the durable transcript vault reads
+// XDG_DATA_HOME first — so an inherited value from the developer's shell would
+// let a delete test reach the REAL vault. goleak.VerifyTestMain is inlined
+// rather than called, because it exits the process and a deferred cleanup
+// would never run.
 func TestMain(m *testing.M) {
 	os.Setenv("RAWCLAW_ARCHIVE_AUTOSYNC", "off")
-	goleak.VerifyTestMain(m)
+
+	data, err := os.MkdirTemp("", "rawclaw-cli-data-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "scratch data dir:", err)
+		os.Exit(1)
+	}
+	os.Setenv("XDG_DATA_HOME", data)
+
+	code := m.Run()
+	leakErr := goleak.Find()
+	os.RemoveAll(data)
+	if leakErr != nil {
+		fmt.Fprintln(os.Stderr, "goleak:", leakErr)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
 }
