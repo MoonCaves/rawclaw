@@ -34,11 +34,19 @@ func newTopicsCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := strings.Join(args, " ")
-			return agentproto.TopicsAndRender(cmd.OutOrStdout(), q, verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir")), limit, includePath, jsonOut)
+			scope := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
+			opts := agentproto.TopicsOpts{Limit: limit, IncludePath: includePath}
+			// --this-project narrows the one store by project LABEL, so take the
+			// label off the single scope the flag resolved to rather than
+			// re-deriving it. The scope list still travels for the fallback path.
+			if thisProject && len(scope) == 1 {
+				opts.Project = scope[0].Project
+			}
+			return agentproto.TopicsAndRender(cmd.OutOrStdout(), q, scope, opts, jsonOut)
 		},
 	}
 	f := cmd.Flags()
-	f.IntVar(&limit, "limit", 8, "max topic hits per project")
+	f.IntVar(&limit, "limit", 8, "max topic hits (across all projects, ranked together)")
 	f.BoolVar(&thisProject, "this-project", false, "limit to this project (default: all projects)")
 	f.StringVar(&dir, "dir", cwd(), "project working dir for --this-project")
 	f.StringVar(&includePath, "include-path", "", "only search projects whose working dir matches this regex")

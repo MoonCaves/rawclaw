@@ -107,7 +107,7 @@ func TestMatchTopicsResolvesStartMessage(t *testing.T) {
 		t.Fatalf("UpsertTopicSegment: %v", err)
 	}
 
-	hits, err := store.MatchTopics(con, "fusion", 10)
+	hits, err := store.MatchTopics(con, "fusion", 10, nil)
 	if err != nil {
 		t.Fatalf("MatchTopics: %v", err)
 	}
@@ -122,12 +122,12 @@ func TestMatchTopicsResolvesStartMessage(t *testing.T) {
 	}
 
 	// A query matching the summary column also surfaces (porter stemming on "recall").
-	if h, _ := store.MatchTopics(con, "recall", 10); len(h) != 1 {
+	if h, _ := store.MatchTopics(con, "recall", 10, nil); len(h) != 1 {
 		t.Errorf("MatchTopics(recall) over summary = %d, want 1", len(h))
 	}
 
 	// A non-matching query returns nothing (not an error).
-	if h, _ := store.MatchTopics(con, "kubernetes", 10); len(h) != 0 {
+	if h, _ := store.MatchTopics(con, "kubernetes", 10, nil); len(h) != 0 {
 		t.Errorf("MatchTopics(kubernetes) = %d, want 0", len(h))
 	}
 
@@ -135,7 +135,7 @@ func TestMatchTopicsResolvesStartMessage(t *testing.T) {
 	if err := store.UpsertTopicSegment(con, "sess1", "uuid-orphan", "", "orphan topic", "no backing message", 2.0); err != nil {
 		t.Fatalf("UpsertTopicSegment orphan: %v", err)
 	}
-	if h, _ := store.MatchTopics(con, "orphan", 10); len(h) != 0 {
+	if h, _ := store.MatchTopics(con, "orphan", 10, nil); len(h) != 0 {
 		t.Errorf("MatchTopics(orphan) with no start message = %d, want 0", len(h))
 	}
 }

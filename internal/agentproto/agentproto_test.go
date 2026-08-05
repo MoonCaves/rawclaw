@@ -974,7 +974,7 @@ func TestTopicsCommand(t *testing.T) {
 	con.Close()
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	res, err := Topics("rollback", scope, 8, "")
+	res, err := Topics("rollback", scope, TopicsOpts{Limit: 8})
 	if err != nil {
 		t.Fatalf("Topics: %v", err)
 	}
@@ -999,7 +999,7 @@ func TestTopicsCommand(t *testing.T) {
 	}
 
 	// A query that matches nothing (but topics ARE tagged) → no hits, no empty-note.
-	none, err := Topics("kubernetes", scope, 8, "")
+	none, err := Topics("kubernetes", scope, TopicsOpts{Limit: 8})
 	if err != nil {
 		t.Fatalf("Topics(kubernetes): %v", err)
 	}
@@ -1027,7 +1027,7 @@ func TestTopicsEmptyState(t *testing.T) {
 	}
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	res, err := Topics("anything", scope, 8, "")
+	res, err := Topics("anything", scope, TopicsOpts{Limit: 8})
 	if err != nil {
 		t.Fatalf("Topics: %v", err)
 	}

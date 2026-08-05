@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -142,12 +145,22 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 	if err != nil {
 		return fmt.Errorf("open %q read-write: %w", dbp, err)
 	}
-	defer con.Close()
 
 	n, err := runTagWrite(con, fullSID, r, nowUnix())
+	_ = con.Close() // close before folding in: the fold attaches this db read-only
 	if err != nil {
 		return err
 	}
+
+	// Fold the new topic rows into the consolidated store, the same write-through
+	// an indexing run does. Without it a tag written today stays invisible to the
+	// one-store readers until the next `rawclaw consolidate`. Advisory: the
+	// consolidated store is a derived artifact, so a failed fold is a stale cache,
+	// never a failed tag-write.
+	if err := index.SyncConsolidatedFrom(dbp); err != nil {
+		slog.Debug("tag-write: consolidated write-through failed", "db", filepath.Base(dbp), "err", err)
+	}
+
 	fmt.Fprintf(w, "wrote %d topic segments for %s\n", n, lastSlice8(fullSID))
 	return nil
 }

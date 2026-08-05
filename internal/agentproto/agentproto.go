@@ -1383,34 +1383,107 @@ type TopicsResult struct {
 // exist anywhere in scope — tells the agent how topics get tagged.
 const topicsEmptyNote = "no topics tagged yet — a session is tagged via the rawclaw-topic-tagger subagent"
 
-// Topics searches ONLY the topic layer across scope (nil = all projects),
-// returning hits ordered per-project by FTS rank, capped at limit per project.
-// Each hit resolves the segment's START message id (what MatchTopics returns) to
-// its uuid for a read-ref. It never touches the keyword/vector ranking — this is
-// the separate, on-demand finder. anyTopics reports whether ANY topic rows exist
-// in scope (regardless of query match), so the caller can tell "no match" apart
-// from "nothing tagged yet".
+// TopicsOpts groups the topic-finder's scope narrowing. Both narrowing fields
+// resolve to project labels against the one store: Project is already a label,
+// IncludePath is a pattern matched in Go against the (project, working
+// directory) pairs the store knows about.
+type TopicsOpts struct {
+	Limit       int
+	Project     string // "" = every project; else the one project to search
+	IncludePath string // "" = no filter; else a regex over the project working dir
+}
+
+// Topics searches ONLY the topic layer, returning hits ordered by FTS rank and
+// capped at Limit. Each hit resolves the segment's START message id (what
+// MatchTopics returns) to its uuid for a read-ref. It never touches the
+// keyword/vector ranking — this is the separate, on-demand finder. The
+// empty-state note distinguishes "no match" from "nothing tagged yet".
 //
-// Ordering is deliberately PER-PROJECT, not global. Each project is its own
-// SQLite file, and raw bm25 scores are NOT comparable across independent
-// databases — bm25 folds in per-database corpus statistics, so a weak hit in a
-// small database can outscore a strong hit in a large one. Merging by score was
-// tried and reverted for exactly that reason. A correct global ranking needs one
-// shared index, not a smarter merge; that is tracked as the consolidation work.
-func Topics(query string, scope []view.Scope, limit int, includePath string) (TopicsResult, error) {
+// Ordering is GLOBAL, across every project at once, because the whole corpus is
+// one FTS index: bm25 folds in corpus statistics, and those are only comparable
+// when every candidate was scored against the same corpus. Limit is therefore a
+// cap on the combined list, not a per-project quota — the old per-project cap
+// existed only because a merge across independent databases could not be
+// ordered, and it let a weak hit from a small project sit alongside a strong one
+// from a large project as though they ranked equally.
+//
+// scope is the fallback path's project enumeration, used only when the one
+// store cannot answer.
+func Topics(query string, scope []view.Scope, opts TopicsOpts) (TopicsResult, error) {
+	limit := opts.Limit
 	if limit <= 0 {
 		limit = DefaultSearchLimit
 	}
+
+	if con, _, err := index.OpenConsolidated(); err == nil {
+		defer con.Close()
+		if res, ok := topicsFromStore(con, query, limit, opts); ok {
+			return res, nil
+		}
+	}
+	return topicsByFanOut(query, scope, limit, opts)
+}
+
+// topicsFromStore is the one-store path: one database, one query, one globally
+// ranked list. ok=false means the store could not answer this request — the
+// narrowing named projects it has never heard of — and the caller falls back to
+// the per-project databases rather than report an empty result the store did
+// not earn.
+func topicsFromStore(con *sql.DB, query string, limit int, opts TopicsOpts) (TopicsResult, bool) {
+	// A store carrying no topic rows at all cannot answer this verb — the topic
+	// layer is written into a project db by `tag-write` and folded in after, so
+	// an un-folded store would report "nothing tagged" over a corpus that is in
+	// fact tagged. Hand those back to the fan-out rather than answer confidently.
+	if !store.TopicRowsExist(con) {
+		return TopicsResult{}, false
+	}
+	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.IncludePath, "")
+	if err != nil || (narrowed && len(projects) == 0) {
+		return TopicsResult{}, false
+	}
+
+	thits, err := store.MatchTopics(con, query, limit, projects)
+	if err != nil {
+		return TopicsResult{}, false
+	}
+	hits := []TopicHit{}
+	for _, h := range thits {
+		uuid := store.MessageUUID(con, h.MsgID)
+		if uuid == "" {
+			continue // can't build a read-ref without the message uuid
+		}
+		hits = append(hits, TopicHit{
+			Topic:   h.Topic,
+			Project: h.Project,
+			ReadRef: fmtRef(h.SessionID, uuid),
+		})
+	}
+
+	// No empty-state note here: reaching this point means the store DOES carry
+	// topic rows, so zero hits is a query that matched nothing, not an untagged
+	// corpus.
+	return TopicsResult{Query: query, Hits: hits}, true
+}
+
+// topicsByFanOut is the pre-consolidation path, kept as the fallback for a
+// corpus whose one store is missing or empty. Its ordering is per-project and
+// its cap is per-project, because scores from independent databases cannot be
+// merged into one ranking — the limitation this fallback inherits and the one
+// store removes.
+func topicsByFanOut(query string, scope []view.Scope, limit int, opts TopicsOpts) (TopicsResult, error) {
 	if scope == nil {
 		scope = allScope()
 	}
-	if includePath != "" {
-		scope = filterScopeByPath(scope, includePath, "")
+	if opts.IncludePath != "" {
+		scope = filterScopeByPath(scope, opts.IncludePath, "")
 	}
 
 	hits := []TopicHit{}
 	anyTopics := false
 	for _, sc := range scope {
+		if opts.Project != "" && sc.Project != opts.Project {
+			continue
+		}
 		dbp, _, err := scopes.Resolve(sc, false)
 		if err != nil {
 			continue // a failing project is skipped (mirrors locateSession)
@@ -1426,7 +1499,7 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 		if store.TopicRowsExist(con) {
 			anyTopics = true
 		}
-		thits, _ := store.MatchTopics(con, query, limit)
+		thits, _ := store.MatchTopics(con, query, limit, nil)
 		for _, h := range thits {
 			uuid := store.MessageUUID(con, h.MsgID)
 			if uuid == "" {
@@ -1448,10 +1521,63 @@ func Topics(query string, scope []view.Scope, limit int, includePath string) (To
 	return res, nil
 }
 
+// resolveStoreProjects turns a request's scope narrowing into the exact project
+// labels the one store should be filtered on. narrowed reports whether the
+// request asked for a subset at all — the difference between "search
+// everything" (no filter, which also keeps rows indexed before the scope
+// columns existed) and "search these projects", which an empty result set would
+// otherwise be indistinguishable from.
+//
+// A path pattern is matched HERE, in Go, against the (project, directory) pairs
+// the store knows, so the regex keeps Go's semantics rather than SQLite's and
+// no pattern ever reaches the SQL.
+func resolveStoreProjects(con *sql.DB, project, includePath, excludePath string) (projects []string, narrowed bool, err error) {
+	if project == "" && includePath == "" && excludePath == "" {
+		return nil, false, nil
+	}
+	scopeRows, err := store.DistinctScopes(con)
+	if err != nil {
+		return nil, true, err
+	}
+
+	keep := map[string]bool{}
+	for _, sr := range scopeRows {
+		keep[sr.Project] = keep[sr.Project] // ensure the key exists with a false default
+	}
+	if includePath != "" || excludePath != "" {
+		pred := query.PathPredicate(includePath, excludePath)
+		for _, sr := range scopeRows {
+			if pred(sr.CWD) {
+				keep[sr.Project] = true
+			}
+		}
+	} else {
+		for k := range keep {
+			keep[k] = true
+		}
+	}
+	if project != "" {
+		for k := range keep {
+			if k != project {
+				keep[k] = false
+			}
+		}
+	}
+
+	for _, sr := range scopeRows {
+		if keep[sr.Project] {
+			keep[sr.Project] = false // emit each label once
+			projects = append(projects, sr.Project)
+		}
+	}
+	sort.Strings(projects)
+	return projects, true, nil
+}
+
 // TopicsAndRender runs Topics and writes the result to w (JSON when wantJSON, else
 // text). The exported entry the top-level `topics` subcommand calls.
-func TopicsAndRender(w io.Writer, query string, scope []view.Scope, limit int, includePath string, wantJSON bool) error {
-	result, err := Topics(query, scope, limit, includePath)
+func TopicsAndRender(w io.Writer, query string, scope []view.Scope, opts TopicsOpts, wantJSON bool) error {
+	result, err := Topics(query, scope, opts)
 	if err != nil {
 		return err
 	}
