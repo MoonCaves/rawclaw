@@ -35,6 +35,73 @@ func IsConsolidatedDB(dbFileName string) bool {
 	return filepath.Base(dbFileName) == ConsolidatedDBName
 }
 
+// OpenConsolidated opens the one store read-only for a read verb and reports
+// how many sessions it holds. It returns an error — never a usable connection —
+// when the store is absent, unreadable, or empty. Those three states look
+// identical to "nothing matched" once a query has run against them, and a
+// confident empty answer from a store that was never filled is the one failure
+// a reader must not produce. A caller that gets an error falls back to the
+// per-project databases and says which store answered.
+func OpenConsolidated() (*sql.DB, int, error) {
+	path := ConsolidatedPath()
+	if _, err := os.Stat(path); err != nil {
+		return nil, 0, fmt.Errorf("no consolidated store at %s", path)
+	}
+	con, err := store.ConnectRO(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("open consolidated store: %w", err)
+	}
+	var sessions int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions); err != nil {
+		_ = con.Close()
+		return nil, 0, fmt.Errorf("read consolidated store: %w", err)
+	}
+	if sessions == 0 {
+		_ = con.Close()
+		return nil, 0, fmt.Errorf("consolidated store holds no sessions")
+	}
+	return con, sessions, nil
+}
+
+// UnconsolidatedDBs returns the per-project databases the one store has never
+// folded in, by comparing the cache directory against the fold-in watermarks
+// the store stamps. This is what keeps a one-store read honest: a project whose
+// database exists but was never merged is missing from every answer, and a
+// reader has to be able to name it rather than let the corpus quietly shrink.
+//
+// It compares presence, not freshness — a source that changed after its
+// fold-in is not detected here, because proving that would mean opening every
+// source database, which is the per-project fan-out this work exists to remove.
+func UnconsolidatedDBs(con *sql.DB) ([]string, error) {
+	dbs, err := PerProjectDBs()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := con.Query("SELECT key FROM meta WHERE key LIKE 'sync:%'")
+	if err != nil {
+		return nil, fmt.Errorf("read fold-in watermarks: %w", err)
+	}
+	defer rows.Close()
+	folded := map[string]struct{}{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		folded[strings.TrimPrefix(key, "sync:")] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, dbp := range dbs {
+		if _, ok := folded[filepath.Base(dbp)]; !ok {
+			missing = append(missing, dbp)
+		}
+	}
+	return missing, nil
+}
+
 // SyncStats reports what one consolidation pass moved.
 type SyncStats struct {
 	Sources      int // per-project dbs read
