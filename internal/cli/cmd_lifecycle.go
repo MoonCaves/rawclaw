@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/archive"
+	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/paths"
@@ -315,9 +316,41 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 		}
 	}
 
+	// The vault holds rawclaw's own copy of every session it indexed, and a
+	// rebuild reads it rather than the index. A tombstone alone stops the
+	// rebuild from restoring a deleted session, but the raw bytes would stay
+	// on disk — which contradicts the receipt printed below. So an explicit
+	// delete evicts the copy too, for the live matches and the retained rows
+	// alike.
+	evictIDs := make([]string, 0, len(done.Matched)+len(retained))
+	for _, it := range done.Matched {
+		evictIDs = append(evictIDs, it.SessionID)
+	}
+	for _, r := range retained {
+		evictIDs = append(evictIDs, r.SessionID)
+	}
+	if err := evictVaultCopies(evictIDs); err != nil {
+		return err
+	}
+
 	fmt.Fprintf(out, "Deleted %d session(s) (%d retained), reclaimed %s. Tombstone: %s\n",
 		len(done.Matched)+len(retained), len(retained), humanizeBytes(done.TotalBytes), done.TombstonePath)
 	printProvenance(out, len(done.Matched))
+	return nil
+}
+
+// evictVaultCopies removes rawclaw's own transcript copy for every session an
+// explicit delete just removed. The tombstone already keeps a rebuild from
+// restoring those sessions; this is what makes the bytes actually go away.
+func evictVaultCopies(ids []string) error {
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if err := durable.Remove(id); err != nil {
+			return fmt.Errorf("remove vaulted transcript for %s: %w", id, err)
+		}
+	}
 	return nil
 }
 
