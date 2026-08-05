@@ -243,3 +243,42 @@ func LastMessages(con *sql.DB, sid string, limit int) ([]SessionMessage, error) 
 	}
 	return out, rows.Err()
 }
+
+// NewestHumanMessageID returns the id of the newest message in a session that a
+// PERSON actually typed, or 0 when there is none.
+//
+// Why a query and not a scan: an earlier version walked back a fixed window of
+// trailing records looking for a human turn, and it silently found nothing.
+// Measured on the live corpus, ~85% of role='user' rows are machinery — tool
+// results, notifications, slash-command plumbing, reminder blocks — so in a
+// working session the newest human turn can sit far behind the tail. It was 65
+// records back in the session that exposed this, against a 40-record window, and
+// the caller degraded to "no turn found" without saying so. A predicate has no
+// window to be wrong about.
+//
+// The NOT LIKE list is the one the untagged-session census already validated on
+// this corpus (librarian/bin/rawclaw-untagged-census.sh), plus the interruption
+// marker. length>2 drops bare punctuation acks.
+func NewestHumanMessageID(con *sql.DB, sid string) (int, error) {
+	var id sql.NullInt64
+	err := con.QueryRow(`
+SELECT id FROM messages
+WHERE session_id=? AND role='user' AND length(trim(content))>2
+  AND content NOT LIKE '[TOOL_RESULT]%'
+  AND content NOT LIKE '[TOOL:%'
+  AND content NOT LIKE '[Request interrupted%'
+  AND content NOT LIKE '<command-%'
+  AND content NOT LIKE '<local-command-%'
+  AND content NOT LIKE '<task-notification>%'
+  AND content NOT LIKE '<system-reminder>%'
+  AND content NOT LIKE '<bash-%'
+  AND content NOT LIKE '<environment_context>%'
+ORDER BY id DESC LIMIT 1`, sid).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return int(id.Int64), nil
+}

@@ -61,6 +61,31 @@ type Options struct {
 	DebugSearch      bool
 	Timeout          time.Duration
 	DirSet           bool // --dir explicitly passed (the arbitrary-folder opt-in)
+
+	// CurrentSession is the caller's own live session ("" = fall back to the
+	// runtime's env, "off" = don't exclude anything). Resolved by currentSession.
+	CurrentSession string
+}
+
+// currentSessionEnv is the Claude Code environment variable that names the
+// session a command is being run from. Reading it is how the exclusion works
+// without every agent remembering to pass a flag — the whole point is that the
+// caller does NOT have to know it just typed something.
+const currentSessionEnv = "CLAUDE_CODE_SESSION_ID"
+
+// currentSession resolves which session the caller is live in, for the
+// current-turn exclusion: the explicit flag first, then the runtime's env. The
+// literal "off" disables it, so a session can always search its own live turn
+// back if it means to.
+func (o *Options) currentSession() string {
+	v := strings.TrimSpace(o.CurrentSession)
+	if strings.EqualFold(v, "off") {
+		return ""
+	}
+	if v != "" {
+		return v
+	}
+	return strings.TrimSpace(os.Getenv(currentSessionEnv))
 }
 
 // params builds the retrieve.SearchParams the search shapes read, carrying the
@@ -174,6 +199,11 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.IntVar(&opts.MinMessages, "min-messages", 0, "only sessions with >= N messages (drops thin/bootstrap threads)")
 	f.BoolVar(&opts.DebugSearch, "debug-search", false, "explain WHY each hit ranked where it did (LLM-free scoring breakdown)")
 	_ = f.MarkHidden("debug-search")
+	f.StringVar(&opts.CurrentSession, "current-session", "",
+		"the session you are searching FROM (id or 8-char prefix); its CURRENT TURN — the prompt "+
+			"just typed and this turn's tool output — is withheld, since it is not recall and it "+
+			"outranks the archive on its own words. That session's earlier history stays searchable. "+
+			"Defaults to $"+currentSessionEnv+"; pass `off` to search your own live turn too.")
 
 	// --timeout is PERSISTENT (every subcommand inherits it): rawclaw must be
 	// self-bounding so an agent never needs an external `timeout(1)`. Default 30s;
@@ -1019,6 +1049,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		MinMessages:      o.MinMessages,
 		IncludePath:      o.IncludePath,
 		ExcludePath:      o.ExcludePath,
+		CurrentSession:   o.currentSession(),
 	}, emb, label, o.JSON)
 }
 

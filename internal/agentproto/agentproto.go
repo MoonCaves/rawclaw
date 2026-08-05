@@ -128,6 +128,13 @@ type SearchEnvelope struct {
 	// mentions (relevance ranks by token match, not importance). Steers to a
 	// distinctive token + scoping, and warns against skipping on the snippet alone.
 	NarrowHint string `json:"narrow_hint,omitempty"`
+
+	// ExcludedCurrentTurn counts the candidates withheld as the caller's own live
+	// turn (SearchOpts.CurrentSession). Reported rather than dropped quietly: an
+	// agent that knows a record was withheld can ask for it; one that doesn't
+	// just sees a hole. 0 = nothing was withheld, which is the case whenever the
+	// caller didn't say where it was.
+	ExcludedCurrentTurn int `json:"excluded_current_turn,omitempty"`
 }
 
 // ReadResult is a bounded excerpt around a ref. Embeds the AnchoredView shape
@@ -184,6 +191,12 @@ type SearchOpts struct {
 	MinMessages      int    // 0 = no minimum
 	IncludePath      string // "" = no filter; else a regex over the project working dir
 	ExcludePath      string // "" = no filter; else a regex over the project working dir
+
+	// CurrentSession is the session the caller is live in ("" = unknown, the
+	// pre-existing behavior). Its CURRENT TURN — and only that — is withheld from
+	// the results; see dropCurrentTurn for what the turn is and why the rest of
+	// the session stays searchable.
+	CurrentSession string
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -364,6 +377,10 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 
 	cands, reports, hitCeiling := collectCandidates(scope, rawQuery, fetch, p, qvec)
 
+	// Withhold the caller's own live turn before anything is ranked: the prompt
+	// just typed is not recall, and letting it win a slot costs a real result.
+	cands, droppedTurn := dropCurrentTurn(cands, opts.CurrentSession)
+
 	sortCandidates(cands, opts.Sort)
 
 	// Build every DISTINCT result first, then cap to `limit`. Capping after the
@@ -464,16 +481,17 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	}
 
 	return SearchEnvelope{
-		Results:           results,
-		Scopes:            reports,
-		Complete:          scopesComplete(reports) && !hasMore,
-		Count:             len(results),
-		TotalMatches:      total,
-		TotalIsLowerBound: hitCeiling,
-		HasMore:           hasMore,
-		NextCommand:       nextCmd,
-		RecencyHint:       recencyHint,
-		NarrowHint:        narrowHint,
+		Results:             results,
+		Scopes:              reports,
+		Complete:            scopesComplete(reports) && !hasMore,
+		Count:               len(results),
+		TotalMatches:        total,
+		TotalIsLowerBound:   hitCeiling,
+		HasMore:             hasMore,
+		NextCommand:         nextCmd,
+		RecencyHint:         recencyHint,
+		NarrowHint:          narrowHint,
+		ExcludedCurrentTurn: droppedTurn,
 	}
 }
 
@@ -639,6 +657,112 @@ func collectCandidates(
 		reports = append(reports, rep)
 	}
 	return cands, reports, hitCeiling
+}
+
+// dropCurrentTurn removes the caller's CURRENT TURN from the candidate pool and
+// reports how many rows it withheld.
+//
+// The problem: a live session's records are indexed as they are written, so the
+// prompt the operator just typed is in the index by the time the agent runs a
+// search on it. It matches its own words better than anything in the archive
+// does, and it wins the top slot with a record that tells the caller nothing it
+// doesn't already know — displacing a real result.
+//
+// The scope here is deliberately the narrowest thing that fixes that, and is NOT
+// the session and NOT its lineage. In a long session the earlier parts of that
+// same session are legitimate, valuable history — often the most relevant
+// history there is, because it is the same thread of work — and they stay fully
+// searchable. Only the turn in flight goes.
+//
+// "The turn in flight" is the run from the newest message a PERSON typed to the
+// end of the session: currentTurnStart finds that message and everything at or
+// after its id is withheld. What sits after it is this turn's own tool results,
+// injected envelopes and reasoning — records the caller produced seconds ago,
+// not recall. What sits before it is history, and is left alone.
+//
+// The boundary is resolved once per database rather than once per candidate. A
+// session continued from a second directory has a row in each project's
+// database, so there can legitimately be more than one.
+func dropCurrentTurn(cands []retrieve.Anchor, currentSession string) ([]retrieve.Anchor, int) {
+	if currentSession == "" || len(cands) == 0 {
+		return cands, 0
+	}
+	starts := map[string]int{}
+	for i := range cands {
+		dbp := cands[i].DBP
+		if dbp == "" || !isCurrentSession(cands[i].SessionID, currentSession) {
+			continue
+		}
+		if _, done := starts[dbp]; !done {
+			starts[dbp] = currentTurnStart(dbp, cands[i].SessionID)
+		}
+	}
+	if len(starts) == 0 {
+		return cands, 0
+	}
+	out := make([]retrieve.Anchor, 0, len(cands))
+	dropped := 0
+	for _, a := range cands {
+		start := starts[a.DBP]
+		if start > 0 && a.ID >= start && isCurrentSession(a.SessionID, currentSession) {
+			dropped++
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, dropped
+}
+
+// isCurrentSession reports whether candSID is the session the caller named.
+// A full session id and a pasted <session8> both resolve, because 8 hex chars is
+// the same handle the read-ref vocabulary already hands agents; below 8 the
+// prefix is too loose to act on and only an exact id counts.
+//
+// An agent sub-session ("<parent>/agent-…") shares its parent's whole id and so
+// matches every prefix of it — but it is a DIFFERENT conversation, never the
+// caller's own turn, so a match that has to cross a "/" is refused.
+func isCurrentSession(candSID, arg string) bool {
+	if candSID == arg {
+		return true
+	}
+	if len(arg) < 8 || !strings.HasPrefix(candSID, arg) {
+		return false
+	}
+	return !strings.Contains(candSID[len(arg):], "/")
+}
+
+// currentTurnStart returns the message id the caller's live turn begins at: the
+// newest record in the session that a person actually typed. 0 means there is no
+// such record at all, and 0 disables the exclusion — nothing to anchor the turn
+// on means nothing to withhold, and withholding something else would be worse
+// than doing nothing.
+//
+// The boundary is found by a predicate over the whole session (store.NewestHuman
+// MessageID), not by walking a fixed window back from the tail. An earlier
+// version scanned the last 40 records, on the assumption that the caller's
+// prompt sits within a handful of records of the end. Measured against the live
+// corpus that assumption is wrong by a wide margin: roughly 85% of role=user rows
+// are machinery — tool results and injected envelopes — and in the session that
+// exposed this the newest human-typed message was 65 records back. The window
+// found nothing, returned 0, and silently turned the feature off while its tests
+// stayed green. Any fixed window is a guess about a ratio that varies per turn,
+// so there is no window here.
+//
+// "A person typed it" is role=user minus the machinery: tool results, injected
+// envelopes, and the runtime's interruption marker are all excluded, the last for
+// the same reason view.isInterruptionMarker excludes it from the browse tail —
+// it is the runtime reporting a stop, not anything either party said.
+func currentTurnStart(dbp, sessionID string) int {
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		return 0
+	}
+	defer con.Close()
+	id, err := store.NewestHumanMessageID(con, sessionID)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 // attachTopics fills in each result's Topic label, in place. refs and anchors
@@ -1272,6 +1396,18 @@ func bookendRows(con *sql.DB, fullSID string, asc bool) ([]store.Msg, error) {
 // stale, so the agent reads a partial result AS partial (#6).
 func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 	if len(env.Results) == 0 {
+		// An empty result set with rows withheld is the one case where the
+		// standard "rephrase" advice is actively wrong: the query DID match, and
+		// telling the caller to rewrite it sends them chasing a wording problem
+		// that does not exist. Say what happened instead, and name the flag that
+		// shows the withheld rows. This is also the case where staying silent
+		// would be a lie — "No matches" over a set we chose not to return.
+		if env.ExcludedCurrentTurn > 0 {
+			fmt.Fprintf(w, "No matches outside the turn you are in now — %s\n", currentTurnLine(env.ExcludedCurrentTurn))
+			fmt.Fprintln(w, "To see them anyway, re-run with --current-session off.")
+			renderScopeFooter(w, env)
+			return
+		}
 		fmt.Fprintln(w, "No matches. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.")
 		renderScopeFooter(w, env)
 		return
@@ -1322,6 +1458,9 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 	if env.NarrowHint != "" {
 		fmt.Fprintf(w, "note: %s\n", env.NarrowHint)
 	}
+	if env.ExcludedCurrentTurn > 0 {
+		fmt.Fprintf(w, "note: %s\n", currentTurnLine(env.ExcludedCurrentTurn))
+	}
 	renderScopeFooter(w, env)
 
 	// Cheap disambiguation: when the matches span 2+ distinct projects, say so and
@@ -1332,6 +1471,13 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 	// Freshness: the last footer line, always — these are raw transcripts, not the
 	// current state of the world.
 	fmt.Fprintln(w, freshnessNote)
+}
+
+// currentTurnLine states what the current-turn exclusion withheld. It names the
+// turn, not the session, because the session's earlier history was searched —
+// an agent must not read this as "my own session was skipped".
+func currentTurnLine(n int) string {
+	return fmt.Sprintf("excluded %d record(s) of the turn you are in now; the rest of that session was searched", n)
 }
 
 // freshnessNote is the standing reminder that search/read results are raw session
