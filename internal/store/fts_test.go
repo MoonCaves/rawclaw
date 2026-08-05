@@ -128,20 +128,23 @@ func TestSearchHitsFilters(t *testing.T) {
 //	billing (project "billing", source "claude"): "needle in billing"
 //	rollout (project "billing", source "codex"):  "needle in the rollout"
 //	nolabel (no project, no source):              "needle with no label"
+//
+// "billing" is recorded under two different directories, which is what a
+// project checked out twice looks like.
 func seedScopedCorpus(t *testing.T) *sql.DB {
 	t.Helper()
 	con, _ := storetest.NewDB(t)
 	rows := []struct {
-		id, project, source, text string
+		id, project, cwd, source, text string
 	}{
-		{"ledger", "ledger", "claude", "needle in the ledger"},
-		{"billing", "billing", "claude", "needle in billing"},
-		{"rollout", "billing", "codex", "needle in the rollout"},
-		{"nolabel", "", "", "needle with no label"},
+		{"ledger", "ledger", "/src/ledger", "claude", "needle in the ledger"},
+		{"billing", "billing", "/src/billing", "claude", "needle in billing"},
+		{"rollout", "billing", "/work/billing", "codex", "needle in the rollout"},
+		{"nolabel", "", "", "", "needle with no label"},
 	}
 	for i, r := range rows {
 		storetest.InsertSession(t, con, storetest.Session{
-			ID: r.id, MessageCount: 1, Project: r.project, SourceTool: r.source})
+			ID: r.id, MessageCount: 1, Project: r.project, CWD: r.cwd, SourceTool: r.source})
 		storetest.InsertMessage(t, con, storetest.Message{
 			SessionID: r.id, Role: "user", Content: r.text,
 			TS: float64(100 * (i + 1)), ISO: "2026-01-01T10:00:00Z", UUID: "uuid-" + r.id})
@@ -199,6 +202,58 @@ func TestSearchHitsScopeFilters(t *testing.T) {
 	anchors, err := store.SearchAnchors(con, "needle", store.Filter{Projects: []string{"ledger"}}, store.SortRelevance, 10)
 	if err != nil || len(anchors) != 1 || anchors[0].SessionID != "ledger" {
 		t.Errorf("scoped anchors = %v (%v), want the one ledger row", anchors, err)
+	}
+}
+
+func TestSearchAnchorsCarryProject(t *testing.T) {
+	con := seedScopedCorpus(t)
+
+	// Every anchor names the project it came from. An unscoped search over the
+	// one store returns rows from several projects at once, so a row that does
+	// not say where it came from cannot be rendered or grouped.
+	anchors, err := store.SearchAnchors(con, "needle", store.Filter{}, store.SortNewest, 10)
+	if err != nil {
+		t.Fatalf("SearchAnchors: %v", err)
+	}
+	got := map[string]string{}
+	for _, a := range anchors {
+		got[a.SessionID] = a.Project
+	}
+	want := map[string]string{
+		"ledger":  "ledger",
+		"billing": "billing",
+		"rollout": "billing",
+		"nolabel": "", // a row indexed before the scope columns has no label to carry
+	}
+	for sid, wantProj := range want {
+		if got[sid] != wantProj {
+			t.Errorf("anchor %s project = %q, want %q", sid, got[sid], wantProj)
+		}
+	}
+}
+
+func TestDistinctScopes(t *testing.T) {
+	con := seedScopedCorpus(t)
+
+	got, err := store.DistinctScopes(con)
+	if err != nil {
+		t.Fatalf("DistinctScopes: %v", err)
+	}
+	// One pair per directory a project was seen in, so a path pattern matching
+	// either of "billing"'s two directories still selects the one label. The
+	// unlabeled row contributes nothing — there is no label to select.
+	want := []store.ProjectScope{
+		{Project: "billing", CWD: "/src/billing"},
+		{Project: "billing", CWD: "/work/billing"},
+		{Project: "ledger", CWD: "/src/ledger"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("DistinctScopes = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("DistinctScopes = %v, want %v", got, want)
+		}
 	}
 }
 
