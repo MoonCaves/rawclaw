@@ -109,6 +109,13 @@ type SearchParams struct {
 	Before           string // "" = no bound; else YYYY-MM-DD inclusive
 	RawMatch         string // "" = plain path; else explicit FTS5 expr (boolean query)
 	MinMessages      int    // 0 = no minimum
+
+	// Scope narrowing for the one store, where project and source are columns
+	// rather than a choice of which database to open. Both empty searches the
+	// whole corpus. Projects is an exact-match list the caller has already
+	// resolved (a path pattern is matched in Go, never pushed into SQL).
+	Projects   []string
+	SourceTool string
 }
 
 // storeFilterSort maps SearchParams onto the store's shared FTS Filter + Sort
@@ -123,6 +130,8 @@ func storeFilterSort(p SearchParams) (store.Filter, store.Sort) {
 		MinMessages:      p.MinMessages,
 		SinceDate:        p.Since,
 		BeforeDate:       p.Before,
+		Projects:         p.Projects,
+		SourceTool:       p.SourceTool,
 	}
 	switch p.Sort {
 	case "newest":
@@ -635,6 +644,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			Snip:         disp,
 			Cov:          cov,
 			MissingSince: a.MissingSince, // 0 when NULL (present)
+			Project:      a.Project,      // "" from a database that predates the scope columns
 		})
 	}
 
