@@ -42,7 +42,20 @@ func PrintBrowse(w io.Writer, rows []view.BrowseRow, project string) {
 	fmt.Fprintf(w, "%d most-recent sessions on %s:\n\n", len(rows), project)
 	for _, r := range rows {
 		fmt.Fprintf(w, "  · %s · %d msgs · %s\n", sid8(r.SessionID), r.N, r.Preview)
+		printLastActivity(w, r.Last)
 	}
+}
+
+// printLastActivity writes a row's "now" line under its opening line. The list
+// is ordered by recency, so the newest real message is the thing the reader
+// actually came for; the opening above it says what the session is FOR. Omitted
+// entirely when the tail held nothing but machinery — a missing line is honest,
+// a tool result dressed up as activity is not.
+func printLastActivity(w io.Writer, last string) {
+	if last == "" {
+		return
+	}
+	fmt.Fprintf(w, "      now → %s\n", last)
 }
 
 // PrintBrowseAll renders the cross-project (--all) recent-sessions list: the
@@ -56,6 +69,7 @@ func PrintBrowseAll(w io.Writer, rows []view.BrowseAllRow) {
 	fmt.Fprintf(w, "%d most-recent sessions across all projects:\n\n", len(rows))
 	for _, r := range rows {
 		fmt.Fprintf(w, "  · %s · %s · %d msgs · %s\n", sid8(r.SessionID), r.Project, r.N, r.Preview)
+		printLastActivity(w, r.Last)
 	}
 }
 

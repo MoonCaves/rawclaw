@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -401,5 +402,68 @@ func TestBrowseReturnsPreviewsWithoutDeadlock(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Browse() did not return within 10s — single-conn pool deadlock reintroduced")
+	}
+}
+
+// TestSessionLastActivityShowsNewestRealMessage is the "what is this desk doing
+// right now" contract: the row's Last must be the newest message that is real
+// conversation, not the session's opening and not the machinery that usually
+// sits at the tail of a busy session.
+func TestSessionLastActivityShowsNewestRealMessage(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	lines := []string{
+		`{"type":"user","uuid":"11111111-0000-0000-0000-000000000001","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"set up the deployment pipeline"}}`,
+		`{"type":"assistant","uuid":"11111111-0000-0000-0000-000000000002","timestamp":"2026-06-01T10:05:00Z","message":{"role":"assistant","content":"the nightly job now repins every image"}}`,
+		`{"type":"user","uuid":"11111111-0000-0000-0000-000000000003","timestamp":"2026-06-01T10:06:00Z","message":{"role":"user","content":"[TOOL_RESULT] exit 0"}}`,
+		`{"type":"user","uuid":"11111111-0000-0000-0000-000000000004","timestamp":"2026-06-01T10:07:00Z","message":{"role":"user","content":"<task-notification>agent done</task-notification>"}}`,
+		`{"type":"user","uuid":"11111111-0000-0000-0000-000000000005","timestamp":"2026-06-01T10:08:00Z","message":{"role":"user","content":"[Request interrupted by user for tool use]"}}`,
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sessnow.jsonl"),
+		[]byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	rows := Browse(dir, 10, "", "")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(rows))
+	}
+	r := rows[0]
+	// The opening stays the identity line.
+	if !strings.Contains(r.Preview, "set up the deployment pipeline") {
+		t.Errorf("Preview = %q, want the session's opening", r.Preview)
+	}
+	// Last must skip the tool result, the envelope AND the interruption marker,
+	// landing on the newest real message.
+	if !strings.Contains(r.Last, "nightly job now repins") {
+		t.Errorf("Last = %q, want the newest real message", r.Last)
+	}
+	for _, banned := range []string{"TOOL_RESULT", "task-notification", "interrupted by user"} {
+		if strings.Contains(r.Last, banned) {
+			t.Errorf("Last = %q, leaked machinery %q", r.Last, banned)
+		}
+	}
+}
+
+// TestSessionLastActivityEmptyWhenTailIsAllMachinery: honest silence. A session
+// whose entire tail is generated material gets no "now" line rather than a row
+// captioned with a tool result.
+func TestSessionLastActivityEmptyWhenTailIsAllMachinery(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	lines := []string{
+		`{"type":"user","uuid":"22222222-0000-0000-0000-000000000001","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"[TOOL_RESULT] only machinery here"}}`,
+		`{"type":"user","uuid":"22222222-0000-0000-0000-000000000002","timestamp":"2026-06-01T10:01:00Z","message":{"role":"user","content":"<system-reminder>nudge</system-reminder>"}}`,
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sessnoise.jsonl"),
+		[]byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rows := Browse(dir, 10, "", "")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(rows))
+	}
+	if rows[0].Last != "" {
+		t.Errorf("Last = %q, want empty (tail is all machinery)", rows[0].Last)
 	}
 }
