@@ -2,6 +2,7 @@ package retrieve
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/store/storetest"
@@ -394,4 +395,103 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// TestSearchRoutesSubstringProbe pins the whole point of the substring index at
+// the level a caller sees it: a probe landing inside a word returns nothing from
+// the word index, and now returns the message anyway. The same fixture also
+// pins that a word query is untouched by the routing — it never reaches the
+// fallback, because the fallback only fires on zero word hits.
+func TestSearchRoutesSubstringProbe(t *testing.T) {
+	sessions := []testSession{{id: "ledger", msgCount: 5, lastTS: 100}}
+	msgs := []testMsg{
+		{sessionID: "ledger", role: "user", tsISO: "2026-06-01", ts: 1,
+			content: "we should configure the reconciliation job today"},
+	}
+	_, dbp := newTestDB(t, sessions, msgs)
+
+	// "iliat" sits inside "reconciliation" and is on no token boundary.
+	got := Search(dbp, "iliat", 10, SearchParams{})
+	if len(got) != 1 {
+		t.Fatalf("substring probe: got %d hits, want 1", len(got))
+	}
+	if got[0].SessionID != "ledger" {
+		t.Errorf("substring probe: session %q, want ledger", got[0].SessionID)
+	}
+	if !containsSub(got[0].Snippet, "iliat") {
+		t.Errorf("substring probe: snippet %q must highlight the probe", got[0].Snippet)
+	}
+
+	// The word path still answers a word query, unchanged.
+	if w := Search(dbp, "reconciliation", 10, SearchParams{}); len(w) != 1 {
+		t.Errorf("word query: got %d hits, want 1", len(w))
+	}
+	// A probe matching nothing at all stays empty — the fallback is a second
+	// chance, not a way to invent hits.
+	if none := Search(dbp, "zzqxw", 10, SearchParams{}); len(none) != 0 {
+		t.Errorf("unmatchable probe: got %d hits, want 0", len(none))
+	}
+}
+
+// TestMatchAnchorsRoutesSubstringProbe is the anchor-recall half of
+// TestSearchRoutesSubstringProbe: read-refs must be reachable by substring too,
+// or a substring hit could be found but not opened.
+func TestMatchAnchorsRoutesSubstringProbe(t *testing.T) {
+	sessions := []testSession{{id: "ledger", msgCount: 5, lastTS: 100}}
+	msgs := []testMsg{
+		{sessionID: "ledger", role: "user", tsISO: "2026-06-01", ts: 1,
+			content: "we should configure the reconciliation job today"},
+	}
+	con, _ := newTestDB(t, sessions, msgs)
+
+	got := MatchAnchors(con, "iliat", 100, SearchParams{})
+	if len(got) != 1 {
+		t.Fatalf("substring probe: got %d anchors, want 1", len(got))
+	}
+	if got[0].ID == 0 {
+		t.Errorf("substring anchor must carry a message id, got 0")
+	}
+	if got[0].SessionID != "ledger" {
+		t.Errorf("substring anchor: session %q, want ledger", got[0].SessionID)
+	}
+}
+
+// TestSubstringFallbackRoutingRule pins the routing rule itself, including the
+// three cases that must NOT route — each of which is a way the fallback could
+// quietly change behavior it has no business touching.
+func TestSubstringFallbackRoutingRule(t *testing.T) {
+	tests := []struct {
+		name      string
+		q         string
+		p         SearchParams
+		wordHits  int
+		wantRoute bool
+		wantMatch string
+	}{
+		{name: "no word hits routes", q: "iliat", wantRoute: true, wantMatch: `"iliat"`},
+		{name: "phrase with a space routes as one phrase", q: "ion job", wantRoute: true, wantMatch: `"ion job"`},
+		{name: "embedded quote is doubled", q: `a"b`, wantRoute: true, wantMatch: `"a""b"`},
+		{name: "word index answered so no route", q: "iliat", wordHits: 1},
+		{name: "explicit boolean query is left alone", q: "iliat", p: SearchParams{RawMatch: "a OR b"}},
+		// Two characters cannot form a trigram, so the query could only ever
+		// return nothing — asking is pure cost.
+		{name: "shorter than a trigram does not route", q: "il"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			match, terms, route := substringFallback(tt.q, tt.p, tt.wordHits)
+			if route != tt.wantRoute {
+				t.Fatalf("route = %v, want %v", route, tt.wantRoute)
+			}
+			if !route {
+				return
+			}
+			if match != tt.wantMatch {
+				t.Errorf("match = %q, want %q", match, tt.wantMatch)
+			}
+			if len(terms) != 1 || terms[0] != strings.ToLower(strings.TrimSpace(tt.q)) {
+				t.Errorf("terms = %q, want the lowercased probe as the single highlight term", terms)
+			}
+		})
+	}
 }
