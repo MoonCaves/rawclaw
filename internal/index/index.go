@@ -238,15 +238,27 @@ func backfillScope(con *sql.DB) error {
 	}
 	rows.Close()
 
-	byDir := map[string]string{} // parent dir -> cwd recorded by a file in it
+	byDir := map[string]projectScope{}
 	for _, t := range todo {
-		dir := filepath.Dir(t.path)
-		cwd, seen := byDir[dir]
-		if !seen {
-			cwd = paths.FileCWD(t.path)
-			byDir[dir] = cwd
+		// The PROJECT dir, not the file's parent: a subagent or workflow
+		// transcript sits in a subdirectory, and its parent's name ("subagents",
+		// "wf_<id>") is not a project. A path outside the projects root has no
+		// project dir to walk up to, so its own parent is the best available
+		// answer — that is the explicit --dir scope.
+		dir := paths.ProjectDirOf(t.path)
+		if dir == "" {
+			dir = filepath.Dir(t.path)
 		}
-		projectArg, cwdArg := scopeOf(cwd, dir)
+		scope, seen := byDir[dir]
+		if !seen {
+			scope = dirScope(dir)
+			byDir[dir] = scope
+		}
+		// The dir's own cwd answers for every session in it (one dir, one working
+		// directory), so the backfill reads one transcript per PROJECT rather
+		// than one per session — the difference between a handful of reads and
+		// thousands on a large index.
+		projectArg, cwdArg := scopeOf("", scope)
 		if projectArg == nil && cwdArg == nil {
 			continue // nothing provable — leave NULL rather than invent a scope
 		}
@@ -314,13 +326,13 @@ func originOr(origin string) string {
 // true on success. Rows are stamped with this machine's identity; a replicated
 // tree goes through reindexFileWithOrigin instead.
 func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
-	return reindexFileWithOrigin(con, path, transcriptDir, "")
+	return reindexFileWithOrigin(con, path, transcriptDir, "", dirScope(transcriptDir))
 }
 
 // reindexFileWithOrigin is ReindexFile with an explicit origin_machine ("" = this
 // machine) — the provenance seam the archive-scope ingest stamps foreign
 // machine ids through.
-func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string) bool {
+func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scope projectScope) bool {
 	sid, isSub, parent := provenance.SessionIDFor(path, transcriptDir)
 
 	rows, started, last, cwd, ok := parseTranscript(path, sid)
@@ -350,7 +362,7 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string) bool
 	// Stamp provenance (D3), scope (project/cwd) and clear missing_since — a
 	// freshly (re)indexed session is present by definition, so a reappeared source
 	// file un-flags here.
-	projectArg, cwdArg := scopeOf(cwd, transcriptDir)
+	projectArg, cwdArg := scopeOf(cwd, scope)
 	if _, err := con.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
 		sid, started, last, len(rows), isSub, parentArg, originOr(origin), sourceClaude, realpath(path), projectArg, cwdArg,
@@ -435,19 +447,42 @@ func lineCWD(o map[string]any) string {
 // cwd. Both are returned as `any` so an unresolvable scope writes SQL NULL
 // rather than an empty string: NULL means "not known", "" would claim the
 // session ran in a directory with no name.
-func scopeOf(cwd, fallbackDir string) (projectArg, cwdArg any) {
+func scopeOf(own string, dir projectScope) (projectArg, cwdArg any) {
+	cwd := own
+	if cwd == "" {
+		cwd = dir.cwd
+	}
 	if cwd != "" {
 		cwdArg = cwd
-		if base := filepath.Base(strings.TrimRight(cwd, "/")); base != "" && base != "." && base != string(filepath.Separator) {
+		if base := filepath.Base(strings.TrimRight(cwd, "/")); usableScope(base) {
 			return base, cwdArg
 		}
 	}
-	if fallbackDir != "" {
-		if base := filepath.Base(filepath.Clean(fallbackDir)); base != "" && base != "." && base != string(filepath.Separator) {
-			return base, cwdArg
-		}
+	if usableScope(dir.label) {
+		return dir.label, cwdArg
 	}
 	return nil, cwdArg
+}
+
+// projectScope is a project dir's identity: the working directory its
+// transcripts record (empty when none does) and the friendly label
+// paths.ProjectLabel shows for it. Resolved once per dir and reused, because
+// resolving reads a transcript off disk and one dir holds hundreds of sessions.
+type projectScope struct{ cwd, label string }
+
+// dirScope resolves a project dir's identity. An empty dir yields an empty
+// scope, so a source with no project dir at all (a Codex rollout shards by
+// date) simply contributes no fallback.
+func dirScope(tdir string) projectScope {
+	if tdir == "" {
+		return projectScope{}
+	}
+	return projectScope{cwd: paths.DirCWD(tdir), label: paths.ProjectLabel(tdir)}
+}
+
+// usableScope rejects the degenerate basenames that carry no scope information.
+func usableScope(s string) bool {
+	return s != "" && s != "." && s != string(filepath.Separator)
 }
 
 // indexable reports whether o's "type" is in parse.IndexableTypes.
@@ -486,6 +521,11 @@ func UpdateIndex(con *sql.DB, transcriptDir string) error {
 // machine) stamped onto every (re)indexed session — the archive-scope path.
 func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 	files := paths.ContainedJSONL(transcriptDir)
+
+	// Resolve this dir's scope ONCE: every file in the walk shares it, including
+	// the subagent and workflow threads nested below it, and resolving reads a
+	// transcript off disk.
+	scope := dirScope(transcriptDir)
 
 	onDisk := make(map[string]struct{}, len(files))
 	for _, f := range files {
@@ -529,7 +569,7 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 				}
 			}
 		}
-		if reindexFileWithOrigin(con, f, transcriptDir, origin) {
+		if reindexFileWithOrigin(con, f, transcriptDir, origin, scope) {
 			sid, _, _ := provenance.SessionIDFor(f, transcriptDir)
 			if _, err := con.Exec(
 				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",

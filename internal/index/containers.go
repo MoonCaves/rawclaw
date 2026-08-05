@@ -173,7 +173,7 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 	// out of the transcript, so no fallback directory is needed here: a container
 	// with no recorded cwd has no directory that stands for one either (a Codex
 	// rollout lives in a date-sharded path, not a project dir).
-	projectArg, cwdArg := scopeOf(c.CWD, "")
+	projectArg, cwdArg := scopeOf(c.CWD, projectScope{})
 	if _, err := con.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
 		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, originOr(origin), sourceID, realpath(c.Path), projectArg, cwdArg,

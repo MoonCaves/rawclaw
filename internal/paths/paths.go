@@ -137,17 +137,56 @@ func ContainedJSONL(transcriptDir string) []string {
 // in a transcript, else the encoded dir basename.
 func ProjectLabel(tdir string) string {
 	enc := filepath.Base(filepath.Clean(tdir))
-	for _, f := range firstTopLevelJSONL(tdir) {
-		rec := firstCWD(f)
-		if rec != "" {
-			// basename of the recorded cwd (trailing slash stripped), else enc.
-			if base := baseName(strings.TrimRight(rec, "/")); base != "" {
-				return base
-			}
-			return enc
+	if rec := DirCWD(tdir); rec != "" {
+		// basename of the recorded cwd (trailing slash stripped), else enc.
+		if base := baseName(strings.TrimRight(rec, "/")); base != "" {
+			return base
 		}
 	}
 	return enc
+}
+
+// DirCWD returns the working directory this project dir's transcripts record,
+// or "" when none does. It samples ONE top-level transcript because a project
+// dir maps 1:1 to a working directory by construction — the dir's name IS that
+// path, encoded — so one sample answers for every session in the dir.
+//
+// Unlike ProjectCWD it never substitutes the directory's own name for a real
+// path: a caller storing a cwd needs to tell "the sessions here ran in /x/y"
+// apart from "nothing here records where it ran."
+func DirCWD(tdir string) string {
+	for _, f := range firstTopLevelJSONL(tdir) {
+		if c := firstCWD(f); c != "" {
+			return c
+		}
+	}
+	return ""
+}
+
+// ProjectDirOf returns the project dir a transcript file belongs to: the
+// ancestor sitting directly under the projects root. Returns "" when the file
+// is not under the projects root at all (an explicit --dir scope, or a source
+// that shards by date rather than by project).
+//
+// The file's own parent directory is NOT the answer in general: subagent and
+// workflow transcripts live in SUBDIRECTORIES of their project dir, so reading
+// the parent labels them "subagents" or "wf_<id>" instead of the project they
+// actually ran in. Resolution is lexical, so it still answers for a transcript
+// that has since been purged from disk.
+func ProjectDirOf(jsonlPath string) string {
+	sep := string(os.PathSeparator)
+	root := strings.TrimRight(realpath(ProjectsRoot()), sep)
+	dir := realpath(filepath.Dir(jsonlPath))
+	for {
+		parent := filepath.Dir(dir)
+		if strings.TrimRight(parent, sep) == root {
+			return dir
+		}
+		if parent == dir { // reached the filesystem root without meeting it
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // AllProjectDirs returns every project dir under the projects root that holds
@@ -172,10 +211,8 @@ func AllProjectDirs() []string {
 // ProjectCWD returns the working directory recorded in this project's
 // transcripts (for path filtering), falling back to the encoded dir name.
 func ProjectCWD(tdir string) string {
-	for _, f := range firstTopLevelJSONL(tdir) {
-		if c := firstCWD(f); c != "" {
-			return c
-		}
+	if c := DirCWD(tdir); c != "" {
+		return c
 	}
 	return filepath.Base(filepath.Clean(tdir))
 }
