@@ -565,15 +565,6 @@ func installRawclawHookAt(configDir, configFile, primeTemplate string) error {
 	}
 	entries := map[string]string{"SessionStart": scriptPath}
 
-	// Migration: rawclaw <= v0.5.x also installed a SessionEnd tagqueue.sh.
-	// Sessions now self-tag at closeout, so delete the stale script here. Its
-	// settings entry needs no special case — addRawclawHooks strips every
-	// rawclaw-owned entry across every event before re-adding, so simply not
-	// listing SessionEnd unregisters it on the next setup run.
-	if err := os.Remove(legacyTagQueueScriptPath(configDir)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove legacy tag-queue hook script: %w", err)
-	}
-
 	data, err := readJSONFile(configFile)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", configFile, err)
@@ -583,6 +574,19 @@ func installRawclawHookAt(configDir, configFile, primeTemplate string) error {
 	}
 	if err := writeJSONFile(configFile, data); err != nil {
 		return fmt.Errorf("write %s: %w", configFile, err)
+	}
+
+	// Migration: rawclaw <= v0.5.x also installed a SessionEnd tagqueue.sh.
+	// Sessions self-tag at closeout now, so the stale script goes — but only
+	// AFTER the config write above succeeded. Deleting it first would, on a
+	// failed or refused write, leave the old SessionEnd entry registered and
+	// pointing at a file that no longer exists: precisely the broken
+	// intermediate state this function's ordering exists to prevent. The entry
+	// itself needs no special case, because addRawclawHooks strips every
+	// rawclaw-owned entry across every event before re-adding, so simply not
+	// listing SessionEnd unregisters it.
+	if err := os.Remove(legacyTagQueueScriptPath(configDir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove legacy tag-queue hook script: %w", err)
 	}
 	return nil
 }

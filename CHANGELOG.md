@@ -2,58 +2,40 @@
 
 All notable changes to RawClaw are documented in this file.
 
-## Unreleased
-
-### Fixed
-- **The same session id is now ONE session, however many projects hold a row.**
-  Continue a session from a different directory and the agent writes a second
-  transcript under the new project while keeping the id; delete the first
-  directory and durable retention keeps its row as a stub. `read`, `outline` and
-  `tag` reported that as an ambiguity and advised "give a longer prefix" — which
-  cannot help, because the full ids are byte-identical. The session was simply
-  unreachable. Rows sharing a full id now collapse to one, preferring the row
-  whose source file is still live and then the one holding more messages. A real
-  prefix collision between DIFFERENT ids still raises, as it should.
-- **`topics` now ranks across every project, not within each one.** The sweep
-  opens one SQLite file per project and used to append each project's hits in
-  iteration order, so whichever project was opened first owned the top of the
-  list however weak its matches were — `topics "adversarial"` led with two
-  segments that only mention the word inside a summary while sixteen segments
-  *labelled* "Adversarial …" sat below them. Each hit now carries its bm25 score
-  out of its own database and the union is ranked before the cap.
-- `topics` also weights the `topic` column an order of magnitude above
-  `summary`, so a segment whose LABEL is your query beats one that merely
-  mentions it in passing. Summaries still contribute recall.
-
-### Changed
-- **`topics --limit` now caps the combined list, not each project.** It
-  previously returned up to `limit` hits *per project*, which made asking for a
-  global "top N" impossible. Help text updated to match.
+## [Unreleased]
 
 ### Removed
-- **The tag queue is gone.** `rawclaw tag-queue` (and its `add` / `remove`
-  subcommands), the SessionEnd `tagqueue.sh` hook `setup` installed, and
-  `tag-write`'s dequeue side-effect have all been removed. Sessions self-tag at
-  closeout, which the SessionStart banner already instructs; a queue of
-  stragglers earned nothing but drift — it had reached 883 entries on one
-  machine, ~830 of them for sessions that never wrote a transcript and so could
-  never resolve. The topic layer itself (`tag-prep`, `tag-write`, `topics`) is
-  untouched.
-- Upgrading is automatic: `rawclaw setup` deletes a `tagqueue.sh` left by an
-  earlier version and unregisters its SessionEnd entry, so no install is left
-  calling a verb that no longer exists. `setup --eject` still removes it too.
 
+- **The `tag-queue` command is gone.** `rawclaw tag-queue` (and its `add` / `remove`
+  subcommands), the SessionEnd `tagqueue.sh` hook `setup` installed, and `tag-write`'s
+  dequeue side-effect have all been removed. Sessions self-tag at closeout, which the
+  SessionStart banner already instructs. A queue of stragglers earned nothing but drift —
+  entries accumulated for sessions that never wrote a transcript and so could never
+  resolve. The topic layer itself (`tag-prep`, `tag-write`, `topics`) is untouched.
+- Upgrading is handled for you: `rawclaw setup` deletes a `tagqueue.sh` left by an earlier
+  version and unregisters its SessionEnd entry, so no install is left calling a verb that no
+  longer exists. The script is removed only after the settings write succeeds, so a failed
+  write cannot strand a registered hook pointing at a deleted file. `setup --eject` still
+  removes it too.
 
-## [Unreleased]
+### Fixed
+
+- **The same session id is now ONE session, however many projects hold a row.** Continue a
+  session from a different directory and the agent writes a second transcript under the new
+  project while keeping the id; delete the first directory and durable retention keeps its row
+  as a stub. `read`, `outline` and `tag` reported that as an ambiguity and advised "give a
+  longer prefix" — which cannot help, because the full ids are byte-identical. The session was
+  simply unreachable. Rows sharing a full id now collapse to one, preferring the row whose
+  source file is still live and then the one holding more messages. A real prefix collision
+  between DIFFERENT ids still raises, as it should.
 
 ### Changed
 
 - **SessionStart no longer assigns old-session tagging to the new agent.** The Claude Code and
-  Codex discovery banners no longer inspect or print the pending topic-tag queue or its session ids.
-  Instead they tell the current agent to delegate its own `tag-prep` → `tag-write` closeout work to
-  a background subagent whenever the user signals that the session is ending, keeping the main agent
-  available. Claude Code's silent SessionEnd queue remains unchanged while its eventual consumer is
-  decided separately.
+  Codex discovery banners no longer inspect or print a pending tag queue or its session ids.
+  Instead they tell the current agent to delegate its own `tag-prep` → `tag-write` closeout work
+  to a background subagent whenever the user signals that the session is ending, keeping the main
+  agent available.
 
 ## [0.7.1] — 2026-07-21
 

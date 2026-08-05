@@ -93,3 +93,31 @@ func TestSetupIsCleanWithoutLegacyHook(t *testing.T) {
 		t.Errorf("a fresh install registered SessionEnd:\n%s", raw)
 	}
 }
+
+// TestSetupKeepsLegacyHookWhenConfigWriteFails pins the ordering fix: the
+// legacy script must survive a failed settings write, because deleting it first
+// would leave the still-registered SessionEnd entry pointing at a missing file.
+func TestSetupKeepsLegacyHookWhenConfigWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	cf := filepath.Join(dir, "settings.json")
+
+	legacy := legacyTagQueueScriptPath(dir)
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Off-schema but legal JSON: addRawclawHooks refuses rather than clobbering,
+	// so the write never happens.
+	if err := os.WriteFile(cf, []byte(`{"hooks": {"SessionStart": "not-an-array"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installRawclawHookAt(dir, cf, rawclawPrimeScript); err == nil {
+		t.Fatal("expected install to refuse an off-schema hooks entry")
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		t.Errorf("legacy script was deleted despite the config write failing: %v", err)
+	}
+}
