@@ -63,6 +63,15 @@ type SearchRef struct {
 	// omitempty then keeps the JSON identical to an untagged corpus.
 	Topic string `json:"topic,omitempty"`
 
+	// Last is where the hit's session ENDED UP: its most recent real activity,
+	// attached after ranking (see attachLastActivity). A hit is a point in the
+	// middle of a conversation — in a 1500-message session the match can predate
+	// the session's actual conclusion by hours, and nothing on the hit line said
+	// so. Like Topic this is display-only and cannot influence ranking. Empty
+	// when the session's whole scanned tail is machinery, which renders as no
+	// line at all rather than a hit captioned with a tool result.
+	Last string `json:"last,omitempty"`
+
 	// Missing is true when this conversation's backing source file is gone but its
 	// content was retained in the index (durable retention, D1). Surfaced so a
 	// retained-but-missing hit is not read as current state (D7). omitempty keeps
@@ -396,10 +405,12 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		truncated = true
 	}
 
-	// Topic labels are attached HERE — after collection, fusion, sorting, dedup
-	// and capping have all finished — so the label cannot influence which
-	// conversations come back or in what order. See attachTopics.
+	// Topic labels and last-activity lines are attached HERE — after collection,
+	// fusion, sorting, dedup and capping have all finished — so neither can
+	// influence which conversations come back or in what order. See attachTopics
+	// and attachLastActivity.
 	attachTopics(results, picked)
+	attachLastActivity(results, picked)
 
 	// Never-silent truncation: an agent that sees N must learn the set is larger.
 	// total is the distinct count within the fetch window; if a scope hit the fetch
@@ -664,6 +675,64 @@ func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
 		}
 		for _, i := range idxs {
 			refs[i].Topic = store.TopicForMessage(con, anchors[i].SessionID, anchors[i].UUID)
+		}
+		_ = con.Close()
+	}
+}
+
+// attachLastActivity fills in each result's Last line, in place. refs and
+// anchors are index-parallel, exactly as in attachTopics.
+//
+// A search hit is a point in the MIDDLE of a conversation. The hit line said
+// when the match happened and what it said, but never whether the session went
+// anywhere afterwards — in a long session the match can sit hours before the
+// real conclusion. This is the same question a browse row answers with its "now"
+// line, so it reuses the same reader: view.SessionLastActivity, the newest
+// message that still has content once tool runs and injected envelopes are
+// stripped, skipping the runtime's interruption marker. One definition of "real
+// activity", or the two surfaces drift.
+//
+// It carries ba0c430's honesty rule with it: when the whole scanned tail is
+// machinery the lookup returns "" and the hit gets no line, rather than being
+// captioned with a tool result.
+//
+// Like the topic label this is DISPLAY ONLY — run after collection, fusion,
+// sorting, dedup and capping, keyed on results already chosen, so it cannot
+// reach the ranking. TestLastActivityDoesNotAffectOrdering holds the property.
+// The tail is read for the hit's OWN session id, not its lineage root: the hit
+// names one session, and "where that session ended up" is the honest claim.
+//
+// Lookups are grouped by database, so a result set spanning several projects
+// opens each project's database once — this is a per-result query and the
+// grouping is what keeps it one connection per project rather than per hit. Any
+// failure is silent and renders as no line.
+func attachLastActivity(refs []SearchRef, anchors []retrieve.Anchor) {
+	if len(refs) == 0 || len(refs) != len(anchors) {
+		return
+	}
+	byDB := map[string][]int{}
+	for i := range anchors {
+		if anchors[i].DBP == "" || anchors[i].SessionID == "" {
+			continue
+		}
+		byDB[anchors[i].DBP] = append(byDB[anchors[i].DBP], i)
+	}
+	for dbp, idxs := range byDB {
+		con, err := store.ConnectRO(dbp)
+		if err != nil {
+			continue
+		}
+		// Sessions repeat across hits only when the dedup let them through; the
+		// cache spares the duplicate tail read either way.
+		cache := map[string]string{}
+		for _, i := range idxs {
+			sid := anchors[i].SessionID
+			last, done := cache[sid]
+			if !done {
+				last = view.SessionLastActivity(con, sid)
+				cache[sid] = last
+			}
+			refs[i].Last = last
 		}
 		_ = con.Close()
 	}
@@ -1231,6 +1300,12 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		}
 		fmt.Fprintf(w, "  ━━ %s · %s · %s%s%s\n", iso, sid8(r.SessionID), r.Project, topic, miss)
 		fmt.Fprintf(w, "     …%s…\n", r.Snippet)
+		// Where this conversation ended up, under the point it matched at. Same
+		// "now →" vocabulary browse uses for the same fact (render.printLastActivity),
+		// and omitted entirely when the tail held nothing but machinery.
+		if r.Last != "" {
+			fmt.Fprintf(w, "     now → %s\n", r.Last)
+		}
 		fmt.Fprintf(w, "     read ref=%s\n", r.ReadRef)
 		fmt.Fprintln(w)
 	}
