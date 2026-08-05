@@ -175,6 +175,13 @@ raw transcript rawclaw owns, and the db is rebuildable from it.
   rebuilds it from the vault alone. There is deliberately no retention pass in
   that path — retention reconciles against a live source scan, and this pass has
   none; the sidecars already carry the verdict a previous scan reached.
+- **Rebuild guard:** the vault fills as sessions are indexed, so a machine that
+  had a store before the vault existed starts out with a vault thinner than its
+  store. The rebuild counts both first and refuses when the store holds more,
+  because a recovery path that silently returns less history than it replaced is
+  worse than no recovery path. The count is read read-only — `EnsureSchema` must
+  never run against a store whose rows are about to be protected, since a
+  version mismatch would make it drop them. `RAWCLAW_REBUILD_FORCE=1` overrides.
 - **Tradeoff:** a second copy of every transcript on disk. Bounded by the
   unchanged-source skip (same path/size/fingerprint → no rewrite), so a full
   reindex does not re-copy the corpus.

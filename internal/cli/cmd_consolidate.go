@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -90,6 +91,12 @@ func runRebuildFromTranscripts(cmd *cobra.Command) error {
 	start := time.Now()
 	st, err := index.RebuildFromTranscripts(index.ConsolidatedPath())
 	if err != nil {
+		// A refusal is a safe outcome, not a crash: the store is untouched and
+		// the message already says what to do. Exit 2 marks it as "you asked
+		// for the wrong thing" rather than "rawclaw broke".
+		if errors.Is(err, index.ErrRebuildWouldLoseHistory) {
+			return ExitError{Code: 2, Msg: err.Error()}
+		}
 		return err
 	}
 	out := cmd.OutOrStdout()
