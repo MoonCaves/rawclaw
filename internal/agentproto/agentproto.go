@@ -72,6 +72,18 @@ const (
 	ScopeEmpty         = "empty"          // searched fresh, zero rows
 	ScopeSkippedError  = "skipped_error"  // index/open failed — not searched
 	ScopeStaleFallback = "stale_fallback" // busy-lock → searched a possibly-stale cached index
+
+	// ScopeNotConsolidated marks a project whose own database exists but has
+	// never been folded into the one store. A one-store read cannot see it, so it
+	// is named rather than left out — the same rule the other statuses follow: a
+	// corpus may shrink, but never silently.
+	ScopeNotConsolidated = "not_consolidated"
+)
+
+// Store values for SearchEnvelope.Store — which index actually answered.
+const (
+	StoreConsolidated = "consolidated" // one database, one query
+	StorePerProject   = "per-project"  // the fan-out: one database per project
 )
 
 // ScopeReport records how one project scope fared during a search, so an agent
@@ -115,6 +127,13 @@ type SearchEnvelope struct {
 	// mentions (relevance ranks by token match, not importance). Steers to a
 	// distinctive token + scoping, and warns against skipping on the snippet alone.
 	NarrowHint string `json:"narrow_hint,omitempty"`
+
+	// Store names which index answered — the one consolidated store, or the
+	// per-project fan-out. The two rank differently (one corpus vs one corpus per
+	// project), so a reader comparing two answers has to be able to tell them
+	// apart. StoreNote says why the fan-out was used, and is empty otherwise.
+	Store     string `json:"store,omitempty"`
+	StoreNote string `json:"store_note,omitempty"`
 }
 
 // ReadResult is a bounded excerpt around a ref. Embeds the AnchoredView shape
@@ -171,6 +190,21 @@ type SearchOpts struct {
 	MinMessages      int    // 0 = no minimum
 	IncludePath      string // "" = no filter; else a regex over the project working dir
 	ExcludePath      string // "" = no filter; else a regex over the project working dir
+
+	// Project and Source narrow the ONE store by column instead of by choosing
+	// which databases to open: Project is the exact project label (the same label
+	// paths.ProjectLabel stamps on the row), Source is the source tool. Both empty
+	// = the whole corpus. They are read only on the one-store path; the fan-out
+	// narrows by the scope list it is given.
+	Project string
+	Source  string
+
+	// ScopeFallback supplies the per-project scope list, called ONLY if the
+	// one-store path cannot answer. It is a function because enumerating every
+	// project costs seconds of directory and git probing on a real corpus, and
+	// the whole point of the one store is not to pay that on a search that never
+	// touches it. Nil falls back to every project under a background context.
+	ScopeFallback func() []view.Scope
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -288,37 +322,36 @@ func runeSlice(s string, n int) string {
 
 // ── verb: search ─────────────────────────────────────────────────────────────
 
-// Search returns rank-ordered conversation refs matching query within scope
-// (nil scope = all projects), wrapped in an envelope that reports per-scope
-// completeness (#6) so a partial result is never mistaken for complete. With a
-// non-nil embedder in relevance mode (no --sort), keyword anchors are RRF-fused
-// with vector-KNN anchors — parity with the default discovery path.
+// Search returns rank-ordered conversation refs matching query within scope,
+// wrapped in an envelope that reports completeness (#6) so a partial result is
+// never mistaken for complete. With a non-nil embedder in relevance mode (no
+// --sort), keyword anchors are RRF-fused with vector-KNN anchors — parity with
+// the default discovery path.
+//
+// The scope argument selects which reader answers, and the two rank differently:
+//
+//   - nil scope means "no project list decided this call" — the one consolidated
+//     store answers it, one database and one query, with Project / Source /
+//     IncludePath narrowing pushed down as WHERE clauses on the row. Every hit is
+//     then scored against ONE corpus, which is what makes the ranking comparable
+//     across projects.
+//   - a non-nil scope is an explicit list of projects to fan out over, one
+//     database each. Scores from separate databases are NOT comparable (bm25 is
+//     computed per database), so this ordering is a merge of per-project
+//     rankings, and it stays only for the cases the one store cannot serve.
+//
+// The nil-scope path falls back to the fan-out — via opts.ScopeFallback — when
+// the store is absent or empty, or when the requested narrowing names a project
+// the store has never heard of. Falling back is always announced in StoreNote.
 func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed.Embedder) SearchEnvelope {
 	limit := opts.Limit
 	if limit == 0 {
 		limit = DefaultSearchLimit
 	}
-	if scope == nil {
-		scope = allScope()
-	}
-	if len(scope) == 0 {
-		return SearchEnvelope{Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true}
-	}
 
 	fetch := limit * 8
 	if fetch < 30 {
 		fetch = 30
-	}
-
-	// Apply the same scope filtering the human path does: a path predicate drops
-	// whole projects whose working dir doesn't match include / does match exclude,
-	// BEFORE indexing them. Role / date bounds / min-messages push into the SQL
-	// WHERE via SearchParams. None of these flag VALUES reach the FTS5 query (#1).
-	if opts.IncludePath != "" || opts.ExcludePath != "" {
-		scope = filterScopeByPath(scope, opts.IncludePath, opts.ExcludePath)
-		if len(scope) == 0 {
-			return SearchEnvelope{Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true}
-		}
 	}
 
 	// Translate human boolean operators (NOT/&&/||/!) into an explicit FTS5 expr,
@@ -349,7 +382,45 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		qvec = embedder.Embed(rawQuery)
 	}
 
-	cands, reports, hitCeiling := collectCandidates(scope, rawQuery, fetch, p, qvec)
+	var (
+		cands      []retrieve.Anchor
+		reports    []ScopeReport
+		hitCeiling bool
+		answered   bool
+		storeName  = StoreConsolidated
+		storeNote  string
+	)
+
+	if scope == nil {
+		cands, reports, hitCeiling, storeNote, answered = searchOneStore(rawQuery, fetch, p, qvec, opts)
+	}
+
+	if !answered {
+		storeName = StorePerProject
+		if scope == nil {
+			scope = fallbackScope(opts)
+		}
+		if len(scope) == 0 {
+			return SearchEnvelope{
+				Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true,
+				Store: storeName, StoreNote: storeNote,
+			}
+		}
+		// Apply the same scope filtering the human path does: a path predicate drops
+		// whole projects whose working dir doesn't match include / does match exclude,
+		// BEFORE indexing them. Role / date bounds / min-messages push into the SQL
+		// WHERE via SearchParams. None of these flag VALUES reach the FTS5 query (#1).
+		if opts.IncludePath != "" || opts.ExcludePath != "" {
+			scope = filterScopeByPath(scope, opts.IncludePath, opts.ExcludePath)
+			if len(scope) == 0 {
+				return SearchEnvelope{
+					Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true,
+					Store: storeName, StoreNote: storeNote,
+				}
+			}
+		}
+		cands, reports, hitCeiling = collectCandidates(scope, rawQuery, fetch, p, qvec)
+	}
 
 	sortCandidates(cands, opts.Sort)
 
@@ -448,7 +519,122 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		NextCommand:       nextCmd,
 		RecencyHint:       recencyHint,
 		NarrowHint:        narrowHint,
+		Store:             storeName,
+		StoreNote:         storeNote,
 	}
+}
+
+// searchOneStore answers a search from the consolidated store: one database, one
+// query, and the scope filters expressed as WHERE clauses on the project and
+// source columns rather than as a choice of which files to open.
+//
+// The include-path regex is resolved HERE, in Go, against the working dirs the
+// store already knows (store.DistinctScopes) — the matching labels then travel
+// as an exact-match IN list. The pattern itself never reaches SQL: SQLite has no
+// Go-compatible regex, and pushing it down would quietly change what the flag
+// means.
+//
+// It returns ok=false — never a confident empty answer — when the store cannot
+// serve the request: absent, empty, unreadable, or asked for a project it has
+// never heard of. Each of those hands back a note naming the reason, because the
+// fan-out that follows ranks differently and the caller has to know which reader
+// produced the list.
+func searchOneStore(
+	rawQuery string,
+	fetch int,
+	p retrieve.SearchParams,
+	qvec []float64,
+	opts SearchOpts,
+) (cands []retrieve.Anchor, reports []ScopeReport, hitCeiling bool, note string, ok bool) {
+	con, sessions, err := index.OpenConsolidated()
+	if err != nil {
+		return nil, nil, false, "one store unavailable (" + err.Error() + ") — searched per project instead", false
+	}
+	defer con.Close()
+
+	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.IncludePath, opts.ExcludePath)
+	if err != nil {
+		return nil, nil, false, "one store scope lookup failed (" + err.Error() + ") — searched per project instead", false
+	}
+	if narrowed && len(projects) == 0 {
+		// The store holds no project matching this narrowing. That is not the same
+		// as "no matches": the project's own database may exist and simply not be
+		// folded in yet, so answering empty here would hide a corpus that is on
+		// disk. The fan-out can still open it directly.
+		return nil, nil, false, "one store knows no project matching this scope — searched per project instead", false
+	}
+	p.Projects = projects
+	p.SourceTool = opts.Source
+
+	rows := retrieve.MatchAnchors(con, rawQuery, fetch, p)
+	if len(rows) >= fetch {
+		// The single query filled its fetch window, so any total derived from these
+		// rows is a floor. Measured pre-fusion, like the fan-out does.
+		hitCeiling = true
+	}
+	if qvec != nil {
+		rows = semantic.Fuse(con, rows, qvec, fetch, p.IncludeSubagents)
+	}
+	dbp := index.ConsolidatedPath()
+	for i := range rows {
+		rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
+		// The project label comes off the ROW, not off a scope: in one store the
+		// project is a column, and one query returns rows from many projects.
+		rows[i].DBP = dbp
+		rows[i].Rank = i
+		cands = append(cands, rows[i])
+	}
+
+	// The completeness report in its one-store shape: a single row for the store
+	// that answered, plus one row per project database that has never been folded
+	// into it. Those projects are genuinely outside this answer, and naming them
+	// is what stops the corpus from shrinking silently.
+	detail := fmt.Sprintf("%d sessions", sessions)
+	if narrowed {
+		detail += fmt.Sprintf(" · narrowed to %d project(s)", len(projects))
+	}
+	status := ScopeSearched
+	if len(rows) == 0 {
+		status = ScopeEmpty
+	}
+	reports = []ScopeReport{{Dir: dbp, Status: status, Detail: detail}}
+	if missing, err := index.UnconsolidatedDBs(con); err == nil {
+		for _, m := range missing {
+			reports = append(reports, ScopeReport{
+				Dir:    m,
+				Status: ScopeNotConsolidated,
+				Detail: "never folded into the one store — run `rawclaw consolidate`",
+			})
+		}
+	}
+	return cands, reports, hitCeiling, "", true
+}
+
+// fallbackScope builds the per-project scope list for a nil-scope search the one
+// store could not answer. The caller supplies it as a function because
+// enumerating every project costs seconds of directory walking and git probing,
+// and a search the store answers must not pay that.
+//
+// A Project narrowing is re-applied here: on the fan-out, scope IS the filter, so
+// a caller that asked for one project must not be widened to all of them just
+// because the store was unavailable.
+func fallbackScope(opts SearchOpts) []view.Scope {
+	var sc []view.Scope
+	if opts.ScopeFallback != nil {
+		sc = opts.ScopeFallback()
+	} else {
+		sc = allScope()
+	}
+	if opts.Project == "" {
+		return sc
+	}
+	out := make([]view.Scope, 0, 1)
+	for _, s := range sc {
+		if s.Project == opts.Project {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // SearchAndRender runs Search and writes the result to w: the agent envelope as
@@ -537,11 +723,13 @@ func filterScopeByPath(scope []view.Scope, include, exclude string) []view.Scope
 	return out
 }
 
-// scopesComplete reports whether every scope was searched fresh (none skipped or
-// served from a stale fallback).
+// scopesComplete reports whether every scope was searched fresh: none skipped,
+// none served from a stale fallback, and — on the one-store path — no project
+// database left outside the store. A project that was never folded in is missing
+// from the answer just as surely as one whose index failed to open.
 func scopesComplete(reports []ScopeReport) bool {
 	for _, r := range reports {
-		if r.Status == ScopeSkippedError || r.Status == ScopeStaleFallback {
+		if r.Status == ScopeSkippedError || r.Status == ScopeStaleFallback || r.Status == ScopeNotConsolidated {
 			return false
 		}
 	}
@@ -1242,27 +1430,37 @@ func projectSpreadLine(results []SearchRef) string {
 		len(distinct), strings.Join(shown, ", "))
 }
 
-// renderScopeFooter prints the incompleteness footer when any scope was skipped
-// or served from a stale fallback.
+// renderScopeFooter prints the incompleteness footer: which reader answered when
+// it was not the one store, and what was left out of the answer. The two shapes
+// of report both land here — the fan-out reports one row per project, the one
+// store reports itself plus the project databases it has never folded in — so
+// each kind of gap is counted in its own words rather than as "N of M projects".
 func renderScopeFooter(w io.Writer, env SearchEnvelope) {
+	if env.StoreNote != "" {
+		fmt.Fprintf(w, "note: %s\n", env.StoreNote)
+	}
 	if env.Complete {
 		return
 	}
-	errored, stale := 0, 0
+	errored, stale, unfolded := 0, 0, 0
 	for _, s := range env.Scopes {
 		switch s.Status {
 		case ScopeSkippedError:
 			errored++
 		case ScopeStaleFallback:
 			stale++
+		case ScopeNotConsolidated:
+			unfolded++
 		}
 	}
-	skipped := errored + stale
-	if skipped == 0 {
-		return
+	if skipped := errored + stale; skipped > 0 {
+		fmt.Fprintf(w, "note: %d of %d projects incomplete (%d error, %d stale) — results may be incomplete\n",
+			skipped, len(env.Scopes), errored, stale)
 	}
-	fmt.Fprintf(w, "note: %d of %d projects incomplete (%d error, %d stale) — results may be incomplete\n",
-		skipped, len(env.Scopes), errored, stale)
+	if unfolded > 0 {
+		fmt.Fprintf(w, "note: %d project database(s) are not in the one store and were NOT searched — run `rawclaw consolidate`\n",
+			unfolded)
+	}
 }
 
 // fmtChars renders a char count compactly: 1800 → "1.8k", 950 → "950".
