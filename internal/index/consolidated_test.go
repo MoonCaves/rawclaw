@@ -559,6 +559,56 @@ func TestConsolidate_LaterTaggingWinsForOneSegment(t *testing.T) {
 	}
 }
 
+// TestConsolidate_FoldsTopicsFromAnOlderTopicSchema is the guard on the oldest
+// tags in the corpus. The topic table gained origin_machine after it shipped, so
+// a project tagged before that has a topic_segment without the column — and a
+// merge that names it unconditionally fails on precisely those sources, leaving
+// the longest-standing labels invisible to every one-store reader while the
+// newer ones fold in fine. The source is rebuilt in the pre-provenance shape
+// here rather than mocked, because the shape is what the merge trips over.
+func TestConsolidate_FoldsTopicsFromAnOlderTopicSchema(t *testing.T) {
+	isolateCache(t)
+	a := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+	sid := firstSessionID(t, a)
+	tagSession(t, a, sid, "u-a1", "invoice reconciliation", "totals did not line up", 100)
+
+	// Drop the source back to the pre-provenance topic table, keeping the row.
+	con, err := store.ConnectRW(a)
+	if err != nil {
+		t.Fatalf("open source: %v", err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE topic_old (
+		   id INTEGER PRIMARY KEY AUTOINCREMENT,
+		   session_id TEXT NOT NULL, start_uuid TEXT NOT NULL, end_uuid TEXT,
+		   topic TEXT, summary TEXT, tagged_at REAL,
+		   UNIQUE(session_id, start_uuid))`,
+		`INSERT INTO topic_old(session_id,start_uuid,end_uuid,topic,summary,tagged_at)
+		   SELECT session_id,start_uuid,end_uuid,topic,summary,tagged_at FROM topic_segment`,
+		`DROP TABLE topic_segment`,
+		`ALTER TABLE topic_old RENAME TO topic_segment`,
+	} {
+		if _, err := con.Exec(stmt); err != nil {
+			t.Fatalf("reshape source topic table: %v", err)
+		}
+	}
+	con.Close()
+
+	if _, err := ConsolidateFrom([]string{a}, false); err != nil {
+		t.Fatalf("ConsolidateFrom over a pre-provenance topic table: %v", err)
+	}
+	dst := openConsolidated(t)
+	if got := scalar(t, dst, "SELECT topic FROM topic_segment WHERE session_id=?", sid); got != "invoice reconciliation" {
+		t.Fatalf("folded topic = %q, want the old-schema source's label", got)
+	}
+	// An untracked origin is stored as NULL, which is what it already means
+	// everywhere else here — not an empty string that would read as a machine.
+	if got := scalar(t, dst, "SELECT origin_machine IS NULL FROM topic_segment WHERE session_id=?", sid); got != "1" {
+		t.Errorf("origin_machine IS NULL = %s, want 1 for a source that never recorded one", got)
+	}
+}
+
 // TestConsolidate_SkipsASourceWithNoTopicLayer keeps an untagged project from
 // failing the whole pass: the topic tables are created on demand, so a project
 // nobody tagged genuinely has none.
