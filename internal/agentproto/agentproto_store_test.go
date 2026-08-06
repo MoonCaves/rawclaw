@@ -371,6 +371,52 @@ func TestSearchProvesExhaustionBeforeCallingATotalExact(t *testing.T) {
 	}
 }
 
+// TestRenderScopeFooterTellsTheTruthInItsOneStoreShape covers the human surface
+// of the completeness report. The JSON envelope carrying an honest
+// not_consolidated row is worth nothing if the text a person reads stays silent
+// about it, and the same goes for a search that quietly fell back to the
+// fan-out: both are degradations, and both have to be visible without opening
+// the JSON.
+func TestRenderScopeFooterTellsTheTruthInItsOneStoreShape(t *testing.T) {
+	var full strings.Builder
+	renderScopeFooter(&full, SearchEnvelope{
+		Store:    StoreConsolidated,
+		Complete: true,
+		Scopes:   []ScopeReport{{Dir: "p.db", Status: ScopeSearched, Detail: "12 sessions"}},
+	})
+	if full.String() != "" {
+		t.Errorf("a complete one-store answer printed a footer: %q", full.String())
+	}
+
+	var partial strings.Builder
+	renderScopeFooter(&partial, SearchEnvelope{
+		Store: StoreConsolidated,
+		Scopes: []ScopeReport{
+			{Dir: "p.db", Status: ScopeSearched, Detail: "12 sessions"},
+			{Dir: "billing.db", Status: ScopeNotConsolidated},
+			{Dir: "ledger.db", Status: ScopeNotConsolidated},
+		},
+	})
+	out := partial.String()
+	if !strings.Contains(out, "2 project database(s) are not in the one store") {
+		t.Errorf("footer hides the unfolded project databases:\n%s", out)
+	}
+	if !strings.Contains(out, "rawclaw consolidate") {
+		t.Errorf("footer names the problem without the fix:\n%s", out)
+	}
+
+	var fell strings.Builder
+	renderScopeFooter(&fell, SearchEnvelope{
+		Store:     StorePerProject,
+		StoreNote: "one store unavailable — searched per project instead",
+		Complete:  true,
+		Scopes:    []ScopeReport{{Dir: "p.db", Status: ScopeSearched}},
+	})
+	if !strings.Contains(fell.String(), "one store unavailable") {
+		t.Errorf("footer hides the fallback to the fan-out:\n%s", fell.String())
+	}
+}
+
 // contains reports whether xs holds s.
 func contains(xs []string, s string) bool {
 	for _, x := range xs {
