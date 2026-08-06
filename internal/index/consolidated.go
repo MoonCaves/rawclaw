@@ -2,6 +2,7 @@ package index
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -452,7 +453,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	switch err := con.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&prev); {
 	case err == nil && prev == mark:
 		return offered, false, nil
-	case err != nil && err != sql.ErrNoRows:
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return 0, true, fmt.Errorf("read sync watermark: %w", err)
 	}
 
@@ -525,7 +526,7 @@ func srcHasTable(con *sql.DB, name string) (bool, error) {
 	err := con.QueryRow(
 		"SELECT 1 FROM src.sqlite_master WHERE type='table' AND name=?", name).Scan(&one)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return false, nil
 	case err != nil:
 		return false, fmt.Errorf("look for source table %s: %w", name, err)

@@ -6,6 +6,7 @@ package index
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -221,8 +222,15 @@ func migrateScopeColumns(con *sql.DB) error {
 // killed mid-pass simply redoes the pass (F3).
 func runOnce(con *sql.DB, key string, step func(*sql.DB) error) error {
 	var done string
-	if err := con.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&done); err == nil && done == "1" {
+	// No row means "never run" and is the normal first-time state. Any OTHER
+	// read error is a real fault, and reporting it beats treating it as
+	// "not run" — that reading would re-scan the whole corpus on every
+	// invocation and hide the fault behind the cost.
+	switch err := con.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&done); {
+	case err == nil && done == "1":
 		return nil
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("read %s marker: %w", key, err)
 	}
 	if err := step(con); err != nil {
 		return err
