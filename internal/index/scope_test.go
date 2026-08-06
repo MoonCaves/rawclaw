@@ -249,6 +249,103 @@ func TestMigrateScopeColumns_UpgradesInPlace(t *testing.T) {
 	}
 }
 
+// TestBackfillScope_DateShardedSourceGetsNoLabel is the defect this gate exists
+// for. A source that shards its transcripts by date has no project directory at
+// all, so walking up from the file finds nothing and the parent's name is a day
+// number. Labeling the row with it invents a project that never existed: it then
+// answers a path filter and names itself in the scope footer. The row must come
+// out unlabeled instead, because unlabeled is the truth.
+func TestBackfillScope_DateShardedSourceGetsNoLabel(t *testing.T) {
+	shard := filepath.Join(t.TempDir(), "2026", "07", "09")
+	if err := os.MkdirAll(shard, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(shard, "rollout-abc.jsonl")
+	writeJSONL(t, rollout, `{"type":"user","timestamp":"2026-07-09T10:00:00Z","message":{"role":"user","content":"hi"}}`)
+
+	con, _ := openTestDB(t)
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	// Two rows on the same shard: one from another source, one from the
+	// directory-walk ingest. Only the first is refused — an explicit --dir tree
+	// is laid out project-per-directory, and the gate must not disturb it.
+	if _, err := con.Exec(
+		`INSERT INTO sessions(id,message_count,source_path,origin_machine,source_tool) VALUES('foreign',1,?,'m','codex')`,
+		rollout); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec(
+		`INSERT INTO sessions(id,message_count,source_path,origin_machine,source_tool) VALUES('walked',1,?,'m',?)`,
+		rollout, sourceClaude); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("DELETE FROM meta WHERE key=?", scopeBackfillKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateScopeColumns(con); err != nil {
+		t.Fatalf("migrateScopeColumns: %v", err)
+	}
+
+	project, _, projectOK, cwdOK := scopeOfSession(t, con, "foreign")
+	if projectOK || cwdOK {
+		t.Errorf("date-sharded row scoped to (%q, cwdOK=%v); a day number is not a project", project, cwdOK)
+	}
+	if project, _, ok, _ := scopeOfSession(t, con, "walked"); !ok || project != "09" {
+		t.Errorf("directory-walk row = %q (ok=%v); the gate must leave that path alone", project, ok)
+	}
+}
+
+// TestMigrateScopeColumns_RepairsInventedLabels covers the other half: a db an
+// earlier binary already mislabeled. That db carries the first pass's completion
+// marker, so the repair has to be its own stamped pass or it never runs.
+func TestMigrateScopeColumns_RepairsInventedLabels(t *testing.T) {
+	con, _ := openTestDB(t)
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	// invented: a foreign-source row labeled with a day number and nothing behind
+	// it. grounded: a foreign-source row whose cwd was actually recorded, so its
+	// label is earned. walked: the directory-walk ingest's own label, untouchable.
+	for _, r := range []struct{ id, source, project, cwd string }{
+		{"invented", "codex", "09", ""},
+		{"grounded", "codex", "ledger", "/w/ledger"},
+		{"walked", sourceClaude, "orphan-project", ""},
+	} {
+		var cwd any
+		if r.cwd != "" {
+			cwd = r.cwd
+		}
+		if _, err := con.Exec(
+			`INSERT INTO sessions(id,message_count,origin_machine,source_tool,project,cwd) VALUES(?,1,'m',?,?,?)`,
+			r.id, r.source, r.project, cwd); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The db predates the repair but not the backfill — exactly the upgrade shape.
+	if _, err := con.Exec("DELETE FROM meta WHERE key=?", inventedScopeRepairKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateScopeColumns(con); err != nil {
+		t.Fatalf("migrateScopeColumns: %v", err)
+	}
+
+	if project, _, ok, _ := scopeOfSession(t, con, "invented"); ok {
+		t.Errorf("invented label %q survived the repair", project)
+	}
+	if project, cwd, _, _ := scopeOfSession(t, con, "grounded"); project != "ledger" || cwd != "/w/ledger" {
+		t.Errorf("grounded row = (%q, %q); a label backed by a recorded cwd is not invented", project, cwd)
+	}
+	if project, _, ok, _ := scopeOfSession(t, con, "walked"); !ok || project != "orphan-project" {
+		t.Errorf("directory-walk row = %q (ok=%v); the repair reached past its own source", project, ok)
+	}
+
+	var marker string
+	if err := con.QueryRow("SELECT value FROM meta WHERE key=?", inventedScopeRepairKey).Scan(&marker); err != nil || marker != "1" {
+		t.Errorf("repair marker = %q (%v), want %q", marker, err, "1")
+	}
+}
+
 // TestMigrateScopeColumns_MarkerStopsRework proves the completion marker does
 // its job: once the backfill has run, a row that resolved to nothing is not
 // re-read on every later invocation. Without the marker, a db holding sessions
