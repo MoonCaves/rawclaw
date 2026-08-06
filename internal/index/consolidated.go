@@ -213,10 +213,25 @@ const topicNewer = `COALESCE(excluded.tagged_at,0) > COALESCE(topic_segment.tagg
 // would silently overwrite each other's search entry. Inserting without it lets
 // the topic_ai / topic_au triggers assign a fresh rowid and keep topic_fts in
 // step, which is why nothing here writes topic_fts directly.
+// The origin column is selected through a placeholder because the topic table
+// predates it: a project tagged before provenance was added has a topic_segment
+// with no origin_machine at all, and naming it unconditionally makes the merge
+// fail on exactly the OLDEST tags — the ones with the most history behind them,
+// and the ones a one-store reader would otherwise never see. Where the source
+// has no such column the merge substitutes NULL, which is what an untracked
+// origin already means everywhere else in this store.
+func mergeTopicsSQLFor(srcHasOrigin bool) string {
+	origin := "NULL"
+	if srcHasOrigin {
+		origin = "origin_machine"
+	}
+	return strings.Replace(mergeTopicsSQL, "{{origin}}", origin, 1)
+}
+
 var mergeTopicsSQL = `
 INSERT INTO main.topic_segment
   (session_id,start_uuid,end_uuid,topic,summary,tagged_at,origin_machine)
-SELECT session_id,start_uuid,end_uuid,topic,summary,tagged_at,origin_machine
+SELECT session_id,start_uuid,end_uuid,topic,summary,tagged_at,{{origin}}
 FROM src.topic_segment
 WHERE true
 ON CONFLICT(session_id,start_uuid) DO UPDATE SET
@@ -448,7 +463,11 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 		return 0, true, fmt.Errorf("merge messages: %w", err)
 	}
 	if hasTopics {
-		if _, err := con.Exec(mergeTopicsSQL); err != nil {
+		srcOrigin, err := srcHasColumn(con, "topic_segment", "origin_machine")
+		if err != nil {
+			return 0, true, err
+		}
+		if _, err := con.Exec(mergeTopicsSQLFor(srcOrigin)); err != nil {
 			return 0, true, fmt.Errorf("merge topics: %w", err)
 		}
 	}
@@ -512,6 +531,36 @@ func srcHasTable(con *sql.DB, name string) (bool, error) {
 		return false, fmt.Errorf("look for source table %s: %w", name, err)
 	}
 	return true, nil
+}
+
+// srcHasColumn reports whether an attached source table carries a column. The
+// sidecar tables grew columns after they shipped, so a source written by an
+// older build is a normal state to find on disk, not a corruption — the merge
+// asks rather than assumes.
+func srcHasColumn(con *sql.DB, table, col string) (bool, error) {
+	rows, err := con.Query("PRAGMA src.table_info(" + table + ")")
+	if err != nil {
+		return false, fmt.Errorf("read source %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid         int
+			name, typ   string
+			notNull, pk int
+			dflt        sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return false, fmt.Errorf("scan source %s column: %w", table, err)
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate source %s columns: %w", table, err)
+	}
+	return false, nil
 }
 
 func hasScopeColumns(con *sql.DB) (bool, error) {
