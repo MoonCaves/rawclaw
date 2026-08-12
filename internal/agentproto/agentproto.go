@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1523,10 +1524,6 @@ type sessionCand struct {
 	SessionID string
 	Project   string
 	dbp       string
-	// foreign marks a scope replicated from another machine (view.Scope.Origin
-	// non-empty). A foreign database is a read replica: tag export deliberately
-	// skips it, so writing a tag there would be dropped at sync time.
-	foreign bool
 }
 
 // ErrAmbiguousSession is returned when a session8 prefix matches more than one
@@ -1553,14 +1550,125 @@ func (e *ErrSessionNotFound) Error() string {
 	return fmt.Sprintf("session %q not found in scope", e.Prefix)
 }
 
-// locateSession walks scope, indexing each project and probing the sessions
-// table for session ids with the session8 prefix. It aggregates matches ACROSS
-// all scope (not just within one project), so a prefix that collides across
-// projects is caught too. Returns the db path, full session id, and project
-// label on a unique match; an *ErrAmbiguousSession on ≥2 matches; an
-// *ErrSessionNotFound on 0. A failing project is skipped. Shared by Read and
-// Outline.
+// locateSession resolves a session8 prefix to the ONE database that answers for
+// it, plus the full session id and project label. Shared by Read, Outline and
+// the tag verbs.
+//
+// The primary path is a row lookup in the consolidated store. Project is a
+// column there, so scope narrowing is a WHERE clause instead of a choice of
+// which files to open, and a session that ran in two working directories is a
+// SINGLE row — consolidation already merged the halves, so there is nothing to
+// reconcile here and no ranking to guess at.
+//
+// The per-project sweep is the fallback, for the two cases the one store cannot
+// answer: it is missing or empty (nothing has consolidated on this machine
+// yet), or it simply has no row for this prefix (it is a derived artifact and
+// may lag the per-project indexes, and replicas of other machines are not
+// folded into it at all). A miss there is therefore never reported as "session
+// not found" while an index still holds the session.
+//
+// Returns an *ErrAmbiguousSession on ≥2 DISTINCT matching ids, an
+// *ErrSessionNotFound on none. A failing project is skipped.
 func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj string, err error) {
+	// An empty scope means "this directory has no history", not "search
+	// everything": callers build it deliberately, so it must resolve nothing.
+	if len(scope) == 0 {
+		return "", "", "", &ErrSessionNotFound{Prefix: session8}
+	}
+	if cands := oneStoreCands(scope, session8); len(cands) > 0 {
+		return decideSession(cands, session8)
+	}
+	return decideSession(sweepScopes(scope, session8), session8)
+}
+
+// decideSession turns candidate rows into the verb's answer: exactly one row
+// resolves, none is a not-found, and two DIFFERENT ids is the git-style
+// ambiguity only a longer prefix can break.
+func decideSession(cands []sessionCand, session8 string) (dbp, fullSID, proj string, err error) {
+	switch len(cands) {
+	case 0:
+		return "", "", "", &ErrSessionNotFound{Prefix: session8}
+	case 1:
+		c := cands[0]
+		return c.dbp, c.SessionID, c.Project, nil
+	default:
+		return "", "", "", &ErrAmbiguousSession{Prefix: session8, Candidates: cands}
+	}
+}
+
+// oneStoreCands looks the prefix up in the consolidated store. An empty result
+// means "ask the per-project indexes instead" — either because the store could
+// not answer at all (said plainly, below) or because it holds no matching row.
+func oneStoreCands(scope []view.Scope, session8 string) []sessionCand {
+	dbp := index.ConsolidatedPath()
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		slog.Warn("the consolidated store cannot be opened, so this lookup falls back to the per-project indexes; run `rawclaw consolidate` to build it",
+			"path", dbp, "err", err)
+		return nil
+	}
+	defer con.Close()
+
+	// One probe answers both "is it there" and "does it hold anything": the file
+	// is opened read-only, so a missing store fails the query rather than being
+	// created empty.
+	var filled int
+	switch err := con.QueryRow("SELECT EXISTS(SELECT 1 FROM sessions)").Scan(&filled); {
+	case err != nil:
+		slog.Warn("the consolidated store is missing or unreadable, so this lookup falls back to the per-project indexes; run `rawclaw consolidate` to build it",
+			"path", dbp, "err", err)
+		return nil
+	case filled == 0:
+		slog.Warn("the consolidated store is empty, so this lookup falls back to the per-project indexes; run `rawclaw consolidate` to fill it",
+			"path", dbp)
+		return nil
+	}
+
+	// Fetch up to 2: enough to DETECT a collision without fetching the world.
+	// Sub-sessions are excluded first for the reason spelled out in sweepScopes.
+	projects := scopeProjects(scope)
+	rows, err := store.SessionRowsByPrefix(con, session8, false, projects, 2)
+	if err != nil {
+		slog.Warn("the consolidated store could not be queried, so this lookup falls back to the per-project indexes", "path", dbp, "err", err)
+		return nil
+	}
+	if len(rows) == 0 {
+		rows, err = store.SessionRowsByPrefix(con, session8, true, projects, 2)
+		if err != nil {
+			return nil
+		}
+	}
+	cands := make([]sessionCand, 0, len(rows))
+	for _, r := range rows {
+		cands = append(cands, sessionCand{SessionID: r.ID, Project: r.Project, dbp: dbp})
+	}
+	return cands
+}
+
+// scopeProjects lists the project labels a scope narrows to — the one store's
+// equivalent of "which project databases would the sweep have opened". A scope
+// carrying no label cannot be expressed as a label filter, so one such scope
+// drops the filter for the whole lookup: over-matching surfaces as an
+// ambiguity the caller can see and break, whereas under-matching would hide a
+// session that is reachable today.
+func scopeProjects(scope []view.Scope) []string {
+	out := make([]string, 0, len(scope))
+	seen := make(map[string]bool, len(scope))
+	for _, sc := range scope {
+		if sc.Project == "" {
+			return nil
+		}
+		if !seen[sc.Project] {
+			seen[sc.Project] = true
+			out = append(out, sc.Project)
+		}
+	}
+	return out
+}
+
+// sweepScopes probes each scope's OWN database for the prefix — the lookup as
+// it worked before the one store, kept as the fallback path.
+func sweepScopes(scope []view.Scope, session8 string) []sessionCand {
 	// collect resolves the prefix against every scope. When excludeSub is set we
 	// drop agent sub-sessions (id "<parent>/agent-...", is_subagent=1): a session
 	// and its sub-agents share the UUID prefix — and even the full UUID, since a
@@ -1588,7 +1696,7 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 				continue
 			}
 			for _, sid := range sids {
-				cs = append(cs, sessionCand{SessionID: sid, Project: sc.Project, dbp: dbpC, foreign: sc.Origin != ""})
+				cs = append(cs, sessionCand{SessionID: sid, Project: sc.Project, dbp: dbpC})
 			}
 		}
 		return cs
@@ -1598,86 +1706,30 @@ func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj stri
 	if len(cands) == 0 {
 		cands = collect(false)
 	}
-	cands = coalesceSameSession(cands)
-
-	switch len(cands) {
-	case 0:
-		return "", "", "", &ErrSessionNotFound{Prefix: session8}
-	case 1:
-		c := cands[0]
-		return c.dbp, c.SessionID, c.Project, nil
-	default:
-		return "", "", "", &ErrAmbiguousSession{Prefix: session8, Candidates: cands}
-	}
+	return firstRowPerSession(cands)
 }
 
-// coalesceSameSession collapses candidates that share the SAME full session id
-// down to one row, because they ARE one session.
-//
-// This is not a prefix collision. Continue a session from a different directory
-// and the agent writes a second transcript under the new project while keeping
-// the session id, so the scope sweep finds a row in each project. Delete the
-// first directory and durable retention keeps its row with a missing_since
-// watermark. Either way it is one conversation, and reporting it as an
-// ambiguity was unhelpable advice: the error said "give a longer prefix" when
-// the full ids are byte-identical and no prefix can ever separate them, leaving
-// the session unreachable to read, outline and tag.
-//
-// Which row represents it: prefer one whose backing source file is still live
-// over a retained stub, then the one holding more messages. That picks the
-// current transcript rather than the abandoned half. Rows for genuinely
-// DIFFERENT ids are left alone, so a real prefix collision still raises.
-func coalesceSameSession(cands []sessionCand) []sessionCand {
+// firstRowPerSession keeps one row per full session id. A session continued in
+// a second directory has a row in EACH project's database, and those rows are
+// one conversation, so reporting them as an ambiguity was unhelpable advice:
+// the ids are byte-identical and no longer prefix can separate them. Which copy
+// answers is settled by scope order, which already lists live project
+// directories before orphaned ones and local scopes before replicas of other
+// machines. This runs only on the fallback path, and it is self-correcting: the
+// sweep above resolved every scope, which writes each one through to the
+// consolidated store, so the next lookup gets the merged row instead of a half.
+func firstRowPerSession(cands []sessionCand) []sessionCand {
 	if len(cands) < 2 {
 		return cands
 	}
-	type ranked struct {
-		cand  sessionCand
-		live  bool
-		count int
-	}
-	// better reports whether a beats b. Order matters and is deliberate:
-	//   1. LOCAL beats foreign. A foreign scope is a replica of another machine's
-	//      database; tag export skips foreign databases, so resolving here to a
-	//      foreign row would send `tag-write` at a database whose new rows never
-	//      sync back — the tag would be silently dropped or overwritten on the
-	//      next ingest.
-	//   2. A live source beats a retained stub (the transcript still exists).
-	//   3. More messages wins (the fuller half of a continued session).
-	better := func(a, b ranked) bool {
-		if a.cand.foreign != b.cand.foreign {
-			return !a.cand.foreign
-		}
-		if a.live != b.live {
-			return a.live
-		}
-		return a.count > b.count
-	}
-	best := make(map[string]ranked, len(cands))
-	order := make([]string, 0, len(cands))
-
+	seen := make(map[string]bool, len(cands))
+	out := make([]sessionCand, 0, len(cands))
 	for _, c := range cands {
-		live, count := false, 0
-		if con, err := store.ConnectRO(c.dbp); err == nil {
-			if mc, isLive, ok := store.SessionRowQuality(con, c.SessionID); ok {
-				live, count = isLive, mc
-			}
-			_ = con.Close()
-		}
-		prev, seen := best[c.SessionID]
-		if !seen {
-			order = append(order, c.SessionID)
-			best[c.SessionID] = ranked{cand: c, live: live, count: count}
+		if seen[c.SessionID] {
 			continue
 		}
-		if cur := (ranked{cand: c, live: live, count: count}); better(cur, prev) {
-			best[c.SessionID] = cur
-		}
-	}
-
-	out := make([]sessionCand, 0, len(order))
-	for _, sid := range order {
-		out = append(out, best[sid].cand)
+		seen[c.SessionID] = true
+		out = append(out, c)
 	}
 	return out
 }
@@ -1765,12 +1817,17 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 	if len(startRows) > 0 {
 		lastStartID = startRows[len(startRows)-1].ID
 	}
-	firstEndID := nmsg + 1
+	firstEndID := 0 // 0 = no upper bound: count everything after the opening bookend
 	if len(endMsgs) > 0 {
 		firstEndID = endMsgs[0].ID
 	}
-	midCount := firstEndID - lastStartID - 1
-	if midCount < 0 {
+	// Count the gap in SQL rather than by subtracting row ids. The two are the
+	// same only while a session's rows are contiguous, which they are in a
+	// per-project index and are NOT in the one store: ids there run across every
+	// project, and a session continued in a second directory is folded in two
+	// pieces with other sessions' rows between them.
+	midCount, cErr := store.CountMessagesBetween(con, fullSID, lastStartID, firstEndID)
+	if cErr != nil {
 		midCount = 0
 	}
 
