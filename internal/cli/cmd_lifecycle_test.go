@@ -26,6 +26,11 @@ func newCfgRoot(t *testing.T) string {
 	// ~/.cache (cacheDir="" in runDelete). Without this, `go test` would pollute
 	// the contributor's real ~/.cache/session-search/.deleted. Keep it hermetic.
 	t.Setenv("HOME", cfg)
+	// The durable transcript vault reads XDG_DATA_HOME before HOME, so pin it
+	// under this test's config dir too. Otherwise every test in the package
+	// would share the one scratch vault TestMain sets, and a delete test could
+	// evict a sibling test's fixture.
+	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
 	return root
 }
 
