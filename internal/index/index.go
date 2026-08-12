@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/durable"
@@ -1049,7 +1050,58 @@ const (
 func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status IndexStatus, err error) {
 	dbp = DBPath(tdir)
 	nSessions, status, err = EnsureIndexedTree(dbp, tdir, reindex, "")
+	if err == nil {
+		// Keep the vector side level with the keyword side. This sits HERE, at
+		// the single point every caller funnels through, rather than at the five
+		// separate call sites — a top-up hung on each of those is one refactor
+		// away from a path that silently stops embedding, which is exactly how
+		// the vector lane went stale in the first place.
+		//
+		// Detached and rate-limited inside MaybeVectorTopup, so an ordinary
+		// invoke pays one stat and never waits on a remote embedder; a silent
+		// no-op when no embedder is configured, preserving the keyword-only
+		// default byte-for-byte.
+		fireVectorTopup(dbp)
+	}
 	return dbp, nSessions, status, err
+}
+
+// fireVectorTopup reads the hook under the read lock and calls it OUTSIDE the
+// lock: the hook spawns a detached child, and holding a lock across that would
+// serialise every indexing pass behind one spawn for no benefit.
+func fireVectorTopup(dbp string) {
+	vectorTopupMu.RLock()
+	fn := vectorTopupHook
+	vectorTopupMu.RUnlock()
+	if fn != nil {
+		fn(dbp)
+	}
+}
+
+// vectorTopupHook is semantic.MaybeVectorTopup, injected at init by package
+// semantic rather than imported, so index keeps no dependency on the embedding
+// side and the vector lane stays a bolt-on the keyword engine never needs.
+// Guarded even though the only production write is package semantic's init
+// (which happens-before main, so that write alone could not race): tests swap
+// the hook while other goroutines are indexing, and an unsynchronised func
+// value read concurrently with a write is a data race the detector will call.
+// The sibling --no-vector flag in package semantic is RWMutex-guarded for the
+// same reason; matching it keeps one idiom across the feature.
+var (
+	vectorTopupMu   sync.RWMutex
+	vectorTopupHook = func(string) {}
+)
+
+// SetVectorTopupHook installs the post-index vector top-up. Called once from
+// package semantic's init; a nil fn restores the no-op.
+func SetVectorTopupHook(fn func(string)) {
+	vectorTopupMu.Lock()
+	defer vectorTopupMu.Unlock()
+	if fn == nil {
+		vectorTopupHook = func(string) {}
+		return
+	}
+	vectorTopupHook = fn
 }
 
 // EnsureIndexedTree builds/updates the FTS index for one Claude-shaped

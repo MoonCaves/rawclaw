@@ -26,6 +26,14 @@ import (
 func TestMain(m *testing.M) {
 	os.Setenv("RAWCLAW_ARCHIVE_AUTOSYNC", "off")
 
+	// Same hazard, second spawner: with RAWCLAW_EMBED_ENDPOINT set, a search
+	// through the real command tree fires a detached vector top-up of
+	// os.Executable() — the TEST BINARY. Go's flag parsing stops at the first
+	// non-flag arg, so `<exe> vector-topup --dbp X` re-runs the whole suite
+	// instead of erroring, and forks again. Stub the seam package-wide; the
+	// spawn-counting tests swap in their own per-test.
+	spawnVectorTopup = func(string) {}
+
 	data, err := os.MkdirTemp("", "rawclaw-cli-data-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "scratch data dir:", err)

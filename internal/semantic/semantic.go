@@ -13,6 +13,7 @@
 package semantic
 
 import (
+	"context"
 	"crypto/sha1"
 	"database/sql"
 	"encoding/binary"
@@ -95,7 +96,13 @@ type embedItem struct {
 // VecIndex embeds any message (tool-stripped prose ≥ MinChars) not yet vectored,
 // prunes stale vectors, and refreshes churned msg_ids. Resumable; returns the
 // count added. `maxNew` of 0 = no cap.
-func VecIndex(con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err error) {
+// ctx bounds the embedding pass. It is load-bearing rather than decorative:
+// the batch path fans out to several goroutines each blocked on a remote HTTP
+// call, and without a cancellation signal a Ctrl-C leaves them running to
+// completion against the endpoint while the caller has already gone. Every
+// vector committed before cancellation stays committed — the pass is
+// resumable, so a cancelled run costs only the batch in flight.
+func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err error) {
 	if err := store.EnsureVecSchema(con); err != nil {
 		return 0, err
 	}
@@ -109,7 +116,20 @@ func VecIndex(con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err 
 	}
 	current := map[vecKey]curEntry{}
 	for _, m := range msgs {
-		text := strings.TrimSpace(parse.StripTools(m.Content))
+		// StripGenerated, not StripTools: every retrieval path scores against
+		// the generated-stripped form, and the vector arm has to see the same
+		// text or the two halves of the fusion are reading different corpora.
+		// StripTools only drops tool runs; it leaves the runtime's own injected
+		// envelopes — system reminders, task notifications, slash-command
+		// plumbing, captured shell IO — which are machinery nobody said, repeat
+		// near-identically across thousands of messages, and would crowd real
+		// neighbours out of the cosine ranking.
+		//
+		// This changes the content hash for any message that carried an
+		// envelope, so the prune pass below drops those stale vectors and they
+		// re-embed from the clean text. Messages that never had one hash
+		// identically and are left alone.
+		text := strings.TrimSpace(parse.StripGenerated(m.Content))
 		if len([]rune(text)) < MinChars {
 			continue
 		}
@@ -161,6 +181,9 @@ func VecIndex(con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err 
 	if !isBatch {
 		// Serial fallback path for non-batch embedders.
 		for _, item := range toEmbed {
+			if ctx.Err() != nil {
+				return added, nil // cancelled: keep what landed, the pass resumes
+			}
 			vec := embedder.Embed(item.text)
 			if len(vec) == 0 {
 				continue
@@ -224,6 +247,9 @@ func VecIndex(con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err 
 		go func() {
 			defer wg.Done()
 			for batch := range batchChan {
+				if ctx.Err() != nil {
+					return // drain-and-exit: the range keeps the channel from leaking
+				}
 				texts := make([]string, len(batch))
 				for j, it := range batch {
 					texts[j] = it.text
@@ -244,7 +270,11 @@ func VecIndex(con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err 
 						resBatch = append(resBatch, vecResult{item: batch[j], vec: vec})
 					}
 				}
-				resultsChan <- resBatch
+				select {
+				case resultsChan <- resBatch:
+				case <-ctx.Done():
+					return // writer is gone; do not block on a send nobody will read
+				}
 			}
 		}()
 	}
@@ -262,6 +292,9 @@ func VecIndex(con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err 
 
 	// Single-threaded DB writes on con to prevent SQLite locks.
 	for resBatch := range resultsChan {
+		if ctx.Err() != nil {
+			break // stop committing; workers see the same signal and unwind
+		}
 		for _, res := range resBatch {
 			if maxNew != 0 && added >= maxNew {
 				break
