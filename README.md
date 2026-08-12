@@ -185,11 +185,12 @@ Each machine gets a top-level directory in the repo (`<machine>/<source>/...`), 
 The archive is durable, not instant. For seconds-fresh visibility, `rawclaw live` skips it entirely and reads the other machine's in-progress session over one SSH hop:
 
 ```bash
+rawclaw setup live user@box-a   # auto-provision remote host, install binary & repair PATH in 1 command
 rawclaw live box-a               # list box-a's recent sessions, newest first
 rawclaw live box-a 3f2a91c0      # render that session's current transcript (messages written seconds ago included)
 ```
 
-The machine name doubles as the ssh destination — an `~/.ssh/config` Host alias just works — or map it explicitly in the archive config (`"ssh": {"box-a": "user@10.0.0.5"}`). The far end needs sshd plus a rawclaw on its non-interactive PATH; without that, `live` fails with a pointed error and your freshness is whatever the last `archive push` uploaded. `--json` gives agents the structured form (raw message text, tool calls and all); `--tail N` widens the transcript window. The rendered transcript follows the same display posture as `read` and `outline` — tool calls stripped unless `--include-tools` asks for them. No summarizing, no interpretation.
+The machine name doubles as the ssh destination — an `~/.ssh/config` Host alias just works — or map it explicitly in the archive config (`"ssh": {"box-a": "user@10.0.0.5"}`). Run `rawclaw setup live <target>` to automatically provision the far end, install the binary, repair non-interactive PATH, and register host aliases in one step. If a remote shell lacks `rawclaw` on its non-interactive PATH, `live` fails with an actionable error pointing straight at `rawclaw setup live <machine>`. `--json` gives agents the structured form (raw message text, tool calls and all); `--tail N` widens the transcript window. The rendered transcript follows the same display posture as `read` and `outline` — tool calls stripped unless `--include-tools` asks for them. No summarizing, no interpretation.
 
 ---
 
