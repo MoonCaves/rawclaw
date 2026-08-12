@@ -1,8 +1,11 @@
 package semantic
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"math"
+	"sync"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
@@ -89,7 +92,7 @@ func TestVecIndexEmbedsPrunesAndRefreshes(t *testing.T) {
 
 	emb := fakeEmbedder{vecs: map[string][]float64{long: {1, 0, 0}}}
 
-	added, err := VecIndex(con, emb, 0)
+	added, err := VecIndex(context.Background(), con, emb, 0)
 	if err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
@@ -101,7 +104,7 @@ func TestVecIndexEmbedsPrunesAndRefreshes(t *testing.T) {
 	}
 
 	// Re-run: nothing new to embed (resumable).
-	added2, err := VecIndex(con, emb, 0)
+	added2, err := VecIndex(context.Background(), con, emb, 0)
 	if err != nil {
 		t.Fatalf("VecIndex (2nd): %v", err)
 	}
@@ -117,7 +120,7 @@ func TestVecIndexEmbedsPrunesAndRefreshes(t *testing.T) {
 		t.Fatalf("expected a churned id; got the same %d", newID)
 	}
 
-	added3, err := VecIndex(con, emb, 0)
+	added3, err := VecIndex(context.Background(), con, emb, 0)
 	if err != nil {
 		t.Fatalf("VecIndex (3rd): %v", err)
 	}
@@ -140,7 +143,7 @@ func TestVecIndexEmbedsPrunesAndRefreshes(t *testing.T) {
 
 	// Now remove the source text entirely → the vector must be pruned.
 	storetest.DeleteMessage(t, con, newID)
-	if _, err := VecIndex(con, emb, 0); err != nil {
+	if _, err := VecIndex(context.Background(), con, emb, 0); err != nil {
 		t.Fatalf("VecIndex (prune): %v", err)
 	}
 	if store.HasVectors(con) {
@@ -152,7 +155,7 @@ func TestVecIndexNilEmbedderAddsNothing(t *testing.T) {
 	con := openTestDB(t)
 	addMessage(t, con, "s1", "user", "a long enough message to be embedded", "2026-06-18T10:00:00Z", 0, "")
 
-	added, err := VecIndex(con, nilEmbedder{}, 0)
+	added, err := VecIndex(context.Background(), con, nilEmbedder{}, 0)
 	if err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
@@ -176,7 +179,7 @@ func TestVecIndexMaxNewCap(t *testing.T) {
 		addMessage(t, con, "s1", "user", txt, "2026-06-18T10:0"+string(rune('0'+i))+":00Z", 0, "")
 		vecs[txt] = []float64{float64(i), 1, 0}
 	}
-	added, err := VecIndex(con, fakeEmbedder{vecs: vecs}, 2)
+	added, err := VecIndex(context.Background(), con, fakeEmbedder{vecs: vecs}, 2)
 	if err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
@@ -197,7 +200,7 @@ func TestVecKNNRanksNearestAndSkipsSubagents(t *testing.T) {
 		"an orthogonal message far from the query":   {0, 1, 0},
 		"a subagent message also near the query vec": {0.9, 0.1, 0},
 	}}
-	if _, err := VecIndex(con, emb, 0); err != nil {
+	if _, err := VecIndex(context.Background(), con, emb, 0); err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
 
@@ -239,7 +242,7 @@ func TestVecKNNExistenceCheck(t *testing.T) {
 	emb := fakeEmbedder{vecs: map[string][]float64{
 		"a message that will be removed after indexing": {1, 0, 0},
 	}}
-	if _, err := VecIndex(con, emb, 0); err != nil {
+	if _, err := VecIndex(context.Background(), con, emb, 0); err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
 	// Delete the message row but leave the vector orphaned (no reindex run).
@@ -263,7 +266,7 @@ func TestVecKNNDimMismatchSkipped(t *testing.T) {
 	emb := fakeEmbedder{vecs: map[string][]float64{
 		"a three dim message stored in the index": {1, 0, 0},
 	}}
-	if _, err := VecIndex(con, emb, 0); err != nil {
+	if _, err := VecIndex(context.Background(), con, emb, 0); err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
 	// Query with a 4-dim vector: the 3-dim stored vector is skipped.
@@ -284,7 +287,7 @@ func TestFuseRRF(t *testing.T) {
 		"shared message present in both keyword and vector": {1, 0, 0},
 		"vector only message not matched by keyword path":   {0.99, 0.01, 0},
 	}}
-	if _, err := VecIndex(con, emb, 0); err != nil {
+	if _, err := VecIndex(context.Background(), con, emb, 0); err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
 
@@ -386,7 +389,7 @@ func TestFuseVectorOnlyCarriesMissingSince(t *testing.T) {
 	emb := fakeEmbedder{vecs: map[string][]float64{
 		"vector only retained beacon message": {1, 0, 0},
 	}}
-	if _, err := VecIndex(con, emb, 0); err != nil {
+	if _, err := VecIndex(context.Background(), con, emb, 0); err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
 
@@ -464,7 +467,7 @@ func TestVecIndex_BatchEmbedderFallback(t *testing.T) {
 		failBatch: true, // Batch will return nil -> trigger per-item fallback
 	}
 
-	added, err := VecIndex(con, emb, 0)
+	added, err := VecIndex(context.Background(), con, emb, 0)
 	if err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
@@ -500,7 +503,7 @@ func TestVecIndex_BatchEmbedderSuccess(t *testing.T) {
 		failBatch: false,
 	}
 
-	added, err := VecIndex(con, emb, 0)
+	added, err := VecIndex(context.Background(), con, emb, 0)
 	if err != nil {
 		t.Fatalf("VecIndex: %v", err)
 	}
@@ -512,5 +515,61 @@ func TestVecIndex_BatchEmbedderSuccess(t *testing.T) {
 	}
 	if emb.itemCalled {
 		t.Error("Embed should not be called when EmbedBatch succeeds")
+	}
+}
+
+// cancellingEmbedder cancels the pass from inside the FIRST embed call, then
+// serves every later call normally. That shape is what makes the assertion
+// below meaningful: work is genuinely available to continue, so a pass that
+// keeps going would embed all of it.
+type cancellingEmbedder struct {
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (e *cancellingEmbedder) Embed(text string) []float64 {
+	e.once.Do(func() { e.cancel() })
+	return []float64{1, 0, 0}
+}
+
+// TestVecIndexCancellationStopsWork pins the cancellation contract the ctx
+// parameter exists for: a cancelled pass stops embedding instead of running the
+// rest of the corpus against a remote endpoint whose caller has already walked
+// away. It asserts the WEAK form — that the pass stops short — because exactly
+// how many in-flight items land before the signal is observed is a race by
+// design, and pinning an exact count would make this flap.
+//
+// The serial path is exercised deliberately: cancellingEmbedder implements only
+// embed.Embedder, not BatchEmbedder, so this covers the fallback branch where a
+// per-item loop must also honour the signal.
+func TestVecIndexCancellationStopsWork(t *testing.T) {
+	con := openTestDB(t)
+
+	const n = 40
+	for i := 0; i < n; i++ {
+		addMessage(t, con, "s1", "user",
+			fmt.Sprintf("a sufficiently long prose message number %d about embeddings", i),
+			"2026-06-18T10:00:00Z", 0, "")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	added, err := VecIndex(ctx, con, &cancellingEmbedder{cancel: cancel}, 0)
+	if err != nil {
+		t.Fatalf("VecIndex under cancellation: %v", err)
+	}
+	if added >= n {
+		t.Fatalf("cancellation did not stop the pass: embedded %d of %d", added, n)
+	}
+
+	// Whatever was committed before the signal STAYS committed: the pass is
+	// resumable, so a cancelled run must never roll back landed work.
+	var stored int
+	if err := con.QueryRow("SELECT COUNT(*) FROM chunk_vec").Scan(&stored); err != nil {
+		t.Fatalf("count chunk_vec: %v", err)
+	}
+	if stored != added {
+		t.Fatalf("committed vectors %d != reported added %d", stored, added)
 	}
 }

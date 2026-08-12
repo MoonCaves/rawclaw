@@ -241,6 +241,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root.AddCommand(newConsolidateCmd())
 	root.AddCommand(newTagPrepCmd())
 	root.AddCommand(newTagWriteCmd())
+	root.AddCommand(newVectorTopupCmd())
 	archiveCmd := newArchiveCmd()
 	archiveCmd.AddCommand(newArchiveInitCmd())
 	archiveCmd.AddCommand(newArchivePushCmd())
@@ -532,6 +533,14 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	out := cmd.OutOrStdout()
 	ctx := cmd.Context()
 
+	// FIRST thing in the run: --no-vector switches off the whole vector lane,
+	// including the background top-up that indexing fires. Indexing happens
+	// deep inside scope resolution below, so setting this any later reads the
+	// PREVIOUS run's value — and because it is process-global, in a test binary
+	// that means the previous test's value. Set unconditionally, never only in
+	// the true branch, so each invocation starts from its own flag.
+	semantic.SetNoVector(o.NoVector)
+
 	if err := validateChoice("source", o.Source, "claude", "codex"); err != nil {
 		return err
 	}
@@ -627,7 +636,7 @@ func runReindexVectors(ctx context.Context, w io.Writer, o *Options) error {
 
 	total := 0
 	for _, s := range scope {
-		n, err := reindexOne(s, emb)
+		n, err := reindexOne(ctx, s, emb)
 		if err != nil {
 			fmt.Fprintf(w, "  %s: skipped (%s)\n", s.Project, err)
 			continue
@@ -644,7 +653,7 @@ func runReindexVectors(ctx context.Context, w io.Writer, o *Options) error {
 // reindexOne indexes a scope then refreshes its vectors
 // (resolve db → open read-write → vector index → close). Works for any source:
 // a Claude scope ensures its TDir, a Codex scope uses its pre-built db.
-func reindexOne(sc view.Scope, emb embed.Embedder) (int, error) {
+func reindexOne(ctx context.Context, sc view.Scope, emb embed.Embedder) (int, error) {
 	dbp, _, err := scopes.Resolve(sc, false)
 	if err != nil {
 		return 0, err
@@ -654,7 +663,7 @@ func reindexOne(sc view.Scope, emb embed.Embedder) (int, error) {
 		return 0, err
 	}
 	defer con.Close()
-	return semantic.VecIndex(con, emb, 0)
+	return semantic.VecIndex(ctx, con, emb, 0)
 }
 
 // runResume prints the paste-ready resume command for a session id — `claude
