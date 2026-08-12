@@ -1237,11 +1237,15 @@ func currentTurnStart(dbp, sessionID string) int {
 // property.
 //
 // A tag is the better label when it exists, but it only exists if someone tagged
-// the session at the end — measured on the live corpus, 222 of 1391 substantial
-// sessions, so five hit lines in six would render with no title at all. Tagging
-// is a bonus, not the thing finding a conversation depends on, so an untagged
-// session falls back to the ask that opened it (view.SessionPreview): the user's
-// own words, already in the database, no model call, always present.
+// the session at the end. Measured on a live corpus of 712 non-subagent sessions,
+// 241 were tagged — and the coverage is strongly size-skewed, because tagging
+// effort goes to the heavy sessions: 165 of 223 sessions over 200 messages carry
+// a tag, against 5 of 181 under ten. So the hit lines left blank are exactly the
+// small and mid-sized sessions, which are the ones hardest to recognise from an
+// id and a timestamp. Tagging is a bonus, not the thing finding a conversation
+// depends on, so an untagged session falls back to the ask that opened it
+// (view.SessionPreview): the user's own words, already in the database, no model
+// call, always present.
 //
 // Lookups are grouped by database so a result set spanning several projects
 // opens each project's database once. Any failure is silent: a missing topic
