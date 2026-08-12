@@ -145,7 +145,7 @@ rawclaw "monthly billing for the paid tier"   # now lexical + semantic, fused
 - **Local, fully private:** Ollama — no API key, nothing leaves your machine.
 - **Hosted:** OpenAI, Voyage, or any OpenAI-compatible gateway (`RAWCLAW_EMBED_WIRE=openai` + `RAWCLAW_EMBED_KEY`).
 
-Vectors live as BLOBs in the same on-disk index; cosine scoring and fusion run in pure Go — no LLM, no extra service, no numpy, no GPU. Unset the env (or pass `--no-vector`) and you're back to byte-identical keyword search.
+Vectors live as BLOBs in the same single on-disk store a search reads, alongside the keyword index; cosine scoring and fusion run in pure Go — no LLM, no extra service, no numpy, no GPU. Unset the env (or pass `--no-vector`) and you're back to byte-identical keyword search.
 
 ### Topic tags — where the conversation pivoted
 
