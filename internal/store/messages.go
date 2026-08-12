@@ -55,6 +55,25 @@ func BookendMessages(con *sql.DB, sid string, boundID int, hasBound, asc bool, l
 	return readMsgs(con, q, args...)
 }
 
+// CountMessagesBetween counts ONE session's messages strictly between two row
+// ids; beforeID <= 0 means no upper bound. Scoped by session_id on purpose: in
+// a database holding every project, row ids run across all of them and a
+// session that ran in two working directories has its rows split around other
+// sessions' rows, so subtracting two ids counts strangers. [agentproto.Outline]
+func CountMessagesBetween(con *sql.DB, sid string, afterID, beforeID int) (int, error) {
+	q := "SELECT COUNT(*) FROM messages WHERE session_id=? AND id>?"
+	args := []any{sid, afterID}
+	if beforeID > 0 {
+		q += " AND id<?"
+		args = append(args, beforeID)
+	}
+	var n int
+	if err := con.QueryRow(q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // readMsgs runs a (id, role, content) query and scans the rows.
 func readMsgs(con *sql.DB, query string, args ...any) ([]Msg, error) {
 	rows, err := con.Query(query, args...)
