@@ -126,6 +126,10 @@ func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 	var out []view.Scope
 	for _, dbp := range entries {
 		base := filepath.Base(dbp)
+		if index.IsConsolidatedDB(base) {
+			continue // the consolidated store is a SUPERSET of these dbs, not a
+			// peer of them: listing it here would search every row a second time
+		}
 		if strings.HasPrefix(base, "codex-") {
 			continue // codex dbs are enumerated + reconciled by Codex()
 		}

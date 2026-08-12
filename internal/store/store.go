@@ -17,20 +17,30 @@ import (
 
 // SchemaVersion gates a full rebuild on mismatch. It is deliberately NOT bumped
 // for the durable-retention columns (origin_machine/source_tool/source_path/
-// missing_since): a bump forces Rebuild() to re-walk the live tree and re-prune
-// every already-retained session, defeating retention on the first upgrade. Those
-// columns are added in place by index's migrateDurabilityColumns instead.
+// missing_since) nor for the scope columns (project/cwd): a bump forces
+// Rebuild() to re-walk the live tree and re-prune every already-retained
+// session, defeating retention on the first upgrade. Those columns are added in
+// place by index's migrateDurabilityColumns / migrateScopeColumns instead.
 const SchemaVersion = 4
 
 // Schema is the base (non-FTS) DDL. The sessions provenance/retention columns
-// (origin_machine/source_tool/source_path/missing_since) are present here so a
-// fresh or rebuilt db carries them from the start; an existing current-version db
-// gets them via index's in-place migrateDurabilityColumns migration.
+// (origin_machine/source_tool/source_path/missing_since) and the scope columns
+// (project/cwd) are present here so a fresh or rebuilt db carries them from the
+// start; an existing current-version db gets them via index's in-place
+// migrateDurabilityColumns / migrateScopeColumns migrations.
+//
+// project/cwd make a session's scope readable from the ROW rather than inferred
+// from which per-project db file it lives in. Today that inference is exact
+// (one db per project), which is precisely why the filename is load-bearing and
+// a shared store is impossible; carrying the scope on the row is the prefactor
+// that removes the dependency. origin_machine already answers "which machine",
+// so the row triple is (project, cwd, origin_machine).
 const Schema = `
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY, started_at REAL, last_ts REAL,
     message_count INTEGER DEFAULT 0, is_subagent INTEGER DEFAULT 0, parent_id TEXT,
-    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL
+    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL,
+    project TEXT, cwd TEXT
 );
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,

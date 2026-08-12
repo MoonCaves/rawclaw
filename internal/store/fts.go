@@ -18,6 +18,18 @@ type Filter struct {
 	MinMessages      int    // 0 = no minimum; else s.message_count >= MinMessages
 	SinceDate        string // "" = no bound; else substr(m.ts_iso,1,10) >= SinceDate (YYYY-MM-DD inclusive)
 	BeforeDate       string // "" = no bound; else substr(m.ts_iso,1,10) <= BeforeDate (YYYY-MM-DD inclusive)
+
+	// Scope, for the one store that holds every project. Which project a
+	// session belongs to is a column here, so narrowing to a project is a WHERE
+	// clause rather than a choice of which file to open. Both are empty by
+	// default, which searches everything.
+	//
+	// Projects is an exact-match list, not a pattern: a caller with a regex
+	// (--include-path) resolves it against DistinctProjects first and passes
+	// the projects that matched. Keeping the pattern out of SQL means the
+	// regex keeps Go's semantics instead of SQLite's.
+	Projects   []string // empty = every project; else s.project IN (...)
+	SourceTool string   // "" = every source; else s.source_tool = SourceTool
 }
 
 // Sort selects the ORDER BY for SearchHits / SearchAnchors (D5).
@@ -71,7 +83,49 @@ func ftsWhere(match string, f Filter) (where []string, args []any) {
 		where = append(where, "substr(m.ts_iso,1,10) <= ?")
 		args = append(args, f.BeforeDate)
 	}
+	if len(f.Projects) > 0 {
+		where = append(where, "s.project IN ("+placeholders(len(f.Projects))+")")
+		for _, p := range f.Projects {
+			args = append(args, p)
+		}
+	}
+	if f.SourceTool != "" {
+		where = append(where, "s.source_tool=?")
+		args = append(args, f.SourceTool)
+	}
 	return where, args
+}
+
+// placeholders builds the "?,?,?" list for an IN clause of n values. n is a
+// count the caller already holds, never user text, so nothing here is
+// interpolated from input.
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// DistinctProjects returns every project label present in the store, sorted.
+// A caller holding a path pattern resolves it here — matching in Go — and
+// passes the winners as Filter.Projects. Rows with no project (indexed before
+// the scope columns existed) are left out, because there is no label to match
+// a pattern against.
+func DistinctProjects(con *sql.DB) ([]string, error) {
+	rows, err := con.Query("SELECT DISTINCT project FROM sessions WHERE project IS NOT NULL AND project<>'' ORDER BY project")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // SearchHit is one flat keyword-recall row: the session/message columns plus
