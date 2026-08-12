@@ -2,6 +2,7 @@ package index
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -33,6 +34,73 @@ func ConsolidatedPath() string {
 // superset of them, not a peer.
 func IsConsolidatedDB(dbFileName string) bool {
 	return filepath.Base(dbFileName) == ConsolidatedDBName
+}
+
+// OpenConsolidated opens the one store read-only for a read verb and reports
+// how many sessions it holds. It returns an error — never a usable connection —
+// when the store is absent, unreadable, or empty. Those three states look
+// identical to "nothing matched" once a query has run against them, and a
+// confident empty answer from a store that was never filled is the one failure
+// a reader must not produce. A caller that gets an error falls back to the
+// per-project databases and says which store answered.
+func OpenConsolidated() (*sql.DB, int, error) {
+	path := ConsolidatedPath()
+	if _, err := os.Stat(path); err != nil {
+		return nil, 0, fmt.Errorf("no consolidated store at %s", path)
+	}
+	con, err := store.ConnectRO(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("open consolidated store: %w", err)
+	}
+	var sessions int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions); err != nil {
+		_ = con.Close()
+		return nil, 0, fmt.Errorf("read consolidated store: %w", err)
+	}
+	if sessions == 0 {
+		_ = con.Close()
+		return nil, 0, fmt.Errorf("consolidated store holds no sessions")
+	}
+	return con, sessions, nil
+}
+
+// UnconsolidatedDBs returns the per-project databases the one store has never
+// folded in, by comparing the cache directory against the fold-in watermarks
+// the store stamps. This is what keeps a one-store read honest: a project whose
+// database exists but was never merged is missing from every answer, and a
+// reader has to be able to name it rather than let the corpus quietly shrink.
+//
+// It compares presence, not freshness — a source that changed after its
+// fold-in is not detected here, because proving that would mean opening every
+// source database, which is the per-project fan-out this work exists to remove.
+func UnconsolidatedDBs(con *sql.DB) ([]string, error) {
+	dbs, err := PerProjectDBs()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := con.Query("SELECT key FROM meta WHERE key LIKE 'sync:%'")
+	if err != nil {
+		return nil, fmt.Errorf("read fold-in watermarks: %w", err)
+	}
+	defer rows.Close()
+	folded := map[string]struct{}{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		folded[strings.TrimPrefix(key, "sync:")] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var missing []string
+	for _, dbp := range dbs {
+		if _, ok := folded[filepath.Base(dbp)]; !ok {
+			missing = append(missing, dbp)
+		}
+	}
+	return missing, nil
 }
 
 // SyncStats reports what one consolidation pass moved.
@@ -128,6 +196,67 @@ SELECT session_id, role, content, ts, ts_iso, uuid FROM (
 )
 `
 
+// topicNewer is the precedence rule between two taggings of the SAME segment
+// (one session, one start anchor). Tagging is a re-runnable act — a segment can
+// be re-tagged with a better label — so the later tagging wins. Equal or
+// missing timestamps leave the copy already in the store alone, which keeps the
+// pass order-independent.
+const topicNewer = `COALESCE(excluded.tagged_at,0) > COALESCE(topic_segment.tagged_at,0)`
+
+// mergeTopicsSQL folds one attached db's topic segments into the consolidated
+// store, keyed by the (session_id, start_uuid) identity the segment already
+// carries. Without this the one store answers every topic query with nothing:
+// the tags live only in the per-project dbs that produced them, so a reader
+// that resolves to the store would report an untagged corpus.
+//
+// As with messages, the segment id is deliberately not carried over — it is an
+// AUTOINCREMENT rowid that doubles as the topic_fts rowid, so two sources' id 1
+// would silently overwrite each other's search entry. Inserting without it lets
+// the topic_ai / topic_au triggers assign a fresh rowid and keep topic_fts in
+// step, which is why nothing here writes topic_fts directly.
+// The origin column is selected through a placeholder because the topic table
+// predates it: a project tagged before provenance was added has a topic_segment
+// with no origin_machine at all, and naming it unconditionally makes the merge
+// fail on exactly the OLDEST tags — the ones with the most history behind them,
+// and the ones a one-store reader would otherwise never see. Where the source
+// has no such column the merge substitutes NULL, which is what an untracked
+// origin already means everywhere else in this store.
+func mergeTopicsSQLFor(srcHasOrigin bool) string {
+	origin := "NULL"
+	if srcHasOrigin {
+		origin = "origin_machine"
+	}
+	return strings.Replace(mergeTopicsSQL, "{{origin}}", origin, 1)
+}
+
+var mergeTopicsSQL = `
+INSERT INTO main.topic_segment
+  (session_id,start_uuid,end_uuid,topic,summary,tagged_at,origin_machine)
+SELECT session_id,start_uuid,end_uuid,topic,summary,tagged_at,{{origin}}
+FROM src.topic_segment
+WHERE true
+ON CONFLICT(session_id,start_uuid) DO UPDATE SET
+  end_uuid       = CASE WHEN ` + topicNewer + ` THEN excluded.end_uuid       ELSE topic_segment.end_uuid END,
+  topic          = CASE WHEN ` + topicNewer + ` THEN excluded.topic          ELSE topic_segment.topic END,
+  summary        = CASE WHEN ` + topicNewer + ` THEN excluded.summary        ELSE topic_segment.summary END,
+  origin_machine = CASE WHEN ` + topicNewer + ` THEN excluded.origin_machine ELSE topic_segment.origin_machine END,
+  tagged_at      = MAX(COALESCE(topic_segment.tagged_at,0), COALESCE(excluded.tagged_at,0))
+`
+
+// mergeVerdictsSQL folds the session-verdict sidecar in on the same rule: one
+// row per session, the later verdict wins. It rides with the topic merge
+// because it is the same tagging act's other half.
+const mergeVerdictsSQL = `
+INSERT INTO main.session_verdict(session_id,verdict,source,origin_machine,tagged_at)
+SELECT session_id,verdict,source,origin_machine,tagged_at FROM src.session_verdict
+WHERE true
+ON CONFLICT(session_id) DO UPDATE SET
+  verdict        = CASE WHEN COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0) THEN excluded.verdict        ELSE session_verdict.verdict END,
+  source         = CASE WHEN COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0) THEN excluded.source         ELSE session_verdict.source END,
+  origin_machine = CASE WHEN COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0) THEN excluded.origin_machine ELSE session_verdict.origin_machine END,
+  tagged_at      = MAX(COALESCE(session_verdict.tagged_at,0), COALESCE(excluded.tagged_at,0))
+`
+
 // recountSQL restates each session's message_count from the union that actually
 // landed, replacing the per-source counts carried in by the merge.
 const recountSQL = `
@@ -157,6 +286,13 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 	defer con.Close()
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return st, fmt.Errorf("ensure consolidated schema: %w", err)
+	}
+	// The topic layer is gated separately from the keyword schema, so it has to
+	// be asked for explicitly. Creating it unconditionally means a topic query
+	// against the one store can answer "nothing is tagged yet" instead of
+	// failing on a missing table.
+	if err := store.EnsureTopicSchema(con); err != nil {
+		return st, fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 
 	for _, src := range srcPaths {
@@ -198,6 +334,9 @@ func SyncConsolidatedFrom(srcPath string) error {
 	defer con.Close()
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return fmt.Errorf("ensure consolidated schema: %w", err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		return fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 	if _, _, err := consolidateOne(con, srcPath); err != nil {
 		return fmt.Errorf("consolidate %s: %w", filepath.Base(srcPath), err)
@@ -267,6 +406,18 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 		return 0, true, cErr
 	}
 
+	// Whether this source has a topic layer at all: the topic tables are created
+	// on demand by the tagging path, so a project nobody has tagged simply has
+	// no such table and its merge steps are skipped.
+	hasTopics, err := srcHasTable(con, "topic_segment")
+	if err != nil {
+		return 0, true, err
+	}
+	hasVerdicts, err := srcHasTable(con, "session_verdict")
+	if err != nil {
+		return 0, true, err
+	}
+
 	mark := ""
 	if err := con.QueryRow(
 		`SELECT (SELECT COUNT(*) FROM src.sessions) || ':' ||
@@ -275,6 +426,21 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	).Scan(&mark); err != nil {
 		return 0, true, fmt.Errorf("read source watermark: %w", err)
 	}
+	// The topic layer joins the watermark, because tagging changes a source
+	// without touching a single session or message row. Left out, a re-tagged
+	// project would read as unchanged and its new labels would never arrive.
+	// The latest tagging time rides along with the count: re-tagging a segment
+	// in place replaces a label without changing how many there are, so a count
+	// alone would still miss it.
+	topicMark := "0"
+	if hasTopics {
+		if err := con.QueryRow(
+			`SELECT COUNT(*) || '@' || COALESCE(MAX(tagged_at),0) FROM src.topic_segment`,
+		).Scan(&topicMark); err != nil {
+			return 0, true, fmt.Errorf("read source topic watermark: %w", err)
+		}
+	}
+	mark += ":t" + topicMark
 	if err := con.QueryRow("SELECT COUNT(*) FROM src.sessions").Scan(&offered); err != nil {
 		return 0, true, fmt.Errorf("count source sessions: %w", err)
 	}
@@ -287,7 +453,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	switch err := con.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&prev); {
 	case err == nil && prev == mark:
 		return offered, false, nil
-	case err != nil && err != sql.ErrNoRows:
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return 0, true, fmt.Errorf("read sync watermark: %w", err)
 	}
 
@@ -296,6 +462,20 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	}
 	if _, err := con.Exec(mergeMessagesSQL); err != nil {
 		return 0, true, fmt.Errorf("merge messages: %w", err)
+	}
+	if hasTopics {
+		srcOrigin, err := srcHasColumn(con, "topic_segment", "origin_machine")
+		if err != nil {
+			return 0, true, err
+		}
+		if _, err := con.Exec(mergeTopicsSQLFor(srcOrigin)); err != nil {
+			return 0, true, fmt.Errorf("merge topics: %w", err)
+		}
+	}
+	if hasVerdicts {
+		if _, err := con.Exec(mergeVerdictsSQL); err != nil {
+			return 0, true, fmt.Errorf("merge verdicts: %w", err)
+		}
 	}
 	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
 		return 0, true, fmt.Errorf("stamp sync watermark: %w", err)
@@ -337,6 +517,53 @@ func syncMarkKey(src string) string { return "sync:" + filepath.Base(src) }
 
 // hasScopeColumns reports whether the ATTACHed source carries the project/cwd
 // columns the merge selects.
+// srcHasTable reports whether the ATTACHed source carries a given table. The
+// topic layer is created on demand rather than by the base schema, so a source
+// that was never tagged genuinely has no topic tables and its topic merge must
+// be skipped rather than fail the whole pass.
+func srcHasTable(con *sql.DB, name string) (bool, error) {
+	var one int
+	err := con.QueryRow(
+		"SELECT 1 FROM src.sqlite_master WHERE type='table' AND name=?", name).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("look for source table %s: %w", name, err)
+	}
+	return true, nil
+}
+
+// srcHasColumn reports whether an attached source table carries a column. The
+// sidecar tables grew columns after they shipped, so a source written by an
+// older build is a normal state to find on disk, not a corruption — the merge
+// asks rather than assumes.
+func srcHasColumn(con *sql.DB, table, col string) (bool, error) {
+	rows, err := con.Query("PRAGMA src.table_info(" + table + ")")
+	if err != nil {
+		return false, fmt.Errorf("read source %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid         int
+			name, typ   string
+			notNull, pk int
+			dflt        sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return false, fmt.Errorf("scan source %s column: %w", table, err)
+		}
+		if name == col {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate source %s columns: %w", table, err)
+	}
+	return false, nil
+}
+
 func hasScopeColumns(con *sql.DB) (bool, error) {
 	rows, err := con.Query("PRAGMA src.table_info(sessions)")
 	if err != nil {
