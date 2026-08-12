@@ -303,6 +303,9 @@ func resolveTimeoutFromArgs(args []string, env string) time.Duration {
 		if isUpgradeInvocation(args) && resolved < upgradeWatchdog {
 			return upgradeWatchdog
 		}
+		if isConsolidateInvocation(args) && resolved < consolidateWatchdog {
+			return consolidateWatchdog
+		}
 		// The syncing archive verbs (init/push/pull/autosync) run WITHOUT the
 		// wall-clock watchdog: no cap fits both a hung transfer and a legit
 		// slow multi-GB first push, so — like rsync's --timeout and curl's
@@ -357,6 +360,15 @@ func leadingSubcommandTokens(args []string, n int) []string {
 func isUpgradeInvocation(args []string) bool {
 	w := leadingSubcommandTokens(args, 1)
 	return len(w) == 1 && (w[0] == "upgrade" || w[0] == "update")
+}
+
+// isConsolidateInvocation reports whether args target `consolidate`, the bulk
+// fold of every per-project index into the single store — the one read-side
+// command whose cost is measured in minutes on a large corpus rather than
+// milliseconds.
+func isConsolidateInvocation(args []string) bool {
+	w := leadingSubcommandTokens(args, 1)
+	return len(w) == 1 && w[0] == "consolidate"
 }
 
 // isArchiveSyncInvocation reports whether args target a SYNCING archive verb —

@@ -67,11 +67,72 @@ CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
 END;
 `
 
-// dropSQL drops every schema object before a full rebuild.
+// TrigramSQL is the SUBSTRING index: a second FTS5 table over the same content
+// of the same messages, tokenized into overlapping three-character sequences,
+// plus the triggers that keep it in step with messages exactly as the word
+// index's triggers do.
+//
+// It exists because an FTS5 table fixes one tokenizer, and a word tokenizer only
+// ever matches on token boundaries. A query landing mid-token is not something
+// messages_fts ranks badly — it is something messages_fts cannot answer at all.
+// The two tables therefore answer disjoint question shapes, and both are needed.
+//
+// The shape is copied verbatim from Hermes' schema — a plain
+// fts5(content, tokenize='trigram'), no detail=none, no external content —
+// because that is what a session-search tool with a large user base runs in
+// production. Tuning it is something to do once there is evidence it is needed.
+//
+// Unlike the word DDL above, every object here is IF NOT EXISTS: these arrive at
+// an already-populated db through an additive migration
+// (index.migrateTrigramIndex) as well as through a rebuild, so the DDL has to be
+// safe to re-run against a db that already has some of it.
+const TrigramSQL = `
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts_trigram USING fts5(content, tokenize='trigram');
+CREATE TRIGGER IF NOT EXISTS messages_tri_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts_trigram(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_tri_ad AFTER DELETE ON messages BEGIN
+  DELETE FROM messages_fts_trigram WHERE rowid = old.id;
+END;
+CREATE TRIGGER IF NOT EXISTS messages_tri_au AFTER UPDATE ON messages BEGIN
+  DELETE FROM messages_fts_trigram WHERE rowid = old.id;
+  INSERT INTO messages_fts_trigram(rowid, content) VALUES (new.id, new.content);
+END;
+`
+
+// TrigramResetSQL empties the substring index. It is the recovery path for a
+// db whose index holds rows the backfill watermark cannot account for, where
+// starting over is the only state that is knowably correct.
+const TrigramResetSQL = `DELETE FROM messages_fts_trigram`
+
+// TrigramBatchBoundSQL returns the highest messages.id in the next backfill
+// batch — the upper bound of a half-open id window — or NULL when nothing is
+// left to copy. Taking the bound first means the INSERT that follows is a plain
+// range scan over the rowid index rather than a LIMIT whose row set depends on
+// evaluation order. Args: the watermark, the batch size.
+const TrigramBatchBoundSQL = `SELECT max(id) FROM (SELECT id FROM messages WHERE id > ? ORDER BY id LIMIT ?)`
+
+// TrigramBatchFillSQL copies one id window of messages into the substring
+// index. Args: the watermark (exclusive), the batch bound (inclusive).
+//
+// OR REPLACE makes the copy idempotent, which matters because an entry can
+// already be there for a row this window covers: another process writing a
+// message during the backfill fires the insert trigger for it. Re-writing an
+// identical entry is a no-op in effect, whereas a plain INSERT would fail the
+// whole migration on a rowid collision.
+const TrigramBatchFillSQL = `INSERT OR REPLACE INTO messages_fts_trigram(rowid, content) SELECT id, content FROM messages WHERE id > ? AND id <= ?`
+
+// dropSQL drops every schema object before a full rebuild. Dropping messages
+// would take its triggers with it, but they are named here anyway so the drop
+// list reads as the complete inventory of what a rebuild removes.
 const dropSQL = `DROP TRIGGER IF EXISTS messages_ai;
 DROP TRIGGER IF EXISTS messages_ad;
 DROP TRIGGER IF EXISTS messages_au;
+DROP TRIGGER IF EXISTS messages_tri_ai;
+DROP TRIGGER IF EXISTS messages_tri_ad;
+DROP TRIGGER IF EXISTS messages_tri_au;
 DROP TABLE IF EXISTS messages_fts;
+DROP TABLE IF EXISTS messages_fts_trigram;
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS file_index;`
@@ -222,6 +283,11 @@ func Rebuild(con *sql.DB) error {
 	}
 	if _, err := con.Exec(FTSSQL); err != nil {
 		return fmt.Errorf("rebuild fts: %w", err)
+	}
+	// The substring index is part of the rebuilt shape, so a fresh db carries it
+	// from the start and only an already-populated db needs the migration.
+	if _, err := con.Exec(TrigramSQL); err != nil {
+		return fmt.Errorf("rebuild trigram fts: %w", err)
 	}
 	_, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", strconv.Itoa(SchemaVersion))
 	if err != nil {
