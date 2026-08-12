@@ -366,3 +366,103 @@ func TestTopicRowsExistDegrade(t *testing.T) {
 		t.Error("TopicRowsExist with a row = false, want true")
 	}
 }
+
+// TestSearchSubstringIndexAnswersMidToken pins the reason the substring index
+// exists: a probe that lands inside a word is not something the word index ranks
+// badly, it is something the word index cannot answer at all. The same probe
+// against the trigram index returns the row, and the shared filters still apply.
+func TestSearchSubstringIndexAnswersMidToken(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	storetest.InsertSession(t, con, storetest.Session{ID: "ledger", MessageCount: 5})
+	storetest.InsertSession(t, con, storetest.Session{ID: "billing", IsSubagent: true, ParentID: "ledger", MessageCount: 2})
+	storetest.InsertMessage(t, con, storetest.Message{
+		SessionID: "ledger", Role: "user", Content: "the reconciliation finished cleanly",
+		TS: 100, ISO: "2026-01-01T10:00:00Z", UUID: "uuid-l1"})
+	storetest.InsertMessage(t, con, storetest.Message{
+		SessionID: "billing", Role: "user", Content: "reconciliation notes from the thread",
+		TS: 200, ISO: "2026-01-02T10:00:00Z", UUID: "uuid-b1"})
+
+	// "iliat" sits inside "reconciliation" and is not a word, so it falls on no
+	// token boundary the word tokenizer produced.
+	const probe = `"iliat"`
+
+	hits, err := store.SearchHits(con, probe, store.Filter{IncludeSubagents: true}, store.SortRelevance, 10)
+	if err != nil {
+		t.Fatalf("SearchHits: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("word index answered a mid-token probe with %v — the premise of the substring index is wrong", hitSessions(hits))
+	}
+
+	hits, err = store.SearchHitsSubstring(con, probe, store.Filter{IncludeSubagents: true}, store.SortRelevance, 10)
+	if err != nil {
+		t.Fatalf("SearchHitsSubstring: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("SearchHitsSubstring = %v, want both rows", hitSessions(hits))
+	}
+	if hits[0].Content == "" {
+		t.Error("Content empty — the snippet-rebuild input must be carried on the substring path too")
+	}
+
+	// The filters are the same composition, so the subagent row drops by default.
+	hits, err = store.SearchHitsSubstring(con, probe, store.Filter{}, store.SortRelevance, 10)
+	if err != nil || len(hits) != 1 || hits[0].SessionID != "ledger" {
+		t.Errorf("SearchHitsSubstring default filter = %v (%v), want the one top-level row", hitSessions(hits), err)
+	}
+
+	// Anchor recall reaches the same row and carries the message id + uuid.
+	anchors, err := store.SearchAnchorsSubstring(con, probe, store.Filter{}, store.SortRelevance, 10)
+	if err != nil {
+		t.Fatalf("SearchAnchorsSubstring: %v", err)
+	}
+	if len(anchors) != 1 || anchors[0].UUID != "uuid-l1" || anchors[0].ID == 0 {
+		t.Errorf("SearchAnchorsSubstring = %+v, want the ledger anchor with its uuid", anchors)
+	}
+	if anchors, err := store.SearchAnchors(con, probe, store.Filter{}, store.SortRelevance, 10); err != nil || len(anchors) != 0 {
+		t.Errorf("word anchors answered a mid-token probe = %+v (%v), want empty", anchors, err)
+	}
+}
+
+// TestSubstringIndexTracksMessages pins that the substring index is kept in step
+// with messages by the same three sync triggers the word index uses — an index
+// that only tracks inserts would go quietly wrong on every edit and delete.
+func TestSubstringIndexTracksMessages(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	storetest.InsertSession(t, con, storetest.Session{ID: "ledger", MessageCount: 5})
+	id := storetest.InsertMessage(t, con, storetest.Message{
+		SessionID: "ledger", Role: "user", Content: "the reconciliation finished cleanly",
+		TS: 100, ISO: "2026-01-01T10:00:00Z", UUID: "uuid-l1"})
+
+	countSub := func(probe string) int {
+		t.Helper()
+		hits, err := store.SearchHitsSubstring(con, probe, store.Filter{}, store.SortRelevance, 10)
+		if err != nil {
+			t.Fatalf("SearchHitsSubstring(%s): %v", probe, err)
+		}
+		return len(hits)
+	}
+
+	// AFTER INSERT put it there.
+	if n := countSub(`"iliat"`); n != 1 {
+		t.Fatalf("after insert = %d rows, want 1 (the insert trigger did not index it)", n)
+	}
+
+	// AFTER UPDATE must retire the old content and index the new.
+	storetest.SetMessageContent(t, con, id, "the settlement finished cleanly")
+	if n := countSub(`"iliat"`); n != 0 {
+		t.Errorf("after update = %d rows for the OLD substring, want 0 (stale entry left behind)", n)
+	}
+	if n := countSub(`"tleme"`); n != 1 {
+		t.Errorf("after update = %d rows for the NEW substring, want 1", n)
+	}
+
+	// AFTER DELETE must remove it. This one is asserted against the index
+	// directly: the search join drops a row whose message is gone, so a stale
+	// entry would still read as "not searchable" while sitting in the index
+	// forever.
+	storetest.DeleteMessage(t, con, id)
+	if n := storetest.CountTrigramRows(t, con, `"tleme"`); n != 0 {
+		t.Errorf("after delete = %d entries left in the index, want 0", n)
+	}
+}

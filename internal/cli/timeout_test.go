@@ -215,3 +215,33 @@ func TestExecuteRunsUnderWatchdog(t *testing.T) {
 		t.Errorf("version output missing under Execute, got %q", out.String())
 	}
 }
+
+// TestResolveTimeoutFromArgsConsolidateFloor proves the same watchdog fix for
+// the bulk fold: building the substring index pushed a full --rebuild past the
+// 30s default, so a bare `consolidate` must not inherit it. An explicit
+// --timeout / RAWCLAW_TIMEOUT still wins, and other commands are unaffected.
+func TestResolveTimeoutFromArgsConsolidateFloor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		env  string
+		want time.Duration
+	}{
+		{"bare consolidate gets the floor", []string{"consolidate"}, "", consolidateWatchdog},
+		{"consolidate --rebuild gets the floor", []string{"consolidate", "--rebuild"}, "", consolidateWatchdog},
+		{"explicit --timeout wins over floor", []string{"consolidate", "--timeout", "90s"}, "", 90 * time.Second},
+		{"explicit --timeout=0 disables even for consolidate", []string{"consolidate", "--timeout", "0"}, "", 0},
+		{"RAWCLAW_TIMEOUT wins over floor", []string{"consolidate"}, "45s", 45 * time.Second},
+		{"a query that merely mentions the word keeps the default", []string{"consolidate the ledger"}, "", defaultTimeout},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resolveTimeoutFromArgs(tc.args, tc.env); got != tc.want {
+				t.Errorf("resolveTimeoutFromArgs(%q, %q) = %v, want %v", tc.args, tc.env, got, tc.want)
+			}
+		})
+	}
+}

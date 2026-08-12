@@ -171,6 +171,43 @@ func buildMatch(q string, p SearchParams) (match string, terms []string, multi, 
 	return strings.Join(quoted, " OR "), terms, true, true
 }
 
+// minTrigram is the shortest query the substring index can answer: a trigram
+// index stores three-character sequences, so a two-character probe has no
+// trigram to match and the query can only ever return nothing.
+const minTrigram = 3
+
+// substringFallback decides whether to re-ask a query of the SUBSTRING index,
+// and returns the MATCH expression and highlight terms to ask it with.
+//
+// THE ROUTING RULE, in one sentence: the word index is asked first, and only a
+// query it returned NOTHING for is retried as a substring.
+//
+// That rule is this short because of how a word tokenizer fails. It matches on
+// token boundaries, so a query landing mid-token — "ansac" inside
+// "transaction" — is not something it ranks badly, it is something it cannot
+// answer at all; it returns zero rows rather than wrong ones. "Zero rows from
+// the word index" is therefore the whole signal, and a query the word index CAN
+// answer never reaches here, so every existing result's ranking, snippet and
+// coverage are untouched.
+//
+// An explicit boolean query (RawMatch) is excluded: its operators are the
+// intent, and a literal substring has no operators to honor.
+func substringFallback(q string, p SearchParams, wordHits int) (match string, terms []string, ok bool) {
+	if wordHits > 0 || p.RawMatch != "" {
+		return "", nil, false
+	}
+	probe := strings.TrimSpace(q)
+	if len([]rune(probe)) < minTrigram {
+		return "", nil, false
+	}
+	// The whole query becomes ONE FTS5 phrase (embedded quotes doubled, which is
+	// how FTS5 escapes a quote inside a string), and the trigram tokenizer reads a
+	// phrase as a literal substring of the content. It doubles as the single
+	// highlight term, lowercased because MakeSnippet matches case-insensitively
+	// against lowercased text.
+	return `"` + strings.ReplaceAll(probe, `"`, `""`) + `"`, []string{strings.ToLower(probe)}, true
+}
+
 // lowerSet returns the distinct, non-empty lowercased terms used for coverage
 // counting.
 func lowerSet(terms []string) []string {
@@ -378,6 +415,13 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 	hits, err := store.SearchHits(con, match, filt, srt, fetch)
 	if err != nil {
 		return nil, ExplainInputs{}
+	}
+	if subMatch, subTerms, route := substringFallback(q, p, len(hits)); route {
+		if sub, sErr := store.SearchHitsSubstring(con, subMatch, filt, srt, fetch); sErr == nil && len(sub) > 0 {
+			// One literal substring is one term, so the multi-term OR/coverage
+			// re-rank does not apply to what comes back.
+			hits, terms, multi = sub, subTerms, false
+		}
 	}
 
 	lterms := lowerSet(terms)
@@ -621,6 +665,13 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 	anchors, err := store.SearchAnchors(con, match, filt, srt, fetch)
 	if err != nil {
 		return []Anchor{}
+	}
+	// Same substring routing as searchScored — the rule is documented once, on
+	// substringFallback.
+	if subMatch, subTerms, route := substringFallback(q, p, len(anchors)); route {
+		if sub, sErr := store.SearchAnchorsSubstring(con, subMatch, filt, srt, fetch); sErr == nil && len(sub) > 0 {
+			anchors, terms, multi = sub, subTerms, false
+		}
 	}
 
 	lterms := lowerSet(terms)

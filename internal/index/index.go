@@ -75,6 +75,13 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 		if rerr := store.Rebuild(con); rerr != nil {
 			return fmt.Errorf("ensure schema rebuild: %w", rerr)
 		}
+		// A rebuilt db already has the substring index (store.Rebuild creates it)
+		// over an empty messages table, so this only stamps the backfill marker.
+		// Without the stamp the very next call would read the db as un-backfilled
+		// and re-fill a freshly indexed corpus from scratch.
+		if terr := migrateTrigramIndex(con); terr != nil {
+			return fmt.Errorf("ensure trigram index: %w", terr)
+		}
 		return nil
 	}
 	// Version already current → ensure the base schema + FTS are present
@@ -94,6 +101,160 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 	}
 	if _, err := con.Exec("SELECT 1 FROM messages_fts LIMIT 1"); err != nil {
 		_, _ = con.Exec(store.FTSSQL) // best-effort; raced creation is acceptable
+	}
+	// Same treatment again for the substring index: added in place, no version
+	// bump.
+	if err := migrateTrigramIndex(con); err != nil {
+		return fmt.Errorf("ensure trigram index: %w", err)
+	}
+	return nil
+}
+
+// trigramBackfillKey marks the substring index as fully populated from the
+// messages that were already in the db when it was added.
+const trigramBackfillKey = "trigram_backfill_done"
+
+// trigramWatermarkKey holds how far an unfinished backfill got: the highest
+// messages.id already copied into the substring index. It is the resume point,
+// and it exists only while the backfill is in progress.
+const trigramWatermarkKey = "trigram_backfill_at"
+
+// trigramBatch is how many messages one backfill transaction copies. It is the
+// unit of work a kill can cost, and the reason the size is modest: measured on
+// a corpus of ~345k messages the whole backfill takes ~52s, which is longer
+// than the CLI's own 30s watchdog, so the pass MUST survive being killed
+// part-way. At this size a batch is a few seconds, so a killed run loses
+// seconds of work and the next run resumes where it stopped.
+const trigramBatch = 20000
+
+// migrateTrigramIndex adds the substring index to an existing current-version db
+// and fills it from the rows already there, in place and WITHOUT bumping
+// SchemaVersion — for exactly the reason the durability and scope columns do not
+// bump it. A bump sends every db down store.Rebuild, which drops the messages
+// table and forces a re-walk of the live transcript tree; every session retained
+// after its source transcript was purged upstream would be re-pruned on that
+// walk. Durable retention exists to survive that, and a new search index is not
+// worth spending it. The substring index is fully derivable from messages, which
+// is what makes building it in place possible at all.
+//
+// Kill-safety (F3): the fill runs in batches, and each batch commits its rows
+// and its resume point in ONE transaction. A process killed part-way therefore
+// leaves a db whose watermark describes exactly what is in the index, and the
+// next call carries on from there instead of starting over. That property is
+// not decorative here: the backfill on a large corpus takes longer than the
+// CLI's own watchdog allows a single run to live, so a pass that could only
+// start over would be killed at the same point forever and never finish.
+//
+// The done marker is stamped only after the last batch. It is what keeps the
+// steady-state cost at one meta read: without it, every invocation would have
+// to ask the db how far the fill got.
+func migrateTrigramIndex(con *sql.DB) error {
+	if err := clearOrphanedTrigramMarker(con); err != nil {
+		return err
+	}
+	if _, err := con.Exec(store.TrigramSQL); err != nil {
+		return fmt.Errorf("create trigram index: %w", err)
+	}
+	var done string
+	if err := con.QueryRow("SELECT value FROM meta WHERE key=?", trigramBackfillKey).Scan(&done); err == nil && done == "1" {
+		return nil // already filled — the triggers keep it current from here
+	}
+	at, err := trigramResumePoint(con)
+	if err != nil {
+		return err
+	}
+	for {
+		var bound sql.NullInt64
+		if err := con.QueryRow(store.TrigramBatchBoundSQL, at, trigramBatch).Scan(&bound); err != nil {
+			return fmt.Errorf("read trigram batch bound: %w", err)
+		}
+		if !bound.Valid {
+			break // no messages left above the watermark
+		}
+		if err := fillTrigramBatch(con, at, bound.Int64); err != nil {
+			return err
+		}
+		at = bound.Int64
+	}
+	// Done, so the resume point has nothing left to describe: drop it rather
+	// than leave transient state behind in meta.
+	if _, err := con.Exec(
+		"INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1'); DELETE FROM meta WHERE key='"+trigramWatermarkKey+"'",
+		trigramBackfillKey); err != nil {
+		return fmt.Errorf("stamp %s: %w", trigramBackfillKey, err)
+	}
+	return nil
+}
+
+// clearOrphanedTrigramMarker forgets a done marker the db can no longer honor.
+//
+// A binary older than the substring index rebuilds a db by dropping messages,
+// which takes OUR triggers with it, while leaving messages_fts_trigram and the
+// done marker standing — its drop list never named them. What survives claims to
+// be a filled index but describes messages that no longer exist, and the damage
+// is not merely stale results: re-indexing restarts ids from 1, so once the new
+// ids reach the old range the re-created insert trigger hits a rowid the orphan
+// table already holds and the INSERT INTO messages fails outright, breaking
+// indexing rather than degrading search.
+//
+// The triggers are what the marker actually vouches for, so a table standing
+// without its triggers means the marker is lying. Clearing both meta keys sends
+// this pass down the reset-and-refill path, which is the only state that is
+// knowably correct. The check is two lookups in sqlite_master, which SQLite
+// answers from the schema it already has in memory.
+func clearOrphanedTrigramMarker(con *sql.DB) error {
+	var table, trigger int
+	if err := con.QueryRow(`SELECT
+	  COALESCE(SUM(name='messages_fts_trigram'),0),
+	  COALESCE(SUM(name='messages_tri_ai'),0)
+	FROM sqlite_master WHERE name IN ('messages_fts_trigram','messages_tri_ai')`).Scan(&table, &trigger); err != nil {
+		return fmt.Errorf("inspect trigram objects: %w", err)
+	}
+	if table == 0 || trigger == 1 {
+		return nil // never created, or intact — nothing to disbelieve
+	}
+	if _, err := con.Exec("DELETE FROM meta WHERE key IN (?,?)", trigramBackfillKey, trigramWatermarkKey); err != nil {
+		return fmt.Errorf("clear orphaned trigram markers: %w", err)
+	}
+	return nil
+}
+
+// trigramResumePoint reads where an interrupted backfill stopped. A missing
+// watermark means no batch ever committed, so the fill starts at zero — and
+// then any entries already in the index came from somewhere this function
+// cannot account for, which makes emptying it the only knowably correct state.
+func trigramResumePoint(con *sql.DB) (int64, error) {
+	var raw string
+	err := con.QueryRow("SELECT value FROM meta WHERE key=?", trigramWatermarkKey).Scan(&raw)
+	if err == nil {
+		if at, cerr := strconv.ParseInt(raw, 10, 64); cerr == nil {
+			return at, nil
+		}
+	}
+	if _, err := con.Exec(store.TrigramResetSQL); err != nil {
+		return 0, fmt.Errorf("clear trigram index: %w", err)
+	}
+	return 0, nil
+}
+
+// fillTrigramBatch copies one id window into the substring index and advances
+// the resume point in the SAME transaction, so the watermark can never claim
+// more than the index holds.
+func fillTrigramBatch(con *sql.DB, from, to int64) error {
+	tx, err := con.Begin()
+	if err != nil {
+		return fmt.Errorf("begin trigram batch: %w", err)
+	}
+	defer tx.Rollback() // no-op after a successful commit
+	if _, err := tx.Exec(store.TrigramBatchFillSQL, from, to); err != nil {
+		return fmt.Errorf("backfill trigram index: %w", err)
+	}
+	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+		trigramWatermarkKey, strconv.FormatInt(to, 10)); err != nil {
+		return fmt.Errorf("stamp %s: %w", trigramWatermarkKey, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit trigram batch: %w", err)
 	}
 	return nil
 }
