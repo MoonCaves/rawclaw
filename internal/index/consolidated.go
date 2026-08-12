@@ -376,7 +376,22 @@ func writeThroughConsolidated(dbp string, indexErr error) {
 	}
 	if err := SyncConsolidatedFrom(dbp); err != nil {
 		slog.Debug("consolidate: write-through failed", "db", filepath.Base(dbp), "err", err)
+		return
 	}
+	// Vectors belong in the store search actually reads. This is the ONLY place
+	// they are topped up, and it is deliberately here rather than beside the
+	// indexing call: consolidation is what moves a message into the searched
+	// corpus, so the message and its vector land in the same file by
+	// construction. Fired against the consolidated path (never dbp) — a vector
+	// written into a per-project db is a vector no reader will ever see, which
+	// is exactly how the semantic lane went dark. Sitting after the fold-in also
+	// covers every source at once: the Codex/containers path never fired a
+	// top-up at all, because that hook hung off the Claude-only EnsureIndexed.
+	//
+	// Detached and rate-limited inside MaybeVectorTopup, so an ordinary invoke
+	// pays one stat and never waits on a remote embedder; a silent no-op when no
+	// embedder is configured, preserving the keyword-only default byte-for-byte.
+	fireVectorTopup(ConsolidatedPath())
 }
 
 // consolidateOne attaches src, merges its sessions and messages, and detaches.

@@ -76,7 +76,7 @@ func newConsolidateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&rebuild, "rebuild", false,
-		"discard the store and refill it from every index")
+		"discard the store and refill it from every index (also discards embeddings — they re-embed on the next passes)")
 	cmd.Flags().BoolVar(&fromTranscripts, "from-transcripts", false,
 		"discard the store and rebuild it from rawclaw's own transcript copies (recovery path)")
 	return cmd

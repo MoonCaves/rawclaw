@@ -643,31 +643,32 @@ func runReindexVectors(ctx context.Context, w io.Writer, o *Options) error {
 		scope = allScope(ctx, o.Source, o.Reindex)
 	}
 
-	total := 0
+	// Index each scope FIRST, for its side effect only: resolving a scope folds
+	// its rows into the consolidated store. The vectors are not written here.
 	for _, s := range scope {
-		n, err := reindexOne(ctx, s, emb)
-		if err != nil {
+		if _, _, err := scopes.Resolve(s, false); err != nil {
 			fmt.Fprintf(w, "  %s: skipped (%s)\n", s.Project, err)
-			continue
-		}
-		total += n
-		if n > 0 {
-			fmt.Fprintf(w, "  %s: +%d vectors\n", s.Project, n)
 		}
 	}
-	fmt.Fprintf(w, "\nSemantic index updated: +%d new vectors. Run a normal search to use it (RRF-fused).\n", total)
+
+	// Then embed ONCE, against the store a search actually opens. Embedding each
+	// scope's own db instead is what made this command a no-op: default search
+	// reads the consolidated store, so vectors written per project were never
+	// read by anything and the command still printed a success line.
+	total, err := reindexConsolidated(ctx, emb)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "\nSemantic index updated: +%d new vectors in %s. Run a normal search to use it (RRF-fused).\n",
+		total, index.ConsolidatedPath())
 	return nil
 }
 
-// reindexOne indexes a scope then refreshes its vectors
-// (resolve db → open read-write → vector index → close). Works for any source:
-// a Claude scope ensures its TDir, a Codex scope uses its pre-built db.
-func reindexOne(ctx context.Context, sc view.Scope, emb embed.Embedder) (int, error) {
-	dbp, _, err := scopes.Resolve(sc, false)
-	if err != nil {
-		return 0, err
-	}
-	con, err := store.ConnectRW(dbp)
+// reindexConsolidated embeds every not-yet-vectored message in the consolidated
+// store (open read-write → vector index → close). One store, one pass: the
+// per-project databases are a staging cache the reader never opens.
+func reindexConsolidated(ctx context.Context, emb embed.Embedder) (int, error) {
+	con, err := store.ConnectRW(index.ConsolidatedPath())
 	if err != nil {
 		return 0, err
 	}
