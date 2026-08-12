@@ -1236,10 +1236,17 @@ func currentTurnStart(dbp, sessionID string) int {
 // ranking has no way to do that. TestTopicLabelDoesNotAffectOrdering holds the
 // property.
 //
+// A tag is the better label when it exists, but it only exists if someone tagged
+// the session at the end — measured on the live corpus, 222 of 1391 substantial
+// sessions, so five hit lines in six would render with no title at all. Tagging
+// is a bonus, not the thing finding a conversation depends on, so an untagged
+// session falls back to the ask that opened it (view.SessionPreview): the user's
+// own words, already in the database, no model call, always present.
+//
 // Lookups are grouped by database so a result set spanning several projects
-// opens each project's database once. Any failure is silent: an untagged
-// session, a missing topic table, or an unreadable database all leave the label
-// empty, which renders exactly as it did before topics existed.
+// opens each project's database once. Any failure is silent: a missing topic
+// table or an unreadable database leaves the label empty, which renders exactly
+// as it did before topics existed.
 func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
 	if len(refs) == 0 || len(refs) != len(anchors) {
 		return
@@ -1257,11 +1264,20 @@ func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
 			continue
 		}
 		for _, i := range idxs {
-			refs[i].Topic = store.TopicForMessage(con, anchors[i].SessionID, anchors[i].UUID)
+			topic := store.TopicForMessage(con, anchors[i].SessionID, anchors[i].UUID)
+			if topic == "" {
+				topic = view.SessionPreview(con, anchors[i].SessionID, searchTitleCap)
+			}
+			refs[i].Topic = topic
 		}
 		_ = con.Close()
 	}
 }
+
+// searchTitleCap is the header-line budget for the title. Shorter than a browse
+// preview because the search header already spends width on a stamp, a session
+// id and a project name.
+const searchTitleCap = 70
 
 // attachLastActivity fills in each result's Last line, in place. refs and
 // anchors are index-parallel, exactly as in attachTopics.
@@ -1971,10 +1987,10 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		if r.Missing {
 			miss = " · source file gone — retained history"
 		}
-		// The topic label answers "what was this session about?" on the header
-		// line, so an agent can choose a hit without opening it. Quoted to mark
-		// it as an authored label rather than another identifier, and omitted
-		// entirely for an untagged session rather than rendered as an empty slot.
+		// The title answers "what was this session about?" on the header line, so
+		// an agent can choose a hit without opening it. It is the tag when the
+		// session has one and the opening ask otherwise (attachTopics); quoted
+		// either way, to mark it as prose rather than another identifier.
 		topic := ""
 		if r.Topic != "" {
 			topic = fmt.Sprintf(" · %q", r.Topic)

@@ -1001,10 +1001,11 @@ func TestSearchCarriesTopicLabel(t *testing.T) {
 	}
 }
 
-// TestSearchUntaggedSessionHasEmptyTopic keeps the untagged corpus honest: with
-// no topic rows at all, every hit's label is empty and the JSON stays identical
-// to a pre-topic corpus (the field is omitempty).
-func TestSearchUntaggedSessionHasEmptyTopic(t *testing.T) {
+// TestSearchUntaggedSessionTitledByOpeningAsk covers the common case: most
+// sessions are never tagged, and a hit line with no title tells a caller nothing.
+// With no topic rows at all the title falls back to the ask that opened the
+// session, so the slot is filled from the corpus itself.
+func TestSearchUntaggedSessionTitledByOpeningAsk(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
 	writeSession(t, proj, "sessone", "11111111-aaaa-bbbb-cccc-000000000001", "discussing the deployment rollback procedure")
@@ -1014,8 +1015,8 @@ func TestSearchUntaggedSessionHasEmptyTopic(t *testing.T) {
 	if len(env.Results) == 0 {
 		t.Fatalf("expected a match for 'deployment', got none")
 	}
-	if env.Results[0].Topic != "" {
-		t.Fatalf("untagged result Topic = %q, want empty", env.Results[0].Topic)
+	if env.Results[0].Topic != "discussing the deployment rollback procedure" {
+		t.Fatalf("untagged result Topic = %q, want the opening ask", env.Results[0].Topic)
 	}
 }
 
@@ -1047,9 +1048,6 @@ func TestTopicLabelDoesNotAffectOrdering(t *testing.T) {
 	beforeOrder := make([]string, len(before.Results))
 	for i, r := range before.Results {
 		beforeOrder[i] = r.ReadRef
-		if r.Topic != "" {
-			t.Fatalf("pre-tagging result %d already carries a topic %q", i, r.Topic)
-		}
 	}
 
 	dbp, _, _, err := index.EnsureIndexed(proj, false)

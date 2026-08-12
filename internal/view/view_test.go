@@ -283,8 +283,8 @@ func TestSessionPreview(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			con := newPreviewDB(t, sid, tt.msgs)
-			if got := sessionPreview(con, sid); got != tt.want {
-				t.Errorf("sessionPreview() = %q, want %q", got, tt.want)
+			if got := SessionPreview(con, sid, browsePreviewCap); got != tt.want {
+				t.Errorf("SessionPreview() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -301,7 +301,7 @@ func TestSessionPreviewKeepsSessionWithGreetingOpener(t *testing.T) {
 		{2, "assistant", "hi!"},
 		{3, "user", "wire up the discovery dedup"},
 	})
-	got := sessionPreview(con, sid)
+	got := SessionPreview(con, sid, browsePreviewCap)
 	if got == "" {
 		t.Fatal("session with greeting opener produced empty preview (session effectively dropped)")
 	}

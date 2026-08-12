@@ -340,7 +340,7 @@ func BrowseDB(dbp string, limit int, since, before string) []BrowseRow {
 
 	// Connection is now free — fill each row's two texts with their own queries.
 	for i := range out {
-		out[i].Preview = sessionPreview(con, out[i].SessionID)
+		out[i].Preview = SessionPreview(con, out[i].SessionID, browsePreviewCap)
 		out[i].Last = SessionLastActivity(con, out[i].SessionID)
 	}
 	return out
@@ -451,12 +451,18 @@ func IsInterruptionMarker(content string) bool {
 // first substantive turn, without scanning a whole session.
 const previewScan = 8
 
-// sessionPreview returns the browse preview for a session: the first SUBSTANTIVE
-// user message's display text (low-signal openers like 'hi' or '/clear' are
+// SessionPreview returns the first SUBSTANTIVE user message's display text for a
+// session — the ask that started it (low-signal openers like 'hi' or '/clear' are
 // skipped via parse.IsSubstantive). The session is never dropped — if no early
 // message is substantive, the first non-empty user message is shown as a
 // fallback so the row still previews something.
-func sessionPreview(con *sql.DB, sessionID string) string {
+//
+// browse renders it as the row preview; search uses it as the header-line title
+// when a session was never tagged, which is most of them. Both want the same
+// thing — "what was this about, in the user's own words" — so both read it here.
+// cap is the caller's line budget: a browse row affords more width than a search
+// header line that already carries a stamp, an id and a project.
+func SessionPreview(con *sql.DB, sessionID string, cap int) string {
 	contents, err := store.FirstUserMessages(con, sessionID, previewScan)
 	if err != nil {
 		return ""
@@ -465,10 +471,10 @@ func sessionPreview(con *sql.DB, sessionID string) string {
 	var fallback string
 	for _, content := range contents {
 		if fallback == "" {
-			fallback = parse.Disp(content, false, browsePreviewCap)
+			fallback = parse.Disp(content, false, cap)
 		}
 		if parse.IsSubstantive(content) {
-			return parse.Disp(content, false, browsePreviewCap)
+			return parse.Disp(content, false, cap)
 		}
 	}
 	return fallback
