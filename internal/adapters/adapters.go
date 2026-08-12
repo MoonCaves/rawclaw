@@ -61,6 +61,9 @@ type HTTPEmbedder struct {
 // Compile-time check: HTTPEmbedder satisfies the Embedder port.
 var _ embed.Embedder = (*HTTPEmbedder)(nil)
 
+// Compile-time check: HTTPEmbedder satisfies the BatchEmbedder port.
+var _ embed.BatchEmbedder = (*HTTPEmbedder)(nil)
+
 // NewHTTPEmbedder constructs an HTTPEmbedder with sensible defaults (wire
 // "ollama", timeout 15s) filled in for zero-valued fields. The endpoint has any
 // trailing slash stripped.
@@ -106,6 +109,98 @@ func (e *HTTPEmbedder) Embed(text string) []float64 {
 		return nil
 	}
 	return vec
+}
+
+// batchEmbedResponse covers the batch response shape for the "openai" wire:
+// {"data":[{"embedding":[...],"index":N},...]}.
+type batchEmbedResponse struct {
+	Data []struct {
+		Embedding []float64 `json:"embedding"`
+		Index     int       `json:"index"`
+	} `json:"data"`
+}
+
+// EmbedBatch embeds multiple texts in a single HTTP request using the "openai"
+// wire format. If e.Wire is not wireOpenAI, or if any network, HTTP, or format
+// error occurs, or if len(data) != len(texts), EmbedBatch returns nil so the
+// caller falls back to per-item Embed. Results are positionally aligned with the
+// input by ordering on the response's "index" field rather than array position.
+// Individual vectors with a dim mismatch or empty data become nil.
+func (e *HTTPEmbedder) EmbedBatch(texts []string) [][]float64 {
+	if e.Wire != wireOpenAI || len(texts) == 0 {
+		return nil
+	}
+
+	payload := map[string]any{
+		"model": e.Model,
+		"input": texts,
+	}
+	if e.InputType != "" {
+		payload["input_type"] = e.InputType
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+
+	timeout := e.batchTimeout()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.Endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if e.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+e.APIKey)
+	}
+
+	client := e.batchClient(timeout)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+
+	var parsed batchEmbedResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil
+	}
+
+	if len(parsed.Data) != len(texts) {
+		return nil
+	}
+
+	res := make([][]float64, len(texts))
+	seen := make([]bool, len(texts))
+	for _, item := range parsed.Data {
+		if item.Index < 0 || item.Index >= len(texts) || seen[item.Index] {
+			return nil
+		}
+		seen[item.Index] = true
+
+		vec := item.Embedding
+		if len(vec) == 0 {
+			continue
+		}
+		if e.Dim != 0 && len(vec) != e.Dim {
+			continue
+		}
+		res[item.Index] = vec
+	}
+
+	return res
 }
 
 // payload builds the request body for the configured wire. For the openai wire
@@ -195,6 +290,27 @@ func (e *HTTPEmbedder) httpClient() *http.Client {
 		return e.client
 	}
 	return &http.Client{Timeout: e.timeout()}
+}
+
+// batchTimeout returns max(e.timeout(), 120s) because a multi-text batch request
+// requires a longer timeout allowance than a single text embedding.
+func (e *HTTPEmbedder) batchTimeout() time.Duration {
+	t := e.timeout()
+	if t < 120*time.Second {
+		return 120 * time.Second
+	}
+	return t
+}
+
+// batchClient returns an http.Client configured with the batch timeout,
+// preserving any custom Transport settings from e.client.
+func (e *HTTPEmbedder) batchClient(timeout time.Duration) *http.Client {
+	if e.client != nil {
+		c := *e.client
+		c.Timeout = timeout
+		return &c
+	}
+	return &http.Client{Timeout: timeout}
 }
 
 // GetEmbedder builds the configured Embedder from the environment, or nil if

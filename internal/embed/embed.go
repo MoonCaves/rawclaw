@@ -19,6 +19,21 @@ type Embedder interface {
 	Embed(text string) []float64
 }
 
+// BatchEmbedder is an OPTIONAL capability an Embedder may also implement:
+// embed many texts in one round trip. It exists because a bulk index over a
+// large corpus is round-trip-bound, not compute-bound — one call per message
+// against a remote endpoint is orders of magnitude slower than batching.
+//
+// Contract: a non-nil return MUST have exactly len(texts) entries, positionally
+// aligned with the input; any individual entry MAY be nil (the same no-op
+// signal as Embed). Returning nil means "batch unavailable or failed" — callers
+// MUST fall back to per-item Embed, so a batch failure never loses vectors.
+// Callers reach this by type assertion; an Embedder that does not implement it
+// is fully conformant.
+type BatchEmbedder interface {
+	EmbedBatch(texts []string) [][]float64
+}
+
 // VectorStore stores and retrieves dense float vectors keyed by opaque string
 // ID. The caller owns ID generation and dedup. When no VectorStore is wired,
 // the keyword engine skips the vector path entirely — a missing store is never
