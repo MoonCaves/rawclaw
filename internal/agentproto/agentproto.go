@@ -147,8 +147,8 @@ const (
 )
 
 // Warning is one advisory carried as data rather than prose (the "warnings are
-// data, not prose" doctrine recorded in our own prior-art survey, from CASS's
-// robot mode).
+// data, not prose" doctrine recorded in the prior-art survey under docs/design,
+// borrowed from robot-mode output in other agent-facing tools).
 //
 // Code is what an agent branches on. Facts carries the measurement that made the
 // warning fire, so a caller can apply its own threshold instead of inheriting
