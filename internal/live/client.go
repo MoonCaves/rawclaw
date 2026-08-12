@@ -157,21 +157,20 @@ func (c *Client) classify(stderr string, err error) error {
 			if isResolveFailure(stderr) {
 				return fmt.Errorf(
 					"cannot resolve machine %q (ssh destination %q) — not a known host.\n"+
-						"Map it in the archive config (\"ssh\": {%q: \"user@host\"}) or add a Host alias in ~/.ssh/config.\nssh: %s",
+						"Run `rawclaw setup live %s` to auto-provision and map it, or add a Host alias in ~/.ssh/config.\nssh: %s",
 					c.Machine, c.Dest, c.Machine, stderr)
 			}
-			return fmt.Errorf("machine %q (ssh destination %q) is unreachable: %s", c.Machine, c.Dest, stderr)
+			return fmt.Errorf("machine %q (ssh destination %q) is unreachable: %s\nRun `rawclaw setup live %s` to provision.", c.Machine, c.Dest, stderr, c.Machine)
 		case 127: // the remote shell had no rawclaw to run
 			return fmt.Errorf(
 				"machine %q is reachable but has no rawclaw on its non-interactive PATH.\n"+
-					"Install it there:  go install github.com/MoonCaves/rawclaw/cmd/rawclaw@latest\n"+
-					"(or drop a release binary on the PATH sshd gives non-interactive commands)\nremote: %s",
-				c.Machine, stderr)
+					"Run `rawclaw setup live %s` to automatically install and repair non-interactive PATH on that machine.\nremote: %s",
+				c.Machine, c.Machine, stderr)
 		}
 		if isTooOldRemote(stderr) {
 			return fmt.Errorf(
-				"rawclaw on machine %q is too old for live peek — run `rawclaw upgrade` there.\nremote: %s",
-				c.Machine, stderr)
+				"rawclaw on machine %q is too old for live peek — run `rawclaw setup live %s` or `rawclaw upgrade` there.\nremote: %s",
+				c.Machine, c.Machine, stderr)
 		}
 	}
 	if stderr != "" {
