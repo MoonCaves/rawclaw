@@ -135,8 +135,9 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 	// Point at the optional cross-machine archive without provisioning it: setup
 	// wires local hooks; `archive init` is a separate opt-in the user runs when
 	// they want backup + sync. One non-blocking line, never a prompt.
-	fmt.Fprintln(out, "\nOptional — back up & sync your transcripts across machines:")
-	fmt.Fprintln(out, "  rawclaw archive init <your-private-repo>   (see the archive section in the README)")
+	fmt.Fprintln(out, "\nMulti-Machine Setup (Using multiple machines?):")
+	fmt.Fprintln(out, "  rawclaw archive init <your-private-repo>   # Back up & sync across machines via Git/Gitea")
+	fmt.Fprintln(out, "  rawclaw setup live <user@remote-host>       # Auto-provision a remote machine for 1-step live peeks")
 
 	return nil
 }
