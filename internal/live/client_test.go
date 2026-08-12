@@ -199,7 +199,7 @@ func TestClientErrors(t *testing.T) {
 			name:      "unknown machine (hostname does not resolve)",
 			exitCode:  255,
 			stderr:    "ssh: Could not resolve hostname box-x: nodename nor servname provided, or not known",
-			wantParts: []string{"box-x", "resolve", "archive config", ".ssh/config"},
+			wantParts: []string{"box-x", "resolve", "rawclaw setup live", ".ssh/config"},
 			notWanted: "go install",
 		},
 		{
@@ -213,7 +213,7 @@ func TestClientErrors(t *testing.T) {
 			name:      "missing remote rawclaw",
 			exitCode:  127,
 			stderr:    "sh: rawclaw: command not found",
-			wantParts: []string{"box-x", "rawclaw", "go install github.com/MoonCaves/rawclaw/cmd/rawclaw@latest", "PATH"},
+			wantParts: []string{"box-x", "rawclaw", "rawclaw setup live", "PATH"},
 			notWanted: "unreachable",
 		},
 		{
