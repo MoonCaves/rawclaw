@@ -115,6 +115,9 @@ printf '\n%s%srawclaw is ready.%s\n\n' "${BOLD}" "${GREEN}" "${RESET}"
 printf '  Try it:\n'
 printf '    %s "where did we set up auth"\n' "$BIN_NAME"
 printf '    %s --list\n' "$BIN_NAME"
-printf '    %s --help\n' "$BIN_NAME"
+printf '\n'
+printf '  Multi-machine setup (Using multiple machines?):\n'
+printf '    %s archive init <private-git-url>   # Back up & sync across machines\n' "$BIN_NAME"
+printf '    %s setup live <user@remote-host>    # Provision remote machine for 1-step live peeks\n' "$BIN_NAME"
 printf '\n'
 printf '  Docs: https://github.com/%s\n\n' "$REPO"
