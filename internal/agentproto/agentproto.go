@@ -21,7 +21,6 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/index"
-	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
@@ -42,6 +41,12 @@ const (
 // readBookend is the number of bookend messages included at each end of the
 // read window.
 const readBookend = 3
+
+// outlineBookendScan bounds how many rows an outline reads at each end to find
+// OutlineBookend that are actually conversation. Same number and same reason as
+// view's bookendScan: a session's first and last rows are the densest place in
+// the corpus for injected handbooks, command echoes and bare [THINKING] markers.
+const outlineBookendScan = 40
 
 // outlineDispCap caps the per-message display length in outline output.
 const outlineDispCap = 300
@@ -1781,6 +1786,12 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 		return nil, fmt.Errorf("outline end rows: %w", err)
 	}
 
+	// Trim the over-fetched rows down to what a reader should see BEFORE the
+	// overlap dedup below: deduping first would compare forty raw rows against
+	// forty raw rows and swallow the whole tail of a short session.
+	startRows = view.FilterDisplayable(startRows, OutlineBookend, includeTools)
+	endRows = view.FilterDisplayable(endRows, OutlineBookend, includeTools) // DESC: nearest the end first
+
 	startIDs := map[int]struct{}{}
 	for _, r := range startRows {
 		startIDs[r.ID] = struct{}{}
@@ -1789,29 +1800,15 @@ func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineRe
 	// endRows came back DESC; reverse to chronological, then drop any already
 	// present in the start bookend so the two ends don't overlap.
 	endMsgs := []store.Msg{}
-	for i := len(endRows) - 1; i >= 0; i-- {
-		if _, dup := startIDs[endRows[i].ID]; dup {
+	for _, r := range view.Reversed(endRows) {
+		if _, dup := startIDs[r.ID]; dup {
 			continue
 		}
-		endMsgs = append(endMsgs, endRows[i])
+		endMsgs = append(endMsgs, r)
 	}
 
-	startOut := make([]view.ViewMsg, 0, len(startRows))
-	for _, r := range startRows {
-		startOut = append(startOut, view.ViewMsg{
-			ID:   r.ID,
-			Role: r.Role,
-			Text: parse.Disp(r.Content, includeTools, outlineDispCap),
-		})
-	}
-	endOut := make([]view.ViewMsg, 0, len(endMsgs))
-	for _, r := range endMsgs {
-		endOut = append(endOut, view.ViewMsg{
-			ID:   r.ID,
-			Role: r.Role,
-			Text: parse.Disp(r.Content, includeTools, outlineDispCap),
-		})
-	}
+	startOut := view.RenderMsgs(startRows, includeTools, outlineDispCap)
+	endOut := view.RenderMsgs(endMsgs, includeTools, outlineDispCap)
 
 	lastStartID := 0
 	if len(startRows) > 0 {
@@ -1872,7 +1869,11 @@ func sessionMeta(con *sql.DB, fullSID string) (iso string, nmsg int) {
 // bookendRows reads up to OutlineBookend user/assistant messages with non-empty
 // content, ordered by id ascending (asc=true) or descending.
 func bookendRows(con *sql.DB, fullSID string, asc bool) ([]store.Msg, error) {
-	return store.BookendMessages(con, fullSID, 0, false, asc, OutlineBookend)
+	// Over-fetch: the rows nearest either end of a session are the likeliest in
+	// the corpus to be injected handbooks, command echoes and bare [THINKING]
+	// markers, and those get dropped before rendering (view.IsDisplayable).
+	// Reading only OutlineBookend rows would return a bookend of leftovers.
+	return store.BookendMessages(con, fullSID, 0, false, asc, outlineBookendScan)
 }
 
 // ── text renderers ───────────────────────────────────────────────────────────

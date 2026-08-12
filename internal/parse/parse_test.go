@@ -654,3 +654,25 @@ func TestStripGeneratedLeavesHumanText(t *testing.T) {
 		t.Errorf("StripGenerated(%q) = %q, kept the envelope body", mixed, got)
 	}
 }
+
+// TestDispStripsGeneratedNotJustTools pins the rule that display and search
+// agree on what counts as conversation. Disp used to strip tool runs alone, so
+// a record that was nothing but an injected envelope rendered as conversation
+// in read, outline and browse while search had already stopped matching it.
+func TestDispStripsGeneratedNotJustTools(t *testing.T) {
+	envelopeOnly := "<local-command-stdout>See ya!</local-command-stdout>"
+	if got := Disp(envelopeOnly, false, -1); got != "" {
+		t.Errorf("Disp(envelope, includeTools=false) = %q, want empty — display must match the search haystack", got)
+	}
+	if got := Disp(envelopeOnly, true, -1); got == "" {
+		t.Error("Disp(envelope, includeTools=true) = empty; the escape hatch must still show every byte")
+	}
+	mixed := "<system-reminder>machinery</system-reminder> what did we decide?"
+	got := Disp(mixed, false, -1)
+	if !strings.Contains(got, "what did we decide?") {
+		t.Errorf("Disp(%q) = %q, dropped the human text", mixed, got)
+	}
+	if strings.Contains(got, "machinery") {
+		t.Errorf("Disp(%q) = %q, kept the envelope body", mixed, got)
+	}
+}

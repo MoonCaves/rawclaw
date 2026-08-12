@@ -528,12 +528,19 @@ func epochSeconds(dt time.Time) float64 {
 	return float64(dt.Unix()) + float64(dt.Nanosecond())/1e9
 }
 
-// Disp normalizes content for display: optionally tool-stripped, whitespace
-// collapsed, capped to `cap` runes.
+// Disp normalizes content for display: generated material optionally removed,
+// whitespace collapsed, capped to `cap` runes.
+//
+// "Generated" means the same thing here as it does to search — tool runs AND
+// injected envelopes (StripGenerated), not tool runs alone. The display path
+// used to strip only tools, so a record that was nothing but an injected
+// envelope rendered as conversation in `read`, `outline` and `browse` while
+// search had already stopped matching it. One rule, both surfaces: rawclaw
+// shows what a person or a model said.
 func Disp(content string, includeTools bool, cap int) string {
 	t := content
 	if !includeTools {
-		t = StripTools(content)
+		t = StripGenerated(content)
 	}
 	return capRunes(collapseSpaces(t), cap)
 }

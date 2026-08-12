@@ -523,3 +523,101 @@ func TestSessionLastActivitySkipsRedactedThinking(t *testing.T) {
 		t.Errorf("Last = %q, want the populated thinking block", rows2[0].Last)
 	}
 }
+
+// TestBookendsAreConversationOnly pins the rule that closed the gap between
+// search and display: a session's opening and closing bookends show what a
+// person or a model said, never the runtime's injected machinery.
+//
+// The fixture is the shape the live corpus actually produces at a session's
+// edges — an injected handbook and a slash-command echo at the head, bare
+// [THINKING] markers (~99.5% of stored thinking rows) at the tail — which is
+// why reading only Bookend rows returned a bookend of leftovers before this.
+func TestBookendsAreConversationOnly(t *testing.T) {
+	const sid = "sess-bookend"
+	msgs := []seedMsg{
+		{1, "user", "<system-reminder>handbook preamble injected here</system-reminder>"},
+		{2, "user", "<local-command-stdout>See ya!</local-command-stdout>"},
+		{3, "assistant", "[THINKING]"},
+		{4, "user", "real opening request"},
+		{5, "assistant", "real opening answer"},
+		{6, "user", "middle one"},
+		{7, "assistant", "anchor message"},
+		{8, "user", "middle two"},
+		{9, "assistant", "real closing answer"},
+		{10, "user", "real closing word"},
+		{11, "assistant", "[THINKING]"},
+		{12, "user", "<task-notification>agent finished</task-notification>"},
+	}
+	con := newTestDB(t, sid, msgs)
+	defer con.Close()
+
+	av := BuildAnchoredView(con, sid, 7, AnchoredViewOpts{Window: 0, Bookend: 2})
+	if av == nil {
+		t.Fatal("BuildAnchoredView = nil, want a view")
+	}
+	if got, want := ids(av.BookendStart), []int{4, 5}; !eqInts(got, want) {
+		t.Errorf("bookend_start = %v, want %v (injected rows must not open a session)", got, want)
+	}
+	if got, want := ids(av.BookendEnd), []int{9, 10}; !eqInts(got, want) {
+		t.Errorf("bookend_end = %v, want %v (bare markers and notifications must not close a session)", got, want)
+	}
+
+	// Nothing is hidden from the store: --include-tools puts every row back,
+	// exactly as it does for search.
+	raw := BuildAnchoredView(con, sid, 7, AnchoredViewOpts{Window: 0, Bookend: 2, IncludeTools: true})
+	if got, want := ids(raw.BookendStart), []int{1, 2}; !eqInts(got, want) {
+		t.Errorf("bookend_start with tools = %v, want %v (suppression is display, not deletion)", got, want)
+	}
+}
+
+// TestAnchorSurvivesEvenWhenGenerated: a caller who names a record by ref gets
+// that record. Refusing to render the row someone asked for by id would be a
+// worse failure than showing them machinery they explicitly requested.
+func TestAnchorSurvivesEvenWhenGenerated(t *testing.T) {
+	const sid = "sess-anchor"
+	msgs := []seedMsg{
+		{1, "user", "opening"},
+		{2, "user", "<task-notification>the anchor is pure machinery</task-notification>"},
+		{3, "user", "closing"},
+	}
+	con := newTestDB(t, sid, msgs)
+	defer con.Close()
+
+	av := BuildAnchoredView(con, sid, 2, AnchoredViewOpts{Window: 1, Bookend: 0})
+	if av == nil {
+		t.Fatal("BuildAnchoredView = nil, want a view")
+	}
+	var anchor *ViewMsg
+	for i := range av.Window {
+		if av.Window[i].Anchor {
+			anchor = &av.Window[i]
+		}
+	}
+	if anchor == nil {
+		t.Fatal("anchor absent from window; a named ref must always render")
+	}
+	if anchor.Text == "" {
+		t.Error("anchor rendered empty; want the raw record when stripping empties it")
+	}
+}
+
+func TestIsDisplayable(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"plain conversation", "what did we decide about the store?", true},
+		{"injected envelope only", "<system-reminder>be helpful</system-reminder>", false},
+		{"captured command output", "<local-command-stdout>See ya!</local-command-stdout>", false},
+		{"bare thinking marker", "[THINKING]", false},
+		{"thinking with a body", "[THINKING] the bm25 scores are not comparable", true},
+		{"empty", "", false},
+		{"envelope wrapping real text", "<system-reminder>noise</system-reminder> the real question", true},
+	}
+	for _, tt := range tests {
+		if got := IsDisplayable(tt.content); got != tt.want {
+			t.Errorf("IsDisplayable(%q) = %v, want %v", tt.content, got, tt.want)
+		}
+	}
+}
