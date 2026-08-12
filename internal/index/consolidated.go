@@ -182,6 +182,21 @@ ON CONFLICT(id) DO UPDATE SET
 // rowid, unique only within its own db, and it is the FTS rowid — letting two
 // sources' id 1 collide would silently overwrite one message's search entry.
 // Inserting without it lets the FTS triggers assign a fresh, unique rowid.
+//
+// ORDER BY first_id is load-bearing, not cosmetic. The new rowid IS the reading
+// order: every session view walks messages by id, because timestamps are not
+// reliably monotonic. So whatever order these rows are inserted in becomes the
+// order the conversation is replayed in forever. Without the ORDER BY, the rows
+// arrive in whatever order the GROUP BY left them — which SQLite satisfies by
+// sorting on the grouping key, i.e. by uuid. A uuid is random, so the
+// conversation was being reassembled in alphabetical order of a random string:
+// measured on one 3k-message session, 1490 of 2978 adjacent pairs disagreed
+// with the source file, and the session's first message came back as a Bash
+// call from the middle instead of the human's opening line.
+//
+// first_id (MIN(id) in the SOURCE db) is that source's own insertion order,
+// which is file order — the very thing the reading order is meant to be. It was
+// already computed here for the dedup pick and then discarded.
 const mergeMessagesSQL = `
 INSERT INTO main.messages(session_id,role,content,ts,ts_iso,uuid)
 SELECT session_id, role, content, ts, ts_iso, uuid FROM (
@@ -194,6 +209,7 @@ SELECT session_id, role, content, ts, ts_iso, uuid FROM (
   )
   GROUP BY s.session_id, s.uuid
 )
+ORDER BY first_id
 `
 
 // topicNewer is the precedence rule between two taggings of the SAME segment
