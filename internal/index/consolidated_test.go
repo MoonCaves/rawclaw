@@ -508,6 +508,33 @@ func TestConsolidate_FoldsTheTopicLayer(t *testing.T) {
 	}
 }
 
+func TestConsolidate_RebuildPreservesStoreOnlyTags(t *testing.T) {
+	isolateCache(t)
+	a := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+	if _, err := ConsolidateFrom([]string{a}, false); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	sid := firstSessionID(t, a)
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertTopicSegment(con, sid, "u-a1", "u-a1", "store-only tag", "must survive", 100); err != nil {
+		t.Fatal(err)
+	}
+	con.Close()
+
+	if _, err := ConsolidateFrom([]string{a}, true); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT topic FROM topic_segment WHERE session_id=?", sid); got != "store-only tag" {
+		t.Fatalf("topic after rebuild = %q, want preserved store-only tag", got)
+	}
+	con.Close()
+}
+
 // TestConsolidate_RefoldsAfterRetagging pins the watermark: tagging changes a
 // source without touching one session or message row, so a watermark built from
 // those counts alone would read a re-tagged project as unchanged and its new
