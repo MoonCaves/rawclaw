@@ -420,3 +420,97 @@ func TestFuseVectorOnlyCarriesMissingSince(t *testing.T) {
 		t.Errorf("unexpected UUID %q on a synthesized vector-only anchor", got.UUID)
 	}
 }
+
+type mockBatchEmbedder struct {
+	vecs        map[string][]float64
+	failBatch   bool
+	batchCalled bool
+	itemCalled  bool
+}
+
+func (m *mockBatchEmbedder) Embed(text string) []float64 {
+	m.itemCalled = true
+	return m.vecs[text]
+}
+
+func (m *mockBatchEmbedder) EmbedBatch(texts []string) [][]float64 {
+	m.batchCalled = true
+	if m.failBatch {
+		return nil
+	}
+	out := make([][]float64, len(texts))
+	for i, t := range texts {
+		out[i] = m.vecs[t]
+	}
+	return out
+}
+
+// TestVecIndex_BatchEmbedderFallback verifies that when EmbedBatch returns nil,
+// VecIndex falls back to per-item Embed for that batch without losing vectors.
+func TestVecIndex_BatchEmbedderFallback(t *testing.T) {
+	con := openTestDB(t)
+
+	msg1 := "first message for fallback testing long enough"
+	msg2 := "second message for fallback testing long enough"
+
+	addMessage(t, con, "s1", "user", msg1, "2026-06-18T10:00:00Z", 0, "")
+	addMessage(t, con, "s1", "user", msg2, "2026-06-18T10:01:00Z", 0, "")
+
+	emb := &mockBatchEmbedder{
+		vecs: map[string][]float64{
+			msg1: {1, 0, 0},
+			msg2: {0, 1, 0},
+		},
+		failBatch: true, // Batch will return nil -> trigger per-item fallback
+	}
+
+	added, err := VecIndex(con, emb, 0)
+	if err != nil {
+		t.Fatalf("VecIndex: %v", err)
+	}
+	if added != 2 {
+		t.Fatalf("added = %d, want 2", added)
+	}
+	if !emb.batchCalled {
+		t.Error("expected EmbedBatch to be called")
+	}
+	if !emb.itemCalled {
+		t.Error("expected fallback to Embed per item when batch returned nil")
+	}
+	if !store.HasVectors(con) {
+		t.Fatal("vectors should be present after fallback indexing")
+	}
+}
+
+// TestVecIndex_BatchEmbedderSuccess verifies batch embedding end-to-end.
+func TestVecIndex_BatchEmbedderSuccess(t *testing.T) {
+	con := openTestDB(t)
+
+	msg1 := "first message for batch success testing long enough"
+	msg2 := "second message for batch success testing long enough"
+
+	addMessage(t, con, "s1", "user", msg1, "2026-06-18T10:00:00Z", 0, "")
+	addMessage(t, con, "s1", "user", msg2, "2026-06-18T10:01:00Z", 0, "")
+
+	emb := &mockBatchEmbedder{
+		vecs: map[string][]float64{
+			msg1: {1, 0, 0},
+			msg2: {0, 1, 0},
+		},
+		failBatch: false,
+	}
+
+	added, err := VecIndex(con, emb, 0)
+	if err != nil {
+		t.Fatalf("VecIndex: %v", err)
+	}
+	if added != 2 {
+		t.Fatalf("added = %d, want 2", added)
+	}
+	if !emb.batchCalled {
+		t.Error("expected EmbedBatch to be called")
+	}
+	if emb.itemCalled {
+		t.Error("Embed should not be called when EmbedBatch succeeds")
+	}
+}

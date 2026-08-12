@@ -21,6 +21,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -85,6 +86,12 @@ type vecKey struct {
 	hash string
 }
 
+type embedItem struct {
+	key  vecKey
+	mid  int
+	text string
+}
+
 // VecIndex embeds any message (tool-stripped prose ≥ MinChars) not yet vectored,
 // prunes stale vectors, and refreshes churned msg_ids. Resumable; returns the
 // count added. `maxNew` of 0 = no cap.
@@ -129,7 +136,8 @@ func VecIndex(con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err 
 		}
 	}
 
-	// Embed the missing; refresh churned msg_ids (no re-embed).
+	// Collect missing messages to embed; refresh churned msg_ids (no re-embed).
+	var toEmbed []embedItem
 	for k, e := range current {
 		if storedMID, ok := have[k]; ok {
 			if storedMID != e.mid { // id churned on a reindex — refresh, don't re-embed
@@ -139,18 +147,132 @@ func VecIndex(con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err 
 			}
 			continue
 		}
-		vec := embedder.Embed(e.text) // document side
-		if len(vec) == 0 {
-			continue
-		}
-		if err := store.VecUpsert(con, k.sid, k.hash, e.mid, len(vec), packVec(vec)); err != nil {
-			return 0, fmt.Errorf("insert vector: %w", err)
-		}
-		added++
-		if maxNew != 0 && added >= maxNew {
+		toEmbed = append(toEmbed, embedItem{key: k, mid: e.mid, text: e.text})
+		if maxNew != 0 && len(toEmbed) >= maxNew {
 			break
 		}
 	}
+
+	if embedder == nil || len(toEmbed) == 0 {
+		return 0, nil
+	}
+
+	bEmbedder, isBatch := embedder.(embed.BatchEmbedder)
+	if !isBatch {
+		// Serial fallback path for non-batch embedders.
+		for _, item := range toEmbed {
+			vec := embedder.Embed(item.text)
+			if len(vec) == 0 {
+				continue
+			}
+			if err := store.VecUpsert(con, item.key.sid, item.key.hash, item.mid, len(vec), packVec(vec)); err != nil {
+				return 0, fmt.Errorf("insert vector: %w", err)
+			}
+			added++
+			if maxNew != 0 && added >= maxNew {
+				break
+			}
+		}
+		return added, nil
+	}
+
+	// Batch path: group into batches bounded by 128 items OR 150000 characters.
+	var batches [][]embedItem
+	var currentBatch []embedItem
+	currentChars := 0
+
+	for _, item := range toEmbed {
+		itemChars := len(item.text)
+		if len(currentBatch) > 0 && (len(currentBatch) >= 128 || currentChars+itemChars > 150000) {
+			batches = append(batches, currentBatch)
+			currentBatch = nil
+			currentChars = 0
+		}
+		currentBatch = append(currentBatch, item)
+		currentChars += itemChars
+	}
+	if len(currentBatch) > 0 {
+		batches = append(batches, currentBatch)
+	}
+
+	// Concurrent HTTP embedding (up to 8 batches) funneled back to single-threaded DB writes.
+	type vecResult struct {
+		item embedItem
+		vec  []float64
+	}
+
+	numWorkers := 8
+	if len(batches) < numWorkers {
+		numWorkers = len(batches)
+	}
+
+	batchChan := make(chan []embedItem, len(batches))
+	for _, b := range batches {
+		batchChan <- b
+	}
+	close(batchChan)
+
+	// Buffer only one slot per worker. A buffer the size of the whole batch list
+	// would let the workers run the entire corpus ahead of the writer and pile
+	// every vector in memory, which is exactly what the streaming close above is
+	// there to avoid; this size gives the writer backpressure instead.
+	resultsChan := make(chan []vecResult, numWorkers)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for batch := range batchChan {
+				texts := make([]string, len(batch))
+				for j, it := range batch {
+					texts[j] = it.text
+				}
+
+				vecs := bEmbedder.EmbedBatch(texts)
+				if vecs == nil || len(vecs) != len(batch) {
+					// Fall back to per-item Embed for just this batch if EmbedBatch fails.
+					vecs = make([][]float64, len(batch))
+					for j, it := range batch {
+						vecs[j] = embedder.Embed(it.text)
+					}
+				}
+
+				resBatch := make([]vecResult, 0, len(batch))
+				for j, vec := range vecs {
+					if len(vec) > 0 {
+						resBatch = append(resBatch, vecResult{item: batch[j], vec: vec})
+					}
+				}
+				resultsChan <- resBatch
+			}
+		}()
+	}
+
+	// Close the results channel once every worker has finished, from a separate
+	// goroutine, so the write loop below can drain results AS THEY ARRIVE rather
+	// than after the whole corpus is embedded. Waiting here instead would hold
+	// every vector in memory until the last batch returned (~8KB per message —
+	// gigabytes on a large corpus) and would lose the entire run on a crash,
+	// which defeats the resumability this function is built for.
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	// Single-threaded DB writes on con to prevent SQLite locks.
+	for resBatch := range resultsChan {
+		for _, res := range resBatch {
+			if maxNew != 0 && added >= maxNew {
+				break
+			}
+			if err := store.VecUpsert(con, res.item.key.sid, res.item.key.hash, res.item.mid, len(res.vec), packVec(res.vec)); err != nil {
+				return 0, fmt.Errorf("insert vector: %w", err)
+			}
+			added++
+		}
+	}
+
 	return added, nil
 }
 
