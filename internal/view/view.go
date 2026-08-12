@@ -87,6 +87,95 @@ type Scope struct {
 	Stale      bool   // replica may lag its origin — report, still serve
 }
 
+// bookendScan bounds how far past the requested bookend size we read looking
+// for records that are actually conversation. A session's first rows are the
+// worst case in the whole corpus for this: a runtime injects the handbook, the
+// environment block and a slash-command echo before the human's first word, and
+// a redacting model then writes bare [THINKING] rows between every turn. Reusing
+// the browse scan bound (lastActivityScan, measured at 40 against five live
+// stores) keeps one measured number in this file instead of two guesses.
+const bookendScan = 40
+
+// bookendFetch is how many rows to read to satisfy a bookend of opts.Bookend
+// displayable ones. Asking for tools back means no rows get dropped, so the
+// fetch is exact; otherwise it is bounded by bookendScan.
+func bookendFetch(opts AnchoredViewOpts) int {
+	if opts.IncludeTools {
+		return opts.Bookend
+	}
+	if opts.Bookend > bookendScan {
+		return opts.Bookend
+	}
+	return bookendScan
+}
+
+// IsDisplayable reports whether a record still says something after everything
+// a runtime generated is removed. It is the display-side twin of the rule
+// search already applies to its haystack, and it is the single place that rule
+// lives for rendering: strip tool runs and injected envelopes, then reject what
+// is left if it is empty, a bare block label (the ~99.5% redacted-thinking
+// case), or the runtime's interruption note.
+//
+// Nothing is deleted or hidden from the store by this — `--include-tools` puts
+// every dropped row back, exactly as it does for search.
+func IsDisplayable(content string) bool {
+	if strings.TrimSpace(parse.StripGenerated(content)) == "" {
+		return false
+	}
+	if IsInterruptionMarker(content) {
+		return false
+	}
+	return !isBareBlockMarker(parse.Disp(content, false, -1))
+}
+
+// FilterDisplayable keeps the first want displayable records of msgs, in the
+// order given. Callers that want the records nearest the END of a session pass
+// them newest-first and reverse the result. With includeTools set nothing is
+// dropped and this is a plain take-want.
+func FilterDisplayable(msgs []store.Msg, want int, includeTools bool) []store.Msg {
+	out := make([]store.Msg, 0, want)
+	for _, m := range msgs {
+		if len(out) == want {
+			break
+		}
+		if !includeTools && !IsDisplayable(m.Content) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// RenderMsgs renders store rows for display at the given cap.
+func RenderMsgs(msgs []store.Msg, includeTools bool, cap int) []ViewMsg {
+	out := make([]ViewMsg, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, ViewMsg{ID: m.ID, Role: m.Role, Text: parse.Disp(m.Content, includeTools, cap)})
+	}
+	return out
+}
+
+// TakeDisplayable renders the FIRST want displayable records of msgs.
+func TakeDisplayable(msgs []store.Msg, want int, includeTools bool, cap int) []ViewMsg {
+	return RenderMsgs(FilterDisplayable(msgs, want, includeTools), includeTools, cap)
+}
+
+// TakeDisplayableTail renders the LAST want displayable records of msgs, still
+// in chronological order. Used for a closing bookend, where the interesting
+// records are the ones nearest the end.
+func TakeDisplayableTail(msgs []store.Msg, want int, includeTools bool, cap int) []ViewMsg {
+	return RenderMsgs(Reversed(FilterDisplayable(Reversed(msgs), want, includeTools)), includeTools, cap)
+}
+
+// Reversed returns msgs in the opposite order.
+func Reversed(msgs []store.Msg) []store.Msg {
+	out := make([]store.Msg, 0, len(msgs))
+	for i := len(msgs) - 1; i >= 0; i-- {
+		out = append(out, msgs[i])
+	}
+	return out
+}
+
 // AnchoredViewOpts groups the optional tuning of AnchoredView (window radius,
 // bookend size, tool inclusion) to keep the signature small.
 // Defaults: Window=5, Bookend=3, IncludeTools=false.
@@ -136,8 +225,18 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 			cap = -1
 		}
 		text := parse.Disp(m.Content, opts.IncludeTools, cap)
-		if text == "" && !isAnchor { // skip empty turns — keep the anchor
-			continue
+		if !isAnchor { // neighbours are context: conversation only
+			if !opts.IncludeTools && !IsDisplayable(m.Content) {
+				continue
+			}
+			if text == "" {
+				continue
+			}
+		} else if text == "" {
+			// The caller named this record by ref. If everything in it was
+			// generated, show it raw rather than an empty line — refusing to
+			// render the row someone asked for by id would be the worse lie.
+			text = parse.Disp(m.Content, true, cap)
 		}
 		wmsgs = append(wmsgs, ViewMsg{ID: m.ID, Role: m.Role, Text: text, Anchor: isAnchor})
 	}
@@ -145,21 +244,18 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 	var bs, be []store.Msg
 	if opts.Bookend > 0 {
 		// bookend_start: the run-up before the window (id<winMin, ASC).
-		bs, _ = store.BookendMessages(con, sessionID, winMin, true, true, opts.Bookend)
+		bs, _ = store.BookendMessages(con, sessionID, winMin, true, true, bookendFetch(opts))
 		// bookend_end: the tail after the window (id>winMax, DESC — reversed below).
-		be, _ = store.BookendMessages(con, sessionID, winMax, true, false, opts.Bookend)
+		be, _ = store.BookendMessages(con, sessionID, winMax, true, false, bookendFetch(opts))
 	}
 
-	bookendStart := make([]ViewMsg, 0, len(bs))
-	for _, m := range bs {
-		bookendStart = append(bookendStart, ViewMsg{ID: m.ID, Role: m.Role, Text: parse.Disp(m.Content, opts.IncludeTools, dispCap)})
-	}
+	bookendStart := TakeDisplayable(bs, opts.Bookend, opts.IncludeTools, dispCap)
 	// bookend_end: emit reversed(be) (be is DESC, so output is ASC by id).
-	bookendEnd := make([]ViewMsg, 0, len(be))
+	rev := make([]store.Msg, 0, len(be))
 	for i := len(be) - 1; i >= 0; i-- {
-		m := be[i]
-		bookendEnd = append(bookendEnd, ViewMsg{ID: m.ID, Role: m.Role, Text: parse.Disp(m.Content, opts.IncludeTools, dispCap)})
+		rev = append(rev, be[i])
 	}
+	bookendEnd := TakeDisplayableTail(rev, opts.Bookend, opts.IncludeTools, dispCap)
 
 	messagesBefore := len(before) - 1
 	if messagesBefore < 0 {
@@ -288,17 +384,12 @@ func SessionLastActivity(con *sql.DB, sessionID string) string {
 		return ""
 	}
 	for _, m := range msgs {
-		if strings.TrimSpace(parse.StripGenerated(m.Content)) == "" {
+		if !IsDisplayable(m.Content) {
 			continue
 		}
-		if IsInterruptionMarker(m.Content) {
-			continue
+		if text := parse.Disp(m.Content, false, browsePreviewCap); text != "" {
+			return text
 		}
-		text := parse.Disp(m.Content, false, browsePreviewCap)
-		if text == "" || isBareBlockMarker(text) {
-			continue
-		}
-		return text
 	}
 	return ""
 }
