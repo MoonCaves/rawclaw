@@ -86,6 +86,11 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 	if err := migrateDurabilityColumns(con, sourceID); err != nil {
 		return fmt.Errorf("ensure durability columns: %w", err)
 	}
+	// Same treatment for the scope columns (project/cwd) — in place, no version
+	// bump, for the same reason.
+	if err := migrateScopeColumns(con); err != nil {
+		return fmt.Errorf("ensure scope columns: %w", err)
+	}
 	if _, err := con.Exec("SELECT 1 FROM messages_fts LIMIT 1"); err != nil {
 		_, _ = con.Exec(store.FTSSQL) // best-effort; raced creation is acceptable
 	}
@@ -150,6 +155,122 @@ func migrateDurabilityColumns(con *sql.DB, sourceID string) error {
 	return nil
 }
 
+// scopeColumns are the columns that move a session's scope off the db FILENAME
+// and onto the ROW. Today the filename is exact (one db per project), which is
+// precisely why it is load-bearing and a shared store is impossible; carrying
+// (project, cwd) on the row — alongside origin_machine, already there — is the
+// prefactor that removes the dependency.
+var scopeColumns = []struct{ name, decl string }{
+	{"project", "project TEXT"},
+	{"cwd", "cwd TEXT"},
+}
+
+// scopeBackfillKey marks the one-time backfill of pre-existing rows as complete.
+const scopeBackfillKey = "scope_backfill_done"
+
+// migrateScopeColumns adds project/cwd to an existing current-version db and
+// backfills them once, WITHOUT bumping SchemaVersion — a bump forces a rebuild
+// from source, which re-walks the live tree and re-prunes every already-retained
+// session, i.e. destroys exactly what durable retention exists to protect (D6).
+// A fresh or rebuilt db carries the columns via Schema, so the ALTERs no-op there.
+//
+// The backfill reads each session's own recorded cwd from its source_path,
+// memoized per directory: every session in a Claude project dir shares one cwd,
+// so this is one small file read per project, not one per session. A session
+// whose source file is gone (retained after an upstream purge) keeps NULL cwd
+// and takes its project from the enclosing directory name — the same fallback
+// paths.ProjectLabel uses. NULL is deliberate: it reads as "not known", where ""
+// would claim the session ran somewhere nameless.
+//
+// Kill-safety (F3): the completion marker is written only AFTER the backfill
+// commits, so a process killed mid-pass simply redoes the pass. The marker is
+// what stops an already-complete db from re-reading files on every invocation —
+// rows that legitimately resolve to nothing would otherwise be retried forever.
+func migrateScopeColumns(con *sql.DB) error {
+	have, err := sessionColumns(con)
+	if err != nil {
+		return err
+	}
+	for _, c := range scopeColumns {
+		if _, ok := have[c.name]; ok {
+			continue
+		}
+		if _, err := con.Exec("ALTER TABLE sessions ADD COLUMN " + c.decl); err != nil {
+			return fmt.Errorf("add sessions.%s: %w", c.name, err)
+		}
+	}
+	var done string
+	if err := con.QueryRow("SELECT value FROM meta WHERE key=?", scopeBackfillKey).Scan(&done); err == nil && done == "1" {
+		return nil // already backfilled — the write path keeps new rows stamped
+	}
+	if err := backfillScope(con); err != nil {
+		return err
+	}
+	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", scopeBackfillKey); err != nil {
+		return fmt.Errorf("stamp %s: %w", scopeBackfillKey, err)
+	}
+	return nil
+}
+
+// backfillScope stamps project/cwd on every session row still missing both. It
+// reads the whole candidate set before writing so the scan is not invalidated by
+// its own updates.
+func backfillScope(con *sql.DB) error {
+	rows, err := con.Query(
+		`SELECT id, source_path FROM sessions
+		  WHERE project IS NULL AND cwd IS NULL AND source_path IS NOT NULL AND source_path <> ''`)
+	if err != nil {
+		return fmt.Errorf("scan sessions for scope backfill: %w", err)
+	}
+	type target struct{ id, path string }
+	var todo []target
+	for rows.Next() {
+		var t target
+		if err := rows.Scan(&t.id, &t.path); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan scope backfill row: %w", err)
+		}
+		todo = append(todo, t)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("scan sessions for scope backfill: %w", err)
+	}
+	rows.Close()
+
+	byDir := map[string]projectScope{}
+	for _, t := range todo {
+		// The PROJECT dir, not the file's parent: a subagent or workflow
+		// transcript sits in a subdirectory, and its parent's name ("subagents",
+		// "wf_<id>") is not a project. A path outside the projects root has no
+		// project dir to walk up to, so its own parent is the best available
+		// answer — that is the explicit --dir scope.
+		dir := paths.ProjectDirOf(t.path)
+		if dir == "" {
+			dir = filepath.Dir(t.path)
+		}
+		scope, seen := byDir[dir]
+		if !seen {
+			scope = dirScope(dir)
+			byDir[dir] = scope
+		}
+		// The dir's own cwd answers for every session in it (one dir, one working
+		// directory), so the backfill reads one transcript per PROJECT rather
+		// than one per session — the difference between a handful of reads and
+		// thousands on a large index.
+		projectArg, cwdArg := scopeOf("", scope)
+		if projectArg == nil && cwdArg == nil {
+			continue // nothing provable — leave NULL rather than invent a scope
+		}
+		if _, err := con.Exec(
+			"UPDATE sessions SET project=?, cwd=? WHERE id=?", projectArg, cwdArg, t.id,
+		); err != nil {
+			return fmt.Errorf("backfill scope for %s: %w", t.id, err)
+		}
+	}
+	return nil
+}
+
 // sessionColumns returns the set of column names on the sessions table (via
 // PRAGMA table_info), used to guard the additive migration.
 func sessionColumns(con *sql.DB) (map[string]struct{}, error) {
@@ -205,16 +326,16 @@ func originOr(origin string) string {
 // true on success. Rows are stamped with this machine's identity; a replicated
 // tree goes through reindexFileWithOrigin instead.
 func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
-	return reindexFileWithOrigin(con, path, transcriptDir, "")
+	return reindexFileWithOrigin(con, path, transcriptDir, "", dirScope(transcriptDir))
 }
 
 // reindexFileWithOrigin is ReindexFile with an explicit origin_machine ("" = this
 // machine) — the provenance seam the archive-scope ingest stamps foreign
 // machine ids through.
-func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string) bool {
+func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scope projectScope) bool {
 	sid, isSub, parent := provenance.SessionIDFor(path, transcriptDir)
 
-	rows, started, last, ok := parseTranscript(path, sid)
+	rows, started, last, cwd, ok := parseTranscript(path, sid)
 	if !ok {
 		return false // parse failed -> leave existing rows + watermark untouched
 	}
@@ -238,11 +359,13 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string) bool
 	if parent != "" {
 		parentArg = parent
 	} // else nil -> SQL NULL for a missing parent
-	// Stamp provenance (D3) and clear missing_since — a freshly (re)indexed
-	// session is present by definition, so a reappeared source file un-flags here.
+	// Stamp provenance (D3), scope (project/cwd) and clear missing_since — a
+	// freshly (re)indexed session is present by definition, so a reappeared source
+	// file un-flags here.
+	projectArg, cwdArg := scopeOf(cwd, scope)
 	if _, err := con.Exec(
-		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since) VALUES(?,?,?,?,?,?,?,?,?,NULL)",
-		sid, started, last, len(rows), isSub, parentArg, originOr(origin), sourceClaude, realpath(path),
+		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
+		sid, started, last, len(rows), isSub, parentArg, originOr(origin), sourceClaude, realpath(path), projectArg, cwdArg,
 	); err != nil {
 		return false
 	}
@@ -250,13 +373,21 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string) bool
 }
 
 // parseTranscript reads and flattens one JSONL transcript into rows, computing
-// the started/last timestamp watermarks. Returns ok=false if the file cannot be
-// opened (a parse-time read error), leaving existing rows untouched. Malformed
-// individual lines are skipped.
-func parseTranscript(path, sid string) (rows []reindexRow, started, last float64, ok bool) {
+// the started/last timestamp watermarks and the working directory the session
+// ran in. Returns ok=false if the file cannot be opened (a parse-time read
+// error), leaving existing rows untouched. Malformed individual lines are
+// skipped.
+//
+// cwd is read from the FIRST line that carries one, INCLUDING lines that are
+// not indexable as messages: Claude records cwd on attachment/meta lines too,
+// and a session whose only cwd-bearing line is non-indexable would otherwise
+// land with a NULL scope. It is the session's own recorded value, never a
+// decode of the enclosing directory name — that decode is lossy for any path
+// segment containing "-" or ".".
+func parseTranscript(path, sid string) (rows []reindexRow, started, last float64, cwd string, ok bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, 0, 0, false
+		return nil, 0, 0, "", false
 	}
 	// []byte is already lossless and json.Unmarshal tolerates invalid UTF-8 in
 	// strings, so no transform is needed.
@@ -269,6 +400,9 @@ func parseTranscript(path, sid string) (rows []reindexRow, started, last float64
 		var o map[string]any
 		if err := json.Unmarshal([]byte(line), &o); err != nil {
 			continue // skip malformed / incomplete trailing line
+		}
+		if cwd == "" {
+			cwd = lineCWD(o)
 		}
 		if !indexable(o) {
 			continue
@@ -289,7 +423,66 @@ func parseTranscript(path, sid string) (rows []reindexRow, started, last float64
 			}
 		}
 	}
-	return rows, started, last, true
+	return rows, started, last, cwd, true
+}
+
+// lineCWD returns the working dir one transcript line records — top level, else
+// nested under "message" — or "" when it records none. Mirrors paths.FileCWD's
+// lookup so the two agree on where a cwd may hide.
+func lineCWD(o map[string]any) string {
+	if cwd, ok := o["cwd"].(string); ok && cwd != "" {
+		return cwd
+	}
+	if msg, ok := o["message"].(map[string]any); ok {
+		if cwd, ok := msg["cwd"].(string); ok && cwd != "" {
+			return cwd
+		}
+	}
+	return ""
+}
+
+// scopeOf resolves the (project, cwd) pair to stamp on a session row. project is
+// the basename of the recorded cwd — the same label paths.ProjectLabel shows —
+// falling back to the enclosing directory's name when the transcript records no
+// cwd. Both are returned as `any` so an unresolvable scope writes SQL NULL
+// rather than an empty string: NULL means "not known", "" would claim the
+// session ran in a directory with no name.
+func scopeOf(own string, dir projectScope) (projectArg, cwdArg any) {
+	cwd := own
+	if cwd == "" {
+		cwd = dir.cwd
+	}
+	if cwd != "" {
+		cwdArg = cwd
+		if base := filepath.Base(strings.TrimRight(cwd, "/")); usableScope(base) {
+			return base, cwdArg
+		}
+	}
+	if usableScope(dir.label) {
+		return dir.label, cwdArg
+	}
+	return nil, cwdArg
+}
+
+// projectScope is a project dir's identity: the working directory its
+// transcripts record (empty when none does) and the friendly label
+// paths.ProjectLabel shows for it. Resolved once per dir and reused, because
+// resolving reads a transcript off disk and one dir holds hundreds of sessions.
+type projectScope struct{ cwd, label string }
+
+// dirScope resolves a project dir's identity. An empty dir yields an empty
+// scope, so a source with no project dir at all (a Codex rollout shards by
+// date) simply contributes no fallback.
+func dirScope(tdir string) projectScope {
+	if tdir == "" {
+		return projectScope{}
+	}
+	return projectScope{cwd: paths.DirCWD(tdir), label: paths.ProjectLabel(tdir)}
+}
+
+// usableScope rejects the degenerate basenames that carry no scope information.
+func usableScope(s string) bool {
+	return s != "" && s != "." && s != string(filepath.Separator)
 }
 
 // indexable reports whether o's "type" is in parse.IndexableTypes.
@@ -328,6 +521,11 @@ func UpdateIndex(con *sql.DB, transcriptDir string) error {
 // machine) stamped onto every (re)indexed session — the archive-scope path.
 func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 	files := paths.ContainedJSONL(transcriptDir)
+
+	// Resolve this dir's scope ONCE: every file in the walk shares it, including
+	// the subagent and workflow threads nested below it, and resolving reads a
+	// transcript off disk.
+	scope := dirScope(transcriptDir)
 
 	onDisk := make(map[string]struct{}, len(files))
 	for _, f := range files {
@@ -371,7 +569,7 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 				}
 			}
 		}
-		if reindexFileWithOrigin(con, f, transcriptDir, origin) {
+		if reindexFileWithOrigin(con, f, transcriptDir, origin, scope) {
 			sid, _, _ := provenance.SessionIDFor(f, transcriptDir)
 			if _, err := con.Exec(
 				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
@@ -557,6 +755,12 @@ func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status
 // owner's identity, while the local path keeps its derived db and local stamp.
 // Reindex + busy-lock semantics are identical to EnsureIndexed.
 func EnsureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions int, status IndexStatus, err error) {
+	nSessions, status, err = ensureIndexedTree(dbp, tdir, reindex, origin)
+	writeThroughConsolidated(dbp, err)
+	return nSessions, status, err
+}
+
+func ensureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions int, status IndexStatus, err error) {
 	if reindex {
 		if _, statErr := os.Stat(dbp); statErr == nil {
 			_ = os.Remove(dbp) // best-effort; ignore a remove error
