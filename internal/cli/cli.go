@@ -317,8 +317,32 @@ func resolveTimeoutFromArgs(args []string, env string) time.Duration {
 		if isArchiveSyncInvocation(args) {
 			return 0
 		}
+		// --reindex-vectors runs without the wall-clock watchdog for the same
+		// reason: no cap fits both a hung endpoint and a legitimate first embed
+		// of a whole corpus, whose cost scales with the history and the
+		// embedder's throughput. The run stays bounded because EVERY embedding
+		// request is individually bounded (adapters' 15s serial / 120s batch
+		// HTTP timeouts), so a dead endpoint fails fast per call rather than
+		// parking the run. A 30s default here made the README's documented
+		// "embed your history once" flow impossible to finish on any real
+		// corpus — it self-terminated partway through, every time.
+		if isReindexVectorsInvocation(args) {
+			return 0
+		}
 	}
 	return resolved
+}
+
+// isReindexVectorsInvocation reports whether args ask for the vector backfill.
+// It is a root FLAG, not a subcommand, so this probes the flag rather than the
+// leading tokens.
+func isReindexVectorsInvocation(args []string) bool {
+	probe := pflag.NewFlagSet("rawclaw-reindex-probe", pflag.ContinueOnError)
+	probe.ParseErrorsWhitelist.UnknownFlags = true
+	probe.SetOutput(io.Discard)
+	rv := probe.Bool("reindex-vectors", false, "")
+	_ = probe.Parse(args)
+	return *rv
 }
 
 // rootValueFlags are the root command's value-taking flags whose
