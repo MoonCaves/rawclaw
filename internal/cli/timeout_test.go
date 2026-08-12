@@ -245,3 +245,36 @@ func TestResolveTimeoutFromArgsConsolidateFloor(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveTimeoutFromArgsReindexVectorsUnbounded proves the README's
+// "embed your history once" command is not killed by the wall clock. It is a
+// root FLAG rather than a subcommand, so it needs its own probe; the 30s
+// default made the documented flow impossible to finish on any real corpus.
+// Every embedding request is individually HTTP-bounded, so dropping the wall
+// clock here keeps the never-hang guarantee. An explicit choice still wins.
+func TestResolveTimeoutFromArgsReindexVectorsUnbounded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		env  string
+		want time.Duration
+	}{
+		{"bare --reindex-vectors drops the wall clock", []string{"--reindex-vectors"}, "", 0},
+		{"with a sibling flag", []string{"--reindex-vectors", "--this-project"}, "", 0},
+		{"= form", []string{"--reindex-vectors=true"}, "", 0},
+		{"explicit --timeout wins", []string{"--reindex-vectors", "--timeout", "90s"}, "", 90 * time.Second},
+		{"RAWCLAW_TIMEOUT wins", []string{"--reindex-vectors"}, "45s", 45 * time.Second},
+		{"a query mentioning it keeps the default", []string{"reindex-vectors notes"}, "", defaultTimeout},
+		{"an ordinary search is unaffected", []string{"billing"}, "", defaultTimeout},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := resolveTimeoutFromArgs(tc.args, tc.env); got != tc.want {
+				t.Errorf("resolveTimeoutFromArgs(%q, %q) = %v, want %v", tc.args, tc.env, got, tc.want)
+			}
+		})
+	}
+}
