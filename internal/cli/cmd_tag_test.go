@@ -129,6 +129,55 @@ func TestRunTagWritePopulatesSegments(t *testing.T) {
 	}
 }
 
+// TestRunTagWriteRetagReplaces locks the behavior Jay asked for: re-tagging a
+// session REDOES its tags — it does not stack a second set beside the first, and
+// it does not error. A first pass writes two segments; a second pass with DIFFERENT
+// boundaries + labels must leave ONLY the second set behind.
+func TestRunTagWriteRetagReplaces(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "sess-retag-1"
+	addMsg(t, con, sid, "user", "how do we blend rankings", "11111111-aaaa")
+	addMsg(t, con, sid, "assistant", "reciprocal rank fusion", "22222222-bbbb")
+	addMsg(t, con, sid, "user", "do topics survive a reindex", "33333333-cccc")
+	addMsg(t, con, sid, "assistant", "sidecar tables persist", "44444444-dddd")
+
+	// First pass: two segments starting at msg 1 and msg 3.
+	first := `[
+		{"start_uuid":"11111111","topic":"ranking fusion","summary":"first pass"},
+		{"start_uuid":"33333333","topic":"schema gating","summary":"first pass"}
+	]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(first), 1.0); err != nil {
+		t.Fatalf("first runTagWrite: %v", err)
+	}
+
+	// Second pass: a SINGLE segment with a shifted boundary (start at msg 2) and a
+	// new label. Under the old per-(session,start_uuid) upsert this would have left
+	// both first-pass rows behind (different start_uuids) — the stacking bug.
+	second := `[{"start_uuid":"22222222","topic":"one merged topic","summary":"second pass"}]`
+	n, err := runTagWrite(con, sid, strings.NewReader(second), 2.0)
+	if err != nil {
+		t.Fatalf("second runTagWrite: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("second pass wrote %d segments, want 1", n)
+	}
+
+	segs, err := store.TopicsForSession(con, sid)
+	if err != nil {
+		t.Fatalf("TopicsForSession: %v", err)
+	}
+	if len(segs) != 1 {
+		t.Fatalf("after re-tag, stored %d segments, want 1 (old set must be gone)", len(segs))
+	}
+	if segs[0].StartUUID != "22222222-bbbb" || segs[0].Topic != "one merged topic" {
+		t.Errorf("surviving segment = %s/%q, want 22222222-bbbb/\"one merged topic\"", segs[0].StartUUID, segs[0].Topic)
+	}
+	// The local re-tag must keep origin_machine NULL (the "this machine" sentinel).
+	if segs[0].OriginMachine != "" {
+		t.Errorf("origin_machine = %q, want empty (NULL) for a local re-tag", segs[0].OriginMachine)
+	}
+}
+
 // TestRunTagWriteUnknownStartUUID errors clearly when a start_uuid prefix matches
 // no message in the session.
 func TestRunTagWriteUnknownStartUUID(t *testing.T) {
