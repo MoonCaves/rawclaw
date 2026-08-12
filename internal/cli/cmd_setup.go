@@ -62,6 +62,7 @@ func newSetupCmd() *cobra.Command {
 		"wire the hook into the CURRENT project's own config instead of the user-level file")
 	cmd.Flags().BoolVar(&eject, "eject", false,
 		"remove exactly what setup installed (script, config entries, empty dirs) instead of installing")
+	cmd.AddCommand(newSetupLiveCmd())
 	return cmd
 }
 
