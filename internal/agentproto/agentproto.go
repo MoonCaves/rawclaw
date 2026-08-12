@@ -378,6 +378,23 @@ func allScope() []view.Scope {
 	return scopes.All(context.Background(), "", false)
 }
 
+// ScopeFn builds the per-project scope list on demand. Building it is not a
+// listing: it opens every per-project index — and after a schema change,
+// migrates every one of them — which on a real corpus costs minutes, more than
+// the run's watchdog allows. An id the one store can answer needs no list at
+// all, so the verbs take the list as a function and call it only if the store
+// comes up empty. SearchOpts.ScopeFallback is the same seam for search; a nil
+// ScopeFn means "every project", resolved under a background context.
+type ScopeFn func() []view.Scope
+
+// resolveScope calls fn, or falls back to every project when fn is nil.
+func resolveScope(fn ScopeFn) []view.Scope {
+	if fn == nil {
+		return allScope()
+	}
+	return fn()
+}
+
 // runeLen counts code points in s.
 func runeLen(s string) int {
 	return len([]rune(s))
@@ -948,10 +965,13 @@ func SearchAndRender(
 // (JSON when wantJSON). The exported entry the top-level `read` subcommand calls,
 // so reading is a top-level verb (`rawclaw read <ref>`).
 // moreLevel 0 = the default window; >0 widens it via the expand-in-place ladder.
+// scope nil = every project, enumerated through more only if the one store
+// cannot answer the ref (see ScopeFn).
 func ReadAndRender(
 	w io.Writer,
 	ref string,
 	scope []view.Scope,
+	more ScopeFn,
 	focus string,
 	budget *int,
 	includeTools bool,
@@ -963,11 +983,12 @@ func ReadAndRender(
 		window = moreWindow(moreLevel)
 	}
 	result, err := Read(ref, scope, ReadOpts{
-		Focus:        focus,
-		Budget:       budget,
-		IncludeTools: includeTools,
-		Window:       window,
-		Around:       around,
+		Focus:         focus,
+		Budget:        budget,
+		IncludeTools:  includeTools,
+		Window:        window,
+		Around:        around,
+		ScopeFallback: more,
 	})
 	if err != nil {
 		return err
@@ -982,8 +1003,8 @@ func ReadAndRender(
 // OutlineAndRender resolves session8 within scope and writes its goal→resolution
 // arc to w (JSON when wantJSON). The exported entry the top-level `outline`
 // subcommand calls.
-func OutlineAndRender(w io.Writer, session8 string, scope []view.Scope, includeTools, wantJSON bool) error {
-	result, err := Outline(session8, scope, includeTools)
+func OutlineAndRender(w io.Writer, session8 string, scope []view.Scope, more ScopeFn, includeTools, wantJSON bool) error {
+	result, err := outline(session8, scope, more, includeTools)
 	if err != nil {
 		return err
 	}
@@ -1318,6 +1339,11 @@ type ReadOpts struct {
 	IncludeTools bool
 	Window       int
 	Around       int
+
+	// ScopeFallback supplies the project list for a nil scope, called ONLY if
+	// the one store cannot answer the id (see ScopeFn). Nil = every project
+	// under a background context.
+	ScopeFallback ScopeFn
 }
 
 // moreWindow maps a --more level (0 = none) to a window radius. Level 0 keeps the
@@ -1340,11 +1366,7 @@ func Read(ref string, scope []view.Scope, opts ReadOpts) (*ReadResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if scope == nil {
-		scope = allScope()
-	}
-
-	dbp, fullSID, proj, locErr := locateSession(scope, session8)
+	dbp, fullSID, proj, locErr := locateSession(scope, opts.ScopeFallback, session8)
 	if locErr != nil {
 		return nil, locErr
 	}
@@ -1572,16 +1594,27 @@ func (e *ErrSessionNotFound) Error() string {
 // folded into it at all). A miss there is therefore never reported as "session
 // not found" while an index still holds the session.
 //
+// A nil scope means "every project" and is resolved through more (see ScopeFn)
+// only if the sweep is reached, so the ordinary lookup — the one the store
+// answers — never pays for enumerating the per-project indexes.
+//
 // Returns an *ErrAmbiguousSession on ≥2 DISTINCT matching ids, an
 // *ErrSessionNotFound on none. A failing project is skipped.
-func locateSession(scope []view.Scope, session8 string) (dbp, fullSID, proj string, err error) {
-	// An empty scope means "this directory has no history", not "search
-	// everything": callers build it deliberately, so it must resolve nothing.
-	if len(scope) == 0 {
+func locateSession(scope []view.Scope, more ScopeFn, session8 string) (dbp, fullSID, proj string, err error) {
+	everywhere := scope == nil
+	// A scope built and found EMPTY means "this directory has no history", not
+	// "search everything": callers build it deliberately, so it must resolve
+	// nothing. A nil scope is the opposite — nobody narrowed anything.
+	if !everywhere && len(scope) == 0 {
 		return "", "", "", &ErrSessionNotFound{Prefix: session8}
 	}
+	// scope nil here narrows the store by nothing, which is what "every
+	// project" means as a WHERE clause.
 	if cands := oneStoreCands(scope, session8); len(cands) > 0 {
 		return decideSession(cands, session8)
+	}
+	if everywhere {
+		scope = resolveScope(more)
 	}
 	return decideSession(sweepScopes(scope, session8), session8)
 }
@@ -1740,16 +1773,14 @@ func firstRowPerSession(cands []sessionCand) []sessionCand {
 }
 
 // LocateSession resolves a session8 prefix to its (db path, full session id)
-// across scope (nil = all projects), the exported door onto the private
+// across scope (nil = all projects, enumerated through more only if the sweep
+// is reached — see ScopeFn), the exported door onto the private
 // locateSession. The `tag` verb uses it to find the db it must open read-write
 // and the full session id whose messages it tags. Returns *ErrSessionNotFound /
 // *ErrAmbiguousSession unchanged, so callers can render the same hints as Read
 // and Outline.
-func LocateSession(session8 string, scope []view.Scope) (dbPath, fullSID string, err error) {
-	if scope == nil {
-		scope = allScope()
-	}
-	dbp, sid, _, err := locateSession(scope, normalizeSessionArg(session8))
+func LocateSession(session8 string, scope []view.Scope, more ScopeFn) (dbPath, fullSID string, err error) {
+	dbp, sid, _, err := locateSession(scope, more, normalizeSessionArg(session8))
 	return dbp, sid, err
 }
 
@@ -1759,12 +1790,16 @@ func LocateSession(session8 string, scope []view.Scope) (dbPath, fullSID string,
 // Returns an error if the session is not found. A pasted read-ref token
 // ("ref=<session8>:<uuid8>" or "<session8>:<uuid8>") resolves via its session half.
 func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineResult, error) {
-	if scope == nil {
-		scope = allScope()
-	}
+	return outline(session8, scope, nil, includeTools)
+}
+
+// outline is Outline with the nil-scope enumeration deferred to more (ScopeFn),
+// which is what the CLI passes so an id the one store answers never enumerates
+// the per-project indexes.
+func outline(session8 string, scope []view.Scope, more ScopeFn, includeTools bool) (*OutlineResult, error) {
 	session8 = normalizeSessionArg(session8)
 
-	dbp, fullSID, proj, locErr := locateSession(scope, session8)
+	dbp, fullSID, proj, locErr := locateSession(scope, more, session8)
 	if locErr != nil {
 		return nil, locErr
 	}
@@ -2134,6 +2169,11 @@ type TopicsOpts struct {
 	Limit       int
 	Project     string // "" = every project; else the one project to search
 	IncludePath string // "" = no filter; else a regex over the project working dir
+
+	// ScopeFallback supplies the project list for a nil scope, called ONLY if
+	// the one store cannot answer (see ScopeFn). Nil = every project under a
+	// background context.
+	ScopeFallback ScopeFn
 }
 
 // Topics searches ONLY the topic layer, returning hits ordered by FTS rank and
@@ -2215,7 +2255,7 @@ func topicsFromStore(con *sql.DB, query string, limit int, opts TopicsOpts) (Top
 // store removes.
 func topicsByFanOut(query string, scope []view.Scope, limit int, opts TopicsOpts) (TopicsResult, error) {
 	if scope == nil {
-		scope = allScope()
+		scope = resolveScope(opts.ScopeFallback)
 	}
 	if opts.IncludePath != "" {
 		scope = scopes.FilterByPath(scope, opts.IncludePath, "")

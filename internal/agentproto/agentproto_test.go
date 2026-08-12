@@ -615,7 +615,7 @@ func TestLocateSessionUnique(t *testing.T) {
 	writeSession(t, proj, "ffff0000zzzz", "uuid-b-1", "second session")
 	scope := scopeFor(t, proj)
 
-	dbp, fullSID, _, err := locateSession(scope, "a1b2c3d4")
+	dbp, fullSID, _, err := locateSession(scope, nil, "a1b2c3d4")
 	if err != nil {
 		t.Fatalf("locateSession unique: unexpected err %v", err)
 	}
@@ -631,7 +631,7 @@ func TestLocateSessionAmbiguous(t *testing.T) {
 	writeSession(t, proj, "a1b2c3d4bbbb", "uuid-b-1", "beta session")
 	scope := scopeFor(t, proj)
 
-	_, _, _, err := locateSession(scope, "a1b2c3d4")
+	_, _, _, err := locateSession(scope, nil, "a1b2c3d4")
 	if err == nil {
 		t.Fatal("locateSession should reject an ambiguous prefix, got nil err")
 	}
@@ -654,7 +654,7 @@ func TestLocateSessionNotFound(t *testing.T) {
 	writeSession(t, proj, "a1b2c3d4eeee", "uuid-a-1", "only session")
 	scope := scopeFor(t, proj)
 
-	_, _, _, err := locateSession(scope, "zzzzzzzz")
+	_, _, _, err := locateSession(scope, nil, "zzzzzzzz")
 	var nf *ErrSessionNotFound
 	if !errors.As(err, &nf) {
 		t.Fatalf("want *ErrSessionNotFound, got %T: %v", err, err)
@@ -686,7 +686,7 @@ func TestLocateSessionAcceptsPastedRef(t *testing.T) {
 	writeSession(t, proj, "a1b2c3d4eeee", "uuid-a-1", "first session")
 	scope := scopeFor(t, proj)
 
-	_, fullSID, err := LocateSession("ref=a1b2c3d4:9f3e1c20", scope)
+	_, fullSID, err := LocateSession("ref=a1b2c3d4:9f3e1c20", scope, nil)
 	if err != nil {
 		t.Fatalf("LocateSession with pasted ref token: %v", err)
 	}
@@ -1327,7 +1327,7 @@ func TestOutlineListsTopics(t *testing.T) {
 	// Author the tag in the db the READ path resolves to — the same one tag-write
 	// opens. Writing it anywhere else would be testing a tag no reader can see.
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	dbp, _, _, err := locateSession(scope, "sesstwo")
+	dbp, _, _, err := locateSession(scope, nil, "sesstwo")
 	if err != nil {
 		t.Fatalf("locateSession: %v", err)
 	}

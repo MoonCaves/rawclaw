@@ -83,7 +83,7 @@ func TestLocateSessionReturnsMergedRow(t *testing.T) {
 		{Project: paths.ProjectLabel(secondDir), TDir: secondDir},
 	}
 
-	dbp, fullSID, proj, err := locateSession(scope, sid[:8])
+	dbp, fullSID, proj, err := locateSession(scope, nil, sid[:8])
 	if err != nil {
 		var amb *ErrAmbiguousSession
 		if errors.As(err, &amb) {
@@ -135,7 +135,7 @@ func TestLocateSessionStillFlagsDistinctIDCollision(t *testing.T) {
 		{Project: paths.ProjectLabel(projB), TDir: projB},
 	}
 
-	if _, _, _, err := locateSession(scope, "019f0001"); err == nil {
+	if _, _, _, err := locateSession(scope, nil, "019f0001"); err == nil {
 		t.Fatal("two distinct sessions sharing a prefix must still raise an ambiguity")
 	} else {
 		var amb *ErrAmbiguousSession
@@ -174,7 +174,7 @@ func TestLocateSessionHonorsProjectNarrowing(t *testing.T) {
 	}
 
 	narrow := []view.Scope{{Project: paths.ProjectLabel(mine), TDir: mine}}
-	if _, _, _, err := locateSession(narrow, theirSID[:8]); err == nil {
+	if _, _, _, err := locateSession(narrow, nil, theirSID[:8]); err == nil {
 		t.Error("a lookup narrowed to one project resolved another project's session")
 	} else {
 		var nf *ErrSessionNotFound
@@ -184,7 +184,7 @@ func TestLocateSessionHonorsProjectNarrowing(t *testing.T) {
 	}
 	// The same narrow scope still finds its OWN session, so the filter narrows
 	// rather than simply blocking.
-	if _, fullSID, _, err := locateSession(narrow, mySID[:8]); err != nil {
+	if _, fullSID, _, err := locateSession(narrow, nil, mySID[:8]); err != nil {
 		t.Errorf("narrowed lookup lost its own session: %v", err)
 	} else if fullSID != mySID {
 		t.Errorf("full session id = %q, want %q", fullSID, mySID)
@@ -214,7 +214,7 @@ func TestLocateSessionFallsBackWhenOneStoreEmpty(t *testing.T) {
 	}
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	dbp, fullSID, _, err := locateSession(scope, sid[:8])
+	dbp, fullSID, _, err := locateSession(scope, nil, sid[:8])
 	if err != nil {
 		t.Fatalf("a session in a per-project index must still resolve without the one store: %v", err)
 	}
