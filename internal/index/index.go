@@ -1050,19 +1050,6 @@ const (
 func EnsureIndexed(tdir string, reindex bool) (dbp string, nSessions int, status IndexStatus, err error) {
 	dbp = DBPath(tdir)
 	nSessions, status, err = EnsureIndexedTree(dbp, tdir, reindex, "")
-	if err == nil {
-		// Keep the vector side level with the keyword side. This sits HERE, at
-		// the single point every caller funnels through, rather than at the five
-		// separate call sites — a top-up hung on each of those is one refactor
-		// away from a path that silently stops embedding, which is exactly how
-		// the vector lane went stale in the first place.
-		//
-		// Detached and rate-limited inside MaybeVectorTopup, so an ordinary
-		// invoke pays one stat and never waits on a remote embedder; a silent
-		// no-op when no embedder is configured, preserving the keyword-only
-		// default byte-for-byte.
-		fireVectorTopup(dbp)
-	}
 	return dbp, nSessions, status, err
 }
 
