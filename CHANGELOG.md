@@ -31,6 +31,26 @@ All notable changes to RawClaw are documented in this file.
   [THINKING]` tells a reader nothing). Reasoning that carries text still captions the row. When the
   whole tail is machinery the row gets no `now` line at all — honest silence beats captioning a
   session with a tool result.
+- **Your history now lives in raw transcript files RawClaw owns, not only in its database.**
+  Every session RawClaw indexes is copied into a transcript vault at
+  `~/.local/share/rawclaw/transcripts` (or `$XDG_DATA_HOME/rawclaw/transcripts`), in the same
+  JSONL shape `claude-web import` already writes. The search index becomes what it should always
+  have been — a cache you can throw away. That matters because a session whose original file was
+  purged upstream used to survive *only* as a database row: one corrupt or deleted index and the
+  history was gone for good. Nothing to configure, and no archive required — durable retention no
+  longer depends on `archive init`, which goes back to being purely a sync mechanism.
+- **`rawclaw consolidate --from-transcripts` rebuilds the store from those transcripts alone.**
+  Delete the index and run it: every session comes back, including the ones whose original
+  transcript no longer exists anywhere on disk, still labelled as retained-but-gone. Sessions you
+  deleted stay deleted — the rebuild reads the same tombstone the delete wrote. Copies of *other*
+  machines' sessions are never vaulted locally, so a teammate's delete still propagates to you.
+  It refuses to run when the vault holds fewer sessions than the store it would replace — on a
+  machine that indexed history before the vault existed, the vault fills as sessions are
+  re-indexed, and recovering less than you had is not recovery. Set `RAWCLAW_REBUILD_FORCE=1`
+  when the store is known to be junk and you want it gone anyway.
+- **`rawclaw delete` removes the vaulted copy too**, so "removed RawClaw's copy" stays literally
+  true. The tombstone already stopped a rebuild from bringing a deleted session back; now the
+  bytes go with it.
 
 ### Removed
 

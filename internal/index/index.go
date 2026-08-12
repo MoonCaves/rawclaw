@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/paths"
@@ -591,7 +593,82 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scop
 	); err != nil {
 		return false
 	}
+
+	// The db is a rebuildable cache, so a session is only really indexed once
+	// rawclaw also owns a raw copy of it. Returning false on a vault failure
+	// withholds the file_index watermark, which makes the next pass retry —
+	// better than a session that is silently never vaulted again.
+	if origin == "" {
+		if err := vaultFile(path, sid, isSub, parent, projectArg, cwdArg); err != nil {
+			slog.Warn("durable transcript not written", "session", sid, "err", err)
+			return false
+		}
+	}
 	return true
+}
+
+// vaultFile stores rawclaw's own copy of a Claude-shape transcript, carrying the
+// index facts the file itself cannot: the scope columns and the source-file
+// watermark a rebuild needs to re-key file_index on the ORIGINAL path.
+//
+// Only own sessions are vaulted. A replica read out of an archive clone belongs
+// to the machine that wrote it; keeping a durable local copy would resurrect it
+// here after its owner deletes it, which is exactly the propagation the replica
+// rules exist to honor.
+func vaultFile(path, sid string, isSub int, parent string, projectArg, cwdArg any) error {
+	m := durable.Meta{
+		ID:         sid,
+		Source:     sourceClaude,
+		Project:    strOf(projectArg),
+		CWD:        strOf(cwdArg),
+		IsSubagent: isSub != 0,
+		ParentID:   parent,
+		SourcePath: realpath(path),
+	}
+	if st, err := os.Stat(path); err == nil {
+		m.SourceMTime = mtimeOf(st)
+		m.SourceSize = st.Size()
+		m.SourceFP = provenance.FileFingerprint(path, st.Size())
+	}
+	return durable.StoreFile(m, path)
+}
+
+// strOf unwraps a nullable scope column into a plain string ("" = SQL NULL).
+func strOf(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+// applyRetentionToVault mirrors a retention pass onto the durable transcript
+// vault, so the vault survives a delete-and-rebuild of the index with the same
+// verdicts: a flagged session stays flagged, a reappeared one un-flags, and a
+// pruned one loses its raw copy too (a user delete has to really delete, or the
+// next rebuild would bring it back).
+//
+// Replica scopes are skipped wholesale: nothing in one is ours, so there is
+// nothing of ours to mirror — and a replica id colliding with an own session
+// must never reach the vault's delete path.
+func applyRetentionToVault(res retention.Result, now float64, origin string) {
+	if origin != "" {
+		return
+	}
+	for _, id := range res.Stamped {
+		if err := durable.SetMissingSince(id, now); err != nil {
+			slog.Warn("durable transcript flag not written", "session", id, "err", err)
+		}
+	}
+	for _, id := range res.Cleared {
+		if err := durable.SetMissingSince(id, 0); err != nil {
+			slog.Warn("durable transcript flag not cleared", "session", id, "err", err)
+		}
+	}
+	for _, id := range res.Pruned {
+		if err := durable.Remove(id); err != nil {
+			slog.Warn("durable transcript not removed", "session", id, "err", err)
+		}
+	}
 }
 
 // parseTranscript reads and flattens one JSONL transcript into rows, computing
@@ -809,9 +886,12 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 	// copy inside the archive clone) instead treats absence as authoritative:
 	// the owner's delete propagated through the archive (E5), so the replica
 	// rows die rather than resurrect the session in search.
-	if err := retention.ReconcileRetention(con, onDisk, tombstoned, nowEpoch(), retention.RetentionMirror(), origin != ""); err != nil {
+	now := nowEpoch()
+	res, err := retention.ReconcileRetention(con, onDisk, tombstoned, now, retention.RetentionMirror(), origin != "")
+	if err != nil {
 		return err
 	}
+	applyRetentionToVault(res, now, origin)
 	return nil
 }
 
@@ -852,12 +932,15 @@ func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
 	// replica=false too: this pass covers LOCAL orphaned dbs (archive-replica
 	// dbs are excluded from orphan discovery by their name prefix), and an
 	// empty scan under replica semantics would wipe the db wholesale.
-	if err := retention.ReconcileRetention(con, map[string]struct{}{}, tombstoned, nowEpoch(), false, false); err != nil {
-		if isBusy(err) {
+	now := nowEpoch()
+	res, rerr := retention.ReconcileRetention(con, map[string]struct{}{}, tombstoned, now, false, false)
+	if rerr != nil {
+		if isBusy(rerr) {
 			return store.CountTopLevelSessions(dbp), nil
 		}
-		return 0, fmt.Errorf("orphan reconcile: %w", err)
+		return 0, fmt.Errorf("orphan reconcile: %w", rerr)
 	}
+	applyRetentionToVault(res, now, "")
 	var n int
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE is_subagent=0").Scan(&n); err != nil {
 		if isBusy(err) {
