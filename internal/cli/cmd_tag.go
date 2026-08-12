@@ -241,12 +241,15 @@ func uuid8(u string) string {
 	return u[:uuid8Len]
 }
 
-// writeSegments maps each subagent segment to a topic_segment row and upserts it.
+// writeSegments maps the subagent's segments to topic_segment rows and REPLACES
+// the session's whole segment set with them (ReplaceSessionSegments) — so a
+// re-tag redoes the tags instead of stacking a second set beside the first.
 // start_uuid is prefix-resolved to a message's full uuid; end_uuid is the full
 // uuid of the message just BEFORE the next segment's start (the session's last
 // message for the final segment). A segment missing start_uuid/topic, or whose
-// start_uuid resolves to no/ambiguous message, returns a clear error. Returns the
-// number of rows written.
+// start_uuid resolves to no/ambiguous message, returns a clear error (and, since
+// the whole set is applied in one transaction, leaves the prior tags untouched).
+// Returns the number of rows written.
 func writeSegments(con *sql.DB, fullSID string, msgs []store.SessionMessage, segs []rawSegment, taggedAt float64) (int, error) {
 	if len(msgs) == 0 {
 		return 0, nil
@@ -270,7 +273,7 @@ func writeSegments(con *sql.DB, fullSID string, msgs []store.SessionMessage, seg
 		startIdx[i] = idx
 	}
 
-	written := 0
+	out := make([]store.TopicSegment, len(segs))
 	for i, seg := range segs {
 		startUUID := msgs[startIdx[i]].UUID
 
@@ -285,12 +288,23 @@ func writeSegments(con *sql.DB, fullSID string, msgs []store.SessionMessage, seg
 			}
 		}
 
-		if err := store.UpsertTopicSegment(con, fullSID, startUUID, endUUID, seg.Topic, seg.Summary, taggedAt); err != nil {
-			return written, err
+		out[i] = store.TopicSegment{
+			SessionID: fullSID,
+			StartUUID: startUUID,
+			EndUUID:   endUUID,
+			Topic:     seg.Topic,
+			Summary:   seg.Summary,
+			TaggedAt:  taggedAt,
+			// OriginMachine left empty — local authoring, stored NULL.
 		}
-		written++
 	}
-	return written, nil
+
+	// Apply the tagging as ONE unit: DELETE the session's prior rows, INSERT this
+	// set. A re-tag replaces; it never stacks a stale set beside the fresh one.
+	if err := store.ReplaceSessionSegments(con, fullSID, out); err != nil {
+		return 0, err
+	}
+	return len(out), nil
 }
 
 // resolveStartUUID resolves a uuid prefix against the session's message uuids,

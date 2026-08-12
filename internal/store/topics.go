@@ -37,8 +37,11 @@ type TopicHit struct {
 }
 
 // UpsertTopicSegment inserts or updates one topic segment, keyed by the stable
-// (session_id, start_uuid). This is the AUTHORING path (local tag-write): the
-// local author's intent wins unconditionally. origin_machine is left NULL — a
+// (session_id, start_uuid). A per-key merge primitive, kept for callers that
+// build up a segment set one row at a time (tests, ad-hoc tooling). It is NOT the
+// tag-write path — a whole tagging is replaced as one unit via
+// ReplaceSessionSegments, so a re-tag with shifted boundaries can't leave stale
+// rows behind. origin_machine is left NULL — a
 // locally-authored tag is "this machine" by construction, and a NULL origin is
 // interpreted as this machine at export; only the cross-machine INGEST
 // path (ReplaceSessionSegments) ever stamps a non-NULL, foreign origin. The
@@ -57,23 +60,30 @@ ON CONFLICT(session_id, start_uuid) DO UPDATE SET
 	return nil
 }
 
-// ReplaceSessionSegments is the cross-machine INGEST primitive. It replaces
-// a session's ENTIRE segment set atomically — DELETE the session's rows, then
-// INSERT the incoming set — mirroring index.ReindexFile's per-session atomic
-// replace. This is deliberately NOT a per-segment merge: two independent taggings
-// of one session with different segment boundaries would interleave into a
-// franken-set under per-key union. The session's tagging is ONE authored unit, so
-// it is applied as one unit.
+// ReplaceSessionSegments replaces a session's ENTIRE segment set atomically —
+// DELETE the session's rows, then INSERT the incoming set — mirroring
+// index.ReindexFile's per-session atomic replace. This is deliberately NOT a
+// per-segment merge: two independent taggings of one session with different
+// segment boundaries would interleave into a franken-set under per-key union.
+// The session's tagging is ONE authored unit, so it is applied as one unit.
 //
-// WHICH set wins is decided by the caller (archive ingest) via PROVENANCE
-// AUTHORITY — the machine the session's transcript lives under owns its tags —
-// NOT wall-clock: independent authorings differ in QUALITY, not freshness, and a
-// clock cannot rank quality (and skews across machines). This function just
-// applies the chosen set. Idempotent: replacing a set with an identical set is a
-// no-op net of the FTS trigger churn, so re-ingesting the same files converges.
+// This is the primitive for BOTH authoring paths:
+//   - local tag-write (a re-tag REPLACES the prior set instead of stacking a
+//     second set beside it — segs carry an empty OriginMachine, stored NULL);
+//   - cross-machine ingest (segs carry the authoring machine's id).
 //
-// segs carry their own OriginMachine (the authoring machine); an empty segs
-// clears the session's segments (the caller does this only when authority says so).
+// For ingest, WHICH set wins is decided by the caller (archive ingest) via
+// PROVENANCE AUTHORITY — the machine the session's transcript lives under owns
+// its tags — NOT wall-clock: independent authorings differ in QUALITY, not
+// freshness, and a clock cannot rank quality (and skews across machines). This
+// function just applies the chosen set. Idempotent: replacing a set with an
+// identical set is a no-op net of the FTS trigger churn, so re-ingesting the
+// same files converges.
+//
+// origin_machine is stored via NULLIF(?, '') so an empty OriginMachine lands as
+// NULL — the "this machine" sentinel the consolidated-store COALESCE depends on;
+// a non-empty (foreign) origin passes through unchanged. An empty segs clears the
+// session's segments (a caller does this only when authority says so).
 func ReplaceSessionSegments(con *sql.DB, sessionID string, segs []TopicSegment) error {
 	tx, err := con.Begin()
 	if err != nil {
@@ -86,10 +96,10 @@ func ReplaceSessionSegments(con *sql.DB, sessionID string, segs []TopicSegment) 
 	for _, s := range segs {
 		if _, err := tx.Exec(
 			`INSERT INTO topic_segment(session_id, start_uuid, end_uuid, topic, summary, tagged_at, origin_machine)
-			 VALUES(?,?,?,?,?,?,?)`,
+			 VALUES(?,?,?,?,?,?,NULLIF(?,''))`,
 			sessionID, s.StartUUID, s.EndUUID, s.Topic, s.Summary, s.TaggedAt, s.OriginMachine,
 		); err != nil {
-			return fmt.Errorf("insert ingested segment: %w", err)
+			return fmt.Errorf("insert segment: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
