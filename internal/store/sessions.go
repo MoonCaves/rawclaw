@@ -86,6 +86,55 @@ func SessionsByPrefix(con *sql.DB, prefix string, includeSubagents bool, limit i
 	return out, rows.Err()
 }
 
+// SessionRow is one session matched by id prefix, carrying the project label
+// the row itself records. [agentproto.locateSession]
+type SessionRow struct {
+	ID      string
+	Project string
+}
+
+// SessionRowsByPrefix answers "which session is this" against ONE database that
+// holds every project. Because project is a column here, narrowing to a subset
+// of projects is a WHERE clause rather than a choice of which file to open, and
+// a session continued in a second directory is a single row rather than one row
+// per project database — so the caller gets the merged session with nothing to
+// reconcile afterwards.
+//
+// projects narrows to those labels; an empty list means every project. limit
+// bounds the read the same way SessionsByPrefix does: fetch just enough rows to
+// DETECT a collision. includeSubagents=false adds is_subagent=0 (top-level
+// only). [agentproto.locateSession]
+func SessionRowsByPrefix(con *sql.DB, prefix string, includeSubagents bool, projects []string, limit int) ([]SessionRow, error) {
+	q := "SELECT id, COALESCE(project,'') FROM sessions WHERE id LIKE ?"
+	args := []any{prefix + "%"}
+	if !includeSubagents {
+		q += " AND is_subagent = 0"
+	}
+	if len(projects) > 0 {
+		q += " AND project IN (" + placeholders(len(projects)) + ")"
+		for _, p := range projects {
+			args = append(args, p)
+		}
+	}
+	q += " ORDER BY id LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := con.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SessionRow
+	for rows.Next() {
+		var r SessionRow
+		if err := rows.Scan(&r.ID, &r.Project); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // SessionMeta reads a session's last_ts + message_count. A missing row (or any
 // read error) reads as ok=false. ISO formatting of lastTS stays caller-side.
 // A NULL last_ts reads as 0. [agentproto.sessionMeta]
@@ -97,26 +146,6 @@ func SessionMeta(con *sql.DB, sid string) (lastTS float64, msgCount int, ok bool
 		return 0, 0, false
 	}
 	return ts.Float64, int(mc.Int64), true
-}
-
-// SessionRowQuality reports the two facts that decide which row should
-// represent a session when the SAME session id exists in more than one project
-// database. That happens for real: continue a session from a different
-// directory and the agent writes a second transcript under the new project
-// while keeping the id, so the sweep sees two rows for one conversation. If the
-// first directory is later deleted, durable retention keeps its row with a
-// missing_since watermark — one live row, one retained stub, one session.
-//
-// sourceLive is false once missing_since is set (the backing file is gone).
-// ok is false when the session isn't in this database at all.
-func SessionRowQuality(con *sql.DB, sid string) (msgCount int, sourceLive bool, ok bool) {
-	var mc sql.NullInt64
-	var missing sql.NullFloat64
-	row := con.QueryRow("SELECT message_count, missing_since FROM sessions WHERE id=?", sid)
-	if err := row.Scan(&mc, &missing); err != nil {
-		return 0, false, false
-	}
-	return int(mc.Int64), !missing.Valid, true
 }
 
 // ParentOf returns a session's parent_id, or "" when the session is missing,
