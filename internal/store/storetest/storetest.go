@@ -113,6 +113,29 @@ func DeleteMessage(t testing.TB, con *sql.DB, id int) {
 	}
 }
 
+// SetMessageContent rewrites one message's content by rowid, so a test can
+// exercise the AFTER UPDATE sync triggers rather than only insert and delete.
+func SetMessageContent(t testing.TB, con *sql.DB, id int, content string) {
+	t.Helper()
+	if _, err := con.Exec("UPDATE messages SET content=? WHERE id=?", content, id); err != nil {
+		t.Fatalf("storetest: update message %d: %v", id, err)
+	}
+}
+
+// CountTrigramRows counts the entries the SUBSTRING index itself holds for a
+// probe, with no join back to messages. The store's search functions join, so a
+// stale entry for an already-deleted message is invisible through them — this
+// reads the index directly, which is the only way a test can see one.
+func CountTrigramRows(t testing.TB, con *sql.DB, probe string) int {
+	t.Helper()
+	var n int
+	if err := con.QueryRow(
+		"SELECT COUNT(*) FROM messages_fts_trigram WHERE messages_fts_trigram MATCH ?", probe).Scan(&n); err != nil {
+		t.Fatalf("storetest: count trigram rows for %s: %v", probe, err)
+	}
+	return n
+}
+
 // settableSessionFields is the allowlist for SetSessionField — the fixture
 // mutations the durable-retention and provenance tests need.
 var settableSessionFields = map[string]bool{

@@ -24,6 +24,17 @@ const defaultTimeout = 30 * time.Second
 // hangs unbounded.
 const upgradeWatchdog = 5 * time.Minute
 
+// consolidateWatchdog is the watchdog floor for `rawclaw consolidate` when the
+// user gave no explicit --timeout / RAWCLAW_TIMEOUT. Folding every per-project
+// index into the single store is bulk work whose cost scales with the corpus,
+// and building the substring index roughly doubled it: a full --rebuild of a
+// ~345k-message store measured ~64s, well past the 30s default, so the command
+// self-terminated at stock flags. This floor sits far above that measurement so
+// a legitimate run finishes on a corpus several times larger, while the run
+// stays bounded — the point of the watchdog is that an agent is never wedged,
+// not that a minute is the longest anything may take.
+const consolidateWatchdog = 10 * time.Minute
+
 // resolveTimeout picks the effective deadline: an explicit --timeout flag wins,
 // else RAWCLAW_TIMEOUT (a Go duration like "45s" or "2m"), else defaultTimeout.
 // A non-positive value disables the watchdog (returns 0). A malformed env var is
