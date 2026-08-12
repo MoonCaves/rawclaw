@@ -403,6 +403,9 @@ func isConsolidateInvocation(args []string) bool {
 // default watchdog.
 func isArchiveSyncInvocation(args []string) bool {
 	w := leadingSubcommandTokens(args, 2)
+	if len(w) >= 2 && w[0] == "setup" && w[1] == "live" {
+		return true
+	}
 	if len(w) < 2 || w[0] != "archive" {
 		return false
 	}
