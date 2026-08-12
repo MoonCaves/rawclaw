@@ -73,6 +73,10 @@ func storedSessionCount(dbp string) (int, error) {
 // was already retained-and-flagged.
 func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 	var st RebuildStats
+	preserved, err := readTagState(dbp)
+	if err != nil {
+		return st, fmt.Errorf("preserve tags: %w", err)
+	}
 
 	vaulted, err := durable.List()
 	if err != nil {
@@ -113,6 +117,12 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 	defer con.Close()
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return st, fmt.Errorf("ensure schema: %w", err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		return st, fmt.Errorf("ensure topic schema: %w", err)
+	}
+	if err := restoreTagState(con, preserved); err != nil {
+		return st, fmt.Errorf("restore tags: %w", err)
 	}
 
 	for _, v := range vaulted {
