@@ -451,3 +451,85 @@ func jsonEqual(t *testing.T, got, want map[string]any) bool {
 	}
 	return string(gb) == string(wb)
 }
+
+// TestHTTPEmbedder_EmbedBatch_Ordering verifies that batch responses are ordered
+// by the "index" field rather than array position.
+func TestHTTPEmbedder_EmbedBatch_Ordering(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Out of order: index 1 first, then index 0.
+		_, _ = io.WriteString(w, `{"data":[{"embedding":[2.0,2.0],"index":1},{"embedding":[1.0,1.0],"index":0}]}`)
+	}))
+	defer srv.Close()
+
+	e := newTestEmbedder(srv.URL, wireOpenAI, "", "", 0)
+	got := e.EmbedBatch([]string{"first", "second"})
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if !floatsEqual(got[0], []float64{1.0, 1.0}) {
+		t.Errorf("got[0] = %v, want [1.0, 1.0]", got[0])
+	}
+	if !floatsEqual(got[1], []float64{2.0, 2.0}) {
+		t.Errorf("got[1] = %v, want [2.0, 2.0]", got[1])
+	}
+}
+
+// TestHTTPEmbedder_EmbedBatch_DimMismatch verifies that a dim mismatch produces
+// a nil entry for that specific vector while valid vectors remain intact.
+func TestHTTPEmbedder_EmbedBatch_DimMismatch(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Item 0 is 3-dim (matches), Item 1 is 4-dim (mismatch).
+		_, _ = io.WriteString(w, `{"data":[{"embedding":[1,2,3],"index":0},{"embedding":[1,2,3,4],"index":1}]}`)
+	}))
+	defer srv.Close()
+
+	e := newTestEmbedder(srv.URL, wireOpenAI, "", "", 3)
+	got := e.EmbedBatch([]string{"first", "second"})
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if !floatsEqual(got[0], []float64{1, 2, 3}) {
+		t.Errorf("got[0] = %v, want [1, 2, 3]", got[0])
+	}
+	if got[1] != nil {
+		t.Errorf("got[1] = %v, want nil due to dim mismatch", got[1])
+	}
+}
+
+// TestHTTPEmbedder_EmbedBatch_FailuresReturnNil verifies whole-batch failures.
+func TestHTTPEmbedder_EmbedBatch_FailuresReturnNil(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		wire     string
+		status   int
+		respBody string
+	}{
+		{name: "ollama wire rejected", wire: wireOllama, status: http.StatusOK, respBody: `{"data":[{"embedding":[1],"index":0}]}`},
+		{name: "non-200 status", wire: wireOpenAI, status: http.StatusInternalServerError, respBody: `{"data":[{"embedding":[1],"index":0}]}`},
+		{name: "malformed json", wire: wireOpenAI, status: http.StatusOK, respBody: `bad json`},
+		{name: "length mismatch", wire: wireOpenAI, status: http.StatusOK, respBody: `{"data":[{"embedding":[1],"index":0}]}`},
+		{name: "out of range index", wire: wireOpenAI, status: http.StatusOK, respBody: `{"data":[{"embedding":[1],"index":5},{"embedding":[2],"index":1}]}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, tt.respBody)
+			}))
+			defer srv.Close()
+
+			e := newTestEmbedder(srv.URL, tt.wire, "", "", 0)
+			if got := e.EmbedBatch([]string{"text1", "text2"}); got != nil {
+				t.Fatalf("EmbedBatch = %v, want nil for whole-batch failure", got)
+			}
+		})
+	}
+}
