@@ -273,6 +273,14 @@ UPDATE sessions SET message_count =
 func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 	var st SyncStats
 	dst := ConsolidatedPath()
+	var preserved tagState
+	if rebuild {
+		var err error
+		preserved, err = readTagState(dst)
+		if err != nil {
+			return st, fmt.Errorf("preserve consolidated tags: %w", err)
+		}
+	}
 	if rebuild {
 		for _, suffix := range []string{"", "-wal", "-shm"} {
 			_ = os.Remove(dst + suffix) // best-effort; a missing file is the goal state
@@ -293,6 +301,11 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 	// failing on a missing table.
 	if err := store.EnsureTopicSchema(con); err != nil {
 		return st, fmt.Errorf("ensure consolidated topic schema: %w", err)
+	}
+	if rebuild {
+		if err := restoreTagState(con, preserved); err != nil {
+			return st, fmt.Errorf("restore consolidated tags: %w", err)
+		}
 	}
 
 	for _, src := range srcPaths {
