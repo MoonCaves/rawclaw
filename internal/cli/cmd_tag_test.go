@@ -231,7 +231,7 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	scope := []view.Scope{{Project: "proj-tag", TDir: dir}}
 	jsonIn := `[{"start_uuid":"11111111","topic":"watermark","summary":"how the watermark is advanced"}]`
 	var out strings.Builder
-	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope); err != nil {
+	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil); err != nil {
 		t.Fatalf("runTagWriteCmd: %v\nout: %s", err, out.String())
 	}
 

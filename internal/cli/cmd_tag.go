@@ -58,7 +58,8 @@ func newTagPrepCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTagPrepCmd(cmd.OutOrStdout(), args[0], verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir")))
+			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
+			return runTagPrepCmd(cmd.OutOrStdout(), args[0], scope, more)
 		},
 	}
 	f := cmd.Flags()
@@ -70,8 +71,8 @@ func newTagPrepCmd() *cobra.Command {
 // runTagPrepCmd resolves session8 → db + full id, opens the db read-only, loads
 // the session's messages, and prints the condensed dump. Thin wrapper around the
 // testable runTagPrep core.
-func runTagPrepCmd(w io.Writer, session8 string, scope []view.Scope) error {
-	con, fullSID, err := openSessionRO(session8, scope)
+func runTagPrepCmd(w io.Writer, session8 string, scope []view.Scope, more agentproto.ScopeFn) error {
+	con, fullSID, err := openSessionRO(session8, scope, more)
 	if err != nil {
 		return err
 	}
@@ -123,7 +124,8 @@ func newTagWriteCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTagWriteCmd(cmd.OutOrStdout(), cmd.InOrStdin(), args[0], verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir")))
+			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
+			return runTagWriteCmd(cmd.OutOrStdout(), cmd.InOrStdin(), args[0], scope, more)
 		},
 	}
 	f := cmd.Flags()
@@ -135,8 +137,8 @@ func newTagWriteCmd() *cobra.Command {
 // runTagWriteCmd resolves session8 → db + full id, opens the db read-write,
 // ensures the topic schema, and runs the populate pass reading JSON from r with a
 // now() timestamp. Thin wrapper around the testable runTagWrite core.
-func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scope) error {
-	dbp, fullSID, err := agentproto.LocateSession(session8, scope)
+func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scope, more agentproto.ScopeFn) error {
+	dbp, fullSID, err := agentproto.LocateSession(session8, scope, more)
 	if err != nil {
 		return err
 	}
@@ -200,8 +202,8 @@ func runTagWrite(con *sql.DB, fullSID string, r io.Reader, taggedAt float64) (in
 
 // openSessionRO resolves session8 → db + full id and opens the db read-only —
 // the load path for tag-prep (a pure dump, no writes).
-func openSessionRO(session8 string, scope []view.Scope) (*sql.DB, string, error) {
-	dbp, fullSID, err := agentproto.LocateSession(session8, scope)
+func openSessionRO(session8 string, scope []view.Scope, more agentproto.ScopeFn) (*sql.DB, string, error) {
+	dbp, fullSID, err := agentproto.LocateSession(session8, scope, more)
 	if err != nil {
 		return nil, "", err
 	}

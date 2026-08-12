@@ -409,23 +409,31 @@ func newVersionCmd(build BuildInfo) *cobra.Command {
 	}
 }
 
-// verbScope resolves the scope for the read/outline verbs: the full
-// all-projects enumeration unless --this-project, in which case the single
-// cwd/--dir project — or an explicit empty scope when this-project is asked
-// but the dir has no transcript history (so it resolves nothing rather than
-// silently going wide). dirSet marks an explicit --dir (the arbitrary-folder
-// opt-in resolveTDir honors).
-func verbScope(ctx context.Context, thisProject bool, dir string, dirSet bool) []view.Scope {
+// verbScope resolves the scope for the read/outline/topics/tag verbs, as a
+// pair: the scope itself, and the function that builds the all-projects list
+// if one turns out to be needed.
+//
+// With --this-project it returns the single cwd/--dir project — or an explicit
+// EMPTY scope when the dir has no transcript history, so the verb resolves
+// nothing rather than silently going wide. dirSet marks an explicit --dir (the
+// arbitrary-folder opt-in resolveTDir honors).
+//
+// Without it the scope is nil, meaning every project, and the list is NOT
+// built here. Building it opens — and after a schema change, migrates — every
+// per-project index, which on a real corpus costs minutes against a verb the
+// watchdog stops in thirty seconds. The one store answers an id lookup with no
+// list at all, so the verbs call this function only if that lookup comes up
+// empty. The closure still captures the run's ctx, so when it does run, the
+// archive enumeration's git probes are under the watchdog as before.
+func verbScope(ctx context.Context, thisProject bool, dir string, dirSet bool) ([]view.Scope, agentproto.ScopeFn) {
 	if !thisProject {
-		// All-projects: built HERE (not via agentproto's nil-scope fallback) so
-		// the archive enumeration's git probes run under the run's watchdog ctx.
-		return allScope(ctx, "", false)
+		return nil, func() []view.Scope { return allScope(ctx, "", false) }
 	}
 	td := resolveTDir(dir, dirSet)
 	if td == "" || !isDir(td) {
-		return []view.Scope{}
+		return []view.Scope{}, nil
 	}
-	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}
+	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}, nil
 }
 
 // resolveTDir maps a --dir value to its transcripts dir. Only an EXPLICIT
@@ -470,8 +478,8 @@ func newReadCmd() *cobra.Command {
 				v := budget
 				b = &v
 			}
-			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0],
-				verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir")),
+			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
+			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], scope, more,
 				focus, b, includeTools, moreLevel, around, jsonOut); err != nil {
 				return err
 			}
@@ -511,8 +519,9 @@ func newOutlineCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
 			if err := agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0],
-				verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir")), includeTools, jsonOut); err != nil {
+				scope, more, includeTools, jsonOut); err != nil {
 				return err
 			}
 			maybeAutosync() // after the arc is printed; never before
