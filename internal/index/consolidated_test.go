@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -661,5 +662,74 @@ func TestConsolidate_SkipsASourceWithNoTopicLayer(t *testing.T) {
 	con := openConsolidated(t)
 	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment"); got != "0" {
 		t.Errorf("topic_segment = %s rows, want 0", got)
+	}
+}
+
+// TestConsolidateKeepsSourceMessageOrder pins the reading order across the
+// fold. The consolidated rowid IS the reading order (every session view walks
+// by id, because timestamps are not reliably monotonic), so the merge must
+// insert in the source's own insertion order. Without ORDER BY first_id the
+// GROUP BY hands rows over sorted by uuid — random — and the conversation is
+// replayed shuffled: measured 1490 of 2978 adjacent pairs out of place on a
+// real 3k-message session, with a mid-session tool call served as the opening.
+func TestConsolidateKeepsSourceMessageOrder(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+
+	// uuids chosen so ALPHABETICAL order is the exact REVERSE of insert order:
+	// if the merge ever sorts by uuid again, this test reads back backwards.
+	src := filepath.Join(dir, "src-order.db")
+	con, err := store.ConnectRW(src)
+	if err != nil {
+		t.Fatalf("open source: %v", err)
+	}
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	if _, err := con.Exec(
+		`INSERT INTO sessions(id,started_at,last_ts,message_count,is_subagent,source_path,project,cwd)
+		 VALUES('s-order',1,9,4,0,'/tmp/s-order.jsonl','p','/tmp')`); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	want := []string{"zzzz-first", "yyyy-second", "xxxx-third", "wwww-fourth"}
+	for i, u := range want {
+		if _, err := con.Exec(
+			`INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)`,
+			"s-order", "user", "message body "+u, float64(i+1), "2026-01-0"+strconv.Itoa(i+1), u); err != nil {
+			t.Fatalf("seed message %d: %v", i, err)
+		}
+	}
+	_ = con.Close()
+
+	if _, err := ConsolidateFrom([]string{src}, true); err != nil {
+		t.Fatalf("consolidate: %v", err)
+	}
+
+	dst, _, err := OpenConsolidated()
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	defer dst.Close()
+	rows, err := dst.Query(`SELECT uuid FROM messages WHERE session_id='s-order' ORDER BY id`)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, u)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("read back %d messages, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("message %d is %q, want %q — the fold reordered the conversation (got %v)",
+				i, got[i], want[i], got)
+		}
 	}
 }
