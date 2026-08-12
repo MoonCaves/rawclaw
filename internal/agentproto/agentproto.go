@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/embed"
@@ -468,11 +469,29 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		RawMatch:         rawMatch,
 	}
 
-	// Embed the query once for RRF fusion, only in relevance mode — an explicit
+	// Embed the query for RRF fusion, only in relevance mode — an explicit
 	// --sort stays pure (keyword/recency), matching the discovery path.
-	var qvec []float64
+	//
+	// Deferred, because embedding is the single most expensive thing a search
+	// does: it is a blocking network round-trip to the embedding endpoint,
+	// ~750ms against a local search that otherwise finishes in ~50ms. Paying it
+	// before opening a store meant paying it even when the store held no vectors
+	// to compare against — which is exactly what consolidation produced, since
+	// the one store carries no chunk_vec table. Fusing against an empty vector
+	// set reduces to keyword order, so that round-trip bought nothing and could
+	// not change a single result. Each leg now asks its own open store whether it
+	// holds vectors and only then resolves this; the result is memoised so a
+	// fan-out over many databases still embeds at most once.
+	var qvecFn func() []float64
 	if embedder != nil && opts.Sort == "" {
-		qvec = embedder.Embed(rawQuery)
+		var (
+			once sync.Once
+			vec  []float64
+		)
+		qvecFn = func() []float64 {
+			once.Do(func() { vec = embedder.Embed(rawQuery) })
+			return vec
+		}
 	}
 
 	var (
@@ -485,7 +504,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	)
 
 	if scope == nil {
-		cands, reports, hitCeiling, storeNote, answered = searchOneStore(rawQuery, fetch, limit, p, qvec, opts)
+		cands, reports, hitCeiling, storeNote, answered = searchOneStore(rawQuery, fetch, limit, p, qvecFn, opts)
 	}
 
 	if !answered {
@@ -512,7 +531,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 				}
 			}
 		}
-		cands, reports, hitCeiling = collectCandidates(scope, rawQuery, fetch, p, qvec)
+		cands, reports, hitCeiling = collectCandidates(scope, rawQuery, fetch, p, qvecFn)
 	}
 
 	// Withhold the caller's own live turn before anything is ranked: the prompt
@@ -787,7 +806,7 @@ func searchOneStore(
 	rawQuery string,
 	fetch, limit int,
 	p retrieve.SearchParams,
-	qvec []float64,
+	qvecFn func() []float64,
 	opts SearchOpts,
 ) (cands []retrieve.Anchor, reports []ScopeReport, hitCeiling bool, note string, ok bool) {
 	con, sessions, err := index.OpenConsolidated()
@@ -816,8 +835,10 @@ func searchOneStore(
 	// conversations, not where the matches ran out. Measured pre-fusion, as the
 	// fan-out measures its own ceiling.
 	hitCeiling = !exhausted
-	if qvec != nil {
-		rows = semantic.Fuse(con, rows, qvec, fetch, p.IncludeSubagents)
+	// Ask the open store before paying for an embedding: no chunk_vec rows means
+	// the fusion below can only reproduce keyword order.
+	if qvecFn != nil && store.HasVectors(con) {
+		rows = semantic.Fuse(con, rows, qvecFn(), fetch, p.IncludeSubagents)
 	}
 	dbp := index.ConsolidatedPath()
 	for i := range rows {
@@ -1038,7 +1059,7 @@ func collectCandidates(
 	query string,
 	fetch int,
 	p retrieve.SearchParams,
-	qvec []float64,
+	qvecFn func() []float64,
 ) ([]retrieve.Anchor, []ScopeReport, bool) {
 	cands := []retrieve.Anchor{}
 	reports := make([]ScopeReport, 0, len(scope))
@@ -1067,10 +1088,12 @@ func collectCandidates(
 			// what saturated.
 			hitCeiling = true
 		}
-		// RRF-fuse keyword anchors with vector-KNN when a query vector is present
-		// (relevance mode only — qvec is nil under --sort). Parity with Discovery.
-		if qvec != nil {
-			rows = semantic.Fuse(con, rows, qvec, fetch, p.IncludeSubagents)
+		// RRF-fuse keyword anchors with vector-KNN when this database actually
+		// holds vectors (relevance mode only — qvecFn is nil under --sort).
+		// Parity with Discovery. The embedding resolves at most once across the
+		// whole fan-out, and not at all if no database here has vectors.
+		if qvecFn != nil && store.HasVectors(con) {
+			rows = semantic.Fuse(con, rows, qvecFn(), fetch, p.IncludeSubagents)
 		}
 		for i := range rows {
 			rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
