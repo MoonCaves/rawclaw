@@ -6,6 +6,7 @@ package index
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -168,6 +169,10 @@ var scopeColumns = []struct{ name, decl string }{
 // scopeBackfillKey marks the one-time backfill of pre-existing rows as complete.
 const scopeBackfillKey = "scope_backfill_done"
 
+// inventedScopeRepairKey marks the one-time repair of the labels an earlier
+// backfill invented from a date-sharded directory.
+const inventedScopeRepairKey = "scope_invented_repair_done"
+
 // migrateScopeColumns adds project/cwd to an existing current-version db and
 // backfills them once, WITHOUT bumping SchemaVersion — a bump forces a rebuild
 // from source, which re-walks the live tree and re-prunes every already-retained
@@ -178,14 +183,18 @@ const scopeBackfillKey = "scope_backfill_done"
 // memoized per directory: every session in a Claude project dir shares one cwd,
 // so this is one small file read per project, not one per session. A session
 // whose source file is gone (retained after an upstream purge) keeps NULL cwd
-// and takes its project from the enclosing directory name — the same fallback
-// paths.ProjectLabel uses. NULL is deliberate: it reads as "not known", where ""
-// would claim the session ran somewhere nameless.
+// and takes its project from the enclosing directory name — but only where that
+// directory IS a project, which is the gate inside backfillScope. NULL is
+// deliberate: it reads as "not known", where "" would claim the session ran
+// somewhere nameless.
 //
-// Kill-safety (F3): the completion marker is written only AFTER the backfill
-// commits, so a process killed mid-pass simply redoes the pass. The marker is
-// what stops an already-complete db from re-reading files on every invocation —
-// rows that legitimately resolve to nothing would otherwise be retried forever.
+// A second pass repairs the labels an earlier binary invented before that gate
+// existed; see repairInventedScope.
+//
+// Kill-safety (F3): each pass's completion marker is written only AFTER the pass
+// commits, so a process killed mid-pass simply redoes it. The markers are what
+// stop an already-complete db from re-reading files on every invocation — rows
+// that legitimately resolve to nothing would otherwise be retried forever.
 func migrateScopeColumns(con *sql.DB) error {
 	have, err := sessionColumns(con)
 	if err != nil {
@@ -199,15 +208,56 @@ func migrateScopeColumns(con *sql.DB) error {
 			return fmt.Errorf("add sessions.%s: %w", c.name, err)
 		}
 	}
-	var done string
-	if err := con.QueryRow("SELECT value FROM meta WHERE key=?", scopeBackfillKey).Scan(&done); err == nil && done == "1" {
-		return nil // already backfilled — the write path keeps new rows stamped
-	}
-	if err := backfillScope(con); err != nil {
+	// The write path keeps new rows stamped, so each pass runs once and is then
+	// marked done. The repair is its own step because a db backfilled by an
+	// earlier binary already carries the marker for the first one.
+	if err := runOnce(con, scopeBackfillKey, backfillScope); err != nil {
 		return err
 	}
-	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", scopeBackfillKey); err != nil {
-		return fmt.Errorf("stamp %s: %w", scopeBackfillKey, err)
+	return runOnce(con, inventedScopeRepairKey, repairInventedScope)
+}
+
+// runOnce runs a one-time migration step unless its completion key is already
+// stamped. The stamp is written only AFTER the step commits, so a process
+// killed mid-pass simply redoes the pass (F3).
+func runOnce(con *sql.DB, key string, step func(*sql.DB) error) error {
+	var done string
+	// No row means "never run" and is the normal first-time state. Any OTHER
+	// read error is a real fault, and reporting it beats treating it as
+	// "not run" — that reading would re-scan the whole corpus on every
+	// invocation and hide the fault behind the cost.
+	switch err := con.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&done); {
+	case err == nil && done == "1":
+		return nil
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("read %s marker: %w", key, err)
+	}
+	if err := step(con); err != nil {
+		return err
+	}
+	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", key); err != nil {
+		return fmt.Errorf("stamp %s: %w", key, err)
+	}
+	return nil
+}
+
+// repairInventedScope clears the project labels an earlier backfill invented
+// from a transcript's parent directory when that directory was a date shard
+// rather than a project dir. A Codex rollout lives under YYYY/MM/DD, so those
+// rows came out labeled with a day number — "09" standing in as a project name,
+// answering --include-path and naming itself in the scope footer.
+//
+// The predicate is exactly "a label with nothing behind it": a row from a source
+// other than the directory-walk ingest, carrying a project but no cwd. A session
+// that DID record a working directory took its label from that cwd and keeps it.
+// Clearing to NULL restores "not known", which the write path fills the next
+// time that session is indexed and can prove an answer.
+func repairInventedScope(con *sql.DB) error {
+	if _, err := con.Exec(
+		`UPDATE sessions SET project=NULL
+		  WHERE source_tool IS NOT NULL AND source_tool <> ?
+		    AND cwd IS NULL AND project IS NOT NULL`, sourceClaude); err != nil {
+		return fmt.Errorf("repair invented scope labels: %w", err)
 	}
 	return nil
 }
@@ -217,16 +267,16 @@ func migrateScopeColumns(con *sql.DB) error {
 // its own updates.
 func backfillScope(con *sql.DB) error {
 	rows, err := con.Query(
-		`SELECT id, source_path FROM sessions
+		`SELECT id, source_path, COALESCE(source_tool,'') FROM sessions
 		  WHERE project IS NULL AND cwd IS NULL AND source_path IS NOT NULL AND source_path <> ''`)
 	if err != nil {
 		return fmt.Errorf("scan sessions for scope backfill: %w", err)
 	}
-	type target struct{ id, path string }
+	type target struct{ id, path, source string }
 	var todo []target
 	for rows.Next() {
 		var t target
-		if err := rows.Scan(&t.id, &t.path); err != nil {
+		if err := rows.Scan(&t.id, &t.path, &t.source); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan scope backfill row: %w", err)
 		}
@@ -242,11 +292,22 @@ func backfillScope(con *sql.DB) error {
 	for _, t := range todo {
 		// The PROJECT dir, not the file's parent: a subagent or workflow
 		// transcript sits in a subdirectory, and its parent's name ("subagents",
-		// "wf_<id>") is not a project. A path outside the projects root has no
-		// project dir to walk up to, so its own parent is the best available
-		// answer — that is the explicit --dir scope.
+		// "wf_<id>") is not a project.
 		dir := paths.ProjectDirOf(t.path)
 		if dir == "" {
+			// Outside the projects root. The file's parent stands in for a
+			// project only when the source lays its transcripts out that way —
+			// the directory-walk ingest does, and an explicit --dir tree does.
+			// A source that shards by date has no project dir at all, and its
+			// parent's name is a day number, not a project. The live path
+			// already refuses that guess; the backfill agrees with it here.
+			//
+			// The gate needs the row to SAY it came from another source. An
+			// unstamped row is not evidence of one, and reading it as such would
+			// silently stop labeling rows this has always labeled correctly.
+			if t.source != "" && t.source != sourceClaude {
+				continue
+			}
 			dir = filepath.Dir(t.path)
 		}
 		scope, seen := byDir[dir]

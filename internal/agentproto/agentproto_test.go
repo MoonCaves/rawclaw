@@ -1122,7 +1122,7 @@ func TestTopicsCommand(t *testing.T) {
 	con.Close()
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	res, err := Topics("rollback", scope, 8, "")
+	res, err := Topics("rollback", scope, TopicsOpts{Limit: 8})
 	if err != nil {
 		t.Fatalf("Topics: %v", err)
 	}
@@ -1147,7 +1147,7 @@ func TestTopicsCommand(t *testing.T) {
 	}
 
 	// A query that matches nothing (but topics ARE tagged) → no hits, no empty-note.
-	none, err := Topics("kubernetes", scope, 8, "")
+	none, err := Topics("kubernetes", scope, TopicsOpts{Limit: 8})
 	if err != nil {
 		t.Fatalf("Topics(kubernetes): %v", err)
 	}
@@ -1164,6 +1164,127 @@ func TestTopicsCommand(t *testing.T) {
 	}
 }
 
+// tagInto writes one topic segment into a project's index db and folds it into
+// the consolidated store, mirroring what `rawclaw tag-write` does end to end.
+// It returns the project label the store stamped on the session.
+func tagInto(t *testing.T, proj, sid, uuid, topic, summary string) {
+	t.Helper()
+	dbp, _, _, err := index.EnsureIndexed(proj, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed(%s): %v", proj, err)
+	}
+	con := openCacheRW(t, dbp)
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
+	}
+	if err := store.UpsertTopicSegment(con, sid, uuid, "", topic, summary, 1.0); err != nil {
+		t.Fatalf("UpsertTopicSegment: %v", err)
+	}
+	con.Close()
+	if err := index.SyncConsolidatedFrom(dbp); err != nil {
+		t.Fatalf("SyncConsolidatedFrom(%s): %v", proj, err)
+	}
+}
+
+// TestTopicsRanksAcrossProjectsFromTheStore is the end-to-end shape of the
+// change: two projects, both folded into one store, one query, and a single
+// ranked list in which a topic LABEL beats a passing mention regardless of which
+// project is larger. The old fan-out could only return the two projects'
+// separate lists back to back.
+func TestTopicsRanksAcrossProjectsFromTheStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	big := t.TempDir()
+	writeSession(t, big, "sessbig", "9f3e1c20-aaaa-bbbb-cccc-000000000001", "advancing the retention watermark")
+	small := t.TempDir()
+	writeSession(t, small, "sesssml", "9f3e1c20-aaaa-bbbb-cccc-000000000002", "the weekly planning recap")
+
+	tagInto(t, big, "sessbig", "9f3e1c20-aaaa-bbbb-cccc-000000000001",
+		"watermark", "how the watermark is advanced")
+	tagInto(t, small, "sesssml", "9f3e1c20-aaaa-bbbb-cccc-000000000002",
+		"weekly planning",
+		"a long recap covering staffing, the release calendar, pricing questions, "+
+			"a tangent about the watermark, the review backlog, and what we deferred")
+
+	// Scope is deliberately EMPTY: if the store did not answer, the fan-out would
+	// have no project to look in and the result would be empty, so a passing
+	// assertion here can only have come from the one store.
+	res, err := Topics("watermark", []view.Scope{}, TopicsOpts{Limit: 8})
+	if err != nil {
+		t.Fatalf("Topics: %v", err)
+	}
+	if len(res.Hits) != 2 {
+		t.Fatalf("Topics hits = %d, want both projects' hits in one list: %+v", len(res.Hits), res.Hits)
+	}
+	if res.Hits[0].Topic != "watermark" {
+		t.Errorf("top hit = %q from %q, want the label hit", res.Hits[0].Topic, res.Hits[0].Project)
+	}
+	if res.Hits[0].Project == "" || res.Hits[0].Project == res.Hits[1].Project {
+		t.Errorf("hits should carry distinct project labels, got %q and %q",
+			res.Hits[0].Project, res.Hits[1].Project)
+	}
+	if res.Note != "" {
+		t.Errorf("note should be empty when topics exist, got %q", res.Note)
+	}
+
+	// Narrowing to the small project drops the other project's hit entirely.
+	only, err := Topics("watermark", []view.Scope{}, TopicsOpts{Limit: 8, Project: res.Hits[1].Project})
+	if err != nil {
+		t.Fatalf("Topics(narrowed): %v", err)
+	}
+	if len(only.Hits) != 1 || only.Hits[0].Project != res.Hits[1].Project {
+		t.Errorf("narrowed Topics = %+v, want only the %q hit", only.Hits, res.Hits[1].Project)
+	}
+
+	// A global --limit caps the combined list, not each project's share of it.
+	capped, err := Topics("watermark", []view.Scope{}, TopicsOpts{Limit: 1})
+	if err != nil {
+		t.Fatalf("Topics(limit=1): %v", err)
+	}
+	if len(capped.Hits) != 1 {
+		t.Errorf("Topics(limit=1) = %d hits, want 1 across all projects", len(capped.Hits))
+	}
+}
+
+// TestTopicsFallsBackWhenTheStoreHasNotHeardOfTheProject covers the honest
+// degradation. The store carries topics, but not this project's — it was
+// rebuilt from a narrower set of sources — so a request narrowed to that
+// project must go to the project db rather than come back empty from a store
+// that never had the answer.
+func TestTopicsFallsBackWhenTheStoreHasNotHeardOfTheProject(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	kept := t.TempDir()
+	writeSession(t, kept, "sesskpt", "9f3e1c20-aaaa-bbbb-cccc-000000000001", "advancing the retention watermark")
+	tagInto(t, kept, "sesskpt", "9f3e1c20-aaaa-bbbb-cccc-000000000001",
+		"watermark", "how the watermark is advanced")
+	keptDB, _, _, err := index.EnsureIndexed(kept, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed(kept): %v", err)
+	}
+
+	dropped := t.TempDir()
+	writeSession(t, dropped, "sessdrp", "9f3e1c20-aaaa-bbbb-cccc-000000000002", "the shard rebalance run")
+	tagInto(t, dropped, "sessdrp", "9f3e1c20-aaaa-bbbb-cccc-000000000002",
+		"shard rebalance", "how the shards were rebalanced")
+
+	// Rebuild the store from the kept project ALONE, so the other project is
+	// genuinely absent from it while its own db still carries the topic.
+	if _, err := index.ConsolidateFrom([]string{keptDB}, true); err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+
+	label := paths.ProjectLabel(dropped)
+	scope := []view.Scope{{Project: label, TDir: dropped}}
+	res, err := Topics("rebalance", scope, TopicsOpts{Limit: 8, Project: label})
+	if err != nil {
+		t.Fatalf("Topics: %v", err)
+	}
+	if len(res.Hits) != 1 || res.Hits[0].Topic != "shard rebalance" {
+		t.Fatalf("Topics = %+v, want the dropped project's hit via the fan-out", res.Hits)
+	}
+}
+
 // TestTopicsEmptyState confirms the helpful empty-state note when NO topics are
 // tagged anywhere in scope (distinct from a query that simply matched nothing).
 func TestTopicsEmptyState(t *testing.T) {
@@ -1175,7 +1296,7 @@ func TestTopicsEmptyState(t *testing.T) {
 	}
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	res, err := Topics("anything", scope, 8, "")
+	res, err := Topics("anything", scope, TopicsOpts{Limit: 8})
 	if err != nil {
 		t.Fatalf("Topics: %v", err)
 	}
@@ -1362,7 +1483,7 @@ func TestTopicsCollapsesRepeatedLabel(t *testing.T) {
 	con.Close()
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	res, err := Topics("label", scope, 10, "")
+	res, err := Topics("label", scope, TopicsOpts{Limit: 10})
 	if err != nil {
 		t.Fatalf("Topics: %v", err)
 	}

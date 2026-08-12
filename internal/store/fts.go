@@ -128,6 +128,39 @@ func DistinctProjects(con *sql.DB) ([]string, error) {
 	return out, rows.Err()
 }
 
+// ProjectScope pairs a project label with the working directory it was
+// recorded under. A pattern over paths (--include-path) needs the directory,
+// while the filter that follows keys on the label, so both have to travel
+// together.
+type ProjectScope struct {
+	Project string
+	CWD     string // "" when the session predates the scope columns
+}
+
+// DistinctScopes returns every (project, working directory) pair in the store,
+// sorted by label. This is the one store's answer to "which projects exist and
+// where do they live" — the question that used to require walking the
+// transcript directories on disk. A project indexed from more than one
+// directory appears once per directory, so a pattern matching any of them
+// selects the label.
+func DistinctScopes(con *sql.DB) ([]ProjectScope, error) {
+	rows, err := con.Query(`SELECT DISTINCT project, COALESCE(cwd,'') FROM sessions
+	                        WHERE project IS NOT NULL AND project<>'' ORDER BY project, 2`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProjectScope
+	for rows.Next() {
+		var ps ProjectScope
+		if err := rows.Scan(&ps.Project, &ps.CWD); err != nil {
+			return nil, err
+		}
+		out = append(out, ps)
+	}
+	return out, rows.Err()
+}
+
 // SearchHit is one flat keyword-recall row: the session/message columns plus
 // the raw content (for the tool-stripped snippet rebuild + coverage count) and
 // the FTS5-built snippet.
@@ -200,6 +233,11 @@ type SearchAnchor struct {
 	Content      string
 	MissingSince float64
 	Snippet      string
+	// Project is the label the session was indexed under. In a per-project
+	// database every row carries the same value and the caller already knows
+	// it; in the one store it is the only thing that says where a hit came
+	// from, so it has to ride along with the row.
+	Project string
 }
 
 // SearchAnchors runs the anchor-recall FTS5 query — the same filters and order
@@ -208,6 +246,7 @@ type SearchAnchor struct {
 func SearchAnchors(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
 	where, args := ftsWhere(match, f)
 	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content, s.missing_since,
+	                   COALESCE(s.project,'') AS project,
 	                   snippet(messages_fts,0,'>>>','<<<','…',16) AS snip
 	            FROM messages_fts JOIN messages m ON m.id=messages_fts.rowid
 	            JOIN sessions s ON s.id=m.session_id
@@ -231,9 +270,10 @@ func SearchAnchors(con *sql.DB, match string, f Filter, s Sort, limit int) ([]Se
 			parent  sql.NullString
 			content sql.NullString
 			missing sql.NullFloat64
+			project string
 			snip    sql.NullString
 		)
-		if err := rows.Scan(&mid, &sid, &uuid, &role, &iso, &parent, &content, &missing, &snip); err != nil {
+		if err := rows.Scan(&mid, &sid, &uuid, &role, &iso, &parent, &content, &missing, &project, &snip); err != nil {
 			return nil, err
 		}
 		out = append(out, SearchAnchor{
@@ -246,6 +286,7 @@ func SearchAnchors(con *sql.DB, match string, f Filter, s Sort, limit int) ([]Se
 			Content:      content.String,
 			MissingSince: missing.Float64, // 0 when NULL (present)
 			Snippet:      snip.String,
+			Project:      project,
 		})
 	}
 	return out, rows.Err()

@@ -30,6 +30,10 @@ type TopicHit struct {
 	MsgID     int
 	SessionID string
 	Topic     string
+	// Project is the label the segment's session was indexed under. In the one
+	// store a topic result set spans projects, so the row is the only place that
+	// says which project a label came from.
+	Project string
 }
 
 // UpsertTopicSegment inserts or updates one topic segment, keyed by the stable
@@ -204,7 +208,21 @@ ORDER BY session_id`)
 // session_id+start_uuid). A segment whose start message is gone (churned/never
 // indexed) is skipped — it has no anchor to surface. A missing topic table reads
 // as no hits. Ordered by FTS rank, capped at limit.
-func MatchTopics(con *sql.DB, query string, limit int) ([]TopicHit, error) {
+//
+// Against the one store the rank is a GLOBAL one: bm25 folds in corpus
+// statistics, so ordering is only meaningful when every candidate was scored
+// against the same corpus. That is also why nothing here weights the topic
+// column above the summary column. A label match already outranks a passing
+// mention in a summary, because the label is the shorter field and bm25
+// normalizes by field length — a hand-tuned weight would be a second, worse
+// copy of a judgement the corpus statistics already make.
+//
+// projects narrows to a set of project labels (empty = every project), the same
+// exact-match contract Filter.Projects has: a caller holding a path pattern
+// resolves it in Go first. The sessions join is a LEFT join so a segment whose
+// session row is missing still surfaces in an unnarrowed search — the project
+// label is metadata for the caller, not a precondition for the hit.
+func MatchTopics(con *sql.DB, query string, limit int, projects []string) ([]TopicHit, error) {
 	if strings.TrimSpace(query) == "" || limit <= 0 {
 		return nil, nil
 	}
@@ -223,14 +241,24 @@ func MatchTopics(con *sql.DB, query string, limit int) ([]TopicHit, error) {
 		return nil, nil
 	}
 	match := strings.Join(terms, " OR ")
+	where := "topic_fts MATCH ?"
+	args := []any{match}
+	if len(projects) > 0 {
+		where += " AND s.project IN (" + placeholders(len(projects)) + ")"
+		for _, pr := range projects {
+			args = append(args, pr)
+		}
+	}
+	args = append(args, limit)
 	rows, err := con.Query(`
-SELECT m.id, ts.session_id, ts.topic
+SELECT m.id, ts.session_id, ts.topic, COALESCE(s.project,'')
 FROM topic_fts
 JOIN topic_segment ts ON ts.id = topic_fts.rowid
 JOIN messages m ON m.session_id = ts.session_id AND m.uuid = ts.start_uuid
-WHERE topic_fts MATCH ?
+LEFT JOIN sessions s ON s.id = ts.session_id
+WHERE `+where+`
 ORDER BY rank
-LIMIT ?`, match, limit)
+LIMIT ?`, args...)
 	if err != nil {
 		return nil, nil // missing table / malformed query reads as no hits (non-fatal)
 	}
@@ -241,7 +269,7 @@ LIMIT ?`, match, limit)
 			h     TopicHit
 			topic sql.NullString
 		)
-		if err := rows.Scan(&h.MsgID, &h.SessionID, &topic); err != nil {
+		if err := rows.Scan(&h.MsgID, &h.SessionID, &topic, &h.Project); err != nil {
 			return nil, fmt.Errorf("scan topic hit: %w", err)
 		}
 		h.Topic = topic.String
