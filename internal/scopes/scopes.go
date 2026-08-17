@@ -46,6 +46,9 @@ func All(ctx context.Context, sourceFilter string, reindex bool) []view.Scope {
 	if sourceFilter == "" || sourceFilter == "codex" {
 		out = append(out, Codex(reindex)...)
 	}
+	if sourceFilter == "" || sourceFilter == "antigravity" {
+		out = append(out, Antigravity(reindex)...)
+	}
 	for _, sc := range Archive(ctx, reindex) {
 		if sourceFilter == "" || sc.Source == sourceFilter {
 			out = append(out, sc)
@@ -132,6 +135,9 @@ func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 		}
 		if strings.HasPrefix(base, "codex-") {
 			continue // codex dbs are enumerated + reconciled by Codex()
+		}
+		if strings.HasPrefix(base, "antigravity-") {
+			continue // antigravity dbs are enumerated + reconciled by Antigravity()
 		}
 		if strings.HasPrefix(base, index.ArchiveDBPrefix) {
 			continue // archive-replica dbs are enumerated by Archive(); their

@@ -324,6 +324,7 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 		}
 	}
 
+	anyChanged := false
 	for _, src := range srcPaths {
 		n, skipped, err := consolidateOne(con, src)
 		if err != nil {
@@ -332,15 +333,21 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 		st.Sources++
 		if skipped {
 			st.Skipped++
+		} else {
+			anyChanged = true
 		}
 		st.SessionsSeen += n
 	}
 
-	if _, err := con.Exec(recountSQL); err != nil {
-		return st, fmt.Errorf("recount messages: %w", err)
+	if rebuild {
+		if _, err := con.Exec(recountSQL); err != nil {
+			return st, fmt.Errorf("recount messages: %w", err)
+		}
 	}
-	if err := pruneTombstoned(con); err != nil {
-		return st, err
+	if rebuild || anyChanged {
+		if err := pruneTombstoned(con); err != nil {
+			return st, err
+		}
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&st.Sessions); err != nil {
 		return st, fmt.Errorf("count sessions: %w", err)
@@ -367,11 +374,12 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if err := store.EnsureTopicSchema(con); err != nil {
 		return fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
-	if _, _, err := consolidateOne(con, srcPath); err != nil {
+	_, skipped, err := consolidateOne(con, srcPath)
+	if err != nil {
 		return fmt.Errorf("consolidate %s: %w", filepath.Base(srcPath), err)
 	}
-	if _, err := con.Exec(recountSQL + " WHERE id IN (SELECT id FROM sessions)"); err != nil {
-		return fmt.Errorf("recount messages: %w", err)
+	if skipped {
+		return nil
 	}
 	return pruneTombstoned(con)
 }
@@ -496,7 +504,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	var prev string
 	switch err := con.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&prev); {
 	case err == nil && prev == mark:
-		return offered, false, nil
+		return offered, true, nil
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return 0, true, fmt.Errorf("read sync watermark: %w", err)
 	}
@@ -520,6 +528,13 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 		if _, err := con.Exec(mergeVerdictsSQL); err != nil {
 			return 0, true, fmt.Errorf("merge verdicts: %w", err)
 		}
+	}
+	if _, err := con.Exec(`
+		UPDATE main.sessions SET message_count =
+		  (SELECT COUNT(*) FROM main.messages WHERE main.messages.session_id = main.sessions.id)
+		WHERE main.sessions.id IN (SELECT id FROM src.sessions)
+	`); err != nil {
+		return 0, true, fmt.Errorf("recount source sessions: %w", err)
 	}
 	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
 		return 0, true, fmt.Errorf("stamp sync watermark: %w", err)

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 )
 
@@ -80,6 +81,31 @@ func (a *Archive) removeTombstoned(ctx context.Context, tombs map[string]struct{
 		}
 		removed++
 	}
+
+	// Antigravity: session dirs live under <clone>/<machine>/antigravity/brain/<id>
+	// remove the entire session dir so both transcript.jsonl and transcript_full.jsonl
+	// are cleaned up.
+	agRoot := filepath.Join(a.machineDir(), "antigravity")
+	agContainers, aerr := antigravity.NewRoot(agRoot).Discover()
+	if aerr != nil {
+		return removed, fmt.Errorf("resolve antigravity sessions in clone: %w", aerr)
+	}
+	for _, c := range agContainers {
+		if cerr := ctx.Err(); cerr != nil {
+			return removed, cerr
+		}
+		if _, ok := tombs[c.ID]; !ok {
+			continue
+		}
+		sessDir := filepath.Dir(filepath.Dir(filepath.Dir(c.Path)))
+		if err := os.RemoveAll(sessDir); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return removed, fmt.Errorf("remove tombstoned antigravity session from clone: %w", err)
+		}
+		removed++
+	}
 	return removed, nil
 }
 
@@ -112,6 +138,19 @@ func tombstonedSources(tree sourceTree, tombs map[string]struct{}) map[string]st
 		for _, c := range containers {
 			if _, ok := tombs[c.ID]; ok {
 				skip[c.Path] = struct{}{}
+			}
+		}
+	case "antigravity":
+		containers, err := antigravity.NewRoot(tree.root).Discover()
+		if err != nil {
+			return skip
+		}
+		for _, c := range containers {
+			if _, ok := tombs[c.ID]; ok {
+				sessDir := filepath.Dir(filepath.Dir(filepath.Dir(c.Path)))
+				for _, p := range paths.ContainedJSONL(sessDir) {
+					skip[p] = struct{}{}
+				}
 			}
 		}
 	}

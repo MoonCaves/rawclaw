@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 )
 
@@ -18,12 +19,14 @@ type sourceTree struct {
 }
 
 // sourceTrees returns the transcript trees this machine pushes: the Claude
-// projects root and the Codex sessions root. Roots that don't exist are
-// enumerated as empty by the copier — an absent runtime is not an error.
+// projects root, the Codex sessions root, and the Antigravity brain root.
+// Roots that don't exist are enumerated as empty by the copier — an absent
+// runtime is not an error.
 func sourceTrees() []sourceTree {
 	return []sourceTree{
 		{id: "claude", root: paths.ProjectsRoot()},
 		{id: "codex", root: codex.SessionsRoot()},
+		{id: antigravity.ID, root: antigravity.ConfigDir()},
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -62,6 +63,7 @@ func (a *Archive) Scopes(ctx context.Context, reindex bool) []view.Scope {
 		stale := a.dirStale(ctx, m.Name, now)
 		out = append(out, a.claudeScopes(m, stale, reindex, ingest)...)
 		out = append(out, a.codexScopes(m, stale, reindex, ingest)...)
+		out = append(out, a.antigravityScopes(m, stale, reindex, ingest)...)
 	}
 	// Apply pulled cross-machine tags into the freshly-ingested foreign dbs,
 	// under the sync lock we hold when ingest is true. Self-gates on tag freshness.
@@ -98,6 +100,7 @@ func (a *Archive) LookupScopes() []view.Scope {
 	for _, m := range a.foreignMachines() {
 		out = append(out, a.claudeScopes(m, false, false, false)...)
 		out = append(out, a.codexScopes(m, false, false, false)...)
+		out = append(out, a.antigravityScopes(m, false, false, false)...)
 	}
 	return out
 }
@@ -301,6 +304,63 @@ func hasTopLevelJSONL(dir string) bool {
 func codexGroupLabel(cwd string) string {
 	if cwd == "" {
 		return "codex"
+	}
+	return filepath.Base(strings.TrimRight(cwd, "/"))
+}
+
+// antigravityScopes enumerates one foreign machine's Antigravity sessions
+// (<machine>/antigravity/...), groups them by recorded cwd, and ingests each group
+// into its own namespaced db with the machine's identity as origin.
+func (a *Archive) antigravityScopes(m manifest, stale, reindex, ingest bool) []view.Scope {
+	root := filepath.Join(a.clone, m.Name, "antigravity")
+	if !isDir(root) {
+		return nil
+	}
+	ad := antigravity.NewRoot(root)
+	containers, err := ad.Discover()
+	if err != nil {
+		slog.Warn("archive: foreign antigravity discover failed", "machine", m.Name, "err", err)
+		return nil
+	}
+
+	byCWD := map[string][]source.Container{}
+	for _, c := range containers {
+		byCWD[c.CWD] = append(byCWD[c.CWD], c)
+	}
+	cwds := make([]string, 0, len(byCWD))
+	for k := range byCWD {
+		cwds = append(cwds, k)
+	}
+	sort.Strings(cwds)
+
+	out := make([]view.Scope, 0, len(cwds))
+	for _, cwd := range cwds {
+		dbp := archiveScopeDBPath(m.Name, antigravity.ID, cwd)
+		if ingest {
+			if _, _, ierr := index.EnsureIndexedContainers(
+				dbp, reindex, byCWD[cwd], ad.Messages, antigravity.Registration().ID, m.MachineID,
+			); ierr != nil {
+				slog.Warn("archive: foreign antigravity scope index failed",
+					"machine", m.Name, "cwd", cwd, "err", ierr)
+			}
+		}
+		out = append(out, view.Scope{
+			Project:    m.Name + "/" + antigravityGroupLabel(cwd),
+			DBP:        dbp,
+			CWD:        cwd,
+			Source:     antigravity.ID,
+			Origin:     m.MachineID,
+			OriginName: m.Name,
+			Stale:      stale,
+		})
+	}
+	return out
+}
+
+// antigravityGroupLabel is the friendly label for an Antigravity cwd group.
+func antigravityGroupLabel(cwd string) string {
+	if cwd == "" {
+		return "antigravity"
 	}
 	return filepath.Base(strings.TrimRight(cwd, "/"))
 }
