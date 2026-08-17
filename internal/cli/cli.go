@@ -189,7 +189,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.BoolVar(&opts.All, "all", false, "cover every project: the search default already, and the widener for bare browse and --stats")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
 	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
-	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex); default searches all")
+	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|antigravity); default searches all")
 	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
 	f.BoolVar(&opts.IncludeTools, "include-tools", false, "also match/show tool calls + tool-only hits")
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
@@ -577,7 +577,7 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	// the true branch, so each invocation starts from its own flag.
 	semantic.SetNoVector(o.NoVector)
 
-	if err := validateChoice("source", o.Source, "claude", "codex"); err != nil {
+	if err := validateChoice("source", o.Source, "claude", "codex", "antigravity"); err != nil {
 		return err
 	}
 
@@ -716,6 +716,10 @@ func runResume(w io.Writer, o *Options) error {
 		src = "codex"
 	}
 	if len(hits) == 0 {
+		hits = antigravityResumeHits(o.Resume)
+		src = "antigravity"
+	}
+	if len(hits) == 0 {
 		if handled, err := resumeForeign(w, o); handled {
 			return err
 		}
@@ -757,12 +761,15 @@ func runResume(w io.Writer, o *Options) error {
 }
 
 // resumeCommand builds the paste-ready resume command for a session, per source:
-// Claude uses `claude --resume`, Codex uses `codex resume`; both prefix a `cd`
-// when the working dir is known.
+// Claude uses `claude --resume`, Codex uses `codex resume`, Antigravity uses `agy --conversation`;
+// all prefix a `cd` when the working dir is known.
 func resumeCommand(src string, h paths.SessionHit) string {
 	verb := "claude --resume " + h.SessionID
-	if src == "codex" {
+	switch src {
+	case "codex":
 		verb = "codex resume " + h.SessionID
+	case "antigravity":
+		verb = "agy --conversation " + h.SessionID
 	}
 	if h.CWD != "" {
 		return "cd " + h.CWD + " && " + verb
@@ -868,6 +875,26 @@ func archiveResumeHits(prefix string) []foreignHit {
 func codexResumeHits(prefix string) []paths.SessionHit {
 	var out []paths.SessionHit
 	for _, sc := range scopes.Codex(false) {
+		con, err := store.ConnectRO(sc.DBP)
+		if err != nil {
+			continue
+		}
+		ids, qerr := store.SessionsByPrefix(con, prefix, false, 3)
+		_ = con.Close()
+		if qerr != nil {
+			continue
+		}
+		for _, id := range ids {
+			out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
+		}
+	}
+	return out
+}
+
+// antigravityResumeHits resolves a session-id prefix against the Antigravity scope dbs.
+func antigravityResumeHits(prefix string) []paths.SessionHit {
+	var out []paths.SessionHit
+	for _, sc := range scopes.Antigravity(false) {
 		con, err := store.ConnectRO(sc.DBP)
 		if err != nil {
 			continue
@@ -1244,12 +1271,16 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 // from what was already folded in. The indexing run's own write-through is what
 // carries the new rows into the store.
 func refreshThisProject(o *Options) {
-	td := resolveTDir(o.Dir, o.DirSet)
-	if td == "" || !isDir(td) {
-		return
+	if o.Source == "" || o.Source == "claude" {
+		td := resolveTDir(o.Dir, o.DirSet)
+		if td != "" && isDir(td) {
+			if _, _, err := scopes.Resolve(view.Scope{Project: paths.ProjectLabel(td), TDir: td}, false); err != nil {
+				slog.Debug("search: current-project refresh failed", "project", paths.ProjectLabel(td), "err", err)
+			}
+		}
 	}
-	if _, _, err := scopes.Resolve(view.Scope{Project: paths.ProjectLabel(td), TDir: td}, false); err != nil {
-		slog.Debug("search: current-project refresh failed", "project", paths.ProjectLabel(td), "err", err)
+	if o.Source == "antigravity" || (o.Source == "" && resolveTDir(o.Dir, o.DirSet) == "") {
+		scopes.RefreshAntigravityCWD(realpathExpand(o.Dir))
 	}
 }
 

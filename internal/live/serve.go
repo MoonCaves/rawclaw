@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/claude"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/timefmt"
@@ -76,7 +77,7 @@ type timedSession struct {
 // sources returns the transcript readers the serving half enumerates —
 // the same adapters ingest uses, so live sees exactly what search would.
 func sources() []source.Registration {
-	return []source.Registration{claude.Registration(), codex.Registration()}
+	return []source.Registration{claude.Registration(), codex.Registration(), antigravity.Registration()}
 }
 
 // localSessions enumerates every top-level session on this machine straight
