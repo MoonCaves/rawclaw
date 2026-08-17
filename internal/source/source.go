@@ -69,3 +69,36 @@ func DetectID(path string) string {
 	}
 	return ""
 }
+
+// ResumeArgv returns the CLI argument vector to resume a session given its source
+// tool and session ID.
+func ResumeArgv(sourceTool, sessionID string) []string {
+	switch sourceTool {
+	case "codex":
+		return []string{"codex", "resume", sessionID}
+	case "antigravity":
+		return []string{"agy", "--conversation", sessionID}
+	case "claude":
+		return []string{"claude", "--resume", sessionID}
+	default:
+		return []string{"claude", "--resume", sessionID}
+	}
+}
+
+// ResumeCommand formats the complete shell command line string to resume a session,
+// optionally prefixing a `cd <cwd> &&` if cwd is non-empty.
+func ResumeCommand(sourceTool, sessionID, cwd string) string {
+	argv := ResumeArgv(sourceTool, sessionID)
+	cmd := ""
+	for i, arg := range argv {
+		if i > 0 {
+			cmd += " "
+		}
+		cmd += arg
+	}
+	if cwd != "" {
+		return "cd " + cwd + " && " + cmd
+	}
+	return cmd
+}
+
