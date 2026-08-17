@@ -28,6 +28,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
+	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -195,7 +196,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
 	f.BoolVar(&opts.Reindex, "reindex", false, "force a full re-index before searching")
 	f.BoolVar(&opts.JSON, "json", false, "machine-readable JSON output (for agents/scripts)")
-	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready `claude --resume` command for a session id (use the 8-char id from search output)")
+	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready resume command (claude/codex/agy) for a session id (use the 8-char id from search output)")
 	f.BoolVar(&opts.Stats, "stats", false, "corpus overview (sessions/messages/date span) for this project, or --all for every project")
 	f.StringVar(&opts.Since, "since", "", "only results on/after this date")
 	f.StringVar(&opts.Before, "before", "", "only results on/before this date")
@@ -760,21 +761,10 @@ func runResume(w io.Writer, o *Options) error {
 	return nil
 }
 
-// resumeCommand builds the paste-ready resume command for a session, per source:
-// Claude uses `claude --resume`, Codex uses `codex resume`, Antigravity uses `agy --conversation`;
-// all prefix a `cd` when the working dir is known.
+// resumeCommand builds the paste-ready resume command for a session using the
+// runtime's registered resume verb table.
 func resumeCommand(src string, h paths.SessionHit) string {
-	verb := "claude --resume " + h.SessionID
-	switch src {
-	case "codex":
-		verb = "codex resume " + h.SessionID
-	case "antigravity":
-		verb = "agy --conversation " + h.SessionID
-	}
-	if h.CWD != "" {
-		return "cd " + h.CWD + " && " + verb
-	}
-	return verb
+	return source.ResumeCommand(src, h.SessionID, h.CWD)
 }
 
 // foreignHit is one archive-replica resume match: a session recorded on

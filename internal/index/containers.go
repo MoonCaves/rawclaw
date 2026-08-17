@@ -121,13 +121,8 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		if mErr != nil {
 			continue // bad container: leave existing rows + watermark untouched
 		}
-		if reindexContainer(con, c, ms, sourceID, origin) {
-			if _, err := con.Exec(
-				"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-				rp, mtime, size, provenance.FileFingerprint(c.Path, size), c.ID,
-			); err != nil {
-				return fmt.Errorf("update file_index: %w", err)
-			}
+		if !reindexContainer(con, c, ms, sourceID, origin, rp, mtime, size) {
+			continue
 		}
 	}
 
@@ -145,22 +140,29 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 	return nil
 }
 
-// reindexContainer atomically replaces one container's rows: the messages are
-// already parsed into ms, so a write failure can't commit away existing data
-// (delete + insert run under database/sql autocommit). Returns false on any
-// write error. Mirrors ReindexFile for the container path. sourceID is stamped as
-// the row's source_tool (D3); origin as its origin_machine ("" = this machine).
-func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin string) bool {
-	if _, err := con.Exec("DELETE FROM messages WHERE session_id=?", c.ID); err != nil {
+// reindexContainer atomically replaces one container's rows under a single
+// transaction: messages, sessions row, and file_index watermark are written
+// together. If any statement or the durable vault write fails, the transaction
+// is rolled back so readers never observe a partial session or a committed
+// session without its watermark. Returns false on any failure.
+func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64) bool {
+	tx, err := con.Begin()
+	if err != nil {
+		slog.Warn("reindex container begin tx failed", "session", c.ID, "err", err)
 		return false
 	}
-	if _, err := con.Exec("DELETE FROM sessions WHERE id=?", c.ID); err != nil {
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM messages WHERE session_id=?", c.ID); err != nil {
+		return false
+	}
+	if _, err := tx.Exec("DELETE FROM sessions WHERE id=?", c.ID); err != nil {
 		return false
 	}
 	var started, last float64
 	var startedSet, lastSet bool
 	for _, m := range ms {
-		if _, err := con.Exec(
+		if _, err := tx.Exec(
 			"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
 			c.ID, m.Role, m.Text, m.TS, m.TSISO, m.UUID,
 		); err != nil {
@@ -179,28 +181,33 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 	if c.ParentID != "" {
 		parentArg = c.ParentID
 	} // else nil → SQL NULL
-	// Stamp provenance (D3) and scope; missing_since NULL — a (re)indexed
-	// container is present. A Container already carries the cwd its source read
-	// out of the transcript, so no fallback directory is needed here: a container
-	// with no recorded cwd has no directory that stands for one either (a Codex
-	// rollout lives in a date-sharded path, not a project dir).
 	projectArg, cwdArg := scopeOf(c.CWD, projectScope{})
-	if _, err := con.Exec(
+	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
 		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, originOr(origin), sourceID, realpath(c.Path), projectArg, cwdArg,
 	); err != nil {
 		return false
 	}
 
-	// Vault rawclaw's own copy, same as the Claude walk does — the container's
-	// source is not Claude-shaped, so the already-flattened messages are
-	// rendered INTO that shape rather than byte-copied. Own sessions only, and a
-	// failure withholds the watermark so the next pass retries (see vaultFile).
+	if _, err := tx.Exec(
+		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
+		rp, mtime, size, provenance.FileFingerprint(c.Path, size), c.ID,
+	); err != nil {
+		return false
+	}
+
+	// Vault rawclaw's own copy inside the atomic success gate: own sessions
+	// only, and a failure rolls back the transaction and withholds the watermark.
 	if origin == "" {
 		if err := vaultContainer(c, ms, sourceID, projectArg, cwdArg); err != nil {
 			slog.Warn("durable transcript not written", "session", c.ID, "err", err)
 			return false
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		slog.Warn("reindex container commit failed", "session", c.ID, "err", err)
+		return false
 	}
 	return true
 }

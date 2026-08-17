@@ -36,8 +36,9 @@ single keyword binary:
   message (a "hi"-opener still gets a real title), preferring Claude Code's own `ai_title` / `summary` /
   `custom_title`; low-signal messages (warmup, `/clear`, command-envelope markup) are filtered from previews
   **without dropping the session**.
-- **`--resume <session8>`** prints the paste-ready `claude --resume` command (with `cd` to the cwd).
+- **`--resume <session8>`** prints the paste-ready resume command (`claude --resume`, `codex resume`, `agy --conversation`) with `cd` to the recorded working directory.
 - **`--stats`** corpus overview (per-project, or `--all` for everything).
+- **Pluggable Source port & Multi-Agent Ingestion** — unified, source-agnostic indexing across **Claude Code**, **Codex**, and **Google Antigravity (`agy`)** transcripts with deterministic message UUIDs, subagent lineage tracking, and live write-through consolidation.
 - **Optional RRF-fused semantic tier** — bring-your-own-embedder, pure-Go cosine over BLOB vectors
   (no numpy, no GPU), `--no-vector` for byte-identical keyword-only. See below for the tuning still ahead.
 
@@ -45,24 +46,15 @@ single keyword binary:
 
 ## Near term
 
-### A pluggable Source port
+### Additional Source Adapters
 
-Today the index is fed by one reader: Claude Code's JSONL transcripts under `~/.claude/projects`.
-That reader already lives behind a clean seam — parse a record, flatten it to searchable text, order
-it within a session. The next step is to lift that seam into an explicit **`Source` port**: a small
-interface (enumerate sessions → stream ordered messages with role, timestamp, and raw text) that the
-index consumes without knowing the file format underneath.
+With the `Source` port shipped and supporting the JSONL family (Claude Code, Codex, Antigravity), remaining coding-agent runtimes fall into three format families:
 
-Once the port exists, other agent CLIs become adapters, not rewrites — these are just on-disk logs.
-A survey of 11 coding-agent runtimes found their session formats fall into **four families**, so the
-port needs four adapter shapes, not one:
-
-- **JSONL** — Claude Code (`~/.claude/projects/<cwd>/*.jsonl`), Codex (`~/.codex/sessions/**/rollout-*.jsonl`),
-  Gemini CLI (`~/.gemini/tmp/<hash>/chats/session-*.jsonl`), Qwen Code (`~/.qwen/projects/<cwd>/chats/*.jsonl`).
 - **SQLite** — Goose (`~/.local/share/goose/sessions/sessions.db`), Crush (`<repo>/.crush/crush.db`),
   opencode (`~/.local/share/opencode/opencode.db`).
 - **JSON-array** — Cline / Roo Code (VS Code globalStorage `tasks/<id>/api_conversation_history.json`),
   Continue (`~/.continue/sessions/<id>.json`).
+- **Markdown / flat files** — Aider (`.aider.chat.history.md`), Cursor (composer transcripts).
 - **Markdown** — Aider (`.aider.chat.history.md`, role inferred from line prefix).
 
 Each is one adapter implementing `Source`; the FTS5 index, fusion, rendering, and the `agent` protocol

@@ -208,6 +208,52 @@ func TestReindexFileAtomicReplace(t *testing.T) {
 	}
 }
 
+func TestReindexFile_RollbackOnFailure(t *testing.T) {
+	con, _ := openTestDB(t)
+	dir := t.TempDir()
+	f := filepath.Join(dir, "atomic_file.jsonl")
+
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u-orig-1","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"original version line 1"}}`,
+		`{"type":"user","uuid":"u-orig-2","timestamp":"2026-06-01T10:01:00Z","message":{"role":"user","content":"original version line 2"}}`,
+	)
+	if !ReindexFile(con, f, dir) {
+		t.Fatal("initial reindex failed")
+	}
+
+	// Install trigger to inject failure during message insertion
+	if _, err := con.Exec("CREATE TRIGGER abort_reindex BEFORE INSERT ON messages WHEN new.role = 'fail' BEGIN SELECT RAISE(ABORT, 'injected reindex failure'); END;"); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	// Write updated file containing a trigger-matching line
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u-new-1","timestamp":"2026-06-01T11:00:00Z","message":{"role":"user","content":"new version line 1"}}`,
+		`{"type":"user","uuid":"u-new-2","timestamp":"2026-06-01T11:01:00Z","message":{"role":"fail","content":"new version line 2"}}`,
+	)
+
+	if ReindexFile(con, f, dir) {
+		t.Fatal("ReindexFile should return false on transaction abort")
+	}
+
+	// Verify the original session and its messages are 100% intact
+	var count int
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id='atomic_file'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Errorf("after rollback message count = %d, want 2 (original messages preserved)", count)
+	}
+
+	var firstMsg string
+	if err := con.QueryRow("SELECT content FROM messages WHERE session_id='atomic_file' AND uuid='u-orig-1'").Scan(&firstMsg); err != nil {
+		t.Fatalf("query original message: %v", err)
+	}
+	if firstMsg != "original version line 1" {
+		t.Errorf("content = %q, want %q", firstMsg, "original version line 1")
+	}
+}
+
 func TestReindexFileMissingReturnsFalse(t *testing.T) {
 	con, _ := openTestDB(t)
 	dir := t.TempDir()

@@ -48,17 +48,17 @@ never duplicates. `rawclaw setup --eject` removes exactly what setup installed �
 
 ## What it does
 
-Claude Code quietly saves every conversation you have with it as JSONL transcripts under `~/.claude/projects`. RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type.
+Your coding agents quietly save conversations as JSONL transcripts on disk (**Claude Code** in `~/.claude/projects`, **Codex** in `~/.codex/sessions`, and **Google Antigravity** in `~/.gemini/antigravity-cli/brain`). RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type.
 
 - **Goal → match → resolution.** Every hit returns the session's opening (what it set out to do), the matched message in context, and the closing (what was decided) — so one result usually answers the question without opening a file.
-- **All your projects by default.** One query spans every Claude Code folder you've worked in (`--this-project` to narrow).
+- **All your projects and runtimes by default.** One query spans every coding session across runtimes and folders (`--this-project` and `--source` to narrow).
 - **Natural phrasing works.** Multi-word queries OR their terms and rank by how many match — you don't need the exact wording.
 - **Reads the full structure, shows the signal.** Subagent threads, tool calls, compaction summaries, and thinking blocks are all indexed, but search defaults to clean human conversation (`--include-tools` / `--include-subagents` to widen).
 - **Built for agents too.** `rawclaw "query"` returns ranked refs with a never-silent completeness envelope; `read <ref>` returns a *bounded excerpt* instead of a whole transcript; `--json` on every command.
 
 ## Who it's for
 
-- **Anyone who lives in Claude Code** and wants to find a past decision in one search instead of a dozen greps.
+- **Anyone who uses AI coding agents (Claude Code, Codex, Antigravity)** and wants to find a past decision in one search instead of a dozen greps.
 - **AI / agent builders** who need programmatic recall of prior sessions — JSON in, JSON out.
 - **CI / automation / scripts** — non-interactive, composes with `jq`/`fzf`, real exit codes.
 - **Resource-constrained / self-hosted / Raspberry Pi.** A single static binary + SQLite FTS5: low RAM, no GPU, no runtime to install. Keyword search needs no network and no API key.
