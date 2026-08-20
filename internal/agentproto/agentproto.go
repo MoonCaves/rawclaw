@@ -1977,7 +1977,7 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		renderWarnings(w, env.Warnings)
 		return
 	}
-	fmt.Fprintf(w, "%d conversation(s) matching '%s' %s:\n\n", len(env.Results), query, scopeLabel)
+	fmt.Fprintf(w, "%d conversation(s) matching '%s' %s · live-indexed on invoke:\n\n", len(env.Results), query, scopeLabel)
 	for _, r := range env.Results {
 		// timefmt seam: search results are agent-parsed — render the stored ISO
 		// as marked UTC (unparseable stamps pass through verbatim).
