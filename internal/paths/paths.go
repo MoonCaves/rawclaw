@@ -51,6 +51,9 @@ func ConfigDir() string {
 // disposable cache (which holds only rebuildable index dbs), because the vault
 // is the truth the dbs are rebuilt FROM: deleting the cache must cost nothing.
 // $XDG_DATA_HOME/rawclaw/transcripts, else ~/.local/share/rawclaw/transcripts.
+// A vault file's mtime records when rawclaw last snapshotted that session,
+// NOT when the session was last active: freshness comes from the live
+// sources, which are re-indexed on every invoke.
 func TranscriptsRoot() string {
 	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
 		return filepath.Join(x, "rawclaw", "transcripts")

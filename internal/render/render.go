@@ -39,7 +39,7 @@ func PrintBrowse(w io.Writer, rows []view.BrowseRow, project string) {
 		return
 	}
 
-	fmt.Fprintf(w, "%d most-recent sessions on %s:\n\n", len(rows), project)
+	fmt.Fprintf(w, "%d most-recent sessions on %s · live-indexed on invoke:\n\n", len(rows), project)
 	for _, r := range rows {
 		fmt.Fprintf(w, "  · %s · %d msgs · %s\n", sid8(r.SessionID), r.N, r.Preview)
 		printLastActivity(w, r.Last)
@@ -72,7 +72,7 @@ func PrintBrowseAll(w io.Writer, rows []view.BrowseAllRow, scope string) {
 		return
 	}
 
-	fmt.Fprintf(w, "%d most-recent sessions across %s:\n\n", len(rows), scope)
+	fmt.Fprintf(w, "%d most-recent sessions across %s · live-indexed on invoke:\n\n", len(rows), scope)
 	for _, r := range rows {
 		fmt.Fprintf(w, "  · %s · %s · %d msgs · %s\n", sid8(r.SessionID), r.Project, r.N, r.Preview)
 		printLastActivity(w, r.Last)
