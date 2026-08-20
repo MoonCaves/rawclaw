@@ -97,7 +97,7 @@ func TestConsolidate_UnionsEveryProject(t *testing.T) {
 	}
 }
 
-// TestConsolidate_SameSessionIDMergesToOneRow is Jay's ruling made structural:
+// TestConsolidate_SameSessionIDMergesToOneRow is the maintainer's ruling made structural:
 // one session resumed in a second directory is ONE session. The stale copy here
 // was purged upstream and holds an older, shorter prefix; the live copy carries
 // the continuation. The merged row must be present, span both, and hold the

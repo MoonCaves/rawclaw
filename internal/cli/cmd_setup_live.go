@@ -42,7 +42,7 @@ func newSetupLiveCmd() *cobra.Command {
 		Short: "Provision a remote machine for zero-friction live peeks",
 		Long: "Provision a remote machine for zero-friction `rawclaw live` peeks in one command.\n\n" +
 			"  rawclaw setup live user@remote-host\n" +
-			"  rawclaw setup live muppet-server --json\n\n" +
+			"  rawclaw setup live my-vps --json\n\n" +
 			"Performs 10 universal checks: resolves SSH config aliases via OpenSSH (`ssh -G`), " +
 			"runs non-interactive auth checks (`BatchMode=yes`), probes remote OS/arch (`uname`), " +
 			"streams binary directly over SSH stdin (no remote `curl`/`tar` required), " +
