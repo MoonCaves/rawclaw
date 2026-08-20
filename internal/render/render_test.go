@@ -75,7 +75,7 @@ func TestPrintBrowse(t *testing.T) {
 		{SessionID: "33334444", LastTS: 1700000100, N: 3, Preview: "second"},
 	}
 
-	rowsWant := "2 most-recent sessions on alpha:\n\n" +
+	rowsWant := "2 most-recent sessions on alpha · live-indexed on invoke:\n\n" +
 		"  · 11112222 · 12 msgs · first session\n" +
 		"  · 33334444 · 3 msgs · second\n"
 

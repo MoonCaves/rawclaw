@@ -390,7 +390,7 @@ func TestRenderSearch(t *testing.T) {
 			{Project: "proj2", SessionID: "ffff", ISO: "", Snippet: "s2", ReadRef: "ffff:1a2b"},
 		}}, "kw", "on this project")
 		out := buf.String()
-		if !strings.HasPrefix(out, "2 conversation(s) matching 'kw' on this project:\n\n") {
+		if !strings.HasPrefix(out, "2 conversation(s) matching 'kw' on this project · live-indexed on invoke:\n\n") {
 			t.Fatalf("header wrong: %q", out)
 		}
 		if !strings.Contains(out, "  ━━ 2026-06-18 · a1b2c3d4 · proj\n") {
