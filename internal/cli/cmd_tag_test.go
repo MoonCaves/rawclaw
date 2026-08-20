@@ -129,7 +129,7 @@ func TestRunTagWritePopulatesSegments(t *testing.T) {
 	}
 }
 
-// TestRunTagWriteRetagReplaces locks the behavior Jay asked for: re-tagging a
+// TestRunTagWriteRetagReplaces locks the maintainer-requested behavior: re-tagging a
 // session REDOES its tags — it does not stack a second set beside the first, and
 // it does not error. A first pass writes two segments; a second pass with DIFFERENT
 // boundaries + labels must leave ONLY the second set behind.
