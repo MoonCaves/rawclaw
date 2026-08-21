@@ -151,6 +151,8 @@ Vectors live as BLOBs in the same single on-disk store a search reads, alongside
 
 Every session gets tagged at its topic-change points with concept keywords, so an agent can always find the moment a conversation pivoted — `rawclaw topics "<concept>"` drops it right there.
 
+`rawclaw tag-prep <session-id>` refreshes that exact live session through the registered transcript-source adapters before it prints. The caller does not choose Claude, Codex, Antigravity, a project, or a working directory; a newly registered source gets the same path automatically. Unchanged transcripts reuse their file watermark, while a refresh RawClaw cannot verify fails instead of returning a known-stale partial dump.
+
 ### Optional transcript archive — a git remote as durable, multi-machine storage
 
 Raw transcripts die upstream (Claude Code's ~30-day purge) and live on only one machine until they don't. The archive gives them one durable home: any private git remote (GitHub, Gitea, a bare repo over SSH — no rawclaw-specific server).

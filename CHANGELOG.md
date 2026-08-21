@@ -68,6 +68,14 @@ All notable changes to RawClaw are documented in this file.
 
 ### Fixed
 
+- **`tag-prep` no longer hands a tagging agent a stale consolidated snapshot.** It first refreshes
+  the exact requested session through RawClaw's registered transcript-source adapters, publishes
+  the result into the consolidated store, verifies the live-file watermark and published message
+  count, and only then prints. The path contains no Claude/Codex/Antigravity branch and does not
+  depend on the caller's working directory; a future registered source inherits it automatically.
+  An unchanged transcript stays cheap through the existing file watermark. If parsing, indexing,
+  or publishing the changed live source cannot be verified, the command returns an error and
+  prints no stale fallback.
 - **Search stops ranking injected envelopes as conversation.** A runtime writes records into a
   transcript that no person and no model authored — `<task-notification>`, `<system-reminder>`,
   slash-command plumbing, captured shell IO — and stores them with `role="user"`, so search ranked

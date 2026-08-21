@@ -68,18 +68,6 @@ func newTagPrepCmd() *cobra.Command {
 	return cmd
 }
 
-// runTagPrepCmd resolves session8 → db + full id, opens the db read-only, loads
-// the session's messages, and prints the condensed dump. Thin wrapper around the
-// testable runTagPrep core.
-func runTagPrepCmd(w io.Writer, session8 string, scope []view.Scope, more agentproto.ScopeFn) error {
-	con, fullSID, err := openSessionRO(session8, scope, more)
-	if err != nil {
-		return err
-	}
-	defer con.Close()
-	return runTagPrep(w, con, fullSID)
-}
-
 // runTagPrep is the testable core: load a session's messages and print the
 // condensed dump (header + one `<uuid8> [<role>] <text>` line per message).
 func runTagPrep(w io.Writer, con *sql.DB, fullSID string) error {
@@ -199,20 +187,6 @@ func runTagWrite(con *sql.DB, fullSID string, r io.Reader, taggedAt float64) (in
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────
-
-// openSessionRO resolves session8 → db + full id and opens the db read-only —
-// the load path for tag-prep (a pure dump, no writes).
-func openSessionRO(session8 string, scope []view.Scope, more agentproto.ScopeFn) (*sql.DB, string, error) {
-	dbp, fullSID, err := agentproto.LocateSession(session8, scope, more)
-	if err != nil {
-		return nil, "", err
-	}
-	con, err := store.ConnectRO(dbp)
-	if err != nil {
-		return nil, "", fmt.Errorf("open %q read-only: %w", dbp, err)
-	}
-	return con, fullSID, nil
-}
 
 // loadSessionMessages reads a session's messages in id order (id ascending) — the
 // chronological spine the dump and the segment-range mapping both walk.

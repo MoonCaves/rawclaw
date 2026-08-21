@@ -1,10 +1,13 @@
 package index
 
 import (
+	"crypto/sha1"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
@@ -19,6 +22,119 @@ import (
 // Messages method, injected so this package never imports the concrete adapters.
 // The index stays source-agnostic; the caller (cli) wires source → index.
 type MessagesFunc func(source.Container) ([]model.Message, error)
+
+// RefreshDBPath returns the private per-container cache used by targeted live
+// refreshes. It lives below the cache root so normal scope/orphan discovery
+// never mistakes it for another searchable project database.
+func RefreshDBPath(sourceID, sessionID, sourcePath string) string {
+	sum := sha1.Sum([]byte(sourceID + "\x00" + sessionID + "\x00" + realpath(sourcePath)))
+	dir := filepath.Join(store.CacheDir(), "refresh")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, hex.EncodeToString(sum[:])+".db")
+}
+
+// EnsureFreshContainer incrementally refreshes one live container, proves its
+// watermark matches the current file, and strictly folds it into the
+// consolidated store. Unlike ordinary advisory indexing, any uncertainty is an
+// error: tag-prep must not print a known-stale partial transcript.
+func EnsureFreshContainer(
+	dbp string,
+	c source.Container,
+	msgs MessagesFunc,
+	sourceID string,
+) (int, error) {
+	var loadErr error
+	strictMessages := func(got source.Container) ([]model.Message, error) {
+		ms, err := msgs(got)
+		if err != nil {
+			loadErr = err
+		}
+		return ms, err
+	}
+
+	_, status, err := EnsureIndexedContainers(
+		dbp,
+		false,
+		[]source.Container{c},
+		strictMessages,
+		sourceID,
+		"",
+	)
+	if loadErr != nil {
+		return 0, fmt.Errorf("read live transcript %s: %w", c.Path, loadErr)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if status != IndexFresh {
+		return 0, fmt.Errorf("refresh cache %s is locked or stale", dbp)
+	}
+
+	nMessages, err := verifyFreshContainer(dbp, c)
+	if err != nil {
+		return 0, err
+	}
+	if err := SyncConsolidatedFrom(dbp); err != nil {
+		return 0, fmt.Errorf("publish refreshed session %s: %w", c.ID, err)
+	}
+	if err := verifyConsolidatedCount(c.ID, nMessages); err != nil {
+		return 0, err
+	}
+	return nMessages, nil
+}
+
+func verifyFreshContainer(dbp string, c source.Container) (int, error) {
+	st, err := os.Stat(c.Path)
+	if err != nil {
+		return 0, fmt.Errorf("stat live transcript %s: %w", c.Path, err)
+	}
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		return 0, fmt.Errorf("open refresh cache %s: %w", dbp, err)
+	}
+	defer con.Close()
+
+	var (
+		mtime     float64
+		size      int64
+		fp        string
+		sessionID string
+	)
+	err = con.QueryRow(
+		"SELECT mtime,size,fp,session_id FROM file_index WHERE path=?",
+		realpath(c.Path),
+	).Scan(&mtime, &size, &fp, &sessionID)
+	if err != nil {
+		return 0, fmt.Errorf("verify refreshed transcript %s: %w", c.Path, err)
+	}
+	wantMTime := mtimeOf(st)
+	wantFP := provenance.FileFingerprint(c.Path, st.Size())
+	if sessionID != c.ID || size != st.Size() || absDiff(mtime, wantMTime) >= 0.001 || fp != wantFP {
+		return 0, fmt.Errorf("live transcript %s changed or was not fully refreshed", c.Path)
+	}
+
+	var nMessages int
+	if err := con.QueryRow("SELECT message_count FROM sessions WHERE id=?", c.ID).Scan(&nMessages); err != nil {
+		return 0, fmt.Errorf("verify refreshed session %s: %w", c.ID, err)
+	}
+	return nMessages, nil
+}
+
+func verifyConsolidatedCount(sessionID string, minimum int) error {
+	con, err := store.ConnectRO(ConsolidatedPath())
+	if err != nil {
+		return fmt.Errorf("open refreshed consolidated store: %w", err)
+	}
+	defer con.Close()
+	var count int
+	if err := con.QueryRow("SELECT message_count FROM sessions WHERE id=?", sessionID).Scan(&count); err != nil {
+		return fmt.Errorf("verify published session %s: %w", sessionID, err)
+	}
+	if count < minimum {
+		return fmt.Errorf("published session %s has %d messages, want at least %d", sessionID, count, minimum)
+	}
+	return nil
+}
 
 // EnsureIndexedContainers builds/updates the db at dbp from cs (one scope's
 // containers), pulling each container's messages via msgs. It mirrors
