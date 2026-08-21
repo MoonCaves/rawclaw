@@ -688,6 +688,10 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 		}
 	}
 
+	if o.Format == "json" {
+		o.JSON = true
+	}
+
 	if o.List {
 		ListProjects(out)
 		return nil
@@ -703,10 +707,6 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 
 	if o.Stats {
 		return runStats(ctx, out, o)
-	}
-
-	if o.Format == "json" {
-		o.JSON = true
 	}
 
 	if len(args) == 0 {
