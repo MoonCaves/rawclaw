@@ -222,19 +222,22 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 					var res []source.Container
 					for rows.Next() {
 						var (
-							sid, cwd, parent string
+							sid, cwd, parent any
 							isSub            any
 						)
-						if scanErr := rows.Scan(&sid, &cwd, &parent, &isSub); scanErr == nil && sid != "" {
-							sub := parseBool(isSub)
-							res = append(res, source.Container{
-								ID:         sid,
-								Path:       dbPath + "#" + sid,
-								CWD:        cwd,
-								IsSubagent: sub,
-								ParentID:   parent,
-								ResumeArgv: []string{"goose", "session", "--resume", sid},
-							})
+						if scanErr := rows.Scan(&sid, &cwd, &parent, &isSub); scanErr == nil {
+							sID := parseString(sid)
+							if sID != "" {
+								sub := parseBool(isSub)
+								res = append(res, source.Container{
+									ID:         sID,
+									Path:       dbPath + "#" + sID,
+									CWD:        parseString(cwd),
+									IsSubagent: sub,
+									ParentID:   parseString(parent),
+									ResumeArgv: []string{"goose", "session", "--resume", "--session-id", sID},
+								})
+							}
 						}
 					}
 					if len(res) > 0 {
@@ -292,7 +295,7 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 		CWD:        cwd,
 		IsSubagent: isSub,
 		ParentID:   parentID,
-		ResumeArgv: []string{"goose", "session", "--resume", defaultID},
+		ResumeArgv: []string{"goose", "session", "--resume", "--session-id", defaultID},
 	}}, true
 }
 
@@ -322,8 +325,8 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 
 	idCol := findMatchingCol(cols, "id", "message_id", "mid", "rowid")
 	roleCol := findMatchingCol(cols, "role", "sender", "author", "type")
-	contentCol := findMatchingCol(cols, "content", "text", "body", "message", "payload")
-	tsCol := findMatchingCol(cols, "created_at", "timestamp", "created", "ts", "time", "date")
+	contentCol := findMatchingCol(cols, "content_json", "content", "text", "body", "message", "payload")
+	tsCol := findMatchingCol(cols, "created_timestamp", "created_at", "timestamp", "created", "ts", "time", "date")
 	sessionCol := findMatchingCol(cols, "session_id", "session", "sess_id", "thread_id")
 
 	if roleCol == "" || contentCol == "" {
@@ -515,6 +518,8 @@ func parseTimestamp(v any) (float64, string) {
 	}
 
 	switch val := v.(type) {
+	case time.Time:
+		return float64(val.UnixNano()) / 1e9, val.UTC().Format(time.RFC3339)
 	case string:
 		val = strings.TrimSpace(val)
 		if val == "" {
@@ -598,8 +603,22 @@ func parseBool(v any) bool {
 		return val != 0
 	case string:
 		val = strings.ToLower(strings.TrimSpace(val))
-		return val == "true" || val == "1" || val == "yes"
+		return val == "true" || val == "1" || val == "yes" || val == "sub_agent" || val == "subagent"
 	default:
 		return false
+	}
+}
+
+func parseString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch val := v.(type) {
+	case string:
+		return val
+	case []byte:
+		return string(val)
+	default:
+		return fmt.Sprint(v)
 	}
 }
