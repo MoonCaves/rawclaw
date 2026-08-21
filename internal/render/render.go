@@ -35,7 +35,7 @@ func fmtMsg(m view.ViewMsg) string {
 // PrintBrowse renders the recent-sessions list for a project.
 func PrintBrowse(w io.Writer, rows []view.BrowseRow, project string) {
 	if len(rows) == 0 {
-		fmt.Fprintf(w, "No sessions on %s.\n", project)
+		fmt.Fprintf(w, "No sessions on %s · live-indexed on invoke.\n", project)
 		return
 	}
 
@@ -68,7 +68,7 @@ func printLastActivity(w io.Writer, last string) {
 // question's answer as another's.
 func PrintBrowseAll(w io.Writer, rows []view.BrowseAllRow, scope string) {
 	if len(rows) == 0 {
-		fmt.Fprintf(w, "No sessions across %s. Try --list to see the searchable projects.\n", scope)
+		fmt.Fprintf(w, "No sessions across %s · live-indexed on invoke. Try --list to see the searchable projects.\n", scope)
 		return
 	}
 
@@ -122,7 +122,7 @@ func yesNo(b bool) string {
 // panicking on a short slice.
 func PrintDebugSearch(w io.Writer, hits []retrieve.Hit, explains []retrieve.ScoreExplain) {
 	if len(hits) == 0 {
-		fmt.Fprintln(w, "No matches to explain. (--debug-search shows WHY each hit ranked where it did.)")
+		fmt.Fprintln(w, "No matches to explain · live-indexed on invoke. (--debug-search shows WHY each hit ranked where it did.)")
 		return
 	}
 
