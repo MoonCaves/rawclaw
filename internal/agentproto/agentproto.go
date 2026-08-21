@@ -2416,7 +2416,7 @@ func resolveStoreProjects(con *sql.DB, project, includePath, excludePath string)
 
 	keep := map[string]bool{}
 	for _, sr := range scopeRows {
-		keep[sr.Project] = keep[sr.Project] // ensure the key exists with a false default
+		keep[sr.Project] = false
 	}
 	if includePath != "" || excludePath != "" {
 		pred := query.PathPredicate(includePath, excludePath)

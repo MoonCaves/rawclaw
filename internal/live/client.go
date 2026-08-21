@@ -160,7 +160,7 @@ func (c *Client) classify(stderr string, err error) error {
 						"Run `rawclaw setup live %s` to auto-provision and map it, or add a Host alias in ~/.ssh/config.\nssh: %s",
 					c.Machine, c.Dest, c.Machine, stderr)
 			}
-			return fmt.Errorf("machine %q (ssh destination %q) is unreachable: %s\nRun `rawclaw setup live %s` to provision.", c.Machine, c.Dest, stderr, c.Machine)
+			return fmt.Errorf("machine %q (ssh destination %q) is unreachable: %s\nRun `rawclaw setup live %s` to provision", c.Machine, c.Dest, stderr, c.Machine)
 		case 127: // the remote shell had no rawclaw to run
 			return fmt.Errorf(
 				"machine %q is reachable but has no rawclaw on its non-interactive PATH.\n"+
