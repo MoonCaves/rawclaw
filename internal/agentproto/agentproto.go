@@ -2187,6 +2187,13 @@ func renderRead(w io.Writer, r *ReadResult) {
 	} else {
 		fmt.Fprintf(w, "\n  keep reading:  rawclaw read %s --more   (or --around N to shift)\n", r.ReadRef)
 	}
+	if len(r.Subagents) > 0 {
+		fmt.Fprintln(w, "  ─ subagents ─")
+		for _, s := range r.Subagents {
+			fmt.Fprintf(w, "     %s (%d msgs)\n", sid8(s.SessionID), s.MessageCount)
+		}
+		fmt.Fprintln(w)
+	}
 	// Freshness: the last footer line, always.
 	fmt.Fprintf(w, "note: %s\n", freshnessNote)
 }
@@ -2213,6 +2220,12 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 		fmt.Fprintln(w, "  ── RESOLUTION (session close) ──")
 		for _, m := range r.End {
 			fmt.Fprintf(w, "     [%s #%d] %s\n", m.Role, m.ID, m.Text)
+		}
+	}
+	if len(r.Subagents) > 0 {
+		fmt.Fprintln(w, "\n  ── SUBAGENTS ──")
+		for _, s := range r.Subagents {
+			fmt.Fprintf(w, "     %s (%d msgs)\n", sid8(s.SessionID), s.MessageCount)
 		}
 	}
 }
