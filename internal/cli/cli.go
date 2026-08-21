@@ -1093,6 +1093,14 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 			Sessions []view.BrowseRow `json:"sessions"`
 		}{paths.ProjectLabel(td), rows})
 	}
+	if o.oneline() {
+		for _, r := range rows {
+			ref := lastSlice8(r.SessionID) + ":"
+			clean := agentproto.CleanSnippetOneline(r.Preview)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ref, timefmt.UTC(time.Unix(int64(r.LastTS), 0)), paths.ProjectLabel(td), clean)
+		}
+		return nil
+	}
 	render.PrintBrowse(w, rows, paths.ProjectLabel(td))
 	return nil
 }
@@ -1127,6 +1135,14 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 	}
 	if o.JSON {
 		return EmitJSON(w, browseScopeJSON(o, len(scope), rows))
+	}
+	if o.oneline() {
+		for _, r := range rows {
+			ref := lastSlice8(r.SessionID) + ":"
+			clean := agentproto.CleanSnippetOneline(r.Preview)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ref, timefmt.UTC(time.Unix(int64(r.LastTS), 0)), r.Project, clean)
+		}
+		return nil
 	}
 	render.PrintBrowseAll(w, rows, browseScopeLabel(o))
 	return nil
