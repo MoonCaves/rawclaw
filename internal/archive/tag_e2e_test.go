@@ -93,3 +93,46 @@ func writeTag(t *testing.T, clone, machine, _ string, tf TagFile) {
 		t.Fatalf("write tag %s/%s: %v", machine, tf.SessionID, err)
 	}
 }
+
+// TestIngestForeignTags_CreatesMissingTopicSchema pins the production state that
+// broke ingest: an archive-built foreign scope db has the base schema but never
+// passed through a path that applies the topic sidecar (no topic_segment).
+// Ingest must create the sidecar itself and land the tags, not warn and skip.
+func TestIngestForeignTags_CreatesMissingTopicSchema(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	clone := t.TempDir()
+
+	// Foreign scope db WITHOUT EnsureTopicSchema — exactly how the archive
+	// splice path builds them.
+	dbp := filepath.Join(t.TempDir(), "box-b-scope.db")
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("ConnectRW: %v", err)
+	}
+	if err := store.Rebuild(con); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	storetest.InsertSession(t, con, storetest.Session{ID: "S", MessageCount: 3})
+	con.Close()
+
+	writeTag(t, clone, "box-a", "box-a-id", TagFile{
+		SessionID: "S", OriginMachine: "box-a-id",
+		Segments: []TagSegment{{StartUUID: "u1", Topic: "gateway work"}},
+	})
+
+	a := &Archive{cfg: Config{Name: "box-a"}, clone: clone, machineID: "box-a-id"}
+	a.ingestForeignTags([]view.Scope{{DBP: dbp, Origin: "box-b-id", Source: "claude"}}, true)
+
+	ro, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("ConnectRO: %v", err)
+	}
+	defer ro.Close()
+	got, err := store.TopicsForSession(ro, "S")
+	if err != nil {
+		t.Fatalf("TopicsForSession after ingest: %v", err)
+	}
+	if len(got) != 1 || got[0].Topic != "gateway work" {
+		t.Fatalf("segments after ingest = %+v, want the one tagged segment", got)
+	}
+}
