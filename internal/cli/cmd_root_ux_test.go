@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -363,10 +364,16 @@ func TestSourceThisProjectRefusedLoudly(t *testing.T) {
 	for _, args := range [][]string{
 		{"--this-project", "--source", "codex"},           // browse shape
 		{"--this-project", "--source", "codex", "apples"}, // search shape
+		{"--source", "codex", "--list"},                   // list has no runtime axis
+		{"--source", "codex", "--resume", "aaaa1111"},     // resume's id fixes the runtime
 	} {
 		out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", args...)
-		if err == nil || !strings.Contains(err.Error(), "--this-project") {
+		if err == nil || !strings.Contains(err.Error(), "--source") {
 			t.Errorf("args %v: want loud refusal, got err=%v out:\n%s", args, err, out)
+		}
+		var xe ExitError
+		if !errors.As(err, &xe) || xe.Code != 2 {
+			t.Errorf("args %v: want usage-error exit 2, got %v", args, err)
 		}
 	}
 }
