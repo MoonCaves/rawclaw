@@ -91,7 +91,7 @@ func TestCLIJourney_GooseEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume: %v\n%s", err, outResume)
 	}
-	if !strings.Contains(outResume, "goose session --resume goose-session-alpha") {
-		t.Errorf("resume output = %q, want 'goose session --resume goose-session-alpha'", outResume)
+	if !strings.Contains(outResume, "goose session --resume --session-id goose-session-alpha") {
+		t.Errorf("resume output = %q, want 'goose session --resume --session-id goose-session-alpha'", outResume)
 	}
 }

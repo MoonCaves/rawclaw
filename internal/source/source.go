@@ -80,7 +80,7 @@ func ResumeArgv(sourceTool, sessionID string) []string {
 	case "antigravity":
 		return []string{"agy", "--conversation", sessionID}
 	case "goose":
-		return []string{"goose", "session", "--resume", sessionID}
+		return []string{"goose", "session", "--resume", "--session-id", sessionID}
 	case "claude":
 		return []string{"claude", "--resume", sessionID}
 	default:

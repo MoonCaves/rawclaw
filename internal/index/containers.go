@@ -319,7 +319,7 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 
 	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-		rp, mtime, size, provenance.FileFingerprint(c.Path, size), c.ID,
+		rp, mtime, size, provenance.FileFingerprint(backingFilePath(c.Path), size), c.ID,
 	); err != nil {
 		return false
 	}
