@@ -195,3 +195,32 @@ func ParentOf(con *sql.DB, sid string) string {
 	}
 	return parent.String
 }
+
+// SubagentRow is one subagent child session of a parent session.
+type SubagentRow struct {
+	ID           string
+	MessageCount int
+}
+
+// SubagentsForSession returns the child subagent sessions for a parent session ID.
+func SubagentsForSession(con *sql.DB, parentSID string) ([]SubagentRow, error) {
+	q := "SELECT id, message_count FROM sessions WHERE (parent_id = ? OR (id LIKE ? AND is_subagent = 1)) ORDER BY id"
+	rows, err := con.Query(q, parentSID, parentSID+"/%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SubagentRow
+	for rows.Next() {
+		var (
+			id string
+			n  sql.NullInt64
+		)
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out = append(out, SubagentRow{ID: id, MessageCount: int(n.Int64)})
+	}
+	return out, rows.Err()
+}
+
