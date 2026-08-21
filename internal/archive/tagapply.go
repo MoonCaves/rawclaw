@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -54,6 +55,7 @@ func (a *Archive) ingestForeignTags(scopes []view.Scope, reindex bool) {
 			conflict, err := applyResolvedTags(con, sid, files)
 			if err != nil {
 				slog.Warn("archive: tag ingest failed", "session", sid, "err", err)
+				skipped = true
 				continue
 			}
 			if conflict {
@@ -63,6 +65,13 @@ func (a *Archive) ingestForeignTags(scopes []view.Scope, reindex bool) {
 			}
 		}
 		_ = con.Close()
+
+		// Fold the updated scope db into the consolidated store. Without this,
+		// freshly ingested foreign tags miss the same-pass consolidation and
+		// would appear only after the NEXT fold.
+		if err := index.SyncConsolidatedFrom(sc.DBP); err != nil {
+			slog.Debug("archive: tag ingest consolidated sync failed", "db", filepath.Base(sc.DBP), "err", err)
+		}
 	}
 	if skipped {
 		// A scope was unreadable this pass, so `conflicts` is NOT the full picture:
