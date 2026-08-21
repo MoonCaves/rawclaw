@@ -530,15 +530,12 @@ func epochSeconds(dt time.Time) float64 {
 
 // Disp normalizes content for display: generated material optionally removed,
 // whitespace collapsed, capped to `cap` runes.
-//
-// "Generated" means the same thing here as it does to search — tool runs AND
-// injected envelopes (StripGenerated), not tool runs alone. The display path
-// used to strip only tools, so a record that was nothing but an injected
-// envelope rendered as conversation in `read`, `outline` and `browse` while
-// search had already stopped matching it. One rule, both surfaces: rawclaw
-// shows what a person or a model said.
 func Disp(content string, includeTools bool, cap int) string {
-	return DispWith(content, includeTools, false, cap)
+	t := content
+	if !includeTools {
+		t = StripGenerated(content)
+	}
+	return capRunes(collapseSpaces(t), cap)
 }
 
 // DispWith normalizes content for display with granular inclusion of tools and
@@ -551,9 +548,9 @@ func DispWith(content string, includeTools, includeThinking bool, cap int) strin
 	case includeTools && !includeThinking:
 		t = RemoveThinkingRuns(t)
 	case !includeTools && includeThinking:
-		t = StripEnvelopes(removeToolRuns(t))
+		t = StripGenerated(t)
 	case !includeTools && !includeThinking:
-		t = StripEnvelopes(RemoveThinkingRuns(removeToolRuns(t)))
+		t = StripGenerated(RemoveThinkingRuns(t))
 	}
 	return capRunes(collapseSpaces(t), cap)
 }

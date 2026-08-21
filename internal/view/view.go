@@ -119,7 +119,13 @@ func bookendFetch(opts AnchoredViewOpts) int {
 // Nothing is deleted or hidden from the store by this — `--include-tools` puts
 // every dropped row back, exactly as it does for search.
 func IsDisplayable(content string) bool {
-	return IsDisplayableWith(content, false, false)
+	if strings.TrimSpace(parse.StripGenerated(content)) == "" {
+		return false
+	}
+	if IsInterruptionMarker(content) {
+		return false
+	}
+	return !isBareBlockMarker(parse.Disp(content, false, -1))
 }
 
 // IsDisplayableWith reports whether a record still says something according to
