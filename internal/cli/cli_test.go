@@ -34,7 +34,7 @@ func TestNewRootCmd(t *testing.T) {
 		"list", "role", "sort", "include-tools", "include-subagents",
 		"reindex", "json", "resume", "stats", "since", "before", "no-vector",
 		"reindex-vectors", "include-path", "exclude-path", "min-messages",
-		"debug-search",
+		"debug-search", "oneline", "format",
 	}
 	for _, name := range wantFlags {
 		if cmd.Flags().Lookup(name) == nil {

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/index"
@@ -261,6 +262,7 @@ type SearchOpts struct {
 	MinMessages      int    // 0 = no minimum
 	IncludePath      string // "" = no filter; else a regex over the project working dir
 	ExcludePath      string // "" = no filter; else a regex over the project working dir
+	Oneline          bool   // emit results in oneline format (<read_ref>\t<started_iso>\t<project>\t<snippet>)
 
 	// CurrentSession is the session the caller is live in ("" = unknown, the
 	// pre-existing behavior). Its CURRENT TURN — and only that — is withheld from
@@ -983,6 +985,10 @@ func SearchAndRender(
 	env := Search(query, scope, opts, embedder)
 	if wantJSON {
 		return emit(w, env)
+	}
+	if opts.Oneline {
+		RenderSearchOneline(w, env)
+		return nil
 	}
 	renderSearch(w, env, query, scopeLabel)
 	return nil
@@ -2027,6 +2033,35 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 	// the order it carries them. The renderer holds no conditions of its own —
 	// that is what keeps the text and --json surfaces from drifting.
 	renderWarnings(w, env.Warnings)
+}
+
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\].*?\x07|\x1b[@-Z\\-_]`)
+
+// CleanSnippetOneline strips ANSI escapes, newlines, tabs, and all control
+// characters from s, collapsing consecutive whitespace so the snippet is strictly
+// single-line plain text suitable for oneline output.
+func CleanSnippetOneline(s string) string {
+	s = ansiRegex.ReplaceAllString(s, "")
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r < 32 || r == 127 || unicode.IsControl(r) {
+			b.WriteByte(' ')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// RenderSearchOneline formats each search hit as exactly one tab-separated line:
+// <sess8>:<uuid8>\t<started_iso>\t<project>\t<snippet_prose>
+// It emits no conversational headers or footers and suppresses all ANSI styling.
+func RenderSearchOneline(w io.Writer, env SearchEnvelope) {
+	for _, r := range env.Results {
+		clean := CleanSnippetOneline(r.Snippet)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.ReadRef, r.ISO, r.Project, clean)
+	}
 }
 
 // renderWarnings prints one "note:" line per warning, skipping any code in
