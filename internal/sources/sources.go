@@ -10,6 +10,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/claude"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
+	"github.com/MoonCaves/rawclaw/internal/source/goose"
 )
 
 var registerBuiltins sync.Once
@@ -21,6 +22,7 @@ func Registered() []source.Registration {
 		source.Register(claude.Registration())
 		source.Register(codex.Registration())
 		source.Register(antigravity.Registration())
+		source.Register(goose.Registration())
 	})
 	return source.Registered()
 }

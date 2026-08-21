@@ -198,13 +198,13 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.BoolVar(&opts.All, "all", false, "cover every project: the search default already, and the widener for bare browse and --stats")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
 	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
-	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|antigravity); default searches all")
+	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|antigravity|goose); default searches all")
 	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
 	f.BoolVar(&opts.IncludeTools, "include-tools", false, "also match/show tool calls + tool-only hits")
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
 	f.BoolVar(&opts.Reindex, "reindex", false, "force a full re-index before searching")
 	f.BoolVar(&opts.JSON, "json", false, "machine-readable JSON output (for agents/scripts)")
-	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready resume command (claude/codex/agy) for a session id (use the 8-char id from search output)")
+	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready resume command (claude/codex/agy/goose) for a session id (use the 8-char id from search output)")
 	f.BoolVar(&opts.Stats, "stats", false, "corpus overview (sessions/messages/date span) for this project, or --all for every project")
 	f.StringVar(&opts.Since, "since", "", "only results on/after this date")
 	f.StringVar(&opts.Before, "before", "", "only results on/before this date")
@@ -663,7 +663,11 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	// the true branch, so each invocation starts from its own flag.
 	semantic.SetNoVector(o.NoVector)
 
-	if err := validateChoice("source", o.Source, "claude", "codex", "antigravity"); err != nil {
+	validSources := []string{}
+	for _, reg := range sources.Registered() {
+		validSources = append(validSources, reg.ID)
+	}
+	if err := validateChoice("source", o.Source, validSources...); err != nil {
 		return err
 	}
 	// --source narrows the runtime axis, so it only composes with shapes that
@@ -830,6 +834,10 @@ func runResume(w io.Writer, o *Options) error {
 		src = "antigravity"
 	}
 	if len(hits) == 0 {
+		hits = gooseResumeHits(o.Resume)
+		src = "goose"
+	}
+	if len(hits) == 0 {
 		if handled, err := resumeForeign(w, o); handled {
 			return err
 		}
@@ -994,6 +1002,26 @@ func codexResumeHits(prefix string) []paths.SessionHit {
 func antigravityResumeHits(prefix string) []paths.SessionHit {
 	var out []paths.SessionHit
 	for _, sc := range scopes.Antigravity(false) {
+		con, err := store.ConnectRO(sc.DBP)
+		if err != nil {
+			continue
+		}
+		ids, qerr := store.SessionsByPrefix(con, prefix, false, 3)
+		_ = con.Close()
+		if qerr != nil {
+			continue
+		}
+		for _, id := range ids {
+			out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
+		}
+	}
+	return out
+}
+
+// gooseResumeHits resolves a session-id prefix against the Goose scope dbs.
+func gooseResumeHits(prefix string) []paths.SessionHit {
+	var out []paths.SessionHit
+	for _, sc := range scopes.Goose(false) {
 		con, err := store.ConnectRO(sc.DBP)
 		if err != nil {
 			continue
