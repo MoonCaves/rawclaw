@@ -223,7 +223,9 @@ func commit(dst string, data []byte) error {
 		return fmt.Errorf("durable: stage %s: %w", dst, err)
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp) // no-op once the rename succeeded
+	defer func() {
+		_ = os.Remove(tmp) // best-effort cleanup; no-op once rename succeeds
+	}()
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		return fmt.Errorf("durable: write %s: %w", tmp, err)

@@ -248,7 +248,9 @@ func fillTrigramBatch(con *sql.DB, from, to int64) error {
 	if err != nil {
 		return fmt.Errorf("begin trigram batch: %w", err)
 	}
-	defer tx.Rollback() // no-op after a successful commit
+	defer func() {
+		_ = tx.Rollback() // no-op after a successful commit
+	}()
 	if _, err := tx.Exec(store.TrigramBatchFillSQL, from, to); err != nil {
 		return fmt.Errorf("backfill trigram index: %w", err)
 	}
@@ -577,7 +579,9 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scop
 		slog.Warn("reindex file begin tx failed", "session", sid, "err", err)
 		return false
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	if _, err := tx.Exec("DELETE FROM messages WHERE session_id=?", sid); err != nil {
 		return false

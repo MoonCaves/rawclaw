@@ -55,7 +55,7 @@ func TestSearchHitCarriesLastActivity(t *testing.T) {
 	if nowAt < 0 {
 		t.Fatalf("no last-activity line in output:\n%s", out)
 	}
-	if !(snipAt < nowAt && nowAt < refAt) {
+	if snipAt >= nowAt || nowAt >= refAt {
 		t.Errorf("last-activity line out of place (snippet %d, now %d, ref %d):\n%s",
 			snipAt, nowAt, refAt, out)
 	}
