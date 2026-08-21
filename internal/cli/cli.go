@@ -511,7 +511,7 @@ func parseWithFlags(withFlags []string, includeTools, includeSubagents bool) (to
 			case "subagents":
 				subagents = true
 			default:
-				return false, false, false, fmt.Errorf("invalid --with choice %q (valid: tools, thinking, subagents)", part)
+				return false, false, false, ExitError{Code: 2, Msg: fmt.Sprintf("invalid --with choice %q (valid: tools, thinking, subagents)", part)}
 			}
 		}
 	}
