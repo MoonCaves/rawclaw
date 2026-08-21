@@ -1973,7 +1973,7 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 			renderWarnings(w, env.Warnings, WarnCurrentTurnExcluded)
 			return
 		}
-		fmt.Fprintln(w, "No matches. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.")
+		fmt.Fprintln(w, "No matches · live-indexed on invoke. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.")
 		renderWarnings(w, env.Warnings)
 		return
 	}

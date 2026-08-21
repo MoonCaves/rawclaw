@@ -378,7 +378,7 @@ func TestRenderSearch(t *testing.T) {
 	t.Run("no matches", func(t *testing.T) {
 		var buf bytes.Buffer
 		renderSearch(&buf, SearchEnvelope{Results: []SearchRef{}, Complete: true}, "q", "across all projects")
-		want := "No matches. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.\n"
+		want := "No matches · live-indexed on invoke. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.\n"
 		if buf.String() != want {
 			t.Fatalf("got %q, want %q", buf.String(), want)
 		}
