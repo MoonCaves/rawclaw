@@ -581,6 +581,14 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	if err := validateChoice("source", o.Source, "claude", "codex", "antigravity"); err != nil {
 		return err
 	}
+	// --this-project resolves the cwd to ONE transcript dir with no runtime
+	// axis, so --source cannot narrow it — and both search and browse used to
+	// drop the flag silently in that combo (browse even printed the source in
+	// its header while ignoring it). Until the composable filter exists,
+	// refuse loudly rather than answer a different question.
+	if o.ThisProject && o.Source != "" {
+		return fmt.Errorf("--source does not compose with --this-project yet; scope by path instead: --source %s --include-path <dir-regex>", o.Source)
+	}
 
 	if o.List {
 		ListProjects(out)
@@ -1153,11 +1161,12 @@ func browseScopeJSON(o *Options, projects int, rows []view.BrowseAllRow) any {
 	}
 	return struct {
 		Scope       string              `json:"scope"`
+		Source      string              `json:"source,omitempty"`
 		IncludePath string              `json:"include_path,omitempty"`
 		ExcludePath string              `json:"exclude_path,omitempty"`
 		Projects    int                 `json:"projects"`
 		Sessions    []view.BrowseAllRow `json:"sessions"`
-	}{scope, o.IncludePath, o.ExcludePath, projects, rows}
+	}{scope, o.Source, o.IncludePath, o.ExcludePath, projects, rows}
 }
 
 // runSearch dispatches a query to the FALLBACK / BRIEF / DISCOVERY shapes.

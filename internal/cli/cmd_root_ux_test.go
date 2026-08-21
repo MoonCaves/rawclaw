@@ -349,3 +349,41 @@ func TestBrowseSourceScopesAcrossProjects(t *testing.T) {
 		t.Errorf("browse --source codex leaked Claude sessions:\n%s", out)
 	}
 }
+
+// TestSourceThisProjectRefusedLoudly: --source cannot narrow --this-project's
+// single transcript dir (no runtime axis there), and both search and browse
+// used to drop the flag silently in that combo — browse's header even named
+// the source it was ignoring. The combo must error until the composable
+// filter exists, never answer a different question.
+func TestSourceThisProjectRefusedLoudly(t *testing.T) {
+	root := newCfgRoot(t)
+	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"2026-06-01T10:00:00Z", "question about apples")
+
+	for _, args := range [][]string{
+		{"--this-project", "--source", "codex"},           // browse shape
+		{"--this-project", "--source", "codex", "apples"}, // search shape
+	} {
+		out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", args...)
+		if err == nil || !strings.Contains(err.Error(), "--this-project") {
+			t.Errorf("args %v: want loud refusal, got err=%v out:\n%s", args, err, out)
+		}
+	}
+}
+
+// TestBrowseSourceJSONCarriesSource: the machine shape of a --source browse
+// names the source scope, so a JSON consumer can tell an honestly-empty
+// filtered answer from an unfiltered one.
+func TestBrowseSourceJSONCarriesSource(t *testing.T) {
+	root := newCfgRoot(t)
+	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"2026-06-01T10:00:00Z", "question about apples")
+
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--source", "claude", "--json", "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("browse --source --json: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, `"source": "claude"`) && !strings.Contains(out, `"source":"claude"`) {
+		t.Errorf("browse JSON does not carry the source scope:\n%s", out)
+	}
+}
