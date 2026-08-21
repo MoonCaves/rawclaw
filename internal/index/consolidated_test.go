@@ -468,6 +468,49 @@ func tagSession(t *testing.T, dbp, sessionID, startUUID, topic, summary string, 
 	}
 }
 
+// tagSessionWithOrigin writes one topic segment with an explicit origin_machine into a per-project db.
+func tagSessionWithOrigin(t *testing.T, dbp, sessionID, startUUID, topic, summary, origin string, taggedAt float64) {
+	t.Helper()
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open %s for tagging: %v", dbp, err)
+	}
+	defer con.Close()
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("ensure topic schema: %v", err)
+	}
+	if err := store.ReplaceSessionSegments(con, sessionID, []store.TopicSegment{
+		{
+			SessionID:     sessionID,
+			StartUUID:     startUUID,
+			EndUUID:       startUUID,
+			Topic:         topic,
+			Summary:       summary,
+			TaggedAt:      taggedAt,
+			OriginMachine: origin,
+		},
+	}); err != nil {
+		t.Fatalf("tag %s: %v", sessionID, err)
+	}
+}
+
+// setVerdict writes one session verdict into a per-project db, the way the
+// tagging path does, so consolidation tests have a verdict layer to fold.
+func setVerdict(t *testing.T, dbp string, v store.Verdict) {
+	t.Helper()
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open %s for verdict: %v", dbp, err)
+	}
+	defer con.Close()
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("ensure topic schema: %v", err)
+	}
+	if err := store.UpsertVerdict(con, v); err != nil {
+		t.Fatalf("upsert verdict on %s: %v", dbp, err)
+	}
+}
+
 // firstSessionID returns the one session id a single-transcript project db
 // holds, so a test can tag it without hardcoding the derived id.
 func firstSessionID(t *testing.T, dbp string) string {
@@ -558,6 +601,77 @@ func TestConsolidate_RefoldsAfterRetagging(t *testing.T) {
 	if got := scalar(t, con, "SELECT topic FROM topic_segment WHERE session_id=?", sid); got != "invoice reconciliation" {
 		t.Fatalf("topic after re-tag = %q, want the label added between passes", got)
 	}
+}
+
+// TestConsolidate_RefoldsAfterVerdictOnlyChange pins the verdict watermark:
+// changing or adding a verdict without altering messages or topic segments
+// must update the watermark so consolidateOne re-folds and updates consolidated.db.
+func TestConsolidate_RefoldsAfterVerdictOnlyChange(t *testing.T) {
+	isolateCache(t)
+	a := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+	sid := firstSessionID(t, a)
+
+	setVerdict(t, a, store.Verdict{
+		SessionID:     sid,
+		Verdict:       store.VerdictRoutine,
+		Source:        store.VerdictSourceFloor,
+		OriginMachine: "local",
+		TaggedAt:      100,
+	})
+
+	if _, err := ConsolidateFrom([]string{a}, false); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT source FROM session_verdict WHERE session_id=?", sid); got != store.VerdictSourceFloor {
+		t.Fatalf("verdict source after first pass = %q, want %q", got, store.VerdictSourceFloor)
+	}
+	con.Close()
+
+	// Update only the verdict on the source DB (tagged_at moves forward, source changes to agent).
+	// No session or message or topic_segment rows change.
+	setVerdict(t, a, store.Verdict{
+		SessionID:     sid,
+		Verdict:       store.VerdictRoutine,
+		Source:        store.VerdictSourceAgent,
+		OriginMachine: "local",
+		TaggedAt:      200,
+	})
+
+	if _, err := ConsolidateFrom([]string{a}, false); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	con2 := openConsolidated(t)
+	if got := scalar(t, con2, "SELECT source FROM session_verdict WHERE session_id=?", sid); got != store.VerdictSourceAgent {
+		t.Errorf("verdict source after verdict-only update = %q, want %q", got, store.VerdictSourceAgent)
+	}
+	if got := scalar(t, con2, "SELECT tagged_at FROM session_verdict WHERE session_id=?", sid); got != "200" && got != "200.0" {
+		t.Errorf("verdict tagged_at after verdict-only update = %s, want 200", got)
+	}
+	con2.Close()
+
+	// Also verify SyncConsolidatedFrom works for verdict-only update
+	setVerdict(t, a, store.Verdict{
+		SessionID:     sid,
+		Verdict:       store.VerdictRoutine,
+		Source:        store.VerdictSourceFloor,
+		OriginMachine: "local",
+		TaggedAt:      300,
+	})
+	if err := SyncConsolidatedFrom(a); err != nil {
+		t.Fatalf("SyncConsolidatedFrom: %v", err)
+	}
+	con3 := openConsolidated(t)
+	if got := scalar(t, con3, "SELECT source FROM session_verdict WHERE session_id=?", sid); got != store.VerdictSourceFloor {
+		t.Errorf("verdict source after SyncConsolidatedFrom update = %q, want %q", got, store.VerdictSourceFloor)
+	}
+	if got := scalar(t, con3, "SELECT tagged_at FROM session_verdict WHERE session_id=?", sid); got != "300" && got != "300.0" {
+		t.Errorf("verdict tagged_at after SyncConsolidatedFrom update = %s, want 300", got)
+	}
+	con3.Close()
 }
 
 // TestConsolidate_LaterTaggingWinsForOneSegment covers the re-tag rule: the
@@ -732,4 +846,157 @@ func TestConsolidateKeepsSourceMessageOrder(t *testing.T) {
 				i, got[i], want[i], got)
 		}
 	}
+}
+
+// TestConsolidate_OriginAuthorityWinsForConflictingTopicSegments verifies that
+// when two source dbs have conflicting topic segments for the same session and
+// start_uuid, the one with higher origin_machine wins in consolidated.db,
+// regardless of which one has a larger tagged_at timestamp (and on equal
+// origin_machine, larger tagged_at wins).
+func TestConsolidate_OriginAuthorityWinsForConflictingTopicSegments(t *testing.T) {
+	t.Run("HigherOriginMachineWinsRegardlessOfTimestamp", func(t *testing.T) {
+		isolateCache(t)
+		transcript := `{"type":"user","cwd":"/w/shared","timestamp":"2026-06-01T10:00:00Z","uuid":"u-1","message":{"role":"user","content":"shared conversation"}}`
+		// Two source dbs representing two machines indexing the same session.
+		a := indexProject(t, "-w-peer-a", transcript)
+		b := indexProject(t, "-w-peer-b", transcript)
+		sid := firstSessionID(t, a)
+
+		// Machine A has lower origin authority ("machine-a"), but newer timestamp (2000).
+		tagSessionWithOrigin(t, a, sid, "u-1", "peer a topic", "peer a summary", "machine-a", 2000)
+		// Machine B has higher origin authority ("machine-b"), but older timestamp (1000).
+		tagSessionWithOrigin(t, b, sid, "u-1", "peer b topic", "peer b summary", "machine-b", 1000)
+
+		// Order 1: fold [a, b]
+		if _, err := ConsolidateFrom([]string{a, b}, true); err != nil {
+			t.Fatalf("consolidate [a, b]: %v", err)
+		}
+		con := openConsolidated(t)
+		if got := scalar(t, con, "SELECT topic FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "peer b topic" {
+			t.Errorf("order [a, b]: topic = %q, want %q (higher origin_machine should win)", got, "peer b topic")
+		}
+		if got := scalar(t, con, "SELECT origin_machine FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "machine-b" {
+			t.Errorf("order [a, b]: origin_machine = %q, want %q", got, "machine-b")
+		}
+		if got := scalar(t, con, "SELECT tagged_at FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "1000" && got != "1000.0" {
+			t.Errorf("order [a, b]: tagged_at = %s, want 1000", got)
+		}
+		if got := scalar(t, con, "SELECT COUNT(*) FROM topic_fts WHERE topic_fts MATCH 'peer AND b'"); got != "1" {
+			t.Errorf("order [a, b]: topic_fts match for 'peer AND b' = %s, want 1", got)
+		}
+		if got := scalar(t, con, "SELECT COUNT(*) FROM topic_fts WHERE topic_fts MATCH 'peer AND a'"); got != "0" {
+			t.Errorf("order [a, b]: topic_fts match for 'peer AND a' = %s, want 0", got)
+		}
+		con.Close()
+
+		// Order 2: fold [b, a] (reverse order must converge to same winner)
+		if _, err := ConsolidateFrom([]string{b, a}, true); err != nil {
+			t.Fatalf("consolidate [b, a]: %v", err)
+		}
+		con2 := openConsolidated(t)
+		if got := scalar(t, con2, "SELECT topic FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "peer b topic" {
+			t.Errorf("order [b, a]: topic = %q, want %q (higher origin_machine should win)", got, "peer b topic")
+		}
+		if got := scalar(t, con2, "SELECT origin_machine FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "machine-b" {
+			t.Errorf("order [b, a]: origin_machine = %q, want %q", got, "machine-b")
+		}
+		if got := scalar(t, con2, "SELECT tagged_at FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "1000" && got != "1000.0" {
+			t.Errorf("order [b, a]: tagged_at = %s, want 1000", got)
+		}
+		if got := scalar(t, con2, "SELECT COUNT(*) FROM topic_fts WHERE topic_fts MATCH 'peer AND b'"); got != "1" {
+			t.Errorf("order [b, a]: topic_fts match for 'peer AND b' = %s, want 1", got)
+		}
+		if got := scalar(t, con2, "SELECT COUNT(*) FROM topic_fts WHERE topic_fts MATCH 'peer AND a'"); got != "0" {
+			t.Errorf("order [b, a]: topic_fts match for 'peer AND a' = %s, want 0", got)
+		}
+		con2.Close()
+	})
+
+	t.Run("EqualOriginMachineNewerTaggedAtWins", func(t *testing.T) {
+		isolateCache(t)
+		transcript := `{"type":"user","cwd":"/w/shared","timestamp":"2026-06-01T10:00:00Z","uuid":"u-1","message":{"role":"user","content":"shared conversation"}}`
+		c1 := indexProject(t, "-w-peer-c1", transcript)
+		c2 := indexProject(t, "-w-peer-c2", transcript)
+		sid := firstSessionID(t, c1)
+
+		// Both have same origin authority ("machine-c"), but c2 is newer.
+		tagSessionWithOrigin(t, c1, sid, "u-1", "early label", "early summary", "machine-c", 100)
+		tagSessionWithOrigin(t, c2, sid, "u-1", "newer label", "newer summary", "machine-c", 300)
+
+		// Order 1: fold [c1, c2]
+		if _, err := ConsolidateFrom([]string{c1, c2}, true); err != nil {
+			t.Fatalf("consolidate [c1, c2]: %v", err)
+		}
+		con := openConsolidated(t)
+		if got := scalar(t, con, "SELECT topic FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "newer label" {
+			t.Errorf("order [c1, c2]: topic = %q, want %q (newer tagged_at on tie)", got, "newer label")
+		}
+		if got := scalar(t, con, "SELECT tagged_at FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "300" && got != "300.0" {
+			t.Errorf("order [c1, c2]: tagged_at = %s, want 300", got)
+		}
+		con.Close()
+
+		// Order 2: fold [c2, c1]
+		if _, err := ConsolidateFrom([]string{c2, c1}, true); err != nil {
+			t.Fatalf("consolidate [c2, c1]: %v", err)
+		}
+		con2 := openConsolidated(t)
+		if got := scalar(t, con2, "SELECT topic FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "newer label" {
+			t.Errorf("order [c2, c1]: topic = %q, want %q (newer tagged_at on tie)", got, "newer label")
+		}
+		if got := scalar(t, con2, "SELECT tagged_at FROM topic_segment WHERE session_id=? AND start_uuid=?", sid, "u-1"); got != "300" && got != "300.0" {
+			t.Errorf("order [c2, c1]: tagged_at = %s, want 300", got)
+		}
+		con2.Close()
+	})
+}
+
+// TestConsolidate_VerdictMergePrecedence verifies that verdicts merge by
+// latest tagged_at, and on tie broken by higher origin_machine.
+func TestConsolidate_VerdictMergePrecedence(t *testing.T) {
+	isolateCache(t)
+	transcript := `{"type":"user","cwd":"/w/shared","timestamp":"2026-06-01T10:00:00Z","uuid":"u-1","message":{"role":"user","content":"shared conversation"}}`
+	a := indexProject(t, "-w-peer-a", transcript)
+	b := indexProject(t, "-w-peer-b", transcript)
+	sid := firstSessionID(t, a)
+
+	// Equal tagged_at (100), machine-b should win tie over machine-a.
+	setVerdict(t, a, store.Verdict{
+		SessionID:     sid,
+		Verdict:       store.VerdictRoutine,
+		Source:        store.VerdictSourceFloor,
+		OriginMachine: "machine-a",
+		TaggedAt:      100,
+	})
+	setVerdict(t, b, store.Verdict{
+		SessionID:     sid,
+		Verdict:       store.VerdictRoutine,
+		Source:        store.VerdictSourceAgent,
+		OriginMachine: "machine-b",
+		TaggedAt:      100,
+	})
+
+	if _, err := ConsolidateFrom([]string{a, b}, true); err != nil {
+		t.Fatalf("consolidate [a, b]: %v", err)
+	}
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT source FROM session_verdict WHERE session_id=?", sid); got != store.VerdictSourceAgent {
+		t.Errorf("order [a, b]: source = %q, want %q (machine-b wins tie)", got, store.VerdictSourceAgent)
+	}
+	if got := scalar(t, con, "SELECT origin_machine FROM session_verdict WHERE session_id=?", sid); got != "machine-b" {
+		t.Errorf("order [a, b]: origin_machine = %q, want %q", got, "machine-b")
+	}
+	con.Close()
+
+	if _, err := ConsolidateFrom([]string{b, a}, true); err != nil {
+		t.Fatalf("consolidate [b, a]: %v", err)
+	}
+	con2 := openConsolidated(t)
+	if got := scalar(t, con2, "SELECT source FROM session_verdict WHERE session_id=?", sid); got != store.VerdictSourceAgent {
+		t.Errorf("order [b, a]: source = %q, want %q (machine-b wins tie)", got, store.VerdictSourceAgent)
+	}
+	if got := scalar(t, con2, "SELECT origin_machine FROM session_verdict WHERE session_id=?", sid); got != "machine-b" {
+		t.Errorf("order [b, a]: origin_machine = %q, want %q", got, "machine-b")
+	}
+	con2.Close()
 }
