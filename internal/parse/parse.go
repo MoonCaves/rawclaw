@@ -538,9 +538,22 @@ func epochSeconds(dt time.Time) float64 {
 // search had already stopped matching it. One rule, both surfaces: rawclaw
 // shows what a person or a model said.
 func Disp(content string, includeTools bool, cap int) string {
+	return DispWith(content, includeTools, false, cap)
+}
+
+// DispWith normalizes content for display with granular inclusion of tools and
+// thinking.
+func DispWith(content string, includeTools, includeThinking bool, cap int) string {
 	t := content
-	if !includeTools {
-		t = StripGenerated(content)
+	switch {
+	case includeTools && includeThinking:
+		// Escape hatch: keep everything as-is.
+	case includeTools && !includeThinking:
+		t = RemoveThinkingRuns(t)
+	case !includeTools && includeThinking:
+		t = StripEnvelopes(removeToolRuns(t))
+	case !includeTools && !includeThinking:
+		t = StripEnvelopes(RemoveThinkingRuns(removeToolRuns(t)))
 	}
 	return capRunes(collapseSpaces(t), cap)
 }
@@ -635,6 +648,68 @@ func envelopeTagAt(text string, i int) (string, int) {
 		}
 	}
 	return "", 0
+}
+
+// StripThinking removes [THINKING...] runs and collapses whitespace.
+func StripThinking(text string) string {
+	return collapseSpaces(RemoveThinkingRuns(text))
+}
+
+// RemoveThinkingRuns deletes every [THINKING...] run up to the next marker boundary
+// or end of string.
+func RemoveThinkingRuns(text string) string {
+	var out strings.Builder
+	i := 0
+	for i < len(text) {
+		start, hdrLen := thinkingMarkerAt(text, i)
+		if start < 0 {
+			out.WriteByte(text[i])
+			i++
+			continue
+		}
+		j := i + hdrLen
+		end := thinkingRunEnd(text, j)
+		i = end
+	}
+	return out.String()
+}
+
+// thinkingMarkerAt reports whether a thinking marker begins at position i.
+func thinkingMarkerAt(text string, i int) (int, int) {
+	const thinking = "[THINKING"
+	if strings.HasPrefix(text[i:], thinking) {
+		n := len(thinking)
+		if i+n < len(text) {
+			if text[i+n] == ']' {
+				return i, n + 1
+			}
+			if text[i+n] == ':' {
+				return i, n + 1
+			}
+		}
+	}
+	return -1, 0
+}
+
+// thinkingRunEnd scans from j (past [THINKING]) to the index of the boundary
+// " [<UPPERCASE>" (or newline boundary), or len(text).
+func thinkingRunEnd(text string, j int) int {
+	for k := j; k < len(text); k++ {
+		if isSpace(text[k]) {
+			if k+2 < len(text) && text[k+1] == '[' && isUpper(text[k+2]) {
+				return k
+			}
+			if text[k] == '\n' && k+1 < len(text) {
+				if text[k+1] == '[' {
+					return k
+				}
+				if isUpper(text[k+1]) || (k+1 < len(text) && text[k+1] != ' ' && text[k+1] != '\t') {
+					return k
+				}
+			}
+		}
+	}
+	return len(text)
 }
 
 // StripGenerated removes everything a runtime generated into a record — tool
