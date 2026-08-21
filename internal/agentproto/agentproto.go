@@ -208,22 +208,30 @@ type SearchEnvelope struct {
 	StoreNote string `json:"store_note,omitempty"`
 }
 
+// SubagentInfo is one child subagent session of a parent session.
+type SubagentInfo struct {
+	SessionID    string `json:"session_id"`
+	MessageCount int    `json:"message_count"`
+	Title        string `json:"title,omitempty"`
+}
+
 // ReadResult is a bounded excerpt around a ref. Embeds the AnchoredView shape
 // plus protocol metadata.
 type ReadResult struct {
-	Project      string `json:"project"`
-	SessionID    string `json:"session_id"`
-	AnchorID     int    `json:"anchor_id"`
-	FocusSnippet string `json:"focus_snippet"`
-	CharBudget   *int   `json:"char_budget"` // nil = no cap
-	ReadRef      string `json:"read_ref"`    // the stable "<session8>:<uuid8>" ref this read resolved
-	Truncated    bool   `json:"truncated"`
+	Project      string         `json:"project"`
+	SessionID    string         `json:"session_id"`
+	AnchorID     int            `json:"anchor_id"`
+	FocusSnippet string         `json:"focus_snippet"`
+	CharBudget   *int           `json:"char_budget"` // nil = no cap
+	ReadRef      string         `json:"read_ref"`    // the stable "<session8>:<uuid8>" ref this read resolved
+	Truncated    bool           `json:"truncated"`
 	// Never-silent trim (#5): when Truncated, these carry the machine counts AND
 	// the literal command an agent re-issues to recover the hidden content. Empty
 	// when nothing was trimmed.
-	TrimmedChars int    `json:"trimmed_chars,omitempty"`
-	TrimmedMsgs  int    `json:"trimmed_msgs,omitempty"`
-	NextCommand  string `json:"next_command,omitempty"`
+	TrimmedChars int            `json:"trimmed_chars,omitempty"`
+	TrimmedMsgs  int            `json:"trimmed_msgs,omitempty"`
+	NextCommand  string         `json:"next_command,omitempty"`
+	Subagents    []SubagentInfo `json:"subagents,omitempty"`
 	*view.AnchoredView
 }
 
@@ -244,7 +252,8 @@ type OutlineResult struct {
 	Start        []view.ViewMsg `json:"start"`
 	End          []view.ViewMsg `json:"end"`
 	MidCount     int            `json:"mid_count"`
-	Topics       []string       `json:"topics,omitempty"` // topic-layer segment labels for this session, in order
+	Topics       []string       `json:"topics,omitempty"`    // topic-layer segment labels for this session, in order
+	Subagents    []SubagentInfo `json:"subagents,omitempty"` // child subagent threads for this session
 }
 
 // SearchOpts groups the optional search filters (keeps the signature small).
@@ -997,7 +1006,6 @@ func SearchAndRender(
 // ReadAndRender resolves ref within scope and writes the bounded excerpt to w
 // (JSON when wantJSON). The exported entry the top-level `read` subcommand calls,
 // so reading is a top-level verb (`rawclaw read <ref>`).
-// moreLevel 0 = the default window; >0 widens it via the expand-in-place ladder.
 // scope nil = every project, enumerated through more only if the one store
 // cannot answer the ref (see ScopeFn).
 func ReadAndRender(
@@ -1005,24 +1013,11 @@ func ReadAndRender(
 	ref string,
 	scope []view.Scope,
 	more ScopeFn,
-	focus string,
-	budget *int,
-	includeTools bool,
-	moreLevel, around int,
+	opts ReadOpts,
 	wantJSON bool,
 ) error {
-	window := 0
-	if moreLevel > 0 {
-		window = moreWindow(moreLevel)
-	}
-	result, err := Read(ref, scope, ReadOpts{
-		Focus:         focus,
-		Budget:        budget,
-		IncludeTools:  includeTools,
-		Window:        window,
-		Around:        around,
-		ScopeFallback: more,
-	})
+	opts.ScopeFallback = more
+	result, err := Read(ref, scope, opts)
 	if err != nil {
 		return err
 	}
@@ -1036,8 +1031,9 @@ func ReadAndRender(
 // OutlineAndRender resolves session8 within scope and writes its goal→resolution
 // arc to w (JSON when wantJSON). The exported entry the top-level `outline`
 // subcommand calls.
-func OutlineAndRender(w io.Writer, session8 string, scope []view.Scope, more ScopeFn, includeTools, wantJSON bool) error {
-	result, err := outline(session8, scope, more, includeTools)
+func OutlineAndRender(w io.Writer, session8 string, scope []view.Scope, more ScopeFn, opts OutlineOpts, wantJSON bool) error {
+	opts.ScopeFallback = more
+	result, err := outline(session8, scope, more, opts)
 	if err != nil {
 		return err
 	}
@@ -1389,16 +1385,23 @@ func sortCandidates(cands []retrieve.Anchor, mode string) {
 //   - Around  > 0           → re-center the window `Around` messages after the
 //     anchor (scroll within the session on the SAME stable ref).
 type ReadOpts struct {
-	Focus        string
-	Budget       *int // nil = no cap (the default since #3)
-	IncludeTools bool
-	Window       int
-	Around       int
+	Focus            string
+	Budget           *int // nil = no cap (the default since #3)
+	IncludeTools     bool
+	IncludeThinking  bool
+	IncludeSubagents bool
+	Window           int
+	Around           int
 
 	// ScopeFallback supplies the project list for a nil scope, called ONLY if
 	// the one store cannot answer the id (see ScopeFn). Nil = every project
 	// under a background context.
 	ScopeFallback ScopeFn
+}
+
+// MoreWindow maps a --more level (0 = none) to a window radius.
+func MoreWindow(level int) int {
+	return moreWindow(level)
 }
 
 // moreWindow maps a --more level (0 = none) to a window radius. Level 0 keeps the
@@ -1448,9 +1451,10 @@ func Read(ref string, scope []view.Scope, opts ReadOpts) (*ReadResult, error) {
 	center := msgID + opts.Around // --around shifts the window center on the same ref
 
 	av := view.BuildAnchoredView(con, fullSID, center, view.AnchoredViewOpts{
-		Window:       window,
-		Bookend:      readBookend,
-		IncludeTools: opts.IncludeTools,
+		Window:          window,
+		Bookend:         readBookend,
+		IncludeTools:    opts.IncludeTools,
+		IncludeThinking: opts.IncludeThinking,
 	})
 	if av == nil {
 		return nil, fmt.Errorf("message %q not found in session %q", uuid8, session8)
@@ -1458,6 +1462,18 @@ func Read(ref string, scope []view.Scope, opts ReadOpts) (*ReadResult, error) {
 
 	st := applyBudget(av, opts.Budget)
 	focusSnippet := focusHighlight(av.Window, opts.Focus)
+
+	var subagents []SubagentInfo
+	if opts.IncludeSubagents {
+		if subs, err := store.SubagentsForSession(con, fullSID); err == nil {
+			for _, s := range subs {
+				subagents = append(subagents, SubagentInfo{
+					SessionID:    s.ID,
+					MessageCount: s.MessageCount,
+				})
+			}
+		}
+	}
 
 	// Build the never-silent recovery command on the SAME stable ref (#5): an
 	// agent re-issues it verbatim to widen the window and recover the hidden
@@ -1478,6 +1494,7 @@ func Read(ref string, scope []view.Scope, opts ReadOpts) (*ReadResult, error) {
 		TrimmedChars: st.OmittedChars,
 		TrimmedMsgs:  st.OmittedMsgs,
 		NextCommand:  nextCmd,
+		Subagents:    subagents,
 		AnchoredView: av,
 	}, nil
 }
@@ -1842,16 +1859,30 @@ func LocateSession(session8 string, scope []view.Scope, more ScopeFn) (dbPath, f
 // ── verb: outline ────────────────────────────────────────────────────────────
 
 // Outline returns a session's bookend arc (first/last N user+assistant messages).
+// OutlineOpts groups optional inclusion and fallback options for Outline.
+type OutlineOpts struct {
+	IncludeTools     bool
+	IncludeThinking  bool
+	IncludeSubagents bool
+	ScopeFallback    ScopeFn
+}
+
+// Outline returns a session's bookend arc (first/last N user+assistant messages).
 // Returns an error if the session is not found. A pasted read-ref token
 // ("ref=<session8>:<uuid8>" or "<session8>:<uuid8>") resolves via its session half.
 func Outline(session8 string, scope []view.Scope, includeTools bool) (*OutlineResult, error) {
-	return outline(session8, scope, nil, includeTools)
+	return outline(session8, scope, nil, OutlineOpts{IncludeTools: includeTools})
+}
+
+// OutlineWith returns a session's outline with granular inclusion options.
+func OutlineWith(session8 string, scope []view.Scope, opts OutlineOpts) (*OutlineResult, error) {
+	return outline(session8, scope, opts.ScopeFallback, opts)
 }
 
 // outline is Outline with the nil-scope enumeration deferred to more (ScopeFn),
 // which is what the CLI passes so an id the one store answers never enumerates
 // the per-project indexes.
-func outline(session8 string, scope []view.Scope, more ScopeFn, includeTools bool) (*OutlineResult, error) {
+func outline(session8 string, scope []view.Scope, more ScopeFn, opts OutlineOpts) (*OutlineResult, error) {
 	session8 = normalizeSessionArg(session8)
 
 	dbp, fullSID, proj, locErr := locateSession(scope, more, session8)
@@ -1879,8 +1910,8 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, includeTools boo
 	// Trim the over-fetched rows down to what a reader should see BEFORE the
 	// overlap dedup below: deduping first would compare forty raw rows against
 	// forty raw rows and swallow the whole tail of a short session.
-	startRows = view.FilterDisplayable(startRows, OutlineBookend, includeTools)
-	endRows = view.FilterDisplayable(endRows, OutlineBookend, includeTools) // DESC: nearest the end first
+	startRows = view.FilterDisplayableWith(startRows, OutlineBookend, opts.IncludeTools, opts.IncludeThinking)
+	endRows = view.FilterDisplayableWith(endRows, OutlineBookend, opts.IncludeTools, opts.IncludeThinking) // DESC: nearest the end first
 
 	startIDs := map[int]struct{}{}
 	for _, r := range startRows {
@@ -1897,8 +1928,8 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, includeTools boo
 		endMsgs = append(endMsgs, r)
 	}
 
-	startOut := view.RenderMsgs(startRows, includeTools, outlineDispCap)
-	endOut := view.RenderMsgs(endMsgs, includeTools, outlineDispCap)
+	startOut := view.RenderMsgsWith(startRows, opts.IncludeTools, opts.IncludeThinking, outlineDispCap)
+	endOut := view.RenderMsgsWith(endMsgs, opts.IncludeTools, opts.IncludeThinking, outlineDispCap)
 
 	lastStartID := 0
 	if len(startRows) > 0 {
@@ -1929,6 +1960,18 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, includeTools boo
 		}
 	}
 
+	var subagents []SubagentInfo
+	if opts.IncludeSubagents {
+		if subs, err := store.SubagentsForSession(con, fullSID); err == nil {
+			for _, s := range subs {
+				subagents = append(subagents, SubagentInfo{
+					SessionID:    s.ID,
+					MessageCount: s.MessageCount,
+				})
+			}
+		}
+	}
+
 	return &OutlineResult{
 		Project:      proj,
 		SessionID:    fullSID,
@@ -1938,6 +1981,7 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, includeTools boo
 		End:          endOut,
 		MidCount:     midCount,
 		Topics:       topics,
+		Subagents:    subagents,
 	}, nil
 }
 
@@ -2178,6 +2222,13 @@ func renderRead(w io.Writer, r *ReadResult) {
 	} else {
 		fmt.Fprintf(w, "\n  keep reading:  rawclaw read %s --more   (or --around N to shift)\n", r.ReadRef)
 	}
+	if len(r.Subagents) > 0 {
+		fmt.Fprintln(w, "  ─ subagents ─")
+		for _, s := range r.Subagents {
+			fmt.Fprintf(w, "     %s (%d msgs)\n", sid8(s.SessionID), s.MessageCount)
+		}
+		fmt.Fprintln(w)
+	}
 	// Freshness: the last footer line, always.
 	fmt.Fprintf(w, "note: %s\n", freshnessNote)
 }
@@ -2204,6 +2255,12 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 		fmt.Fprintln(w, "  ── RESOLUTION (session close) ──")
 		for _, m := range r.End {
 			fmt.Fprintf(w, "     [%s #%d] %s\n", m.Role, m.ID, m.Text)
+		}
+	}
+	if len(r.Subagents) > 0 {
+		fmt.Fprintln(w, "\n  ── SUBAGENTS ──")
+		for _, s := range r.Subagents {
+			fmt.Fprintf(w, "     %s (%d msgs)\n", sid8(s.SessionID), s.MessageCount)
 		}
 	}
 }

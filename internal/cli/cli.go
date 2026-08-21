@@ -506,7 +506,32 @@ func resolveTDir(dir string, explicit bool) string {
 // newReadCmd wires the top-level `rawclaw read <session8:uuid8>` verb: a bounded,
 // expand-in-place excerpt around a search ref. The agent-native read path,
 // promoted out of the `agent` subcommand into its own verb. Thin wrapper over
-// agentproto.Read — flag parsing only, no business logic.
+func parseWithFlags(withFlags []string, includeTools, includeSubagents bool) (tools, thinking, subagents bool, err error) {
+	tools = includeTools
+	subagents = includeSubagents
+	for _, w := range withFlags {
+		for _, part := range strings.Split(w, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			switch part {
+			case "tools":
+				tools = true
+			case "thinking":
+				thinking = true
+			case "subagents":
+				subagents = true
+			default:
+				return false, false, false, ExitError{Code: 2, Msg: fmt.Sprintf("invalid --with choice %q (valid: tools, thinking, subagents)", part)}
+			}
+		}
+	}
+	return tools, thinking, subagents, nil
+}
+
+// newReadCmd wires the top-level `rawclaw read <ref>` verb: a bounded excerpt
+// around a search ref (<session8>:<uuid8>). Thin wrapper over agentproto.Read.
 func newReadCmd() *cobra.Command {
 	var (
 		focus        string
@@ -514,6 +539,7 @@ func newReadCmd() *cobra.Command {
 		moreLevel    int
 		around       int
 		includeTools bool
+		withFlags    []string
 		thisProject  bool
 		dir          string
 		jsonOut      bool
@@ -535,9 +561,25 @@ func newReadCmd() *cobra.Command {
 				v := budget
 				b = &v
 			}
+			tools, thinking, subagents, err := parseWithFlags(withFlags, includeTools, false)
+			if err != nil {
+				return err
+			}
+			window := 0
+			if moreLevel > 0 {
+				window = agentproto.MoreWindow(moreLevel)
+			}
 			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
-			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], scope, more,
-				focus, b, includeTools, moreLevel, around, jsonOut); err != nil {
+			ropts := agentproto.ReadOpts{
+				Focus:            focus,
+				Budget:           b,
+				IncludeTools:     tools,
+				IncludeThinking:  thinking,
+				IncludeSubagents: subagents,
+				Window:           window,
+				Around:           around,
+			}
+			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], scope, more, ropts, jsonOut); err != nil {
 				return err
 			}
 			maybeAutosync() // after the excerpt is printed; never before
@@ -552,6 +594,7 @@ func newReadCmd() *cobra.Command {
 	f.Lookup("more").NoOptDefVal = "1"
 	f.IntVar(&around, "around", 0, "re-center the window N messages from the anchor")
 	f.BoolVar(&includeTools, "include-tools", false, "include tool calls in the excerpt")
+	f.StringSliceVar(&withFlags, "with", nil, "include extra content in the excerpt: tools, thinking, subagents (comma-separated or repeated)")
 	f.BoolVar(&thisProject, "this-project", false, "limit to this project (default: all projects)")
 	f.StringVar(&dir, "dir", cwd(), "project working dir for --this-project")
 	f.BoolVar(&jsonOut, "json", false, "machine-readable JSON output")
@@ -562,10 +605,12 @@ func newReadCmd() *cobra.Command {
 // goal→resolution arc. Thin wrapper over agentproto.Outline.
 func newOutlineCmd() *cobra.Command {
 	var (
-		includeTools bool
-		thisProject  bool
-		dir          string
-		jsonOut      bool
+		includeTools     bool
+		includeSubagents bool
+		withFlags        []string
+		thisProject      bool
+		dir              string
+		jsonOut          bool
 	)
 	cmd := &cobra.Command{
 		Use:   "outline <session8>",
@@ -576,9 +621,18 @@ func newOutlineCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			tools, thinking, subagents, err := parseWithFlags(withFlags, includeTools, includeSubagents)
+			if err != nil {
+				return err
+			}
 			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
+			oopts := agentproto.OutlineOpts{
+				IncludeTools:     tools,
+				IncludeThinking:  thinking,
+				IncludeSubagents: subagents,
+			}
 			if err := agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0],
-				scope, more, includeTools, jsonOut); err != nil {
+				scope, more, oopts, jsonOut); err != nil {
 				return err
 			}
 			maybeAutosync() // after the arc is printed; never before
@@ -587,6 +641,8 @@ func newOutlineCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.BoolVar(&includeTools, "include-tools", false, "include tool calls in the arc")
+	f.BoolVar(&includeSubagents, "include-subagents", false, "include subagent threads in the arc")
+	f.StringSliceVar(&withFlags, "with", nil, "include extra sections in outline: tools, thinking, subagents (comma-separated or repeated)")
 	f.BoolVar(&thisProject, "this-project", false, "limit to this project (default: all projects)")
 	f.StringVar(&dir, "dir", cwd(), "project working dir for --this-project")
 	f.BoolVar(&jsonOut, "json", false, "machine-readable JSON output")
