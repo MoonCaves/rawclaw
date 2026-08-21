@@ -18,9 +18,7 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/source"
-	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
-	"github.com/MoonCaves/rawclaw/internal/source/claude"
-	"github.com/MoonCaves/rawclaw/internal/source/codex"
+	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/timefmt"
 )
 
@@ -74,10 +72,10 @@ type timedSession struct {
 	mtime time.Time
 }
 
-// sources returns the transcript readers the serving half enumerates —
+// registrations returns the transcript readers the serving half enumerates —
 // the same adapters ingest uses, so live sees exactly what search would.
-func sources() []source.Registration {
-	return []source.Registration{claude.Registration(), codex.Registration(), antigravity.Registration()}
+func registrations() []source.Registration {
+	return sources.Registered()
 }
 
 // localSessions enumerates every top-level session on this machine straight
@@ -86,7 +84,7 @@ func sources() []source.Registration {
 func localSessions() []timedSession {
 	now := time.Now()
 	var out []timedSession
-	for _, reg := range sources() {
+	for _, reg := range registrations() {
 		containers, err := reg.New().Discover()
 		if err != nil {
 			slog.Warn("live: source enumeration failed", "source", reg.ID, "err", err)

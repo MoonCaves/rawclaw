@@ -5,9 +5,10 @@
 // adapters, and consumed by the index, which never learns a source's format.
 //
 // Adapters live in subpackages (internal/source/claude, internal/source/codex)
-// and import this package; this package imports none of them. Wire adapters
-// explicitly with Register at start-up — never via init()-time self-registration
-// (implicit ordering, no error path, breaks test isolation).
+// and import this package; this package imports none of them. The explicit
+// internal/sources composition root wires adapters with Register — never via
+// init()-time self-registration (implicit ordering, no error path, breaks test
+// isolation).
 package source
 
 import "github.com/MoonCaves/rawclaw/internal/model"
@@ -48,7 +49,7 @@ type Registration struct {
 // registry holds the explicitly-registered sources, in registration order.
 var registry []Registration
 
-// Register adds a source. Call it once at wire-up (cli/main), never from init().
+// Register adds a source. Call it once at explicit wire-up, never from init().
 func Register(r Registration) { registry = append(registry, r) }
 
 // Registered returns the registered sources in registration order. The returned
@@ -101,4 +102,3 @@ func ResumeCommand(sourceTool, sessionID, cwd string) string {
 	}
 	return cmd
 }
-
