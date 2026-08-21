@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
@@ -83,10 +84,18 @@ func EnsureFreshContainer(
 	return nMessages, nil
 }
 
+func backingFilePath(p string) string {
+	if idx := strings.IndexByte(p, '#'); idx >= 0 {
+		return p[:idx]
+	}
+	return p
+}
+
 func verifyFreshContainer(dbp string, c source.Container) (int, error) {
-	st, err := os.Stat(c.Path)
+	rawPath := backingFilePath(c.Path)
+	st, err := os.Stat(rawPath)
 	if err != nil {
-		return 0, fmt.Errorf("stat live transcript %s: %w", c.Path, err)
+		return 0, fmt.Errorf("stat live transcript %s: %w", rawPath, err)
 	}
 	con, err := store.ConnectRO(dbp)
 	if err != nil {
@@ -108,7 +117,7 @@ func verifyFreshContainer(dbp string, c source.Container) (int, error) {
 		return 0, fmt.Errorf("verify refreshed transcript %s: %w", c.Path, err)
 	}
 	wantMTime := mtimeOf(st)
-	wantFP := provenance.FileFingerprint(c.Path, st.Size())
+	wantFP := provenance.FileFingerprint(rawPath, st.Size())
 	if sessionID != c.ID || size != st.Size() || absDiff(mtime, wantMTime) >= 0.001 || fp != wantFP {
 		return 0, fmt.Errorf("live transcript %s changed or was not fully refreshed", c.Path)
 	}
@@ -217,7 +226,8 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 
 	for _, c := range cs {
 		rp := realpath(c.Path)
-		st, err := os.Stat(c.Path)
+		rawPath := backingFilePath(c.Path)
+		st, err := os.Stat(rawPath)
 		if err != nil {
 			continue
 		}
@@ -228,7 +238,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		size := st.Size()
 		if prev, found := cur[rp]; found {
 			if absDiff(prev.mtime, mtime) < 0.001 && prev.size == size {
-				if prev.fp == provenance.FileFingerprint(c.Path, size) {
+				if prev.fp == provenance.FileFingerprint(rawPath, size) {
 					continue // genuinely unchanged
 				}
 			}
