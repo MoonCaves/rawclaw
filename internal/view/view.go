@@ -97,8 +97,8 @@ type Scope struct {
 const bookendScan = 40
 
 // bookendFetch is how many rows to read to satisfy a bookend of opts.Bookend
-// displayable ones. Asking for tools back means no rows get dropped, so the
-// fetch is exact; otherwise it is bounded by bookendScan.
+// displayable ones. Asking for tools or thinking back means fewer rows get dropped,
+// so the fetch is exact or bounded by bookendScan.
 func bookendFetch(opts AnchoredViewOpts) int {
 	if opts.IncludeTools {
 		return opts.Bookend
@@ -128,17 +128,39 @@ func IsDisplayable(content string) bool {
 	return !isBareBlockMarker(parse.Disp(content, false, -1))
 }
 
+// IsDisplayableWith reports whether a record still says something according to
+// the requested tool and thinking inclusions.
+func IsDisplayableWith(content string, includeTools, includeThinking bool) bool {
+	if includeTools {
+		return strings.TrimSpace(content) != ""
+	}
+	t := parse.DispWith(content, includeTools, includeThinking, -1)
+	if strings.TrimSpace(t) == "" {
+		return false
+	}
+	if IsInterruptionMarker(content) {
+		return false
+	}
+	return !isBareBlockMarker(t)
+}
+
 // FilterDisplayable keeps the first want displayable records of msgs, in the
 // order given. Callers that want the records nearest the END of a session pass
 // them newest-first and reverse the result. With includeTools set nothing is
 // dropped and this is a plain take-want.
 func FilterDisplayable(msgs []store.Msg, want int, includeTools bool) []store.Msg {
+	return FilterDisplayableWith(msgs, want, includeTools, false)
+}
+
+// FilterDisplayableWith keeps the first want displayable records of msgs with
+// granular tool and thinking inclusion.
+func FilterDisplayableWith(msgs []store.Msg, want int, includeTools, includeThinking bool) []store.Msg {
 	out := make([]store.Msg, 0, want)
 	for _, m := range msgs {
 		if len(out) == want {
 			break
 		}
-		if !includeTools && !IsDisplayable(m.Content) {
+		if !includeTools && !IsDisplayableWith(m.Content, includeTools, includeThinking) {
 			continue
 		}
 		out = append(out, m)
@@ -148,23 +170,38 @@ func FilterDisplayable(msgs []store.Msg, want int, includeTools bool) []store.Ms
 
 // RenderMsgs renders store rows for display at the given cap.
 func RenderMsgs(msgs []store.Msg, includeTools bool, cap int) []ViewMsg {
+	return RenderMsgsWith(msgs, includeTools, false, cap)
+}
+
+// RenderMsgsWith renders store rows for display with granular tool/thinking inclusion.
+func RenderMsgsWith(msgs []store.Msg, includeTools, includeThinking bool, cap int) []ViewMsg {
 	out := make([]ViewMsg, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, ViewMsg{ID: m.ID, Role: m.Role, Text: parse.Disp(m.Content, includeTools, cap)})
+		out = append(out, ViewMsg{ID: m.ID, Role: m.Role, Text: parse.DispWith(m.Content, includeTools, includeThinking, cap)})
 	}
 	return out
 }
 
 // TakeDisplayable renders the FIRST want displayable records of msgs.
 func TakeDisplayable(msgs []store.Msg, want int, includeTools bool, cap int) []ViewMsg {
-	return RenderMsgs(FilterDisplayable(msgs, want, includeTools), includeTools, cap)
+	return TakeDisplayableWith(msgs, want, includeTools, false, cap)
+}
+
+// TakeDisplayableWith renders the FIRST want displayable records with granular inclusions.
+func TakeDisplayableWith(msgs []store.Msg, want int, includeTools, includeThinking bool, cap int) []ViewMsg {
+	return RenderMsgsWith(FilterDisplayableWith(msgs, want, includeTools, includeThinking), includeTools, includeThinking, cap)
 }
 
 // TakeDisplayableTail renders the LAST want displayable records of msgs, still
 // in chronological order. Used for a closing bookend, where the interesting
 // records are the ones nearest the end.
 func TakeDisplayableTail(msgs []store.Msg, want int, includeTools bool, cap int) []ViewMsg {
-	return RenderMsgs(Reversed(FilterDisplayable(Reversed(msgs), want, includeTools)), includeTools, cap)
+	return TakeDisplayableTailWith(msgs, want, includeTools, false, cap)
+}
+
+// TakeDisplayableTailWith renders the LAST want displayable records with granular inclusions.
+func TakeDisplayableTailWith(msgs []store.Msg, want int, includeTools, includeThinking bool, cap int) []ViewMsg {
+	return RenderMsgsWith(Reversed(FilterDisplayableWith(Reversed(msgs), want, includeTools, includeThinking)), includeTools, includeThinking, cap)
 }
 
 // Reversed returns msgs in the opposite order.
@@ -180,9 +217,10 @@ func Reversed(msgs []store.Msg) []store.Msg {
 // bookend size, tool inclusion) to keep the signature small.
 // Defaults: Window=5, Bookend=3, IncludeTools=false.
 type AnchoredViewOpts struct {
-	Window       int
-	Bookend      int
-	IncludeTools bool
+	Window          int
+	Bookend         int
+	IncludeTools    bool
+	IncludeThinking bool
 }
 
 // BuildAnchoredView builds the ±window + bookends shape around anchorID in
@@ -224,9 +262,9 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 		if isAnchor {
 			cap = -1
 		}
-		text := parse.Disp(m.Content, opts.IncludeTools, cap)
+		text := parse.DispWith(m.Content, opts.IncludeTools, opts.IncludeThinking, cap)
 		if !isAnchor { // neighbours are context: conversation only
-			if !opts.IncludeTools && !IsDisplayable(m.Content) {
+			if !opts.IncludeTools && !IsDisplayableWith(m.Content, opts.IncludeTools, opts.IncludeThinking) {
 				continue
 			}
 			if text == "" {
@@ -236,7 +274,7 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 			// The caller named this record by ref. If everything in it was
 			// generated, show it raw rather than an empty line — refusing to
 			// render the row someone asked for by id would be the worse lie.
-			text = parse.Disp(m.Content, true, cap)
+			text = parse.DispWith(m.Content, true, true, cap)
 		}
 		wmsgs = append(wmsgs, ViewMsg{ID: m.ID, Role: m.Role, Text: text, Anchor: isAnchor})
 	}
@@ -249,13 +287,13 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 		be, _ = store.BookendMessages(con, sessionID, winMax, true, false, bookendFetch(opts))
 	}
 
-	bookendStart := TakeDisplayable(bs, opts.Bookend, opts.IncludeTools, dispCap)
+	bookendStart := TakeDisplayableWith(bs, opts.Bookend, opts.IncludeTools, opts.IncludeThinking, dispCap)
 	// bookend_end: emit reversed(be) (be is DESC, so output is ASC by id).
 	rev := make([]store.Msg, 0, len(be))
 	for i := len(be) - 1; i >= 0; i-- {
 		rev = append(rev, be[i])
 	}
-	bookendEnd := TakeDisplayableTail(rev, opts.Bookend, opts.IncludeTools, dispCap)
+	bookendEnd := TakeDisplayableTailWith(rev, opts.Bookend, opts.IncludeTools, opts.IncludeThinking, dispCap)
 
 	messagesBefore := len(before) - 1
 	if messagesBefore < 0 {
