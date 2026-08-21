@@ -36,6 +36,15 @@ func (a *Archive) ingestForeignTags(scopes []view.Scope, reindex bool) {
 			skipped = true // an unreadable (e.g. briefly locked) scope: retry it later
 			continue
 		}
+		// Archive-built scope dbs never pass through the tag/index paths that
+		// apply the topic sidecar, so ensure it here before writing topic rows
+		// (idempotent, version-stamped — steady state is one meta read).
+		if err := store.EnsureTopicSchema(con); err != nil {
+			slog.Warn("archive: topic schema ensure failed", "scope", sc.DBP, "err", err)
+			_ = con.Close()
+			skipped = true // retry this scope next pass, same as an unreadable one
+			continue
+		}
 		sids, _ := store.SessionIDsIn(con)
 		for _, sid := range sids {
 			files := gatherTagFiles(a.clone, machineDirs, sid)
