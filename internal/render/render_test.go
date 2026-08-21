@@ -79,7 +79,7 @@ func TestPrintBrowse(t *testing.T) {
 		"  · 11112222 · 12 msgs · first session\n" +
 		"  · 33334444 · 3 msgs · second\n"
 
-	emptyWant := "No sessions on alpha.\n"
+	emptyWant := "No sessions on alpha · live-indexed on invoke.\n"
 
 	tests := []struct {
 		name    string
@@ -98,6 +98,43 @@ func TestPrintBrowse(t *testing.T) {
 			PrintBrowse(&buf, tt.rows, tt.project)
 			if got := buf.String(); got != tt.want {
 				t.Errorf("PrintBrowse() output mismatch\n got: %q\nwant: %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrintBrowseAll(t *testing.T) {
+	t.Parallel()
+
+	rows := []view.BrowseAllRow{
+		{Project: "alpha", BrowseRow: view.BrowseRow{SessionID: "11112222aaaa", Last: "done", N: 12, Preview: "first session"}},
+		{Project: "beta", BrowseRow: view.BrowseRow{SessionID: "33334444bbbb", Last: "", N: 3, Preview: "second session"}},
+	}
+
+	rowsWant := "2 most-recent sessions across all projects · live-indexed on invoke:\n\n" +
+		"  · 11112222 · alpha · 12 msgs · first session\n" +
+		"      now → done\n" +
+		"  · 33334444 · beta · 3 msgs · second session\n"
+
+	emptyWant := "No sessions across all projects · live-indexed on invoke. Try --list to see the searchable projects.\n"
+
+	tests := []struct {
+		name  string
+		rows  []view.BrowseAllRow
+		scope string
+		want  string
+	}{
+		{name: "empty rows", rows: nil, scope: "all projects", want: emptyWant},
+		{name: "two rows", rows: rows, scope: "all projects", want: rowsWant},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			PrintBrowseAll(&buf, tt.rows, tt.scope)
+			if got := buf.String(); got != tt.want {
+				t.Errorf("PrintBrowseAll() output mismatch\n got: %q\nwant: %q", got, tt.want)
 			}
 		})
 	}
