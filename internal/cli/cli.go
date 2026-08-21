@@ -29,6 +29,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -265,7 +266,12 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 		return []string{"newest", "oldest"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = root.RegisterFlagCompletionFunc("source", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return []string{"claude", "codex", "antigravity"}, cobra.ShellCompDirectiveNoFileComp
+		regs := sources.Registered()
+		out := make([]string, 0, len(regs))
+		for _, r := range regs {
+			out = append(out, r.ID)
+		}
+		return out, cobra.ShellCompDirectiveNoFileComp
 	})
 	return root
 }
