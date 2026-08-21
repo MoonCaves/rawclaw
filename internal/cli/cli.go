@@ -63,10 +63,17 @@ type Options struct {
 	DebugSearch      bool
 	Timeout          time.Duration
 	DirSet           bool // --dir explicitly passed (the arbitrary-folder opt-in)
+	Oneline          bool
+	Format           string
 
 	// CurrentSession is the caller's own live session ("" = fall back to the
 	// runtime's env, "off" = don't exclude anything). Resolved by currentSession.
 	CurrentSession string
+}
+
+// oneline reports whether oneline format was requested via --oneline or --format oneline/line.
+func (o *Options) oneline() bool {
+	return o.Oneline || o.Format == "oneline" || o.Format == "line"
 }
 
 // currentSessionEnv is the Claude Code environment variable that names the
@@ -207,6 +214,8 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.IntVar(&opts.MinMessages, "min-messages", 0, "only sessions with >= N messages (drops thin/bootstrap threads)")
 	f.BoolVar(&opts.DebugSearch, "debug-search", false, "explain WHY each hit ranked where it did (LLM-free scoring breakdown)")
 	_ = f.MarkHidden("debug-search")
+	f.BoolVar(&opts.Oneline, "oneline", false, "output search hits in one-line format (<read_ref>\t<started_iso>\t<project>\t<snippet>)")
+	f.StringVar(&opts.Format, "format", "", "output format (text|oneline|line|json)")
 	f.StringVar(&opts.CurrentSession, "current-session", "",
 		"the session you are searching FROM (id or 8-char prefix); its CURRENT TURN — the prompt "+
 			"just typed and this turn's tool output — is withheld, since it is not recall and it "+
@@ -222,14 +231,17 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root.PersistentFlags().DurationVar(&opts.Timeout, "timeout", defaultTimeout,
 		"hard wall-clock deadline for the whole run; exits 124 if exceeded (0 disables; env RAWCLAW_TIMEOUT)")
 
-	// Validate the role/sort enums before running: reject anything outside the
+	// Validate the role/sort/format enums before running: reject anything outside the
 	// allowed set with an "invalid choice" message (stderr + exit 2), keeping the
 	// validation in cobra's pre-run hook.
 	root.PreRunE = func(cmd *cobra.Command, args []string) error {
 		if err := validateChoice("role", opts.Role, "user", "assistant"); err != nil {
 			return err
 		}
-		return validateChoice("sort", opts.Sort, "newest", "oldest")
+		if err := validateChoice("sort", opts.Sort, "newest", "oldest"); err != nil {
+			return err
+		}
+		return validateChoice("format", opts.Format, "text", "oneline", "line", "json")
 	}
 
 	// `--version` prints the banner verbatim (cobra's default template prefixes
@@ -355,7 +367,7 @@ var rootValueFlags = map[string]bool{
 	"--timeout": true, "--dir": true, "--limit": true, "--role": true,
 	"--source": true, "--sort": true, "--resume": true, "--since": true,
 	"--before": true, "--include-path": true, "--exclude-path": true,
-	"--min-messages": true,
+	"--min-messages": true, "--format": true,
 }
 
 // leadingSubcommandTokens returns up to n leading non-flag tokens of args —
@@ -616,6 +628,10 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 		return runStats(ctx, out, o)
 	}
 
+	if o.Format == "json" {
+		o.JSON = true
+	}
+
 	if len(args) == 0 {
 		return runBrowse(ctx, out, o)
 	}
@@ -630,6 +646,9 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 				Error string `json:"error"`
 				Hint  string `json:"hint"`
 			}{"empty query", emptyQueryHint})
+		}
+		if o.oneline() {
+			return nil
 		}
 		fmt.Fprintln(out, "Empty query. "+emptyQueryHint)
 		return nil
@@ -1203,6 +1222,14 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		if o.JSON {
 			return EmitJSON(w, rowsToJSON(res))
 		}
+		if o.oneline() {
+			for _, r := range res {
+				ref := lastSlice8(r.SessionID) + ":"
+				clean := agentproto.CleanSnippetOneline(r.Snippet)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ref, r.ISO, paths.ProjectLabel(td), clean)
+			}
+			return nil
+		}
 		// Note line followed by a blank line (trailing "\n\n").
 		fmt.Fprint(w, "[note] FTS5 unavailable on this build — slower linear scan, this project only.\n\n")
 		PrintResults(w, res, -1)
@@ -1237,6 +1264,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		ExcludePath:      o.ExcludePath,
 		Source:           o.Source,
 		CurrentSession:   o.currentSession(),
+		Oneline:          o.oneline(),
 	}
 	label := ""
 	if o.ThisProject {
