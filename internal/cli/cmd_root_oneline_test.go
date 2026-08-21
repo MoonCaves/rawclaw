@@ -350,3 +350,28 @@ func TestOnelineFormat_JSONTakesPrecedenceWhenBothSet(t *testing.T) {
 		t.Errorf("unexpected results: %+v", env.Results)
 	}
 }
+
+// TestOnelineFormat_Browse verifies that rawclaw --oneline with no query produces oneline browse output.
+func TestOnelineFormat_Browse(t *testing.T) {
+	root := newCfgRoot(t)
+	writeCustomSession(t, root, "-home-u-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"9f3e1c20-0000-0000-0000-000000000001", "2026-06-01T10:00:00Z", "first message preview")
+
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--oneline", "--dir", filepath.Join(root, "-home-u-proj-a"))
+	if err != nil {
+		t.Fatalf("browse --oneline: %v\n%s", err, out)
+	}
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want 1 line, got %d:\n%q", len(lines), out)
+	}
+	cols := strings.Split(lines[0], "\t")
+	if len(cols) != 4 {
+		t.Fatalf("want 4 columns, got %d: %q", len(cols), lines[0])
+	}
+	if !strings.HasPrefix(cols[0], "aaaa1111:") {
+		t.Errorf("ref = %q, want prefix aaaa1111:", cols[0])
+	}
+}
+
