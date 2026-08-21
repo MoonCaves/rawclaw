@@ -14,6 +14,11 @@ func (testSource) Discover() ([]source.Container, error) { return nil, nil }
 func (testSource) Messages(source.Container) ([]model.Message, error) { return nil, nil }
 
 func TestRegisteredKeepsAdditionalRuntimeWithoutDuplicates(t *testing.T) {
+	orig := source.Registered()
+	t.Cleanup(func() {
+		source.ResetForTesting(orig)
+	})
+
 	const extraID = "future-runtime-test"
 	source.Register(source.Registration{
 		ID:  extraID,
