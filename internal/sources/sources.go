@@ -4,8 +4,6 @@
 package sources
 
 import (
-	"sync"
-
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/claude"
@@ -13,16 +11,12 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/goose"
 )
 
-var registerBuiltins sync.Once
-
 // Registered wires the built-in adapters idempotently and returns every
 // registered source, including any additional adapter registered by a caller.
 func Registered() []source.Registration {
-	registerBuiltins.Do(func() {
-		source.Register(claude.Registration())
-		source.Register(codex.Registration())
-		source.Register(antigravity.Registration())
-		source.Register(goose.Registration())
-	})
+	source.Register(claude.Registration())
+	source.Register(codex.Registration())
+	source.Register(antigravity.Registration())
+	source.Register(goose.Registration())
 	return source.Registered()
 }

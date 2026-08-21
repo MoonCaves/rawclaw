@@ -49,8 +49,23 @@ type Registration struct {
 // registry holds the explicitly-registered sources, in registration order.
 var registry []Registration
 
+// ResetForTesting restores the registry slice to a specified state (for test isolation).
+func ResetForTesting(regs []Registration) {
+	registry = make([]Registration, len(regs))
+	copy(registry, regs)
+}
+
 // Register adds a source. Call it once at explicit wire-up, never from init().
-func Register(r Registration) { registry = append(registry, r) }
+// If a source with the same ID already exists, it is replaced idempotently.
+func Register(r Registration) {
+	for i, existing := range registry {
+		if existing.ID == r.ID {
+			registry[i] = r
+			return
+		}
+	}
+	registry = append(registry, r)
+}
 
 // Registered returns the registered sources in registration order. The returned
 // slice is a copy — callers may not mutate the registry through it.
