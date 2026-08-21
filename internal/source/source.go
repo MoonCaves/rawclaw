@@ -79,6 +79,8 @@ func ResumeArgv(sourceTool, sessionID string) []string {
 		return []string{"codex", "resume", sessionID}
 	case "antigravity":
 		return []string{"agy", "--conversation", sessionID}
+	case "goose":
+		return []string{"goose", "session", "--resume", sessionID}
 	case "claude":
 		return []string{"claude", "--resume", sessionID}
 	default:
