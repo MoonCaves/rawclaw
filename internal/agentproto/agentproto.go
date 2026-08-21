@@ -346,6 +346,12 @@ func normalizeSessionArg(s string) string {
 	return out
 }
 
+// NormalizeSessionArg exposes the shared pasted-ref normalization to other
+// session-taking command helpers.
+func NormalizeSessionArg(s string) string {
+	return normalizeSessionArg(s)
+}
+
 // resolveRef parses "<session8>:<uuid8>" → (session8, uuid8). The second half is
 // now an opaque hex prefix (the message uuid), not an integer rowid. A purely
 // numeric second half is a pre-migration ref and returns a migration hint.

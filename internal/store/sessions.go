@@ -93,6 +93,42 @@ type SessionRow struct {
 	Project string
 }
 
+// SessionBacking is the live transcript identity recorded on a session row.
+// It lets a caller re-read the exact backing container without rediscovering
+// every transcript tree first.
+type SessionBacking struct {
+	SourceTool string
+	SourcePath string
+	CWD        string
+	ParentID   string
+	IsSubagent bool
+}
+
+// SessionBackingFor returns the source metadata for sid. ok=false means the
+// session row is absent; query errors are returned so callers can fall back to
+// source discovery without mistaking a broken row for a live path.
+func SessionBackingFor(con *sql.DB, sid string) (backing SessionBacking, ok bool, err error) {
+	var isSubagent int
+	err = con.QueryRow(`
+		SELECT COALESCE(source_tool,''), COALESCE(source_path,''),
+		       COALESCE(cwd,''), COALESCE(parent_id,''), COALESCE(is_subagent,0)
+		FROM sessions WHERE id=?`, sid).Scan(
+		&backing.SourceTool,
+		&backing.SourcePath,
+		&backing.CWD,
+		&backing.ParentID,
+		&isSubagent,
+	)
+	if err == sql.ErrNoRows {
+		return SessionBacking{}, false, nil
+	}
+	if err != nil {
+		return SessionBacking{}, false, err
+	}
+	backing.IsSubagent = isSubagent != 0
+	return backing, true, nil
+}
+
 // SessionRowsByPrefix answers "which session is this" against ONE database that
 // holds every project. Because project is a column here, narrowing to a subset
 // of projects is a WHERE clause rather than a choice of which file to open, and

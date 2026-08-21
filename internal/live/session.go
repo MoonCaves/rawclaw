@@ -145,7 +145,7 @@ func resolvePrefix(prefix string) (source.Registration, source.Container, error)
 		c   source.Container
 	}
 	var matches []match
-	for _, reg := range sources() {
+	for _, reg := range registrations() {
 		containers, err := reg.New().Discover()
 		if err != nil {
 			continue // an unreadable source can't hold the match; others still can
