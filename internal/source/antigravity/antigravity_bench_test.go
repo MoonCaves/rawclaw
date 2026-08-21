@@ -10,6 +10,7 @@ import (
 )
 
 func BenchmarkAntigravityDiscover(b *testing.B) {
+	b.Setenv("HOME", b.TempDir())
 	tmp := b.TempDir()
 	ad := NewRoot(tmp)
 
@@ -60,6 +61,7 @@ func BenchmarkAntigravityNormalize(b *testing.B) {
 }
 
 func BenchmarkAntigravityEnsureIndexed_Incremental(b *testing.B) {
+	b.Setenv("HOME", b.TempDir())
 	tmp := b.TempDir()
 	dbp := filepath.Join(tmp, "bench.db")
 	ad := NewRoot(tmp)
