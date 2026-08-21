@@ -213,11 +213,11 @@ ORDER BY first_id
 `
 
 // topicNewer is the precedence rule between two taggings of the SAME segment
-// (one session, one start anchor). Tagging is a re-runnable act — a segment can
-// be re-tagged with a better label — so the later tagging wins. Equal or
-// missing timestamps leave the copy already in the store alone, which keeps the
+// (one session, one start anchor): origin authority wins (higher origin_machine);
+// on equal origin_machine, the later tagging wins (larger tagged_at). Equal or
+// missing values leave the copy already in the store alone, which keeps the
 // pass order-independent.
-const topicNewer = `COALESCE(excluded.tagged_at,0) > COALESCE(topic_segment.tagged_at,0)`
+const topicNewer = `(COALESCE(excluded.origin_machine, '') > COALESCE(topic_segment.origin_machine, '')) OR (COALESCE(excluded.origin_machine, '') = COALESCE(topic_segment.origin_machine, '') AND COALESCE(excluded.tagged_at, 0) > COALESCE(topic_segment.tagged_at, 0))`
 
 // mergeTopicsSQL folds one attached db's topic segments into the consolidated
 // store, keyed by the (session_id, start_uuid) identity the segment already
@@ -256,8 +256,12 @@ ON CONFLICT(session_id,start_uuid) DO UPDATE SET
   topic          = CASE WHEN ` + topicNewer + ` THEN excluded.topic          ELSE topic_segment.topic END,
   summary        = CASE WHEN ` + topicNewer + ` THEN excluded.summary        ELSE topic_segment.summary END,
   origin_machine = CASE WHEN ` + topicNewer + ` THEN excluded.origin_machine ELSE topic_segment.origin_machine END,
-  tagged_at      = MAX(COALESCE(topic_segment.tagged_at,0), COALESCE(excluded.tagged_at,0))
+  tagged_at      = CASE WHEN ` + topicNewer + ` THEN excluded.tagged_at      ELSE topic_segment.tagged_at END
 `
+
+// verdictNewer is the precedence rule for session verdicts: latest tagged_at
+// wins, tie broken by higher origin_machine (cosmetic attribution tie-break).
+const verdictNewer = `(COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0)) OR (COALESCE(excluded.tagged_at,0) = COALESCE(session_verdict.tagged_at,0) AND COALESCE(excluded.origin_machine,'') > COALESCE(session_verdict.origin_machine,''))`
 
 // mergeVerdictsSQL folds the session-verdict sidecar in on the same rule: one
 // row per session, the later verdict wins. It rides with the topic merge
@@ -267,10 +271,10 @@ INSERT INTO main.session_verdict(session_id,verdict,source,origin_machine,tagged
 SELECT session_id,verdict,source,origin_machine,tagged_at FROM src.session_verdict
 WHERE true
 ON CONFLICT(session_id) DO UPDATE SET
-  verdict        = CASE WHEN COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0) THEN excluded.verdict        ELSE session_verdict.verdict END,
-  source         = CASE WHEN COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0) THEN excluded.source         ELSE session_verdict.source END,
-  origin_machine = CASE WHEN COALESCE(excluded.tagged_at,0) > COALESCE(session_verdict.tagged_at,0) THEN excluded.origin_machine ELSE session_verdict.origin_machine END,
-  tagged_at      = MAX(COALESCE(session_verdict.tagged_at,0), COALESCE(excluded.tagged_at,0))
+  verdict        = CASE WHEN ` + verdictNewer + ` THEN excluded.verdict        ELSE session_verdict.verdict END,
+  source         = CASE WHEN ` + verdictNewer + ` THEN excluded.source         ELSE session_verdict.source END,
+  origin_machine = CASE WHEN ` + verdictNewer + ` THEN excluded.origin_machine ELSE session_verdict.origin_machine END,
+  tagged_at      = CASE WHEN ` + verdictNewer + ` THEN excluded.tagged_at      ELSE session_verdict.tagged_at END
 `
 
 // recountSQL restates each session's message_count from the union that actually
@@ -478,11 +482,12 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	).Scan(&mark); err != nil {
 		return 0, true, fmt.Errorf("read source watermark: %w", err)
 	}
-	// The topic layer joins the watermark, because tagging changes a source
-	// without touching a single session or message row. Left out, a re-tagged
-	// project would read as unchanged and its new labels would never arrive.
-	// The latest tagging time rides along with the count: re-tagging a segment
-	// in place replaces a label without changing how many there are, so a count
+	// The topic layer and session verdicts join the watermark, because tagging
+	// changes a source without touching a single session or message row. Left
+	// out, a re-tagged project or updated verdict would read as unchanged and
+	// its new labels or verdicts would never arrive. The latest tagging time
+	// rides along with the count: re-tagging a segment in place or updating a
+	// verdict replaces a row without changing how many there are, so a count
 	// alone would still miss it.
 	topicMark := "0"
 	if hasTopics {
@@ -493,6 +498,15 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 		}
 	}
 	mark += ":t" + topicMark
+	verdictMark := "0"
+	if hasVerdicts {
+		if err := con.QueryRow(
+			`SELECT COUNT(*) || '@' || COALESCE(MAX(tagged_at),0) FROM src.session_verdict`,
+		).Scan(&verdictMark); err != nil {
+			return 0, true, fmt.Errorf("read source verdict watermark: %w", err)
+		}
+	}
+	mark += ":v" + verdictMark
 	if err := con.QueryRow("SELECT COUNT(*) FROM src.sessions").Scan(&offered); err != nil {
 		return 0, true, fmt.Errorf("count source sessions: %w", err)
 	}
