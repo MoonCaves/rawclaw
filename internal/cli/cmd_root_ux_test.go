@@ -310,3 +310,42 @@ func TestStatsAllFromHistorylessDir(t *testing.T) {
 		t.Errorf("--stats --all missing the corpus aggregate:\n%s", out)
 	}
 }
+
+// TestBrowseSourceScopesAcrossProjects: a no-query browse honors --source the
+// way search does — the flag bounds which runtime's scopes the browse covers,
+// so it runs across projects rather than silently falling back to the cwd's
+// Claude sessions. The regression it pins: `rawclaw --source antigravity`
+// exited 0 with the cwd project's Claude sessions, the flag dropped without a
+// trace — an agent caller concluded "no antigravity history exists".
+func TestBrowseSourceScopesAcrossProjects(t *testing.T) {
+	root := newCfgRoot(t)
+	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"2026-06-01T10:00:00Z", "older question about apples")
+	writeIndexedSession(t, root, "-home-u-proj-b", "bbbb2222-0000-0000-0000-000000000002",
+		"2026-06-02T10:00:00Z", "newer question about bananas")
+
+	// --source claude: both Claude projects appear (cross-project browse, not cwd).
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--source", "claude", "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("browse --source claude: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "aaaa1111") || !strings.Contains(out, "bbbb2222") {
+		t.Errorf("browse --source claude did not cover both projects:\n%s", out)
+	}
+	if strings.Contains(out, "No transcript history") {
+		t.Errorf("browse --source claude fell back to the cwd's single-folder path:\n%s", out)
+	}
+	if !strings.Contains(out, "source claude") {
+		t.Errorf("browse --source header does not name the source scope:\n%s", out)
+	}
+
+	// --source codex with only Claude fixtures: an honestly empty answer, never
+	// the cwd's Claude sessions wearing the caller's flag.
+	out, err = runCmd(t, NewRootCmd(BuildInfo{}), "", "--source", "codex", "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("browse --source codex: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "aaaa1111") || strings.Contains(out, "bbbb2222") {
+		t.Errorf("browse --source codex leaked Claude sessions:\n%s", out)
+	}
+}

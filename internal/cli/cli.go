@@ -1026,8 +1026,13 @@ func runStatsFleet(ctx context.Context, w io.Writer, o *Options) error {
 // sessions on tmp", i.e. a different question's answer wearing the caller's
 // flags. A flag accepted and silently ignored is the worst outcome for an agent
 // caller, which trusts it and moves on wrong.
+//
+// --source is the same kind of structural scope flag: `rawclaw --source
+// antigravity` used to drop the flag and browse the cwd's Claude sessions —
+// so it routes through the scoped path too, where allScope already filters
+// the universe by runtime.
 func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
-	if o.pathScoped() || (o.All && !o.ThisProject) {
+	if o.pathScoped() || o.Source != "" || (o.All && !o.ThisProject) {
 		var universe []view.Scope
 		if o.ThisProject {
 			sc, _, ok := thisScope(w, o)
@@ -1126,6 +1131,9 @@ func browseScopeLabel(o *Options) string {
 	label := "all projects"
 	if o.ThisProject {
 		label = "this project"
+	}
+	if o.Source != "" {
+		label += " · source " + o.Source
 	}
 	if !o.pathScoped() {
 		return label
