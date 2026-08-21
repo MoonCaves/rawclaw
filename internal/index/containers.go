@@ -267,7 +267,9 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 		slog.Warn("reindex container begin tx failed", "session", c.ID, "err", err)
 		return false
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	if _, err := tx.Exec("DELETE FROM messages WHERE session_id=?", c.ID); err != nil {
 		return false
