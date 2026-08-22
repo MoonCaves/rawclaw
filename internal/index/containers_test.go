@@ -2,9 +2,11 @@ package index
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
@@ -137,7 +139,7 @@ func TestReindexContainer_RollbackOnFailure(t *testing.T) {
 		{Role: "fail", Text: "replacement message 2", TS: 4, TSISO: "2026-08-15T00:00:03Z", UUID: "u-bad"}, // triggers RAISE(ABORT)
 	}
 
-	ok := reindexContainer(con, c, brokenMsgs, "test", "", f, 100.0, 10)
+	ok := reindexContainer(con, c, brokenMsgs, "test", "", f, 100.0, 10, "testfp")
 	if ok {
 		t.Fatal("reindexContainer should have returned false on injected failure")
 	}
@@ -157,5 +159,65 @@ func TestReindexContainer_RollbackOnFailure(t *testing.T) {
 	}
 	if firstMsg != "original message 1" {
 		t.Errorf("content = %q, want %q", firstMsg, "original message 1")
+	}
+}
+
+// TestEnsureIndexedContainers_SQLiteWALTrigger verifies that writes committed to a -wal file
+// trigger an incremental re-index even when the main .db file mtime and size are unchanged.
+func TestEnsureIndexedContainers_SQLiteWALTrigger(t *testing.T) {
+	td := t.TempDir()
+	mainDB := filepath.Join(td, "sessions.db")
+	walFile := mainDB + "-wal"
+	cacheDB := filepath.Join(td, "cache.db")
+
+	if err := os.WriteFile(mainDB, []byte("main db data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := source.Container{
+		ID:   "sess-wal-1",
+		Path: mainDB + "#sess-wal-1",
+		CWD:  "/workspace/wal",
+	}
+
+	msgCallCount := 0
+	msgsFn := func(got source.Container) ([]model.Message, error) {
+		msgCallCount++
+		return []model.Message{
+			{Role: "user", Text: fmt.Sprintf("message count = %d", msgCallCount), TS: float64(msgCallCount), TSISO: "2026-08-22T00:00:00Z", UUID: "u1"},
+		}, nil
+	}
+
+	// 1. Initial index
+	_, _, err := EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
+	if err != nil {
+		t.Fatalf("initial index failed: %v", err)
+	}
+	if msgCallCount != 1 {
+		t.Fatalf("expected msgsFn called once, got %d", msgCallCount)
+	}
+
+	// 2. Second index pass with NO changes -> must skip (unchanged)
+	_, _, err = EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
+	if err != nil {
+		t.Fatalf("second index failed: %v", err)
+	}
+	if msgCallCount != 1 {
+		t.Fatalf("expected no reindex on unchanged file, got call count %d", msgCallCount)
+	}
+
+	// 3. Write to WAL file while keeping mainDB untouched
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(walFile, []byte("new transaction committed to wal"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Third index pass -> MUST trigger reindex due to WAL change
+	_, _, err = EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
+	if err != nil {
+		t.Fatalf("third index failed: %v", err)
+	}
+	if msgCallCount != 2 {
+		t.Fatalf("expected reindex triggered by WAL update, got call count %d", msgCallCount)
 	}
 }
