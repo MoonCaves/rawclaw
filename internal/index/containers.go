@@ -351,10 +351,11 @@ func vaultContainer(c source.Container, ms []model.Message, sourceID string, pro
 		ParentID:   c.ParentID,
 		SourcePath: realpath(c.Path),
 	}
-	if st, err := os.Stat(c.Path); err == nil {
+	rawPath := backingFilePath(c.Path)
+	if st, err := os.Stat(rawPath); err == nil {
 		m.SourceMTime = mtimeOf(st)
 		m.SourceSize = st.Size()
-		m.SourceFP = provenance.FileFingerprint(c.Path, st.Size())
+		m.SourceFP = provenance.FileFingerprint(rawPath, st.Size())
 	}
 	return durable.StoreMessages(m, ms)
 }
