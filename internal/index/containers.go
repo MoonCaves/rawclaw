@@ -91,9 +91,32 @@ func backingFilePath(p string) string {
 	return p
 }
 
+func backingFileState(rawPath string) (mtime float64, size int64, fp string, err error) {
+	st, statErr := os.Stat(rawPath)
+	if statErr != nil {
+		return 0, 0, "", statErr
+	}
+	mtime = mtimeOf(st)
+	size = st.Size()
+	fp = provenance.FileFingerprint(rawPath, size)
+
+	// If a SQLite WAL file exists alongside the backing database, incorporate
+	// its mtime, size, and fingerprint so uncheckpointed WAL writes trigger reindexing.
+	if walSt, walErr := os.Stat(rawPath + "-wal"); walErr == nil && walSt.Size() > 0 {
+		walMTime := mtimeOf(walSt)
+		if walMTime > mtime {
+			mtime = walMTime
+		}
+		size += walSt.Size()
+		walFP := provenance.FileFingerprint(rawPath+"-wal", walSt.Size())
+		fp = fp + "+" + walFP
+	}
+	return mtime, size, fp, nil
+}
+
 func verifyFreshContainer(dbp string, c source.Container) (int, error) {
 	rawPath := backingFilePath(c.Path)
-	st, err := os.Stat(rawPath)
+	wantMTime, wantSize, wantFP, err := backingFileState(rawPath)
 	if err != nil {
 		return 0, fmt.Errorf("stat live transcript %s: %w", rawPath, err)
 	}
@@ -116,9 +139,7 @@ func verifyFreshContainer(dbp string, c source.Container) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("verify refreshed transcript %s: %w", c.Path, err)
 	}
-	wantMTime := mtimeOf(st)
-	wantFP := provenance.FileFingerprint(rawPath, st.Size())
-	if sessionID != c.ID || size != st.Size() || absDiff(mtime, wantMTime) >= 0.001 || fp != wantFP {
+	if sessionID != c.ID || size != wantSize || absDiff(mtime, wantMTime) >= 0.001 || fp != wantFP {
 		return 0, fmt.Errorf("live transcript %s changed or was not fully refreshed", c.Path)
 	}
 
@@ -227,18 +248,16 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 	for _, c := range cs {
 		rp := realpath(c.Path)
 		rawPath := backingFilePath(c.Path)
-		st, err := os.Stat(rawPath)
+		mtime, size, fp, err := backingFileState(rawPath)
 		if err != nil {
 			continue
 		}
 		if isMember(tombstoned, c.ID) {
 			continue // user-deleted session: honor across reindex
 		}
-		mtime := mtimeOf(st)
-		size := st.Size()
 		if prev, found := cur[rp]; found {
 			if absDiff(prev.mtime, mtime) < 0.001 && prev.size == size {
-				if prev.fp == provenance.FileFingerprint(rawPath, size) {
+				if prev.fp == fp {
 					continue // genuinely unchanged
 				}
 			}
@@ -247,7 +266,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		if mErr != nil {
 			continue // bad container: leave existing rows + watermark untouched
 		}
-		if !reindexContainer(con, c, ms, sourceID, origin, rp, mtime, size) {
+		if !reindexContainer(con, c, ms, sourceID, origin, rp, mtime, size, fp) {
 			continue
 		}
 	}
@@ -271,7 +290,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 // together. If any statement or the durable vault write fails, the transaction
 // is rolled back so readers never observe a partial session or a committed
 // session without its watermark. Returns false on any failure.
-func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64) bool {
+func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64, fp string) bool {
 	tx, err := con.Begin()
 	if err != nil {
 		slog.Warn("reindex container begin tx failed", "session", c.ID, "err", err)
@@ -319,7 +338,7 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 
 	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-		rp, mtime, size, provenance.FileFingerprint(backingFilePath(c.Path), size), c.ID,
+		rp, mtime, size, fp, c.ID,
 	); err != nil {
 		return false
 	}
@@ -352,10 +371,10 @@ func vaultContainer(c source.Container, ms []model.Message, sourceID string, pro
 		SourcePath: realpath(c.Path),
 	}
 	rawPath := backingFilePath(c.Path)
-	if st, err := os.Stat(rawPath); err == nil {
-		m.SourceMTime = mtimeOf(st)
-		m.SourceSize = st.Size()
-		m.SourceFP = provenance.FileFingerprint(rawPath, st.Size())
+	if mtime, size, fp, err := backingFileState(rawPath); err == nil {
+		m.SourceMTime = mtime
+		m.SourceSize = size
+		m.SourceFP = fp
 	}
 	return durable.StoreMessages(m, ms)
 }
