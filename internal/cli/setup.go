@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -141,6 +142,56 @@ BANNER
 } | python3 -c 'import json,sys; sys.stdout.write(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": sys.stdin.buffer.read().decode("utf-8","replace")}}))'
 `
 
+const rawclawBanner = `[rawclaw] Raw transcript history for context — the receipts + thought process behind past
+sessions, across every project on this machine (not just this one's native session folder).
+Fast FTS5/BM25 search: cheaper than grepping your own agent's session folders (Claude Code
+projects/, Codex sessions/) — use rawclaw instead and save tokens + greps. Memory providers
+hold the superseding current truth; rawclaw is the dated raw record underneath it.
+  rawclaw "query"              search every session  (--this-project / --include-path <re> to scope; --sort newest)
+  rawclaw read <ref>           the matched message whole, with context  (--more / --around to expand)
+  rawclaw outline <sess8>      a session's goal -> resolution arc
+--json for structured output; --help for the rest.
+If the user seems to want to pick up a past session, offering to resume/fork it can help.
+
+Session closeout: whenever the user signals that the current session is ending or should be
+closed out, immediately delegate tagging to a background subagent so the main agent stays
+available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + `, chooses a few topic segments,
+then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
+what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
+systems own current truth. RawClaw only points to where something was discussed.`
+
+// rawclawAntigravityPrimeScriptTemplate is the Antigravity variant of the
+// discovery script (installed at <configDir>/hooks/rawclaw/prime.sh for the
+// Antigravity target).
+//
+// It emits the discovery banner wrapped in AGY's injectSteps JSON contract:
+// {"injectSteps":[{"ephemeralMessage":"..."}]}.
+// The JSON payload is pre-marshaled in Go at install time and baked into the
+// script (swapping @@RAWCLAW_INJECT_JSON@@), so no runtime json parser/encoder
+// (python3 or jq) is required.
+//
+// Gated to invocationNum 0 (first invocation in conversation). If invocationNum
+// cannot be extracted, falls back to emitting the banner (tolerant stance).
+const rawclawAntigravityPrimeScriptTemplate = `#!/bin/sh
+# Installed by ` + "`rawclaw setup`" + ` (Antigravity target); removed by ` + "`rawclaw setup --eject`" + `.
+# Injects a one-time discovery banner into Antigravity on PreInvocation (invocationNum 0).
+set -eu
+
+@@RAWCLAW_RESOLVE@@
+
+input=$(cat)
+inv_num=$(printf '%s' "$input" | sed -n 's/.*"invocationNum"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+
+# Gated to invocationNum 0 (first invocation in conversation). If unparseable, fall back to emitting.
+if [ -n "$inv_num" ] && [ "$inv_num" -ne 0 ]; then
+	exit 0
+fi
+
+cat <<'BANNER_JSON'
+@@RAWCLAW_INJECT_JSON@@
+BANNER_JSON
+`
+
 // resolvePlaceholder is the token every hook-script template carries where its
 // binary-resolution preamble goes; renderHookScript swaps it for rawclawResolveHead
 // at install time. It never reaches disk.
@@ -202,8 +253,9 @@ func renderHookScript(tmpl, quotedBin string) string {
 type setupTarget string
 
 const (
-	targetClaudeCode setupTarget = "claude-code"
-	targetCodex      setupTarget = "codex"
+	targetClaudeCode  setupTarget = "claude-code"
+	targetCodex       setupTarget = "codex"
+	targetAntigravity setupTarget = "antigravity"
 )
 
 // projectTrustWarning is the Codex-only project-scope caveat:
@@ -280,6 +332,11 @@ func settingsPath(configDir string) string {
 // targets — only the file path (and which top-level file we merge into)
 // differs.
 func codexHooksPath(configDir string) string {
+	return filepath.Join(configDir, "hooks.json")
+}
+
+// antigravityHooksPath is the Antigravity hooks file a target config dir owns.
+func antigravityHooksPath(configDir string) string {
 	return filepath.Join(configDir, "hooks.json")
 }
 
@@ -396,11 +453,14 @@ func stripJSON5(s string) string {
 // leaves a half-written settings.json behind (the target is either the old
 // content or the new content, never a truncated mix).
 func writeJSONFile(path string, data map[string]any) error {
-	b, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(data); err != nil {
 		return fmt.Errorf("marshal %s: %w", path, err)
 	}
-	b = append(b, '\n')
+	b := buf.Bytes()
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
@@ -703,4 +763,153 @@ func ejectRawclawHook(configDir string) (ejectOutcome, error) {
 // ejectRawclawCodexHook reverses installRawclawCodexHook — the Codex target.
 func ejectRawclawCodexHook(configDir string) (ejectOutcome, error) {
 	return ejectRawclawHookAt(configDir, codexHooksPath(configDir))
+}
+
+// renderAntigravityPrimeScript turns rawclawAntigravityPrimeScriptTemplate into
+// the script written to disk, pre-encoding the discovery banner into AGY's
+// injectSteps JSON contract.
+func renderAntigravityPrimeScript(quotedBin string) (string, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(map[string]any{
+		"injectSteps": []map[string]string{
+			{"ephemeralMessage": rawclawBanner},
+		},
+	}); err != nil {
+		return "", fmt.Errorf("marshal antigravity banner json: %w", err)
+	}
+	payload := strings.TrimSpace(buf.String())
+	tmpl := strings.ReplaceAll(rawclawAntigravityPrimeScriptTemplate, "@@RAWCLAW_INJECT_JSON@@", payload)
+	return renderHookScript(tmpl, quotedBin), nil
+}
+
+// removeRawclawAntigravityHooks strips every rawclaw-owned group and entry out
+// of Antigravity's hooks.json. Any group named "rawclaw" or containing the
+// hooks/rawclaw/ path marker is cleaned; sibling groups (like other-tool) are
+// left untouched. If a group becomes empty, its key is removed.
+func removeRawclawAntigravityHooks(data map[string]any) {
+	for groupName, groupVal := range data {
+		if groupName == "rawclaw" {
+			delete(data, groupName)
+			continue
+		}
+		groupMap, ok := groupVal.(map[string]any)
+		if !ok {
+			if containsRawclaw(groupVal) {
+				delete(data, groupName)
+			}
+			continue
+		}
+		for eventName, eventVal := range groupMap {
+			arr, ok := eventVal.([]any)
+			if !ok {
+				if containsRawclaw(eventVal) {
+					delete(groupMap, eventName)
+				}
+				continue
+			}
+			filtered := filterHookArray(arr)
+			if len(filtered) == 0 {
+				delete(groupMap, eventName)
+			} else {
+				groupMap[eventName] = filtered
+			}
+		}
+		if len(groupMap) == 0 {
+			delete(data, groupName)
+		}
+	}
+}
+
+// addRawclawAntigravityHooks registers rawclaw's named PreInvocation group in
+// Antigravity's hooks.json map. Existing rawclaw entries are stripped first
+// so the operation is idempotent.
+func addRawclawAntigravityHooks(data map[string]any, scriptPath string) error {
+	removeRawclawAntigravityHooks(data)
+	data["rawclaw"] = map[string]any{
+		"PreInvocation": []any{
+			map[string]any{
+				"type":    "command",
+				"command": scriptPath,
+			},
+		},
+	}
+	return nil
+}
+
+// installRawclawAntigravityHook writes the Antigravity discovery script and
+// registers it in <configDir>/hooks.json as a PreInvocation hook.
+func installRawclawAntigravityHook(configDir string) error {
+	quotedBin := rawclawBinQuoted()
+	scriptContent, err := renderAntigravityPrimeScript(quotedBin)
+	if err != nil {
+		return fmt.Errorf("render antigravity hook script: %w", err)
+	}
+
+	scriptPath := hookScriptPath(configDir)
+	if err := writeHookScript(scriptPath, scriptContent); err != nil {
+		return fmt.Errorf("install antigravity hook script: %w", err)
+	}
+
+	configFile := antigravityHooksPath(configDir)
+	data, err := readJSONFile(configFile)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", configFile, err)
+	}
+	if err := addRawclawAntigravityHooks(data, scriptPath); err != nil {
+		return fmt.Errorf("register antigravity hook in %s: %w", configFile, err)
+	}
+	if err := writeJSONFile(configFile, data); err != nil {
+		return fmt.Errorf("write %s: %w", configFile, err)
+	}
+
+	if err := os.Remove(legacyTagQueueScriptPath(configDir)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove legacy tag-queue hook script: %w", err)
+	}
+	return nil
+}
+
+// ejectRawclawAntigravityHook reverses installRawclawAntigravityHook — the
+// Antigravity target.
+func ejectRawclawAntigravityHook(configDir string) (ejectOutcome, error) {
+	scriptPath := hookScriptPath(configDir)
+	tagScriptPath := legacyTagQueueScriptPath(configDir)
+	configFile := antigravityHooksPath(configDir)
+	scriptDir := filepath.Dir(scriptPath)     // configDir/hooks/rawclaw
+	hooksParentDir := filepath.Dir(scriptDir) // configDir/hooks
+
+	out := ejectOutcome{scriptPath: scriptPath, tagScriptPath: tagScriptPath, configFile: configFile}
+
+	if _, err := os.Stat(scriptPath); err == nil {
+		if err := os.Remove(scriptPath); err != nil {
+			return out, fmt.Errorf("remove %s: %w", scriptPath, err)
+		}
+		out.scriptRemoved = true
+	}
+	if _, err := os.Stat(tagScriptPath); err == nil {
+		if err := os.Remove(tagScriptPath); err != nil {
+			return out, fmt.Errorf("remove %s: %w", tagScriptPath, err)
+		}
+		out.tagScriptRemoved = true
+	}
+	removeIfEmpty(scriptDir)
+	removeIfEmpty(hooksParentDir)
+
+	data, err := readJSONFile(configFile)
+	if err != nil {
+		return out, fmt.Errorf("read %s: %w", configFile, err)
+	}
+
+	if _, hasRawclawGroup := data["rawclaw"]; hasRawclawGroup || containsRawclaw(data) {
+		out.entryRemoved = true
+		removeRawclawAntigravityHooks(data)
+		if err := writeOrRemoveConfigFile(configFile, data); err != nil {
+			return out, err
+		}
+		out.fileDeleted = len(data) == 0
+	}
+
+	removeIfEmpty(configDir)
+	return out, nil
 }
