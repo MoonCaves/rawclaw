@@ -579,13 +579,13 @@ func normalizeUUID(rawID any, sessionID string, ordinal int) string {
 
 func mintUUID(sessionID string, ordinal int) string {
 	h := sha1.New()
-	h.Write([]byte(fmt.Sprintf("%s:%d", sessionID, ordinal)))
+	fmt.Fprintf(h, "%s:%d", sessionID, ordinal)
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 func isAllHex(s string) bool {
 	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 			return false
 		}
 	}
