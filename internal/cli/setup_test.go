@@ -655,3 +655,353 @@ func TestInstallRefusesNonObjectHooksValue(t *testing.T) {
 		t.Errorf("config mutated despite the refusal: %v %q", err, b)
 	}
 }
+
+// TestAddRawclawAntigravityHooksReplacesExistingAndKeepsSibling: seed hooks.json
+// with a foreign group (other-tool) plus a stale/hand-wired rawclaw group.
+// Adding the rawclaw hook must update rawclaw and leave other-tool byte-untouched.
+func TestAddRawclawAntigravityHooksReplacesExistingAndKeepsSibling(t *testing.T) {
+	foreignTool := map[string]any{
+		"PreInvocation": []any{
+			map[string]any{"type": "command", "command": "/opt/other-tool/hook.sh"},
+		},
+		"Stop": []any{
+			map[string]any{"type": "command", "command": "/opt/other-tool/stop.sh"},
+		},
+	}
+	staleRawclaw := map[string]any{
+		"PreInvocation": []any{
+			map[string]any{"type": "command", "command": "/old/path/hooks/rawclaw/prime.sh"},
+		},
+	}
+	data := map[string]any{
+		"other-tool": foreignTool,
+		"rawclaw":     staleRawclaw,
+	}
+
+	if err := addRawclawAntigravityHooks(data, "/new/path/hooks/rawclaw/prime.sh"); err != nil {
+		t.Fatalf("addRawclawAntigravityHooks: %v", err)
+	}
+
+	// other-tool must be preserved
+	if _, ok := data["other-tool"]; !ok {
+		t.Fatal("other-tool was dropped")
+	}
+	toolGroup := data["other-tool"].(map[string]any)
+	if len(toolGroup["PreInvocation"].([]any)) != 1 || len(toolGroup["Stop"].([]any)) != 1 {
+		t.Errorf("other-tool was mutated: %#v", toolGroup)
+	}
+
+	// rawclaw group must have exactly one PreInvocation entry with new path
+	rawclawGroup, ok := data["rawclaw"].(map[string]any)
+	if !ok {
+		t.Fatalf("rawclaw group missing: %#v", data)
+	}
+	arr, ok := rawclawGroup["PreInvocation"].([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("PreInvocation = %#v, want 1 entry", rawclawGroup["PreInvocation"])
+	}
+	entry := arr[0].(map[string]any)
+	if entry["command"] != "/new/path/hooks/rawclaw/prime.sh" {
+		t.Errorf("command = %q, want new path", entry["command"])
+	}
+}
+
+// TestAddRawclawAntigravityHooksIdempotent: calling addRawclawAntigravityHooks
+// twice leaves exactly one rawclaw entry.
+func TestAddRawclawAntigravityHooksIdempotent(t *testing.T) {
+	data := map[string]any{}
+	if err := addRawclawAntigravityHooks(data, "/x/hooks/rawclaw/prime.sh"); err != nil {
+		t.Fatal(err)
+	}
+	if err := addRawclawAntigravityHooks(data, "/x/hooks/rawclaw/prime.sh"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(data) != 1 {
+		t.Fatalf("data len = %d, want 1 (rawclaw only)", len(data))
+	}
+	rawclawGroup := data["rawclaw"].(map[string]any)
+	arr := rawclawGroup["PreInvocation"].([]any)
+	if len(arr) != 1 {
+		t.Fatalf("PreInvocation len = %d, want 1", len(arr))
+	}
+}
+
+// TestInstallRawclawAntigravityHookWritesHooksJSON: installs script and writes
+// hooks.json with rawclaw PreInvocation entry.
+func TestInstallRawclawAntigravityHookWritesHooksJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := installRawclawAntigravityHook(dir); err != nil {
+		t.Fatalf("installRawclawAntigravityHook: %v", err)
+	}
+
+	scriptPath := hookScriptPath(dir)
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("hook script missing: %v", err)
+	}
+
+	data, err := readJSONFile(antigravityHooksPath(dir))
+	if err != nil {
+		t.Fatalf("readJSONFile(hooks.json): %v", err)
+	}
+	rawclawGroup, ok := data["rawclaw"].(map[string]any)
+	if !ok {
+		t.Fatalf("rawclaw group missing in hooks.json: %#v", data)
+	}
+	arr, ok := rawclawGroup["PreInvocation"].([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("PreInvocation = %#v, want 1 entry", rawclawGroup["PreInvocation"])
+	}
+	if !containsRawclaw(arr[0]) {
+		t.Errorf("entry does not carry rawclaw marker: %#v", arr[0])
+	}
+}
+
+// TestEjectRawclawAntigravityHookSolo: ejecting a directory holding only
+// rawclaw files removes script, hooks.json, and cascades directories.
+func TestEjectRawclawAntigravityHookSolo(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "ag-cfg")
+	if err := installRawclawAntigravityHook(configDir); err != nil {
+		t.Fatalf("installRawclawAntigravityHook: %v", err)
+	}
+
+	out, err := ejectRawclawAntigravityHook(configDir)
+	if err != nil {
+		t.Fatalf("ejectRawclawAntigravityHook: %v", err)
+	}
+	if !out.scriptRemoved || !out.entryRemoved || !out.fileDeleted {
+		t.Errorf("want scriptRemoved=true, entryRemoved=true, fileDeleted=true; got %#v", out)
+	}
+	if _, serr := os.Stat(hookScriptPath(configDir)); !os.IsNotExist(serr) {
+		t.Errorf("script should be deleted, stat err=%v", serr)
+	}
+	if _, serr := os.Stat(antigravityHooksPath(configDir)); !os.IsNotExist(serr) {
+		t.Errorf("hooks.json should be deleted, stat err=%v", serr)
+	}
+	if _, serr := os.Stat(configDir); !os.IsNotExist(serr) {
+		t.Errorf("configDir should cascade away, stat err=%v", serr)
+	}
+}
+
+// TestEjectRawclawAntigravityHookWithSibling: ejecting with a sibling group
+// (other-tool) keeps hooks.json and the sibling group intact.
+func TestEjectRawclawAntigravityHookWithSibling(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "ag-cfg")
+	hooksFile := antigravityHooksPath(configDir)
+	if err := os.MkdirAll(filepath.Dir(hooksFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{"other-tool":{"PreInvocation":[{"type":"command","command":"/opt/other-tool/hook.sh"}]}}`
+	if err := os.WriteFile(hooksFile, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installRawclawAntigravityHook(configDir); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	out, err := ejectRawclawAntigravityHook(configDir)
+	if err != nil {
+		t.Fatalf("eject: %v", err)
+	}
+	if !out.scriptRemoved || !out.entryRemoved {
+		t.Errorf("want script and entry removed, got %#v", out)
+	}
+	if out.fileDeleted {
+		t.Errorf("hooks.json must not be deleted when sibling group exists: %#v", out)
+	}
+
+	data, err := readJSONFile(hooksFile)
+	if err != nil {
+		t.Fatalf("read hooks.json after eject: %v", err)
+	}
+	if _, ok := data["other-tool"]; !ok {
+		t.Errorf("other-tool was lost after eject: %#v", data)
+	}
+	if _, ok := data["rawclaw"]; ok {
+		t.Errorf("rawclaw group was not removed: %#v", data)
+	}
+}
+
+// TestEjectRawclawAntigravityHookAdoptsHandWired: the 2026-08-23 hand-wired
+// entry pointing to Claude's prime.sh must be cleanly removed on eject.
+func TestEjectRawclawAntigravityHookAdoptsHandWired(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "ag-cfg")
+	hooksFile := antigravityHooksPath(configDir)
+	if err := os.MkdirAll(filepath.Dir(hooksFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seed := `{
+  "other-tool": {"PreInvocation": [{"type": "command", "command": "/opt/other-tool/hook.sh"}]},
+  "rawclaw": {"PreInvocation": [{"type": "command", "command": "/home/user/.claude/hooks/rawclaw/prime.sh"}]}
+}`
+	if err := os.WriteFile(hooksFile, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := ejectRawclawAntigravityHook(configDir)
+	if err != nil {
+		t.Fatalf("eject: %v", err)
+	}
+	if !out.entryRemoved {
+		t.Errorf("hand-wired entry should be removed, got %#v", out)
+	}
+
+	data, err := readJSONFile(hooksFile)
+	if err != nil {
+		t.Fatalf("read hooks.json: %v", err)
+	}
+	if _, ok := data["rawclaw"]; ok {
+		t.Errorf("rawclaw group still present after eject: %#v", data)
+	}
+	if _, ok := data["other-tool"]; !ok {
+		t.Errorf("sibling group lost: %#v", data)
+	}
+}
+
+// TestInstallRawclawAntigravityHookAdoptsHandWired: verify that install replaces
+// any pre-existing hand-wired rawclaw group with the fresh Antigravity script
+// without duplicating or corrupting sibling entries.
+func TestInstallRawclawAntigravityHookAdoptsHandWired(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "ag-cfg")
+	hooksFile := antigravityHooksPath(configDir)
+	if err := os.MkdirAll(filepath.Dir(hooksFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Seed with other-tool sibling + hand-wired rawclaw pointing to Claude's prime.sh
+	seed := `{
+  "other-tool": {
+    "PreInvocation": [{"type": "command", "command": "/home/user/.other-tool/hooks/hook.sh", "timeout": 10}],
+    "Stop": [{"type": "command", "command": "/home/user/.other-tool/hooks/hook.sh", "timeout": 10}]
+  },
+  "rawclaw": {
+    "PreInvocation": [{"type": "command", "command": "/home/user/.claude/hooks/rawclaw/prime.sh"}]
+  }
+}`
+	if err := os.WriteFile(hooksFile, []byte(seed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installRawclawAntigravityHook(configDir); err != nil {
+		t.Fatalf("installRawclawAntigravityHook: %v", err)
+	}
+
+	data, err := readJSONFile(hooksFile)
+	if err != nil {
+		t.Fatalf("read hooks.json after install: %v", err)
+	}
+
+	// Verify other-tool survived untouched
+	toolGroup, ok := data["other-tool"].(map[string]any)
+	if !ok {
+		t.Fatalf("other-tool group missing: %#v", data)
+	}
+	if len(toolGroup["PreInvocation"].([]any)) != 1 || len(toolGroup["Stop"].([]any)) != 1 {
+		t.Errorf("other-tool mutated: %#v", toolGroup)
+	}
+
+	// Verify rawclaw was adopted and now points to Antigravity's prime.sh
+	rawclawGroup, ok := data["rawclaw"].(map[string]any)
+	if !ok {
+		t.Fatalf("rawclaw group missing: %#v", data)
+	}
+	arr, ok := rawclawGroup["PreInvocation"].([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("PreInvocation len = %d, want 1", len(arr))
+	}
+	entry := arr[0].(map[string]any)
+	wantScript := hookScriptPath(configDir)
+	if entry["command"] != wantScript {
+		t.Errorf("command = %q, want %q", entry["command"], wantScript)
+	}
+}
+
+// TestInstallAndEjectRawclawAntigravityHook_EmptyFile verifies install and eject
+// behavior when hooks.json is an empty 0-byte file.
+func TestInstallAndEjectRawclawAntigravityHook_EmptyFile(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "ag-cfg")
+	hooksFile := antigravityHooksPath(configDir)
+	if err := os.MkdirAll(filepath.Dir(hooksFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksFile, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installRawclawAntigravityHook(configDir); err != nil {
+		t.Fatalf("install on empty file failed: %v", err)
+	}
+
+	data, err := readJSONFile(hooksFile)
+	if err != nil {
+		t.Fatalf("read hooks.json after install: %v", err)
+	}
+	if _, ok := data["rawclaw"]; !ok {
+		t.Errorf("rawclaw group missing after install into empty file: %#v", data)
+	}
+
+	out, err := ejectRawclawAntigravityHook(configDir)
+	if err != nil {
+		t.Fatalf("eject failed: %v", err)
+	}
+	if !out.fileDeleted {
+		t.Errorf("hooks.json should be deleted after ejecting sole rawclaw install, got %#v", out)
+	}
+	if _, serr := os.Stat(hooksFile); !os.IsNotExist(serr) {
+		t.Errorf("hooks.json should be removed, stat err=%v", serr)
+	}
+}
+
+// TestInstallAndEjectRawclawAntigravityHook_EmptyJSONObject verifies install and
+// eject behavior when hooks.json contains an empty JSON object `{}`.
+func TestInstallAndEjectRawclawAntigravityHook_EmptyJSONObject(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "ag-cfg")
+	hooksFile := antigravityHooksPath(configDir)
+	if err := os.MkdirAll(filepath.Dir(hooksFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksFile, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := installRawclawAntigravityHook(configDir); err != nil {
+		t.Fatalf("install failed: %v", err)
+	}
+
+	out, err := ejectRawclawAntigravityHook(configDir)
+	if err != nil {
+		t.Fatalf("eject failed: %v", err)
+	}
+	if !out.entryRemoved || !out.fileDeleted {
+		t.Errorf("want entryRemoved=true, fileDeleted=true; got %#v", out)
+	}
+}
+
+// TestEjectRawclawAntigravityHook_EmptyConfigLeavesUntouched verifies that ejecting
+// when hooks.json is `{}` with no rawclaw entry leaves the file completely untouched.
+func TestEjectRawclawAntigravityHook_EmptyConfigLeavesUntouched(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "ag-cfg")
+	hooksFile := antigravityHooksPath(configDir)
+	if err := os.MkdirAll(filepath.Dir(hooksFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig := []byte("{}\n")
+	if err := os.WriteFile(hooksFile, orig, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := ejectRawclawAntigravityHook(configDir)
+	if err != nil {
+		t.Fatalf("eject on empty config failed: %v", err)
+	}
+	if out.didAnything() {
+		t.Errorf("want clean no-op, got %#v", out)
+	}
+
+	b, err := os.ReadFile(hooksFile)
+	if err != nil {
+		t.Fatalf("read hooks.json: %v", err)
+	}
+	if string(b) != string(orig) {
+		t.Errorf("hooks.json mutated by no-op eject: got %q, want %q", string(b), string(orig))
+	}
+}

@@ -77,16 +77,25 @@ func (o *Options) oneline() bool {
 	return o.Oneline || o.Format == "oneline" || o.Format == "line"
 }
 
-// currentSessionEnv is the Claude Code environment variable that names the
-// session a command is being run from. Reading it is how the exclusion works
-// without every agent remembering to pass a flag — the whole point is that the
-// caller does NOT have to know it just typed something.
-const currentSessionEnv = "CLAUDE_CODE_SESSION_ID"
+// currentSessionEnvs lists the runtime session-identity environment variables in
+// documented precedence order (Claude Code, then Antigravity). Reading them is
+// how the exclusion works without an agent remembering to pass a flag — the
+// whole point is that the caller does NOT have to know it just typed something.
+var currentSessionEnvs = []string{
+	"CLAUDE_CODE_SESSION_ID",
+	"ANTIGRAVITY_CONVERSATION_ID",
+}
+
+type sessionEnvMatch struct {
+	env string
+	sid string
+}
 
 // currentSession resolves which session the caller is live in, for the
-// current-turn exclusion: the explicit flag first, then the runtime's env. The
-// literal "off" disables it, so a session can always search its own live turn
-// back if it means to.
+// current-turn exclusion: the explicit flag first, then "off" disables it, then
+// runtime environment variables in documented order (currentSessionEnvs). If
+// multiple runtime session variables are inherited, a structured warning is
+// logged and the first in documented order is used.
 func (o *Options) currentSession() string {
 	v := strings.TrimSpace(o.CurrentSession)
 	if strings.EqualFold(v, "off") {
@@ -95,7 +104,27 @@ func (o *Options) currentSession() string {
 	if v != "" {
 		return v
 	}
-	return strings.TrimSpace(os.Getenv(currentSessionEnv))
+	var matches []sessionEnvMatch
+	for _, env := range currentSessionEnvs {
+		if sid := strings.TrimSpace(os.Getenv(env)); sid != "" {
+			matches = append(matches, sessionEnvMatch{env: env, sid: sid})
+		}
+	}
+	if len(matches) == 0 {
+		return ""
+	}
+	if len(matches) > 1 {
+		var ignored []string
+		for _, m := range matches[1:] {
+			ignored = append(ignored, m.env)
+		}
+		slog.Warn("multiple session environment variables set; using documented precedence",
+			"chosen_env", matches[0].env,
+			"chosen_session", matches[0].sid,
+			"ignored_envs", strings.Join(ignored, ", "),
+		)
+	}
+	return matches[0].sid
 }
 
 // pathScoped reports whether either path Scope flag is set — the flags that
@@ -221,7 +250,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 		"the session you are searching FROM (id or 8-char prefix); its CURRENT TURN — the prompt "+
 			"just typed and this turn's tool output — is withheld, since it is not recall and it "+
 			"outranks the archive on its own words. That session's earlier history stays searchable. "+
-			"Defaults to $"+currentSessionEnv+"; pass `off` to search your own live turn too.")
+			"Defaults to $CLAUDE_CODE_SESSION_ID or $ANTIGRAVITY_CONVERSATION_ID; pass `off` to search your own live turn too.")
 
 	// --timeout is PERSISTENT (every subcommand inherits it): rawclaw must be
 	// self-bounding so an agent never needs an external `timeout(1)`. Default 30s;

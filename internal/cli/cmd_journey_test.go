@@ -216,3 +216,85 @@ func TestCLIJourney_CrossRuntimeDisambiguation(t *testing.T) {
 		t.Errorf("search --source antigravity got %+v, want only %s", envAg.Results, agSess)
 	}
 }
+
+// TestCLIJourney_AntigravityCurrentSessionExclusion verifies that when searching
+// from inside an AGY session (ANTIGRAVITY_CONVERSATION_ID exported), the caller's
+// just-typed prompt is excluded while earlier history of the same session remains
+// searchable, and --current-session off restores live-turn search.
+func TestCLIJourney_AntigravityCurrentSessionExclusion(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg, ".claude"))
+	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+
+	agRoot := filepath.Join(cfg, ".gemini", "antigravity-cli")
+	sessID := "a9990001-0000-0000-0000-000000000001"
+	workDir := filepath.Join(cfg, "work", "inventory-service")
+
+	// Export the live AGY conversation ID into the environment
+	t.Setenv("ANTIGRAVITY_CONVERSATION_ID", sessID)
+
+	histPath := filepath.Join(agRoot, "history.jsonl")
+	if err := os.MkdirAll(filepath.Dir(histPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(histPath, []byte(`{"conversationId":"`+sessID+`","workspace":"`+workDir+`"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	transPath := filepath.Join(agRoot, "brain", sessID, ".system_generated", "logs", "transcript_full.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcriptJSONL := strings.Join([]string{
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:00Z","content":"<USER_REQUEST>back then we wrote the runbook for rolling back an inventory image</USER_REQUEST>"}`,
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:05Z","thinking":"planning migration","content":"Ran inventory migration","tool_calls":[{"name":"run_command","args":{"CommandLine":"make migrate"}}]}`,
+		`{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:10Z","content":"<USER_REQUEST>runbook runbook runbook what did we ever decide about the runbook</USER_REQUEST>"}`,
+		`{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:15Z","thinking":"searching runbook","content":"Checking runbook status"}`,
+	}, "\n") + "\n"
+
+	if err := os.WriteFile(transPath, []byte(transcriptJSONL), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Search without flags: ANTIGRAVITY_CONVERSATION_ID automatically excludes the just-typed turn
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--reindex", "--json", "runbook")
+	if err != nil {
+		t.Fatalf("search failed: %v\nout: %s", err, out)
+	}
+	var env agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("unmarshal: %v\nout: %s", err, out)
+	}
+	if env.ExcludedCurrentTurn == 0 {
+		t.Fatalf("expected ExcludedCurrentTurn > 0 via ANTIGRAVITY_CONVERSATION_ID, got 0")
+	}
+	if len(env.Results) != 1 {
+		t.Fatalf("expected 1 result from earlier history, got %d: %+v", len(env.Results), env.Results)
+	}
+	if strings.Contains(env.Results[0].Snippet, "what did we ever decide") {
+		t.Errorf("just-typed prompt was not excluded: %s", env.Results[0].Snippet)
+	}
+	if !strings.Contains(env.Results[0].Snippet, "rolling back an inventory image") {
+		t.Errorf("earlier history not found in snippet: %s", env.Results[0].Snippet)
+	}
+
+	// 2. Search with --current-session off: live turn is returned
+	outOff, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--current-session", "off", "--json", "runbook")
+	if err != nil {
+		t.Fatalf("search with --current-session off failed: %v\nout: %s", err, outOff)
+	}
+	var envOff agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(outOff), &envOff); err != nil {
+		t.Fatalf("unmarshal: %v\nout: %s", err, outOff)
+	}
+	if envOff.ExcludedCurrentTurn != 0 {
+		t.Errorf("expected ExcludedCurrentTurn = 0 with --current-session off, got %d", envOff.ExcludedCurrentTurn)
+	}
+	if len(envOff.Results) < 1 || !strings.Contains(envOff.Results[0].Snippet, "what did we ever decide") {
+		t.Errorf("expected just-typed prompt in results with --current-session off, got: %+v", envOff.Results)
+	}
+}
