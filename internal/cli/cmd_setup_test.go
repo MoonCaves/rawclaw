@@ -761,3 +761,190 @@ func TestSetupCmd_HelpMentionsEjectAndCodexLimitation(t *testing.T) {
 		t.Errorf("help text should mention the Codex stale trust-state limitation, got: %s", long)
 	}
 }
+
+func seedForeignAntigravityHook(t *testing.T, configFile string) []byte {
+	t.Helper()
+	seed := `{
+  "other-tool": {
+    "PreInvocation": [
+      {"type": "command", "command": "/opt/other-tool/hook.sh"}
+    ]
+  }
+}
+`
+	if err := os.MkdirAll(filepath.Dir(configFile), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(configFile, []byte(seed), 0o644); err != nil {
+		t.Fatalf("seed %s: %v", configFile, err)
+	}
+	return []byte(seed)
+}
+
+// TestSetupCmd_Yes_WiresAntigravityAndKeepsForeignEntry drives `rawclaw setup --yes`
+// against a sandbox with Claude Code, Codex, and Antigravity present.
+func TestSetupCmd_Yes_WiresAntigravityAndKeepsForeignEntry(t *testing.T) {
+	claudeCfg := t.TempDir()
+	codexCfg := t.TempDir()
+	agCfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeCfg)
+	t.Setenv("CODEX_HOME", codexCfg)
+	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(agCfg, "antigravity-cli"))
+	t.Setenv("HOME", claudeCfg)
+
+	// Create config directories so detection passes
+	if err := os.MkdirAll(filepath.Join(agCfg, "antigravity-cli"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agCustomDir := filepath.Join(agCfg, "config")
+	agHooksFile := antigravityHooksPath(agCustomDir)
+
+	claudeSeeded := seedForeignSessionStartHook(t, settingsPath(claudeCfg))
+	codexSeeded := seedForeignSessionStartHook(t, codexHooksPath(codexCfg))
+	seedForeignAntigravityHook(t, agHooksFile)
+
+	out, err := runCmd(t, newSetupCmd(), "", "--yes")
+	if err != nil {
+		t.Fatalf("setup --yes: %v\nout: %s", err, out)
+	}
+
+	assertForeignEntryIntact(t, claudeSeeded, settingsPath(claudeCfg))
+	assertForeignEntryIntact(t, codexSeeded, codexHooksPath(codexCfg))
+
+	// Antigravity verification
+	agScript := hookScriptPath(agCustomDir)
+	if _, serr := os.Stat(agScript); serr != nil {
+		t.Fatalf("antigravity hook script not on disk at %s: %v", agScript, serr)
+	}
+
+	agData, rerr := readJSONFile(agHooksFile)
+	if rerr != nil {
+		t.Fatalf("read antigravity hooks.json: %v", rerr)
+	}
+	if _, hasTool := agData["other-tool"]; !hasTool {
+		t.Errorf("other-tool was dropped from antigravity hooks.json: %#v", agData)
+	}
+	rawclawGroup, ok := agData["rawclaw"].(map[string]any)
+	if !ok {
+		t.Fatalf("rawclaw group missing in antigravity hooks.json: %#v", agData)
+	}
+	arr, ok := rawclawGroup["PreInvocation"].([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("PreInvocation len = %d, want 1: %#v", len(arr), arr)
+	}
+	if !containsRawclaw(arr[0]) {
+		t.Errorf("entry does not carry rawclaw marker: %#v", arr[0])
+	}
+}
+
+// TestSetupCmd_Yes_AntigravityIdempotentSecondRun verifies idempotency when
+// running setup --yes multiple times with Antigravity detected.
+func TestSetupCmd_Yes_AntigravityIdempotentSecondRun(t *testing.T) {
+	claudeCfg := t.TempDir()
+	agCfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeCfg)
+	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(agCfg, "antigravity-cli"))
+	t.Setenv("HOME", claudeCfg)
+
+	if err := os.MkdirAll(filepath.Join(agCfg, "antigravity-cli"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agCustomDir := filepath.Join(agCfg, "config")
+	agHooksFile := antigravityHooksPath(agCustomDir)
+	seedForeignAntigravityHook(t, agHooksFile)
+
+	if _, err := runCmd(t, newSetupCmd(), "", "--yes"); err != nil {
+		t.Fatalf("first setup --yes: %v", err)
+	}
+	if _, err := runCmd(t, newSetupCmd(), "", "--yes"); err != nil {
+		t.Fatalf("second setup --yes: %v", err)
+	}
+
+	agData, err := readJSONFile(agHooksFile)
+	if err != nil {
+		t.Fatalf("read hooks.json after two runs: %v", err)
+	}
+	if _, hasTool := agData["other-tool"]; !hasTool {
+		t.Errorf("other-tool dropped: %#v", agData)
+	}
+	rawclawGroup := agData["rawclaw"].(map[string]any)
+	arr := rawclawGroup["PreInvocation"].([]any)
+	if len(arr) != 1 {
+		t.Errorf("PreInvocation len = %d after two runs, want 1", len(arr))
+	}
+}
+
+// TestSetupCmd_Yes_AntigravityNotDetected_SkipsWithoutCreatingTree verifies
+// that when Antigravity is absent, setup prints a skip message and creates nothing.
+func TestSetupCmd_Yes_AntigravityNotDetected_SkipsWithoutCreatingTree(t *testing.T) {
+	claudeCfg := t.TempDir()
+	missingAgDir := filepath.Join(t.TempDir(), "nonexistent-ag-home")
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeCfg)
+	t.Setenv("ANTIGRAVITY_HOME", missingAgDir)
+	t.Setenv("HOME", claudeCfg)
+
+	out, err := runCmd(t, newSetupCmd(), "", "--yes")
+	if err != nil {
+		t.Fatalf("setup --yes: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, "Antigravity not detected") {
+		t.Errorf("want 'Antigravity not detected' note, got:\n%s", out)
+	}
+	if _, serr := os.Stat(missingAgDir); !os.IsNotExist(serr) {
+		t.Errorf("setup must not create an Antigravity tree when not detected, stat err=%v", serr)
+	}
+}
+
+// TestSetupCmd_Eject_WiresAllThreeTargets verifies that setup --eject cleans
+// up across Claude Code, Codex, and Antigravity while preserving foreign entries.
+func TestSetupCmd_Eject_WiresAllThreeTargets(t *testing.T) {
+	claudeCfg := t.TempDir()
+	codexCfg := t.TempDir()
+	agCfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeCfg)
+	t.Setenv("CODEX_HOME", codexCfg)
+	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(agCfg, "antigravity-cli"))
+	t.Setenv("HOME", claudeCfg)
+
+	if err := os.MkdirAll(filepath.Join(agCfg, "antigravity-cli"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agCustomDir := filepath.Join(agCfg, "config")
+	agHooksFile := antigravityHooksPath(agCustomDir)
+
+	claudeSeeded := seedForeignSessionStartHook(t, settingsPath(claudeCfg))
+	codexSeeded := seedForeignSessionStartHook(t, codexHooksPath(codexCfg))
+	seedForeignAntigravityHook(t, agHooksFile)
+
+	if _, err := runCmd(t, newSetupCmd(), "", "--yes"); err != nil {
+		t.Fatalf("setup --yes: %v", err)
+	}
+	out, err := runCmd(t, newSetupCmd(), "", "--eject", "--yes")
+	if err != nil {
+		t.Fatalf("setup --eject --yes: %v\nout: %s", err, out)
+	}
+
+	if _, serr := os.Stat(hookScriptPath(claudeCfg)); !os.IsNotExist(serr) {
+		t.Errorf("claude hook script should be gone, stat err=%v", serr)
+	}
+	if _, serr := os.Stat(hookScriptPath(codexCfg)); !os.IsNotExist(serr) {
+		t.Errorf("codex hook script should be gone, stat err=%v", serr)
+	}
+	if _, serr := os.Stat(hookScriptPath(agCustomDir)); !os.IsNotExist(serr) {
+		t.Errorf("antigravity hook script should be gone, stat err=%v", serr)
+	}
+
+	assertForeignEntryIntact(t, claudeSeeded, settingsPath(claudeCfg))
+	assertForeignEntryIntact(t, codexSeeded, codexHooksPath(codexCfg))
+
+	agData, err := readJSONFile(agHooksFile)
+	if err != nil {
+		t.Fatalf("read antigravity hooks.json after eject: %v", err)
+	}
+	if _, ok := agData["rawclaw"]; ok {
+		t.Errorf("antigravity rawclaw group should be gone, got %#v", agData)
+	}
+	if _, ok := agData["other-tool"]; !ok {
+		t.Errorf("antigravity foreign group (other-tool) was lost: %#v", agData)
+	}
+}

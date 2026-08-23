@@ -75,6 +75,29 @@ func ConfigDir() string {
 	return filepath.Join(home, ".gemini", "antigravity-cli")
 }
 
+// GlobalConfigDir returns the Antigravity global customization config directory.
+// On disk the config dir is a SIBLING of the CLI state dir, not a child:
+// ~/.gemini/config sits beside ~/.gemini/antigravity-cli (verified against a live
+// install's builtin hooks doc). A plain join under ANTIGRAVITY_HOME — the Codex
+// shape — would therefore point at the wrong tree, so the basename sniff below
+// maps whichever of the two dirs ANTIGRAVITY_HOME names to its config sibling.
+func GlobalConfigDir() string {
+	if h := os.Getenv("ANTIGRAVITY_HOME"); h != "" {
+		if filepath.Base(h) == "antigravity-cli" {
+			return filepath.Join(filepath.Dir(h), "config")
+		}
+		if filepath.Base(h) == "config" {
+			return h
+		}
+		return filepath.Join(h, "config")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".gemini", "config")
+}
+
 // BrainRoot returns the brain directory under the given config dir.
 func BrainRoot(cfgDir string) string {
 	if cfgDir == "" {

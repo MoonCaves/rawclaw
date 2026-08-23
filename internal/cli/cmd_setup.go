@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	antigravitysrc "github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	codexsrc "github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/spf13/cobra"
 )
@@ -12,10 +13,11 @@ import (
 // newSetupCmd wires `rawclaw setup`: install the discovery-hook script and
 // register it in every DETECTED target's config — Claude Code always
 // (paths.ConfigDir — $CLAUDE_CONFIG_DIR or ~/.claude), plus Codex
-// (codexsrc.ConfigDir — $CODEX_HOME or ~/.codex) when Codex exists on this
-// machine. Default scope is GLOBAL: rawclaw searches across every project by
-// default, so a global discovery hook is the honest default rather than a
-// per-project one. --project narrows the write to the CURRENT project's own
+// (codexsrc.ConfigDir — $CODEX_HOME or ~/.codex) and Antigravity
+// (antigravitysrc.ConfigDir — $ANTIGRAVITY_HOME or ~/.gemini/antigravity-cli) when
+// they exist on this machine. Default scope is GLOBAL: rawclaw searches across
+// every project by default, so a global discovery hook is the honest default rather
+// than a per-project one. --project narrows the write to the CURRENT project's own
 // config instead — the explicit opt-in for anyone who wants the banner in one
 // project only. --eject removes exactly what setup installed, across
 // whichever targets and scope this invocation names.
@@ -23,15 +25,15 @@ func newSetupCmd() *cobra.Command {
 	var yes, project, eject bool
 	cmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Wire the rawclaw discovery hook into Claude Code and Codex",
-		Long: "Install the rawclaw discovery-hook script and register it as a SessionStart hook " +
+		Short: "Wire the rawclaw discovery hook into Claude Code, Codex, and Antigravity",
+		Long: "Install the rawclaw discovery-hook script and register it as a discovery hook " +
 			"in every agent runtime detected on this machine, so a session announces rawclaw " +
 			"exists. The banner tells the current agent to delegate its own closeout tagging to " +
 			"a background subagent when the user signals that the session is ending; it never asks " +
 			"a new session to tag an older one. Rawclaw itself never calls a model. " +
-			"Claude Code is always targeted; Codex is targeted too when its config dir " +
-			"already exists (honors $CODEX_HOME, else ~/.codex) — a machine with no Codex install " +
-			"is left untouched for that target rather than having a Codex tree created for it. " +
+			"Claude Code is always targeted; Codex and Antigravity are targeted too when their config dirs " +
+			"already exist (honors $CODEX_HOME, else ~/.codex; $ANTIGRAVITY_HOME, else ~/.gemini/antigravity-cli) — " +
+			"a machine with no Codex or Antigravity install is left untouched for those targets rather than having trees created for them. " +
 			"By default the hook is wired at the USER level (honors $CLAUDE_CONFIG_DIR, else " +
 			"~/.claude): rawclaw searches every project, so a global hook is the honest default. " +
 			"--project narrows the write to the CURRENT project's own config instead. " +
@@ -41,7 +43,7 @@ func newSetupCmd() *cobra.Command {
 			"non-interactive/agent use.\n\n" +
 			"--eject removes exactly what setup installed, across the same targets and scope: " +
 			"the hook script and its now-empty directories are removed, and rawclaw's own " +
-			"SessionStart entry is stripped out of each config file — deleting the file " +
+			"entries are stripped out of each config file — deleting the file " +
 			"entirely once nothing else is left in it. Every sibling hook is left untouched, " +
 			"and a config file that still holds one survives with it intact. Ejecting on a " +
 			"machine with nothing installed is a clean no-op. Known limitation: Codex may keep " +
@@ -90,6 +92,15 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 		}
 	}
 
+	antigravityDetected := antigravitysrc.ConfigDir() != "" && (isDir(antigravitysrc.ConfigDir()) || isDir(antigravitysrc.GlobalConfigDir()))
+	var antigravityDir string
+	if antigravityDetected {
+		antigravityDir, err = scopeConfigDir(project, antigravitysrc.GlobalConfigDir(), ".agents")
+		if err != nil {
+			return fmt.Errorf("resolve antigravity setup scope: %w", err)
+		}
+	}
+
 	maybePrintProjectTrustWarning(out, targetClaudeCode, project)
 	if codexDetected {
 		maybePrintProjectTrustWarning(out, targetCodex, project)
@@ -105,7 +116,13 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 	} else {
 		fmt.Fprintf(out, "  Codex not detected (no config dir at %q) — skipping that target\n", codexsrc.ConfigDir())
 	}
-	fmt.Fprintf(out, "  (every other hook already registered in either file is left untouched)\n\n")
+	if antigravityDetected {
+		fmt.Fprintf(out, "  install the discovery-hook script at %s\n", hookScriptPath(antigravityDir))
+		fmt.Fprintf(out, "  register it as a PreInvocation hook in %s\n", antigravityHooksPath(antigravityDir))
+	} else {
+		fmt.Fprintf(out, "  Antigravity not detected (no config dir at %q) — skipping that target\n", antigravitysrc.ConfigDir())
+	}
+	fmt.Fprintf(out, "  (every other hook already registered in any file is left untouched)\n\n")
 
 	if !yes {
 		ok, err := confirm(cmd.InOrStdin(), out, "Proceed? [y/N]: ")
@@ -130,6 +147,15 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 		fmt.Fprintf(out, "Installed %s\nRegistered SessionStart hook in %s\n", hookScriptPath(codexDir), codexHooksPath(codexDir))
 	} else {
 		fmt.Fprintln(out, "Codex not detected — skipped that target.")
+	}
+
+	if antigravityDetected {
+		if err := installRawclawAntigravityHook(antigravityDir); err != nil {
+			return fmt.Errorf("install rawclaw antigravity hook: %w", err)
+		}
+		fmt.Fprintf(out, "Installed %s\nRegistered PreInvocation hook in %s\n", hookScriptPath(antigravityDir), antigravityHooksPath(antigravityDir))
+	} else {
+		fmt.Fprintln(out, "Antigravity not detected — skipped that target.")
 	}
 
 	// Point at the optional cross-machine archive without provisioning it: setup
@@ -166,6 +192,15 @@ func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 		}
 	}
 
+	antigravityDetected := antigravitysrc.ConfigDir() != "" && (isDir(antigravitysrc.ConfigDir()) || isDir(antigravitysrc.GlobalConfigDir()))
+	var antigravityDir string
+	if antigravityDetected {
+		antigravityDir, err = scopeConfigDir(project, antigravitysrc.GlobalConfigDir(), ".agents")
+		if err != nil {
+			return fmt.Errorf("resolve antigravity eject scope: %w", err)
+		}
+	}
+
 	fmt.Fprintf(out, "rawclaw setup --eject will:\n")
 	fmt.Fprintf(out, "  remove the discovery-hook script at %s (if present)\n", scriptPath)
 	fmt.Fprintf(out, "  remove the legacy tagging-queue hook script at %s (if present)\n", legacyTagQueueScriptPath(configDir))
@@ -176,7 +211,13 @@ func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 	} else {
 		fmt.Fprintf(out, "  Codex not detected (no config dir at %q) — skipping that target\n", codexsrc.ConfigDir())
 	}
-	fmt.Fprintf(out, "  (every sibling hook already registered in either file is left untouched)\n\n")
+	if antigravityDetected {
+		fmt.Fprintf(out, "  remove the discovery-hook script at %s (if present)\n", hookScriptPath(antigravityDir))
+		fmt.Fprintf(out, "  strip rawclaw's own entry out of %s (if present)\n", antigravityHooksPath(antigravityDir))
+	} else {
+		fmt.Fprintf(out, "  Antigravity not detected (no config dir at %q) — skipping that target\n", antigravitysrc.ConfigDir())
+	}
+	fmt.Fprintf(out, "  (every sibling hook already registered in any file is left untouched)\n\n")
 
 	if !yes {
 		ok, err := confirm(cmd.InOrStdin(), out, "Proceed? [y/N]: ")
@@ -205,6 +246,17 @@ func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 		anyRemoved = anyRemoved || codexOutcome.didAnything()
 	} else {
 		fmt.Fprintln(out, "Codex not detected — skipped that target.")
+	}
+
+	if antigravityDetected {
+		antigravityOutcome, err := ejectRawclawAntigravityHook(antigravityDir)
+		if err != nil {
+			return fmt.Errorf("eject rawclaw antigravity hook: %w", err)
+		}
+		printEjectOutcome(out, "Antigravity", antigravityOutcome)
+		anyRemoved = anyRemoved || antigravityOutcome.didAnything()
+	} else {
+		fmt.Fprintln(out, "Antigravity not detected — skipped that target.")
 	}
 
 	if !anyRemoved {
