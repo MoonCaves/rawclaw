@@ -4,7 +4,19 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-24
+
 ### Added
+
+- **Antigravity (Google's agent CLI) is a third `setup` target.** `rawclaw setup` now detects an
+  Antigravity install and registers a PreInvocation hook that injects the discovery banner as an
+  ephemeral message on a conversation's first turn — emitted as pre-encoded `injectSteps` JSON at
+  install time, so the hook script needs no jq or python3 at runtime. Antigravity discards plain
+  stdout from hooks (verified live with positive and negative probes), which is also why a
+  hand-wired plain-text hook never worked. `setup --eject` removes exactly what setup installed and
+  leaves sibling hook groups semantically intact. Searches run from inside an Antigravity session
+  exclude the just-typed turn via `ANTIGRAVITY_CONVERSATION_ID`, with flag > `off` > env precedence
+  and a warning when multiple runtime session variables are inherited.
 
 - **A search hit now says what the session was ABOUT and where it ENDED UP.** A hit used to carry a
   timestamp, a session id, a project and a matched snippet — nothing that let you pick the right
