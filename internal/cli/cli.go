@@ -190,7 +190,8 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 			"  rawclaw read <sess8>:<uuid8>    bounded excerpt around a ref (--more to widen)\n" +
 			"  rawclaw outline <sess8>         a session's goal -> resolution arc\n\n" +
 			"Searches every project by default; --this-project (with --dir) or --include-path <regex> to scope. " +
-			"Add --json for structured output. Results are raw session history — verify against current state before acting.\n\n" +
+			"Add --json for structured output. A search that finds nothing prints a no-matches note and exits 0 — " +
+			"empty is a valid answer, not an error. Results are raw session history — verify against current state before acting.\n\n" +
 			"Retention: when a source tool purges a transcript (e.g. Claude Code's ~30-day cleanup), rawclaw KEEPS its " +
 			"indexed copy — searchable and readable, labeled as retained history. `rawclaw delete` still removes a " +
 			"session permanently. Set RAWCLAW_RETENTION=mirror to instead drop sessions whose source file is gone. " +

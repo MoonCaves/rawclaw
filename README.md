@@ -109,6 +109,8 @@ rawclaw version                             # print the version + build stamp
 rawclaw --timeout 2m "query"                # raise the self-terminating deadline (0 disables it)
 ```
 
+**A search that finds nothing exits `0`** — an empty result set is a valid answer, not an error (scripts should branch on output, and reserve non-zero for real failures).
+
 **Query tips:** a single distinctive word is sharpest · `"exact phrase"` for adjacency · `term*` for a prefix · `a NOT b` to exclude · `--include-path` / `--exclude-path` to scope by project · `--json` works on every shape.
 
 **Built to never hang.** Every run is bounded by a self-terminating watchdog so an agent never needs an external `timeout(1)`: `--timeout 2m` raises the deadline, `--timeout 0` disables it, and `RAWCLAW_TIMEOUT` (a Go duration like `45s` or `2m`) overrides the default. The default is `30s`; exceeding the deadline exits `124` (the `timeout(1)` convention). The syncing archive verbs (`archive init/push/pull`) are the exception: their transfers are bounded by *stall* detection instead — a hung transfer dies in under a minute, a slow-but-moving push runs as long as it keeps moving (an explicit `--timeout` still applies a hard cap). `delete --yes` (alias `-y`) skips the confirmation prompt for non-interactive use; when the delete would remove original transcript files still on disk, `--yes` alone refuses — add `--files` to authorize that too.
