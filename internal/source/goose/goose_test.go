@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
 )
 
@@ -232,5 +231,4 @@ func TestGooseEndToEndIndexing(t *testing.T) {
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("Messages failed: %v, len=%d", err, len(msgs))
 	}
-	var _ []model.Message = msgs
 }
