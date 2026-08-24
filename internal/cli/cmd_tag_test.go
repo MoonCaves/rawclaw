@@ -78,6 +78,59 @@ func TestRunTagPrepNoMessages(t *testing.T) {
 	}
 }
 
+// TestRunTagWriteCapsCoverageAtTruncation locks a real bug: when tag-prep's dump
+// is truncated (dumpByteCap exceeded), tag-write must not stretch the final
+// segment's end_uuid past the last message the subagent actually saw. Before this
+// fix, writeSegments always capped the final segment at the SESSION's true last
+// message, silently mislabeling every message past the truncation point under
+// whatever topic was open when the dump cut off.
+func TestRunTagWriteCapsCoverageAtTruncation(t *testing.T) {
+	// Cap sized to fit exactly the first message's condensed line, not the second.
+	firstLine := condensedLine(store.SessionMessage{UUID: "11111111-aaaa", Role: "user", Content: "how do we blend rankings"})
+	orig := dumpByteCap
+	dumpByteCap = len(firstLine) + 5
+	defer func() { dumpByteCap = orig }()
+
+	con := newTagTestDB(t)
+	sid := "sess-truncated-1"
+	addMsg(t, con, sid, "user", "how do we blend rankings", "11111111-aaaa")
+	addMsg(t, con, sid, "assistant", "reciprocal rank fusion", "22222222-bbbb")
+	addMsg(t, con, sid, "user", "do topics survive a reindex", "33333333-cccc")
+
+	// Sanity: tag-prep's own dump must actually be truncated under this cap, and
+	// must not show the 3rd message.
+	var dump strings.Builder
+	if err := runTagPrep(&dump, con, sid); err != nil {
+		t.Fatalf("runTagPrep: %v", err)
+	}
+	if !strings.Contains(dump.String(), "TRUNCATED") {
+		t.Fatalf("expected a truncated dump, got:\n%s", dump.String())
+	}
+	if strings.Contains(dump.String(), "33333333") {
+		t.Fatalf("dump should not include the 3rd message past truncation:\n%s", dump.String())
+	}
+
+	// A tagging subagent only ever saw message 1 — its one segment starts there.
+	jsonIn := `[{"start_uuid":"11111111","topic":"ranking fusion","summary":"only what was shown"}]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0); err != nil {
+		t.Fatalf("runTagWrite: %v", err)
+	}
+
+	segs, err := store.TopicsForSession(con, sid)
+	if err != nil {
+		t.Fatalf("TopicsForSession: %v", err)
+	}
+	if len(segs) != 1 {
+		t.Fatalf("stored %d segments, want 1", len(segs))
+	}
+	// The bug: this used to resolve to "33333333-cccc" (the session's true last
+	// message), silently claiming coverage of a message that was never shown.
+	if segs[0].EndUUID != "11111111-aaaa" {
+		t.Errorf("end_uuid = %q, want 11111111-aaaa (the last message actually shown) — "+
+			"tag-write claimed coverage past the truncation point", segs[0].EndUUID)
+	}
+}
+
 // TestRunTagWritePopulatesSegments feeds a JSON array via an io.Reader to
 // runTagWrite and asserts the topic_segment rows carry the prefix-resolved
 // start/end full-uuids + topic + summary, and that the next-segment end-uuid
