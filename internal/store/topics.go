@@ -80,7 +80,8 @@ ON CONFLICT(session_id, start_uuid) DO UPDATE SET
 // identical set is a no-op net of the FTS trigger churn, so re-ingesting the
 // same files converges.
 //
-// origin_machine is stored via NULLIF(?, '') so an empty OriginMachine lands as
+// origin_machine is stored via NULLIF against the empty string, so an empty
+// OriginMachine lands as
 // NULL — the "this machine" sentinel the consolidated-store COALESCE depends on;
 // a non-empty (foreign) origin passes through unchanged. An empty segs clears the
 // session's segments (a caller does this only when authority says so).

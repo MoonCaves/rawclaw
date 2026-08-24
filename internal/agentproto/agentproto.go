@@ -218,13 +218,13 @@ type SubagentInfo struct {
 // ReadResult is a bounded excerpt around a ref. Embeds the AnchoredView shape
 // plus protocol metadata.
 type ReadResult struct {
-	Project      string         `json:"project"`
-	SessionID    string         `json:"session_id"`
-	AnchorID     int            `json:"anchor_id"`
-	FocusSnippet string         `json:"focus_snippet"`
-	CharBudget   *int           `json:"char_budget"` // nil = no cap
-	ReadRef      string         `json:"read_ref"`    // the stable "<session8>:<uuid8>" ref this read resolved
-	Truncated    bool           `json:"truncated"`
+	Project      string `json:"project"`
+	SessionID    string `json:"session_id"`
+	AnchorID     int    `json:"anchor_id"`
+	FocusSnippet string `json:"focus_snippet"`
+	CharBudget   *int   `json:"char_budget"` // nil = no cap
+	ReadRef      string `json:"read_ref"`    // the stable "<session8>:<uuid8>" ref this read resolved
+	Truncated    bool   `json:"truncated"`
 	// Never-silent trim (#5): when Truncated, these carry the machine counts AND
 	// the literal command an agent re-issues to recover the hidden content. Empty
 	// when nothing was trimmed.

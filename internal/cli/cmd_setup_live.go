@@ -18,14 +18,14 @@ import (
 
 // LiveSetupReceipt is the structured JSON receipt returned when setup live completes.
 type LiveSetupReceipt struct {
-	Status      string `json:"status"`
-	Machine     string `json:"machine"`
-	Target      string `json:"target"`
-	RemotePath  string `json:"remote_path"`
-	RemoteArch  string `json:"remote_arch"`
-	RemoteOS    string `json:"remote_os"`
-	Upgraded    bool   `json:"upgraded"`
-	PathRepaired bool  `json:"path_repaired"`
+	Status       string `json:"status"`
+	Machine      string `json:"machine"`
+	Target       string `json:"target"`
+	RemotePath   string `json:"remote_path"`
+	RemoteArch   string `json:"remote_arch"`
+	RemoteOS     string `json:"remote_os"`
+	Upgraded     bool   `json:"upgraded"`
+	PathRepaired bool   `json:"path_repaired"`
 }
 
 // newSetupLiveCmd wires `rawclaw setup live <target>`: single-command zero-friction setup

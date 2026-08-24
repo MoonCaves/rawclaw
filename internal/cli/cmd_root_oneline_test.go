@@ -374,4 +374,3 @@ func TestOnelineFormat_Browse(t *testing.T) {
 		t.Errorf("ref = %q, want prefix aaaa1111:", cols[0])
 	}
 }
-
