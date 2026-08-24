@@ -11,7 +11,13 @@
 // isolation).
 package source
 
-import "github.com/MoonCaves/rawclaw/internal/model"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/MoonCaves/rawclaw/internal/model"
+)
 
 // Container is one ingestable session: the unit the index watermarks, reindexes,
 // and prunes. A source yields one Container per session it can see, already
@@ -115,6 +121,9 @@ func ResumeCommand(sourceTool, sessionID, cwd string) string {
 		cmd += arg
 	}
 	if cwd != "" {
+		if strings.ContainsAny(cwd, " \t\n\"'\\$`|&;<>*?()[]{}~#") {
+			return fmt.Sprintf("cd %s && %s", strconv.Quote(cwd), cmd)
+		}
 		return "cd " + cwd + " && " + cmd
 	}
 	return cmd
