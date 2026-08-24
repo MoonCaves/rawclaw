@@ -223,4 +223,3 @@ func SubagentsForSession(con *sql.DB, parentSID string) ([]SubagentRow, error) {
 	}
 	return out, rows.Err()
 }
-
