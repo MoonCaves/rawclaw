@@ -224,6 +224,28 @@ func Codex(reindex bool) []view.Scope {
 	return out
 }
 
+// RefreshCodexCWD refreshes the Codex index db for a given working dir.
+func RefreshCodexCWD(cwd string) {
+	a := codex.New()
+	containers, err := a.Discover()
+	if err != nil || len(containers) == 0 {
+		return
+	}
+	var matched []source.Container
+	for _, c := range containers {
+		if c.CWD == cwd || (cwd != "" && filepath.Clean(c.CWD) == filepath.Clean(cwd)) {
+			matched = append(matched, c)
+		}
+	}
+	if len(matched) == 0 {
+		return
+	}
+	dbp := codexDBPath(cwd)
+	if _, _, ierr := index.EnsureIndexedContainers(dbp, false, matched, a.Messages, codex.Registration().ID, ""); ierr != nil {
+		slog.Debug("scopes: codex current-cwd refresh failed", "cwd", cwd, "err", ierr)
+	}
+}
+
 // orphanCodexScopes discovers Codex index dbs in the cache dir whose live cwd
 // group has vanished entirely and surfaces each as an eager read-only scope,
 // mirroring orphanClaudeScopes: once every rollout for a cwd is purged, that

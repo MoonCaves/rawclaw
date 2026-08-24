@@ -154,6 +154,39 @@ func TestRunTagPrepCmdExactIDDoesNotRefreshPrefixedSubagents(t *testing.T) {
 	}
 }
 
+func TestRunTagPrepCmdPrefixPrefersRootOverSubagents(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dir := t.TempDir()
+	const sid = "prefix-runtime-session-0001"
+	parentPath := filepath.Join(dir, "parent.log")
+	childPath := filepath.Join(dir, "child.log")
+	writeTagSourceFile(t, parentPath, "parent")
+	writeTagSourceFile(t, childPath, "child")
+	src := &tagTestSource{
+		containers: []source.Container{
+			{ID: sid, Path: parentPath},
+			{ID: sid + "/subagent", Path: childPath, IsSubagent: true, ParentID: sid},
+		},
+		messages: []model.Message{
+			{Role: "user", Text: "root session message", UUID: "77777777-root"},
+		},
+	}
+	reg := tagTestRegistration("prefix-runtime", src)
+
+	var out strings.Builder
+	// Pass an 8-char prefix rather than full session ID
+	if err := runTagPrepCmdWithSources(&out, sid[:8], nil, nil, []source.Registration{reg}); err != nil {
+		t.Fatalf("runTagPrepCmdWithSources: %v", err)
+	}
+	if src.messagesCalls != 1 {
+		t.Fatalf("Messages called %d times, want only root session", src.messagesCalls)
+	}
+	if !strings.Contains(out.String(), "77777777 [user] root session message") {
+		t.Fatalf("tag-prep output missing root session:\n%s", out.String())
+	}
+}
+
 func TestRunTagPrepCmdDoesNotReturnStaleDataAfterRefreshFailure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

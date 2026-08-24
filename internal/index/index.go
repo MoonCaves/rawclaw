@@ -304,20 +304,27 @@ func migrateDurabilityColumns(con *sql.DB, sourceID string) error {
 			return fmt.Errorf("add sessions.%s: %w", c.name, err)
 		}
 	}
-	// Unconditional, idempotent backfill: a no-op UPDATE (matches zero rows) once
-	// every row is already stamped, but closes the gap left by a kill between the
-	// ADD COLUMNs above and a prior run's UPDATE. A row with no file_index
-	// watermark simply stays NULL on source_path; missing_since stays NULL — an
-	// existing session is present until a scan proves otherwise.
-	if _, err := con.Exec(
-		`UPDATE sessions
-		    SET origin_machine = ?,
-		        source_tool = ?,
-		        source_path = (SELECT path FROM file_index WHERE file_index.session_id = sessions.id)
-		  WHERE origin_machine IS NULL`,
-		provenance.MachineID(), sourceID,
-	); err != nil {
-		return fmt.Errorf("backfill provenance: %w", err)
+	// Idempotent backfill, gated on the ROW STATE (any origin_machine still NULL),
+	// never on an in-call "did I just ADD a column?" flag (F3 kill-safety): a process
+	// killed after the ALTER TABLEs commit but before the UPDATE runs leaves every
+	// column present and every row still NULL, and a flag-gated backfill would see
+	// the columns and skip it forever. The probe below re-detects that pending state
+	// on the next call, so a rerun after a kill at any step boundary finishes the job.
+	// A row with no file_index watermark simply stays NULL on source_path;
+	// missing_since stays NULL — an existing session is present until a scan proves
+	// otherwise.
+	var needsBackfill int
+	if err := con.QueryRow("SELECT 1 FROM sessions WHERE origin_machine IS NULL LIMIT 1").Scan(&needsBackfill); err == nil && needsBackfill == 1 {
+		if _, err := con.Exec(
+			`UPDATE sessions
+			    SET origin_machine = ?,
+			        source_tool = ?,
+			        source_path = (SELECT path FROM file_index WHERE file_index.session_id = sessions.id)
+			  WHERE origin_machine IS NULL`,
+			provenance.MachineID(), sourceID,
+		); err != nil {
+			return fmt.Errorf("backfill provenance: %w", err)
+		}
 	}
 	return nil
 }
