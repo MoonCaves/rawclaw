@@ -23,6 +23,13 @@ import (
 // the full text.
 const condenseCap = 200
 
+// dumpByteCap is the total size ceiling (in bytes) for a tag-prep dump. Past
+// this, the dump stops and prints a truncation note instead of handing a
+// tagging subagent a session too large for its context — this happens for
+// real: outlier sessions run into the thousands of messages. var, not const,
+// so a test can shrink it to force truncation without fabricating huge sessions.
+var dumpByteCap = 120_000
+
 // uuid8Len is the prefix length of a message uuid printed by tag-prep and
 // resolved by tag-write — mirrors the <uuid8> refs the search/read path uses.
 const uuid8Len = 8
@@ -79,14 +86,48 @@ func runTagPrep(w io.Writer, con *sql.DB, fullSID string) error {
 		return fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
 	}
 
+	shown, truncatedAt := visibleMessages(msgs)
+
 	fmt.Fprintf(w, "# condensed session %s — one line per message: <uuid8> [<role>] <text>\n",
 		lastSlice8(fullSID))
 	fmt.Fprintf(w, "# split into contiguous TOPIC segments; feed back via: rawclaw tag-write %s\n",
 		lastSlice8(fullSID))
-	for _, m := range msgs {
+	for _, m := range shown {
 		fmt.Fprintln(w, condensedLine(m))
 	}
+	if truncatedAt >= 0 {
+		fmt.Fprintf(w, "# TRUNCATED: %d of %d messages omitted (dump exceeds %dKB) — tag-write will cap "+
+			"coverage at the last message shown above, not the session's true end\n",
+			len(msgs)-truncatedAt, len(msgs), dumpByteCap/1000)
+	}
 	return nil
+}
+
+// visibleMessages returns the subset of msgs a tag-prep dump actually shows:
+// non-displayable rows dropped (tool-only, envelope-only, bare [THINKING]),
+// truncated to dumpByteCap. truncatedAt is the index in msgs where the walk
+// stopped, or -1 if nothing was cut.
+//
+// writeSegments walks this SAME list (not the raw msgs) to resolve start_uuid
+// and to compute the final segment's end_uuid — so a truncated dump can never
+// cause tag-write to silently stretch a segment over messages the tagging
+// subagent never saw.
+func visibleMessages(msgs []store.SessionMessage) (shown []store.SessionMessage, truncatedAt int) {
+	truncatedAt = -1
+	size := 0
+	for i, m := range msgs {
+		if !view.IsDisplayable(m.Content) {
+			continue
+		}
+		line := condensedLine(m)
+		if size+len(line) > dumpByteCap {
+			truncatedAt = i
+			break
+		}
+		shown = append(shown, m)
+		size += len(line) + 1
+	}
+	return shown, truncatedAt
 }
 
 // ── verb: tag-write ────────────────────────────────────────────────────────────
@@ -173,6 +214,10 @@ func runTagWrite(con *sql.DB, fullSID string, r io.Reader, taggedAt float64) (in
 	if len(msgs) == 0 {
 		return 0, fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
 	}
+	shown, _ := visibleMessages(msgs)
+	if len(shown) == 0 {
+		return 0, fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
+	}
 
 	var segs []rawSegment
 	dec := json.NewDecoder(r)
@@ -183,7 +228,7 @@ func runTagWrite(con *sql.DB, fullSID string, r io.Reader, taggedAt float64) (in
 		return 0, fmt.Errorf("tag-write got an empty segment array — nothing to write")
 	}
 
-	return writeSegments(con, fullSID, msgs, segs, taggedAt)
+	return writeSegments(con, fullSID, shown, segs, taggedAt)
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────
