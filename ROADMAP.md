@@ -48,14 +48,15 @@ single keyword binary:
 
 ### Additional Source Adapters
 
-With the `Source` port shipped and supporting the JSONL family (Claude Code, Codex, Antigravity), remaining coding-agent runtimes fall into three format families:
+The `Source` port has shipped, with adapters covering the JSONL family (Claude Code, Codex,
+Antigravity) and the first SQLite reader (Goose). The coding-agent runtimes still unread fall
+into three format families:
 
-- **SQLite** — Goose (`~/.local/share/goose/sessions/sessions.db`), Crush (`<repo>/.crush/crush.db`),
-  opencode (`~/.local/share/opencode/opencode.db`).
+- **SQLite** — Crush (`<repo>/.crush/crush.db`), opencode (`~/.local/share/opencode/opencode.db`).
 - **JSON-array** — Cline / Roo Code (VS Code globalStorage `tasks/<id>/api_conversation_history.json`),
   Continue (`~/.continue/sessions/<id>.json`).
-- **Markdown / flat files** — Aider (`.aider.chat.history.md`), Cursor (composer transcripts).
-- **Markdown** — Aider (`.aider.chat.history.md`, role inferred from line prefix).
+- **Markdown / flat files** — Aider (`.aider.chat.history.md`, role inferred from line prefix),
+  Cursor (composer transcripts).
 
 Each is one adapter implementing `Source`; the FTS5 index, fusion, rendering, and the `agent` protocol
 stay identical. A `--source` flag (and auto-detection by path) lets one RawClaw search across mixed

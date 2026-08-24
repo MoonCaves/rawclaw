@@ -306,5 +306,3 @@ func TestScopes_ForeignTagsPublishedToConsolidatedSamePass(t *testing.T) {
 		t.Errorf("consolidated.db topic OriginMachine = %q, want %q", topics[0].OriginMachine, foreignID)
 	}
 }
-
-

@@ -675,7 +675,7 @@ func TestAddRawclawAntigravityHooksReplacesExistingAndKeepsSibling(t *testing.T)
 	}
 	data := map[string]any{
 		"other-tool": foreignTool,
-		"rawclaw":     staleRawclaw,
+		"rawclaw":    staleRawclaw,
 	}
 
 	if err := addRawclawAntigravityHooks(data, "/new/path/hooks/rawclaw/prime.sh"); err != nil {
