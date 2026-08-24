@@ -177,6 +177,15 @@ func discoverTagSources(
 	if len(exact) > 0 {
 		return exact, nil
 	}
+	nonSub := make([]tagSourceMatch, 0, len(matches))
+	for _, match := range matches {
+		if !match.container.IsSubagent {
+			nonSub = append(nonSub, match)
+		}
+	}
+	if len(nonSub) > 0 {
+		return nonSub, nil
+	}
 	if len(matches) > 0 || len(errs) == 0 {
 		return matches, nil
 	}

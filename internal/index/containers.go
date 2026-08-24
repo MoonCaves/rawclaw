@@ -53,7 +53,7 @@ func EnsureFreshContainer(
 		return ms, err
 	}
 
-	_, status, err := EnsureIndexedContainers(
+	_, status, err := ensureIndexedContainers(
 		dbp,
 		false,
 		[]source.Container{c},
@@ -290,6 +290,12 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 // together. If any statement or the durable vault write fails, the transaction
 // is rolled back so readers never observe a partial session or a committed
 // session without its watermark. Returns false on any failure.
+//
+// The begin is DEFERRED (database/sql's default), not BEGIN IMMEDIATE: an index
+// db has exactly one writer — store.ConnectRW hands out a single write
+// connection — so there is no second writer to lose a lock-upgrade race against,
+// and deferred avoids taking the write lock during the read-only statements. If
+// a second concurrent writer is ever introduced, this must become IMMEDIATE.
 func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64, fp string) bool {
 	tx, err := con.Begin()
 	if err != nil {

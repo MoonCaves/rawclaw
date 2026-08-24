@@ -847,64 +847,68 @@ func reindexConsolidated(ctx context.Context, emb embed.Embedder) (int, error) {
 	return semantic.VecIndex(ctx, con, emb, 0)
 }
 
-// runResume prints the paste-ready resume command for a session id — `claude
-// --resume <id>` for a Claude session, `codex resume <id>` for a Codex one. It
-// resolves against Claude projects first, then falls back to the Codex scopes,
-// then to the archive replicas: a session recorded on ANOTHER machine can't be
-// resumed here, so the hint degrades to the command to run on that machine.
+// runResume prints the paste-ready resume command for a session id across all
+// runtimes (Claude, Codex, Antigravity, Goose). It collects candidate matches
+// across all registered sources; if matches span multiple sessions (even across
+// different runtimes), it reports global ambiguity. If local runtimes yield
+// no match, it falls back to archive replicas.
 func runResume(w io.Writer, o *Options) error {
-	hits := paths.ResolveSession(o.Resume)
-	src := "claude"
-	if len(hits) == 0 {
-		hits = codexResumeHits(o.Resume)
-		src = "codex"
+	type resumeCandidate struct {
+		hit paths.SessionHit
+		src string
 	}
-	if len(hits) == 0 {
-		hits = antigravityResumeHits(o.Resume)
-		src = "antigravity"
+	var matches []resumeCandidate
+	for _, h := range paths.ResolveSession(o.Resume) {
+		matches = append(matches, resumeCandidate{hit: h, src: "claude"})
 	}
-	if len(hits) == 0 {
-		hits = gooseResumeHits(o.Resume)
-		src = "goose"
+	for _, h := range codexResumeHits(o.Resume) {
+		matches = append(matches, resumeCandidate{hit: h, src: "codex"})
 	}
-	if len(hits) == 0 {
+	for _, h := range antigravityResumeHits(o.Resume) {
+		matches = append(matches, resumeCandidate{hit: h, src: "antigravity"})
+	}
+	for _, h := range gooseResumeHits(o.Resume) {
+		matches = append(matches, resumeCandidate{hit: h, src: "goose"})
+	}
+
+	if len(matches) == 0 {
 		if handled, err := resumeForeign(w, o); handled {
 			return err
 		}
 		fmt.Fprintf(w, "No session id starts with '%s'. Use the 8-char id from search output, e.g. [… · a1b2c3d4 · …].\n", o.Resume)
 		return nil
 	}
-	if len(hits) > 1 {
+	if len(matches) > 1 {
 		if o.JSON {
 			type row struct {
 				SessionID string `json:"session_id"`
 				CWD       string `json:"cwd"`
 				Project   string `json:"project"`
 			}
-			rows := make([]row, 0, len(hits))
-			for _, h := range hits {
-				rows = append(rows, row{h.SessionID, h.CWD, h.Project})
+			rows := make([]row, 0, len(matches))
+			for _, m := range matches {
+				rows = append(rows, row{m.hit.SessionID, m.hit.CWD, m.hit.Project})
 			}
 			return EmitJSON(w, rows)
 		}
-		fmt.Fprintf(w, "%d sessions match '%s' — narrow it:\n", len(hits), o.Resume)
-		for _, h := range hits {
-			fmt.Fprintf(w, "  %s  (%s)\n", h.SessionID, h.Project)
+		fmt.Fprintf(w, "%d sessions match '%s' — narrow it:\n", len(matches), o.Resume)
+		for _, m := range matches {
+			fmt.Fprintf(w, "  %s  (%s)\n", m.hit.SessionID, m.hit.Project)
 		}
 		return nil
 	}
 
-	h := hits[0]
-	cmd := resumeCommand(src, h)
+	m := matches[0]
+	cmd := resumeCommand(m.src, m.hit)
 	if o.JSON {
 		return EmitJSON(w, struct {
 			SessionID string `json:"session_id"`
 			CWD       string `json:"cwd"`
 			Project   string `json:"project"`
 			Command   string `json:"command"`
-		}{h.SessionID, h.CWD, h.Project, cmd})
+		}{m.hit.SessionID, m.hit.CWD, m.hit.Project, cmd})
 	}
-	fmt.Fprintf(w, "Resume this session (%s):\n\n  %s\n", h.Project, cmd)
+	fmt.Fprintf(w, "Resume this session (%s):\n\n  %s\n", m.hit.Project, cmd)
 	return nil
 }
 
@@ -1462,6 +1466,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 // from what was already folded in. The indexing run's own write-through is what
 // carries the new rows into the store.
 func refreshThisProject(o *Options) {
+	expDir := realpathExpand(o.Dir)
 	if o.Source == "" || o.Source == "claude" {
 		td := resolveTDir(o.Dir, o.DirSet)
 		if td != "" && isDir(td) {
@@ -1470,8 +1475,14 @@ func refreshThisProject(o *Options) {
 			}
 		}
 	}
-	if o.Source == "antigravity" || (o.Source == "" && resolveTDir(o.Dir, o.DirSet) == "") {
-		scopes.RefreshAntigravityCWD(realpathExpand(o.Dir))
+	if o.Source == "" || o.Source == "antigravity" {
+		scopes.RefreshAntigravityCWD(expDir)
+	}
+	if o.Source == "" || o.Source == "goose" {
+		scopes.RefreshGooseCWD(expDir)
+	}
+	if o.Source == "" || o.Source == "codex" {
+		scopes.RefreshCodexCWD(expDir)
 	}
 }
 

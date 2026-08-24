@@ -330,14 +330,15 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 
 	anyChanged := false
 	for _, src := range srcPaths {
-		n, skipped, err := consolidateOne(con, src)
+		n, changed, skipped, err := consolidateOne(con, src)
 		if err != nil {
 			return st, fmt.Errorf("consolidate %s: %w", filepath.Base(src), err)
 		}
 		st.Sources++
 		if skipped {
 			st.Skipped++
-		} else {
+		}
+		if changed {
 			anyChanged = true
 		}
 		st.SessionsSeen += n
@@ -367,6 +368,9 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 // then hands that db here, so the consolidated store tracks without a separate
 // pass over the transcripts.
 func SyncConsolidatedFrom(srcPath string) error {
+	if IsConsolidatedDB(srcPath) {
+		return nil
+	}
 	con, err := store.ConnectRW(ConsolidatedPath())
 	if err != nil {
 		return fmt.Errorf("open consolidated store: %w", err)
@@ -378,11 +382,11 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if err := store.EnsureTopicSchema(con); err != nil {
 		return fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
-	_, skipped, err := consolidateOne(con, srcPath)
+	_, changed, skipped, err := consolidateOne(con, srcPath)
 	if err != nil {
 		return fmt.Errorf("consolidate %s: %w", filepath.Base(srcPath), err)
 	}
-	if skipped {
+	if skipped || !changed {
 		return nil
 	}
 	return pruneTombstoned(con)
@@ -394,46 +398,38 @@ func SyncConsolidatedFrom(srcPath string) error {
 // connection is closed.
 //
 // It is advisory in both directions: a failed index run is not folded in (its
-// db is in an unknown state), and a failed fold-in is logged, never returned.
-// The consolidated store is a derived artifact — `rawclaw consolidate` rebuilds
-// it from the same sources — so a lost update is a stale cache, not lost data,
-// and it must never be the reason a search fails.
+// db may be inconsistent), and a failed write-through does not fail the index
+// run (the next pass catches up). If the consolidated store is locked by
+// another process, write-through logs and proceeds rather than blocking the
+// indexing command: the reader falls back to per-project dbs when the one
+// store is missing, and the next normal command folds it in.
 func writeThroughConsolidated(dbp string, indexErr error) {
 	if indexErr != nil || IsConsolidatedDB(dbp) {
 		return
 	}
 	if err := SyncConsolidatedFrom(dbp); err != nil {
-		slog.Debug("consolidate: write-through failed", "db", filepath.Base(dbp), "err", err)
+		slog.Debug("consolidate: write-through failed (will retry on next pass)", "db", filepath.Base(dbp), "err", err)
 		return
 	}
-	// Vectors belong in the store search actually reads. This is the ONLY place
-	// they are topped up, and it is deliberately here rather than beside the
-	// indexing call: consolidation is what moves a message into the searched
-	// corpus, so the message and its vector land in the same file by
-	// construction. Fired against the consolidated path (never dbp) — a vector
-	// written into a per-project db is a vector no reader will ever see, which
-	// is exactly how the semantic lane went dark. Sitting after the fold-in also
-	// covers every source at once: the Codex/containers path never fired a
-	// top-up at all, because that hook hung off the Claude-only EnsureIndexed.
-	//
-	// Detached and rate-limited inside MaybeVectorTopup, so an ordinary invoke
-	// pays one stat and never waits on a remote embedder; a silent no-op when no
-	// embedder is configured, preserving the keyword-only default byte-for-byte.
+	// A new or appended project may have brought in messages that need
+	// embeddings. Fire the top-up in the background so the indexing command
+	// does not wait on vector latency: the vector index is an accelerator,
+	// not a correctness gate.
 	fireVectorTopup(ConsolidatedPath())
 }
 
 // consolidateOne attaches src, merges its sessions and messages, and detaches.
-// It returns the number of session rows the source offered (before merging), so
-// a caller can report how many rows collapsed into how many sessions, and
-// whether the source was skipped as unreadable.
+// It is atomic per source: if a merge fails, the detach still runs and the one
+// store's transaction rolls back. It does not modify src — the one store is a
+// derived view, not a second home.
 //
-// The source is attached READ-ONLY: an indexing run may hold the writer lock on
+// The source is attached read-only: SQLite enforces that no merge step can mutate
 // it, and consolidation must never be the thing that blocks indexing. The one
 // write it makes to a source is the additive column migration below, on its own
 // connection, before the read-only attach.
-func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err error) {
+func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
 	if _, err := os.Stat(src); err != nil {
-		return 0, true, fmt.Errorf("source unreadable: %w", err)
+		return 0, false, true, fmt.Errorf("source unreadable: %w", err)
 	}
 	// Bring the source up to the columns the merge reads BEFORE attaching it
 	// read-only. Failure here is not fatal — the guard below decides whether the
@@ -444,7 +440,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 		slog.Debug("consolidate: source not migrated", "db", filepath.Base(src), "err", mErr)
 	}
 	if _, err := con.Exec("ATTACH DATABASE ? AS src", "file:"+src+"?mode=ro"); err != nil {
-		return 0, true, fmt.Errorf("attach: %w", err)
+		return 0, false, true, fmt.Errorf("attach: %w", err)
 	}
 	defer func() {
 		if _, dErr := con.Exec("DETACH DATABASE src"); dErr != nil && err == nil {
@@ -459,7 +455,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	// re-runnable. The caller counts the skip so a pass that moves nothing says
 	// so instead of printing a success line.
 	if ok, cErr := hasScopeColumns(con); cErr != nil || !ok {
-		return 0, true, cErr
+		return 0, false, true, cErr
 	}
 
 	// Whether this source has a topic layer at all: the topic tables are created
@@ -467,20 +463,21 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	// no such table and its merge steps are skipped.
 	hasTopics, err := srcHasTable(con, "topic_segment")
 	if err != nil {
-		return 0, true, err
+		return 0, false, true, err
 	}
 	hasVerdicts, err := srcHasTable(con, "session_verdict")
 	if err != nil {
-		return 0, true, err
+		return 0, false, true, err
 	}
 
 	mark := ""
 	if err := con.QueryRow(
 		`SELECT (SELECT COUNT(*) FROM src.sessions) || ':' ||
 		        (SELECT COUNT(*) FROM src.messages) || ':' ||
-		        (SELECT COALESCE(MAX(id),0) FROM src.messages)`,
+		        (SELECT COALESCE(MAX(id),0) FROM src.messages) || ':' ||
+		        (SELECT COUNT(missing_since) || '@' || COALESCE(MAX(missing_since),0) FROM src.sessions)`,
 	).Scan(&mark); err != nil {
-		return 0, true, fmt.Errorf("read source watermark: %w", err)
+		return 0, false, true, fmt.Errorf("read source watermark: %w", err)
 	}
 	// The topic layer and session verdicts join the watermark, because tagging
 	// changes a source without touching a single session or message row. Left
@@ -494,7 +491,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 		if err := con.QueryRow(
 			`SELECT COUNT(*) || '@' || COALESCE(MAX(tagged_at),0) FROM src.topic_segment`,
 		).Scan(&topicMark); err != nil {
-			return 0, true, fmt.Errorf("read source topic watermark: %w", err)
+			return 0, false, true, fmt.Errorf("read source topic watermark: %w", err)
 		}
 	}
 	mark += ":t" + topicMark
@@ -503,12 +500,12 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 		if err := con.QueryRow(
 			`SELECT COUNT(*) || '@' || COALESCE(MAX(tagged_at),0) FROM src.session_verdict`,
 		).Scan(&verdictMark); err != nil {
-			return 0, true, fmt.Errorf("read source verdict watermark: %w", err)
+			return 0, false, true, fmt.Errorf("read source verdict watermark: %w", err)
 		}
 	}
 	mark += ":v" + verdictMark
 	if err := con.QueryRow("SELECT COUNT(*) FROM src.sessions").Scan(&offered); err != nil {
-		return 0, true, fmt.Errorf("count source sessions: %w", err)
+		return 0, false, true, fmt.Errorf("count source sessions: %w", err)
 	}
 
 	// Skip a source that has not changed since its last fold-in. Without this
@@ -518,29 +515,29 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 	var prev string
 	switch err := con.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&prev); {
 	case err == nil && prev == mark:
-		return offered, true, nil
+		return offered, false, false, nil
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
-		return 0, true, fmt.Errorf("read sync watermark: %w", err)
+		return 0, false, true, fmt.Errorf("read sync watermark: %w", err)
 	}
 
 	if _, err := con.Exec(mergeSessionsSQL); err != nil {
-		return 0, true, fmt.Errorf("merge sessions: %w", err)
+		return 0, false, true, fmt.Errorf("merge sessions: %w", err)
 	}
 	if _, err := con.Exec(mergeMessagesSQL); err != nil {
-		return 0, true, fmt.Errorf("merge messages: %w", err)
+		return 0, false, true, fmt.Errorf("merge messages: %w", err)
 	}
 	if hasTopics {
 		srcOrigin, err := srcHasColumn(con, "topic_segment", "origin_machine")
 		if err != nil {
-			return 0, true, err
+			return 0, false, true, err
 		}
 		if _, err := con.Exec(mergeTopicsSQLFor(srcOrigin)); err != nil {
-			return 0, true, fmt.Errorf("merge topics: %w", err)
+			return 0, false, true, fmt.Errorf("merge topics: %w", err)
 		}
 	}
 	if hasVerdicts {
 		if _, err := con.Exec(mergeVerdictsSQL); err != nil {
-			return 0, true, fmt.Errorf("merge verdicts: %w", err)
+			return 0, false, true, fmt.Errorf("merge verdicts: %w", err)
 		}
 	}
 	if _, err := con.Exec(`
@@ -548,12 +545,12 @@ func consolidateOne(con *sql.DB, src string) (offered int, skipped bool, err err
 		  (SELECT COUNT(*) FROM main.messages WHERE main.messages.session_id = main.sessions.id)
 		WHERE main.sessions.id IN (SELECT id FROM src.sessions)
 	`); err != nil {
-		return 0, true, fmt.Errorf("recount source sessions: %w", err)
+		return 0, false, true, fmt.Errorf("recount source sessions: %w", err)
 	}
 	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
-		return 0, true, fmt.Errorf("stamp sync watermark: %w", err)
+		return 0, false, true, fmt.Errorf("stamp sync watermark: %w", err)
 	}
-	return offered, false, nil
+	return offered, true, false, nil
 }
 
 // migrateSourceScope brings a per-project db up to the scope columns the merge
