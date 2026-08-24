@@ -12,6 +12,7 @@ package antigravity
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -130,16 +131,13 @@ func (a *Adapter) DiscoverRoot(brainDir string) ([]source.Container, error) {
 
 	historyMap := loadHistory(filepath.Join(a.root, "history.jsonl"))
 
-	var out []source.Container
-	var bad int
-
-	// First pass: identify all candidate transcripts and detect subagent relationships.
 	type candSession struct {
 		id   string
 		path string
 	}
-	var candidates []candSession
-	subagentParents := map[string]string{} // subagent conversationId -> parent conversationId
+
+	var mapped []source.Container
+	var unmapped []candSession
 
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
@@ -153,37 +151,85 @@ func (a *Adapter) DiscoverRoot(brainDir string) ([]source.Container, error) {
 			continue
 		}
 
-		candidates = append(candidates, candSession{id: sessionID, path: transcriptPath})
+		if cwd, ok := historyMap[sessionID]; ok && cwd != "" {
+			mapped = append(mapped, source.Container{
+				ID:         sessionID,
+				Path:       transcriptPath,
+				CWD:        cwd,
+				IsSubagent: false,
+				ParentID:   "",
+				ResumeArgv: []string{"agy", "--conversation", sessionID},
+			})
+		} else {
+			unmapped = append(unmapped, candSession{id: sessionID, path: transcriptPath})
+		}
+	}
 
-		// Scan for spawned subagents
-		for _, childID := range extractSpawnedSubagents(transcriptPath) {
-			if childID != "" {
-				subagentParents[childID] = sessionID
+	// Fast path: if all discovered sessions have known history, zero transcript reads are needed.
+	if len(unmapped) == 0 {
+		return mapped, nil
+	}
+
+	// Process unmapped sessions (subagents or sessions lacking history.jsonl records).
+	subagentParents := map[string]string{}
+	unmappedHeaders := make(map[string]sessionHeader, len(unmapped))
+	var needsParentScan bool
+
+	for _, u := range unmapped {
+		cwd, parentID, isSub := inspectSessionHeader(u.path)
+		unmappedHeaders[u.id] = sessionHeader{cwd: cwd, parentID: parentID, isSub: isSub}
+		if parentID != "" {
+			subagentParents[u.id] = parentID
+		} else {
+			needsParentScan = true
+		}
+	}
+
+	// If any unmapped session might be a spawned subagent whose parent wasn't in its header,
+	// scan candidate transcripts for INVOKE_SUBAGENT records.
+	if needsParentScan {
+		var allCandidates []candSession
+		for _, m := range mapped {
+			allCandidates = append(allCandidates, candSession{id: m.ID, path: m.Path})
+		}
+		for _, u := range unmapped {
+			allCandidates = append(allCandidates, u)
+		}
+
+		for _, cand := range allCandidates {
+			children := scanSpawnedSubagents(cand.path)
+			for _, childID := range children {
+				if childID != "" {
+					subagentParents[childID] = cand.id
+				}
 			}
 		}
 	}
 
-	for _, c := range candidates {
-		cwd := historyMap[c.id]
-		if cwd == "" {
-			cwd = inspectCWDFromTranscript(c.path)
+	out := make([]source.Container, 0, len(mapped)+len(unmapped))
+	out = append(out, mapped...)
+
+	for _, u := range unmapped {
+		hdr := unmappedHeaders[u.id]
+		parentID := subagentParents[u.id]
+		if parentID == "" {
+			parentID = hdr.parentID
+		}
+		isSub := parentID != "" || hdr.isSub
+
+		cwd := hdr.cwd
+		if cwd == "" && parentID != "" {
+			cwd = historyMap[parentID]
 		}
 
-		parentID := subagentParents[c.id]
-		isSub := parentID != ""
-
 		out = append(out, source.Container{
-			ID:         c.id,
-			Path:       c.path,
+			ID:         u.id,
+			Path:       u.path,
 			CWD:        cwd,
 			IsSubagent: isSub,
 			ParentID:   parentID,
-			ResumeArgv: []string{"agy", "--conversation", c.id},
+			ResumeArgv: []string{"agy", "--conversation", u.id},
 		})
-	}
-
-	if bad > 0 {
-		slog.Warn("antigravity: skipped unreadable transcripts", "count", bad, "root", brainDir)
 	}
 
 	return out, nil
@@ -216,7 +262,7 @@ func loadHistory(path string) map[string]string {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		if line == "" || !strings.Contains(line, "conversationId") {
 			continue
 		}
 		var rec struct {
@@ -232,26 +278,94 @@ func loadHistory(path string) map[string]string {
 	return out
 }
 
-// extractSpawnedSubagents scans a transcript for real INVOKE_SUBAGENT steps.
-func extractSpawnedSubagents(path string) []string {
-	var children []string
+type sessionHeader struct {
+	cwd      string
+	parentID string
+	isSub    bool
+}
+
+// inspectSessionHeader reads the opening lines of a transcript to find a recorded CWD and subagent lineage.
+func inspectSessionHeader(path string) (cwd, parentID string, isSub bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return "", "", false
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
+	buf := make([]byte, 8192)
+	n, _ := f.Read(buf)
+	if n == 0 {
+		return "", "", false
+	}
+	headerData := buf[:n]
 
-	for scanner.Scan() {
+	scanner := bufio.NewScanner(bytes.NewReader(headerData))
+	count := 0
+	for scanner.Scan() && count < 10 {
+		count++
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || !strings.Contains(line, "INVOKE_SUBAGENT") {
+		if line == "" {
+			continue
+		}
+		// Quick check for subagent reminder in prompt
+		if strings.Contains(line, "<subagent_reminder>") {
+			isSub = true
+			if pid := extractParentFromPrompt(line); pid != "" {
+				parentID = pid
+			}
+		}
+		// Quick check for user information CWD
+		if cwd == "" && strings.Contains(line, "<user_information>") {
+			if extracted := extractCWDFromUserInformation(line); extracted != "" {
+				cwd = extracted
+			}
+		}
+		// Quick check for tool call CWD
+		if cwd == "" && strings.Contains(line, "Cwd") {
+			var rec map[string]any
+			if err := json.Unmarshal([]byte(line), &rec); err == nil {
+				if tcList, ok := rec["tool_calls"].([]any); ok {
+					for _, tc := range tcList {
+						if tcMap, ok := tc.(map[string]any); ok {
+							if args, ok := tcMap["args"].(map[string]any); ok {
+								if c, ok := args["Cwd"].(string); ok && c != "" {
+									c = strings.Trim(c, "\"")
+									if isAbsPath(c) {
+										cwd = c
+										break
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if cwd != "" && parentID != "" {
+			break
+		}
+	}
+	return cwd, parentID, isSub
+}
+
+// scanSpawnedSubagents scans a transcript for INVOKE_SUBAGENT steps using fast byte matching.
+func scanSpawnedSubagents(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	if !bytes.Contains(data, []byte("INVOKE_SUBAGENT")) {
+		return nil
+	}
+	var children []string
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if !bytes.Contains(line, []byte("INVOKE_SUBAGENT")) {
 			continue
 		}
 		var rec map[string]any
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+		if err := json.Unmarshal(line, &rec); err != nil {
 			continue
 		}
 		if stepType, _ := rec["type"].(string); stepType != "INVOKE_SUBAGENT" {
@@ -259,10 +373,9 @@ func extractSpawnedSubagents(path string) []string {
 		}
 		content, _ := rec["content"].(string)
 		if content != "" && strings.Contains(content, "conversationId") {
-			// Extract conversationId values from output block
-			for _, line := range strings.Split(content, "\n") {
-				if strings.Contains(line, "conversationId") {
-					parts := strings.Split(line, ":")
+			for _, l := range strings.Split(content, "\n") {
+				if strings.Contains(l, "conversationId") {
+					parts := strings.Split(l, ":")
 					if len(parts) >= 2 {
 						cid := strings.Trim(strings.TrimSpace(parts[1]), "\", \t\r")
 						if cid != "" {
@@ -276,48 +389,32 @@ func extractSpawnedSubagents(path string) []string {
 	return children
 }
 
-// inspectCWDFromTranscript scans the opening lines of a transcript to find a recorded CWD.
-func inspectCWDFromTranscript(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
+// extractParentFromPrompt parses the caller parent ID from a <subagent_reminder> block.
+func extractParentFromPrompt(s string) string {
+	const startTag = "<subagent_reminder>"
+	const endTag = "</subagent_reminder>"
+	start := strings.Index(s, startTag)
+	if start < 0 {
 		return ""
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 64*1024)
-	scanner.Buffer(buf, 1024*1024)
-
-	count := 0
-	for scanner.Scan() && count < 50 {
-		count++
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var rec map[string]any
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue
-		}
-		// Check for tool call args with Cwd
-		if tcList, ok := rec["tool_calls"].([]any); ok {
-			for _, tc := range tcList {
-				if tcMap, ok := tc.(map[string]any); ok {
-					if args, ok := tcMap["args"].(map[string]any); ok {
-						if cwd, ok := args["Cwd"].(string); ok && cwd != "" {
-							cwd = strings.Trim(cwd, "\"")
-							if isAbsPath(cwd) {
-								return cwd
-							}
-						}
-					}
+	sub := s[start+len(startTag):]
+	if end := strings.Index(sub, endTag); end >= 0 {
+		sub = sub[:end]
+	}
+	for _, line := range strings.Split(sub, "\n") {
+		if strings.Contains(line, "caller agent") || strings.Contains(line, "id:") || strings.Contains(line, "id =") {
+			if idx := strings.Index(line, "id:"); idx >= 0 {
+				val := strings.TrimSpace(line[idx+len("id:"):])
+				val = strings.Trim(val, "\", \t\r)")
+				if val != "" && len(val) >= 8 {
+					return val
 				}
 			}
-		}
-		// Check for user information block in user prompt
-		if content, ok := rec["content"].(string); ok && strings.Contains(content, "<user_information>") {
-			if cwd := extractCWDFromUserInformation(content); cwd != "" {
-				return cwd
+			if idx := strings.Index(line, `id="`); idx >= 0 {
+				val := line[idx+len(`id="`):]
+				if q := strings.Index(val, `"`); q >= 0 {
+					return val[:q]
+				}
 			}
 		}
 	}

@@ -15,6 +15,10 @@ import (
 // 4. Performing incremental append and verifying watermark updates
 func TestAntigravityRecallJourney(t *testing.T) {
 	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
+	t.Setenv("ANTIGRAVITY_HOME", tmp)
 	dbp := filepath.Join(tmp, "test_antigravity.db")
 
 	// Seed history.jsonl
