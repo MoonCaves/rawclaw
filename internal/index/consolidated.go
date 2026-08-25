@@ -106,12 +106,18 @@ func unconsolidatedDBs(con *sql.DB, dbs []string) ([]string, error) {
 	var missing []string
 	for _, dbp := range dbs {
 		if _, ok := folded[sourceIdentity(dbp)]; !ok {
-			// Accept pre-path-identity watermarks written by older builds. They
-			// only when the current source set has one candidate with that name.
-			// If two paths share a basename, neither can be proved to be the
-			// source that wrote the legacy row, so both must be reported missing.
-			if basenameCount[filepath.Base(dbp)] == 1 {
-				if _, ok := folded[filepath.Base(dbp)]; ok {
+			// Accept pre-path-identity watermarks written by older builds only
+			// when the current source set has one candidate with that name.
+			// Immediately rewrite the watermark under its full-path identity
+			// so the ambiguous basename form cannot be accepted a second time
+			// if this database is later removed and replaced by another with
+			// the same basename.
+			base := filepath.Base(dbp)
+			if basenameCount[base] == 1 {
+				if _, ok := folded[base]; ok {
+					rewriteLegacyWatermark(con, dbp, base)
+					delete(folded, base)
+					folded[sourceIdentity(dbp)] = struct{}{}
 					continue
 				}
 			}
@@ -119,6 +125,26 @@ func unconsolidatedDBs(con *sql.DB, dbs []string) ([]string, error) {
 		}
 	}
 	return missing, nil
+}
+
+func rewriteLegacyWatermark(con *sql.DB, dbp, base string) {
+	oldKey := "sync:" + base
+	newKey := syncMarkKey(dbp)
+	if _, err := con.Exec(
+		"INSERT OR REPLACE INTO meta(key, value) SELECT ?, value FROM meta WHERE key = ?",
+		newKey, oldKey,
+	); err != nil {
+		if rw, rwErr := store.ConnectRW(ConsolidatedPath()); rwErr == nil {
+			_, _ = rw.Exec(
+				"INSERT OR REPLACE INTO meta(key, value) SELECT ?, value FROM meta WHERE key = ?",
+				newKey, oldKey,
+			)
+			_, _ = rw.Exec("DELETE FROM meta WHERE key = ?", oldKey)
+			_ = rw.Close()
+		}
+		return
+	}
+	_, _ = con.Exec("DELETE FROM meta WHERE key = ?", oldKey)
 }
 
 // SyncStats reports what one consolidation pass moved.
