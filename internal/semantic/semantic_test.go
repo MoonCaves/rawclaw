@@ -36,12 +36,12 @@ type fakeEmbedder struct {
 	vecs map[string][]float64
 }
 
-func (f fakeEmbedder) Embed(text string) []float64 { return f.vecs[text] }
+func (f fakeEmbedder) Embed(_ context.Context, text string) []float64 { return f.vecs[text] }
 
 // nilEmbedder always returns nil — the keyword-only baseline.
 type nilEmbedder struct{}
 
-func (nilEmbedder) Embed(string) []float64 { return nil }
+func (nilEmbedder) Embed(context.Context, string) []float64 { return nil }
 
 func TestPackUnpackRoundTrip(t *testing.T) {
 	cases := [][]float64{
@@ -432,12 +432,12 @@ type mockBatchEmbedder struct {
 	itemCalled  bool
 }
 
-func (m *mockBatchEmbedder) Embed(text string) []float64 {
+func (m *mockBatchEmbedder) Embed(_ context.Context, text string) []float64 {
 	m.itemCalled = true
 	return m.vecs[text]
 }
 
-func (m *mockBatchEmbedder) EmbedBatch(texts []string) [][]float64 {
+func (m *mockBatchEmbedder) EmbedBatch(_ context.Context, texts []string) [][]float64 {
 	m.batchCalled = true
 	if m.failBatch {
 		return nil
@@ -528,7 +528,7 @@ type cancellingEmbedder struct {
 	once   sync.Once
 }
 
-func (e *cancellingEmbedder) Embed(text string) []float64 {
+func (e *cancellingEmbedder) Embed(_ context.Context, text string) []float64 {
 	e.once.Do(func() { e.cancel() })
 	return []float64{1, 0, 0}
 }
@@ -697,11 +697,11 @@ type errorOnUpsertEmbedder struct {
 	once sync.Once
 }
 
-func (e *errorOnUpsertEmbedder) Embed(text string) []float64 {
+func (e *errorOnUpsertEmbedder) Embed(_ context.Context, text string) []float64 {
 	return []float64{1.0, 0.0, 0.0}
 }
 
-func (e *errorOnUpsertEmbedder) EmbedBatch(texts []string) [][]float64 {
+func (e *errorOnUpsertEmbedder) EmbedBatch(_ context.Context, texts []string) [][]float64 {
 	e.once.Do(func() {
 		// Drop the chunk_vec table on the first batch so subsequent VecUpsert fails.
 		_, _ = e.con.Exec("DROP TABLE chunk_vec")

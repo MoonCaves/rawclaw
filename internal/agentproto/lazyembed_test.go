@@ -1,6 +1,7 @@
 package agentproto
 
 import (
+	"context"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
@@ -12,7 +13,7 @@ import (
 // returns a fixed vector so the fusion path is reachable when it IS asked.
 type countingEmbedder struct{ calls int }
 
-func (c *countingEmbedder) Embed(string) []float64 {
+func (c *countingEmbedder) Embed(context.Context, string) []float64 {
 	c.calls++
 	return []float64{0.1, 0.2, 0.3}
 }

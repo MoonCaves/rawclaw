@@ -526,7 +526,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			vec  []float64
 		)
 		qvecFn = func() []float64 {
-			once.Do(func() { vec = embedder.Embed(rawQuery) })
+			once.Do(func() { vec = embedder.Embed(context.Background(), rawQuery) })
 			return vec
 		}
 	}
