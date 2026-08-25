@@ -276,8 +276,8 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 		}
 		count++
 
-		// Header inspection for first 10 lines
-		if count <= 10 {
+		// Header inspection for opening records (up to 50 records)
+		if count <= 50 {
 			var rec map[string]any
 			if err := json.Unmarshal([]byte(line), &rec); err == nil {
 				content, _ := rec["content"].(string)
@@ -296,17 +296,19 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 						hdr.cwd = extracted
 					}
 				}
-				if hdr.cwd == "" && strings.Contains(line, "<user_information>") {
-					if extracted := extractCWDFromUserInformation(line); extracted != "" {
-						hdr.cwd = extracted
-					}
-				}
-				if hdr.cwd == "" && strings.Contains(line, "Cwd") {
+				if hdr.cwd == "" {
 					if tcList, ok := rec["tool_calls"].([]any); ok {
 						for _, tc := range tcList {
 							if tcMap, ok := tc.(map[string]any); ok {
-								if args, ok := tcMap["args"].(map[string]any); ok {
-									if c, ok := args["Cwd"].(string); ok && c != "" {
+								var argsMap map[string]any
+								switch a := tcMap["args"].(type) {
+								case map[string]any:
+									argsMap = a
+								case string:
+									_ = json.Unmarshal([]byte(a), &argsMap)
+								}
+								if argsMap != nil {
+									if c, ok := argsMap["Cwd"].(string); ok && c != "" {
 										c = strings.Trim(c, "\"")
 										if isAbsPath(c) {
 											hdr.cwd = c
