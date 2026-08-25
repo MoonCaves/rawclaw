@@ -97,7 +97,7 @@ func connectBaselineRO(dbp string) (*sql.DB, error) {
 }
 
 func connectMmapRO(dbp string) (*sql.DB, error) {
-	dsn := "file:" + dbp + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=mmap_size(268435456)"
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=mmap_size(%d)", dbp, store.ROMmapSize)
 	con, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func connectMmapRO(dbp string) (*sql.DB, error) {
 }
 
 func connectMmapQueryOnlyRO(dbp string) (*sql.DB, error) {
-	dsn := "file:" + dbp + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=mmap_size(268435456)&_pragma=query_only(1)"
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=mmap_size(%d)&_pragma=query_only(1)", dbp, store.ROMmapSize)
 	con, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func connectMmapQueryOnlyRO(dbp string) (*sql.DB, error) {
 }
 
 func connectFullTunedRO(dbp string) (*sql.DB, error) {
-	dsn := "file:" + dbp + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=mmap_size(268435456)&_pragma=query_only(1)&_pragma=cache_size(-16000)&_pragma=temp_store(MEMORY)"
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=mmap_size(%d)&_pragma=query_only(1)&_pragma=cache_size(-16000)&_pragma=temp_store(MEMORY)", dbp, store.ROMmapSize)
 	con, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
