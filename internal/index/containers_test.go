@@ -139,9 +139,9 @@ func TestReindexContainer_RollbackOnFailure(t *testing.T) {
 		{Role: "fail", Text: "replacement message 2", TS: 4, TSISO: "2026-08-15T00:00:03Z", UUID: "u-bad"}, // triggers RAISE(ABORT)
 	}
 
-	ok := reindexContainer(con, c, brokenMsgs, "test", "", f, 100.0, 10, "testfp")
-	if ok {
-		t.Fatal("reindexContainer should have returned false on injected failure")
+	err = reindexContainer(con, c, brokenMsgs, "test", "", f, 100.0, 10, "testfp")
+	if err == nil {
+		t.Fatal("reindexContainer should have returned error on injected failure")
 	}
 
 	// Verify the original session and its messages are 100% intact
@@ -219,5 +219,74 @@ func TestEnsureIndexedContainers_SQLiteWALTrigger(t *testing.T) {
 	}
 	if msgCallCount != 2 {
 		t.Fatalf("expected reindex triggered by WAL update, got call count %d", msgCallCount)
+	}
+}
+
+// TestEnsureIndexedContainers_WriteLockContention proves that when a concurrent
+// connection holds a write lock on the index db, EnsureIndexedContainers fails
+// to reindex the container, logs the failure, and returns IndexStale rather than
+// falsely claiming the result is IndexFresh.
+func TestEnsureIndexedContainers_WriteLockContention(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "contention.db")
+	f := filepath.Join(dir, "sess.jsonl")
+	if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := source.Container{ID: "sess-lock", Path: f, CWD: "/repo"}
+	msgs := func(_ source.Container) ([]model.Message, error) {
+		return []model.Message{
+			{Role: "user", Text: "initial message", TS: 1, TSISO: "2026-08-25T00:00:00Z", UUID: "u1"},
+		}, nil
+	}
+
+	// 1. Initial index to set up schema and initial row
+	n, status, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, msgs, "codex", "")
+	if err != nil {
+		t.Fatalf("initial indexing failed: %v", err)
+	}
+	if status != IndexFresh {
+		t.Fatalf("initial status = %v, want IndexFresh", status)
+	}
+	if n != 1 {
+		t.Fatalf("initial sessions = %d, want 1", n)
+	}
+
+	// 2. Open a second connection and hold an exclusive write lock
+	con2, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open second connection: %v", err)
+	}
+	defer con2.Close()
+
+	tx2, err := con2.Begin()
+	if err != nil {
+		t.Fatalf("begin con2 tx: %v", err)
+	}
+	defer tx2.Rollback()
+
+	if _, err := tx2.Exec("INSERT INTO meta(key, value) VALUES('lock_probe', 'held')"); err != nil {
+		t.Fatalf("hold write lock: %v", err)
+	}
+
+	// 3. Update container file so reindex is triggered
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(f, []byte("x-updated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Run EnsureIndexedContainers: the write lock held by con2 causes reindexContainer
+	// to fail with SQLITE_BUSY / database locked. EnsureIndexedContainers must report
+	// status as not fresh (IndexStale).
+	_, status2, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgs, "codex", "")
+	if err != nil {
+		t.Fatalf("EnsureIndexedContainers returned unexpected fatal error: %v", err)
+	}
+	if status2 == IndexFresh {
+		t.Errorf("status = %v, want not fresh (IndexStale) when write lock is held", status2)
+	}
+	if status2 != IndexStale {
+		t.Errorf("status = %v, want IndexStale", status2)
 	}
 }
