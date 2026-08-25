@@ -56,19 +56,6 @@ func packVec(vec []float64) []byte {
 	return buf
 }
 
-// unpackVec decodes little-endian float32 bytes back into a float64 slice.
-// A length not divisible by 4 yields nil.
-func unpackVec(blob []byte) []float64 {
-	if len(blob)%4 != 0 {
-		return nil
-	}
-	out := make([]float64, len(blob)/4)
-	for i := range out {
-		out[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:])))
-	}
-	return out
-}
-
 // contentHash is the first 16 hex chars of the SHA-1 of the text.
 func contentHash(text string) string {
 	sum := sha1.Sum([]byte(text))
