@@ -286,11 +286,7 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 
 	bookendStart := TakeDisplayableWith(bs, opts.Bookend, opts.IncludeTools, opts.IncludeThinking, dispCap)
 	// bookend_end: emit reversed(be) (be is DESC, so output is ASC by id).
-	rev := make([]store.Msg, 0, len(be))
-	for i := len(be) - 1; i >= 0; i-- {
-		rev = append(rev, be[i])
-	}
-	bookendEnd := TakeDisplayableTailWith(rev, opts.Bookend, opts.IncludeTools, opts.IncludeThinking, dispCap)
+	bookendEnd := TakeDisplayableTailWith(Reversed(be), opts.Bookend, opts.IncludeTools, opts.IncludeThinking, dispCap)
 
 	messagesBefore := max(0, len(before)-1)
 	return &AnchoredView{
