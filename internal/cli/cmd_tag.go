@@ -12,6 +12,8 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/lifecycle"
+	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -174,19 +176,33 @@ func newTagWriteCmd() *cobra.Command {
 		source      string
 	)
 	cmd := &cobra.Command{
-		Use:   "tag-write <session8>",
-		Short: "Write a tagging subagent's topic segments (JSON on STDIN) or routine verdict to the index",
+		Use:     "tag-write <session8>",
+		Aliases: []string{"tag-floor"},
+		Short:   "Write a tagging subagent's topic segments (JSON on STDIN) or routine verdict to the index",
 		Long: "Read a JSON array of topic segments from STDIN and store them in the topic index used by " +
 			"search/outline. Each segment: {\"start_uuid\":\"<uuid8 prefix>\",\"topic\":\"...\",\"summary\":\"...\"}, " +
 			"in session order. start_uuid is prefix-resolved against the session's message uuids; each segment's " +
 			"end is the message just before the next segment's start (the last message for the final segment).\n\n" +
 			"Pass --routine to mark the session with a routine verdict (trivial / low-signal; sorts down, never hidden). " +
-			"rawclaw calls NO LLM — a tagging subagent decides the segments or routine verdict and pipes/flags them here.",
-		Args:          cobra.ExactArgs(1),
+			"Use the tag-floor alias with no session argument to sweep the consolidated corpus using the " +
+			"deterministic math floor; it makes no LLM or API calls. rawclaw calls NO LLM — a tagging subagent " +
+			"decides the segments or routine verdict and pipes/flags them here.",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if cmd.CalledAs() == "tag-floor" {
+				if len(args) > 1 {
+					return cobra.MaximumNArgs(1)(cmd, args)
+				}
+				return nil
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
+			if cmd.CalledAs() == "tag-floor" {
+				return runTagFloorCmd(cmd.OutOrStdout(), scope)
+			}
 			return runTagWriteCmd(cmd.OutOrStdout(), cmd.InOrStdin(), args[0], scope, more, routine, source)
 		},
 	}
@@ -196,6 +212,88 @@ func newTagWriteCmd() *cobra.Command {
 	f.BoolVar(&routine, "routine", false, "mark the session with a routine verdict (trivial / low-signal; sorts down)")
 	f.StringVar(&source, "source", store.VerdictSourceAgent, "verdict source (agent|floor)")
 	return cmd
+}
+
+// runTagFloorCmd evaluates every session in the consolidated store. The
+// consolidated messages are already parser output, so the floor uses the
+// parser's substantive-human filter instead of the inflated sessions count.
+// A per-session read error is unknown and is never written as routine.
+func runTagFloorCmd(w io.Writer, scope []view.Scope) error {
+	con, err := store.ConnectRW(index.ConsolidatedPath())
+	if err != nil {
+		return fmt.Errorf("open consolidated store read-write: %w", err)
+	}
+	defer con.Close()
+	if err := store.EnsureTopicSchema(con); err != nil {
+		return fmt.Errorf("ensure topic schema: %w", err)
+	}
+
+	query := "SELECT id FROM sessions"
+	args := []any{}
+	if len(scope) > 0 {
+		if len(scope) != 1 || scope[0].Project == "" {
+			return fmt.Errorf("tag-floor: unsupported project scope")
+		}
+		query += " WHERE project=?"
+		args = append(args, scope[0].Project)
+	}
+	query += " ORDER BY id"
+	rows, err := con.Query(query, args...)
+	if err != nil {
+		return fmt.Errorf("list sessions for floor: %w", err)
+	}
+	var sessionIDs []string
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan session for floor: %w", err)
+		}
+		sessionIDs = append(sessionIDs, sid)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("iterate sessions for floor: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close sessions for floor: %w", err)
+	}
+
+	var evaluated, marked, normal, unknown int
+	for _, sid := range sessionIDs {
+		evaluated++
+		msgs, err := store.SessionMessages(con, sid)
+		if err != nil {
+			unknown++
+			continue
+		}
+		modelMsgs := make([]model.Message, len(msgs))
+		for i, msg := range msgs {
+			modelMsgs[i] = model.Message{Role: msg.Role, Text: msg.Content}
+		}
+		isRoutine, _ := lifecycle.EvaluateMathFloor(modelMsgs)
+		if err := applyFloorRoutine(con, sid, isRoutine, nowUnix()); err != nil {
+			return err
+		}
+		if isRoutine {
+			marked++
+		} else {
+			normal++
+		}
+	}
+	fmt.Fprintf(w, "Evaluated %d sessions: marked %d as routine (floor), %d normal, %d unknown\n",
+		evaluated, marked, normal, unknown)
+	return nil
+}
+
+func applyFloorRoutine(con *sql.DB, sessionID string, isRoutine bool, taggedAt float64) error {
+	if !isRoutine {
+		if _, err := con.Exec("DELETE FROM session_verdict WHERE session_id=? AND source=?", sessionID, store.VerdictSourceFloor); err != nil {
+			return fmt.Errorf("retract floor verdict for %s: %w", lastSlice8(sessionID), err)
+		}
+		return nil
+	}
+	return runTagWriteRoutine(con, sessionID, store.VerdictSourceFloor, taggedAt)
 }
 
 // runTagWriteCmd resolves session8 → db + full id, opens the db read-write,
@@ -255,6 +353,15 @@ func runTagWriteRoutine(con *sql.DB, fullSID, source string, taggedAt float64) e
 	if source == "" {
 		source = store.VerdictSourceAgent
 	}
+	if source == store.VerdictSourceFloor {
+		source, ok, err := verdictSource(con, fullSID)
+		if err != nil {
+			return fmt.Errorf("read existing verdict: %w", err)
+		}
+		if ok && source == store.VerdictSourceAgent {
+			return nil
+		}
+	}
 	if err := store.UpsertVerdict(con, store.Verdict{
 		SessionID: fullSID,
 		Verdict:   store.VerdictRoutine,
@@ -263,7 +370,22 @@ func runTagWriteRoutine(con *sql.DB, fullSID, source string, taggedAt float64) e
 	}); err != nil {
 		return err
 	}
+	if source == store.VerdictSourceFloor {
+		return nil
+	}
 	return store.ReplaceSessionSegments(con, fullSID, nil)
+}
+
+func verdictSource(con *sql.DB, sessionID string) (string, bool, error) {
+	var source string
+	err := con.QueryRow("SELECT source FROM session_verdict WHERE session_id=?", sessionID).Scan(&source)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return source, true, nil
 }
 
 // runTagWrite is the testable core: decode the segment array from r, resolve each
