@@ -193,7 +193,10 @@ ON CONFLICT(session_id, source_db) DO UPDATE SET
 //     Where all copies are purged, only_copy_since is MAX(only_copy_since) — the timestamp
 //     when the LAST live copy vanished from disk.
 //   - Scope and provenance follow the winning contribution (live beats purged; between
-//     equal presence, highest message count wins; tie-broken by latest last_ts and source_db).
+//     equal presence, highest message count wins; tie-broken by latest last_ts, then a
+//     current-form absolute-path identity over a legacy bare-filename one — in ASCII a
+//     letter outranks '/' on a bare DESC, which let stale legacy metadata win (#19) —
+//     then source_db).
 //     A known non-null value (project/cwd/source_tool/origin_machine) never loses to a NULL.
 //   - started_at is the earliest non-zero start timestamp across contributions.
 //   - last_ts is the latest activity across contributions.
@@ -212,6 +215,7 @@ WITH ranked AS (
         (only_copy_since IS NULL) DESC,
         COALESCE(message_count, 0) DESC,
         COALESCE(last_ts, 0) DESC,
+        (source_db LIKE '/%') DESC,
         source_db DESC
     ) AS rank
   FROM main.session_sources
