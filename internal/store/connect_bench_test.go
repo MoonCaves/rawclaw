@@ -139,8 +139,11 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil || len(hits) == 0 {
+			if err != nil {
 				b.Fatalf("SearchHits: %v", err)
+			}
+			if len(hits) == 0 {
+				b.Fatal("SearchHits: 0 hits returned")
 			}
 		}
 	})
@@ -155,8 +158,11 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil || len(hits) == 0 {
+			if err != nil {
 				b.Fatalf("SearchHits: %v", err)
+			}
+			if len(hits) == 0 {
+				b.Fatal("SearchHits: 0 hits returned")
 			}
 		}
 	})
@@ -171,8 +177,11 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil || len(hits) == 0 {
+			if err != nil {
 				b.Fatalf("SearchHits: %v", err)
+			}
+			if len(hits) == 0 {
+				b.Fatal("SearchHits: 0 hits returned")
 			}
 		}
 	})
@@ -187,8 +196,11 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil || len(hits) == 0 {
+			if err != nil {
 				b.Fatalf("SearchHits: %v", err)
+			}
+			if len(hits) == 0 {
+				b.Fatal("SearchHits: 0 hits returned")
 			}
 		}
 	})
@@ -202,9 +214,13 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 				b.Fatal(err)
 			}
 			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil || len(hits) == 0 {
+			if err != nil {
 				con.Close()
 				b.Fatalf("SearchHits: %v", err)
+			}
+			if len(hits) == 0 {
+				con.Close()
+				b.Fatal("SearchHits: 0 hits returned")
 			}
 			con.Close()
 		}
@@ -219,9 +235,13 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 				b.Fatal(err)
 			}
 			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil || len(hits) == 0 {
+			if err != nil {
 				con.Close()
 				b.Fatalf("SearchHits: %v", err)
+			}
+			if len(hits) == 0 {
+				con.Close()
+				b.Fatal("SearchHits: 0 hits returned")
 			}
 			con.Close()
 		}
@@ -236,9 +256,13 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 				b.Fatal(err)
 			}
 			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil || len(hits) == 0 {
+			if err != nil {
 				con.Close()
 				b.Fatalf("SearchHits: %v", err)
+			}
+			if len(hits) == 0 {
+				con.Close()
+				b.Fatal("SearchHits: 0 hits returned")
 			}
 			con.Close()
 		}
@@ -253,9 +277,13 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 				b.Fatal(err)
 			}
 			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil || len(hits) == 0 {
+			if err != nil {
 				con.Close()
 				b.Fatalf("SearchHits: %v", err)
+			}
+			if len(hits) == 0 {
+				con.Close()
+				b.Fatal("SearchHits: 0 hits returned")
 			}
 			con.Close()
 		}
@@ -271,8 +299,11 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil || len(sessions) == 0 {
+			if err != nil {
 				b.Fatalf("BrowseSessions: %v", err)
+			}
+			if len(sessions) == 0 {
+				b.Fatal("BrowseSessions: 0 sessions returned")
 			}
 		}
 	})
@@ -287,8 +318,11 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil || len(sessions) == 0 {
+			if err != nil {
 				b.Fatalf("BrowseSessions: %v", err)
+			}
+			if len(sessions) == 0 {
+				b.Fatal("BrowseSessions: 0 sessions returned")
 			}
 		}
 	})
@@ -303,8 +337,11 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil || len(sessions) == 0 {
+			if err != nil {
 				b.Fatalf("BrowseSessions: %v", err)
+			}
+			if len(sessions) == 0 {
+				b.Fatal("BrowseSessions: 0 sessions returned")
 			}
 		}
 	})
@@ -319,8 +356,11 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
 			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil || len(sessions) == 0 {
+			if err != nil {
 				b.Fatalf("BrowseSessions: %v", err)
+			}
+			if len(sessions) == 0 {
+				b.Fatal("BrowseSessions: 0 sessions returned")
 			}
 		}
 	})
@@ -334,9 +374,13 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 				b.Fatal(err)
 			}
 			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil || len(sessions) == 0 {
+			if err != nil {
 				con.Close()
 				b.Fatalf("BrowseSessions: %v", err)
+			}
+			if len(sessions) == 0 {
+				con.Close()
+				b.Fatal("BrowseSessions: 0 sessions returned")
 			}
 			con.Close()
 		}
@@ -351,9 +395,13 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 				b.Fatal(err)
 			}
 			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil || len(sessions) == 0 {
+			if err != nil {
 				con.Close()
 				b.Fatalf("BrowseSessions: %v", err)
+			}
+			if len(sessions) == 0 {
+				con.Close()
+				b.Fatal("BrowseSessions: 0 sessions returned")
 			}
 			con.Close()
 		}
@@ -368,9 +416,13 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 				b.Fatal(err)
 			}
 			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil || len(sessions) == 0 {
+			if err != nil {
 				con.Close()
 				b.Fatalf("BrowseSessions: %v", err)
+			}
+			if len(sessions) == 0 {
+				con.Close()
+				b.Fatal("BrowseSessions: 0 sessions returned")
 			}
 			con.Close()
 		}
@@ -385,9 +437,13 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 				b.Fatal(err)
 			}
 			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil || len(sessions) == 0 {
+			if err != nil {
 				con.Close()
 				b.Fatalf("BrowseSessions: %v", err)
+			}
+			if len(sessions) == 0 {
+				con.Close()
+				b.Fatal("BrowseSessions: 0 sessions returned")
 			}
 			con.Close()
 		}
