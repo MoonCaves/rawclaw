@@ -520,8 +520,15 @@ func NormalizeRecord(rec map[string]any) (role, text string, ok bool) {
 
 // parseUserRequest extracts the human request from an Antigravity USER_INPUT content.
 func parseUserRequest(s string) string {
-	if inner := tagContent(s, "<USER_REQUEST>", "</USER_REQUEST>"); inner != "" {
-		return strings.TrimSpace(inner)
+	const startTag = "<USER_REQUEST>"
+	const endTag = "</USER_REQUEST>"
+	start := strings.Index(s, startTag)
+	if start >= 0 {
+		sub := s[start+len(startTag):]
+		if end := strings.Index(sub, endTag); end >= 0 {
+			return strings.TrimSpace(sub[:end])
+		}
+		return strings.TrimSpace(sub)
 	}
 	return strings.TrimSpace(s)
 }
