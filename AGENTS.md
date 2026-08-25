@@ -63,6 +63,24 @@ sovereign and dependency-free:
 - Weigh every change against the north star above. Optional-and-opt-in is the price of admission for
   anything that isn't a single-binary, zero-dep, no-LLM default.
 
+## Delegated agents
+
+- Commit each working unit as you finish it. Never hold more than ~10 minutes, or a second
+  concern, uncommitted — a run that ends loses everything uncommitted.
+- Touch only the files your task names. If another file needs changing, say so; don't take it.
+- Green before you finish: `CGO_ENABLED=0 go test -race -count=1 ./...` and `gofmt -l internal/`.
+- "No bug here" is a real result. Never report a green you did not observe.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues (`MoonCaves/rawclaw`), via the `gh` CLI. This repo is public — keep issue titles/bodies scrubbed of local absolute paths, hostnames, and org-internal names; cite `file:line` instead. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists yet; created lazily). See `docs/agents/domain.md`.
+
 ## Index
 
 - [README.md](README.md) — what RawClaw is and its full verb/flag surface, from the user's side.
