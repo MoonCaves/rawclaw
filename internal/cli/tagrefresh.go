@@ -16,6 +16,8 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
+var tagPrepStderr io.Writer = os.Stderr
+
 // runTagPrepCmd refreshes the requested live session through the registered
 // source adapters, then prints the consolidated current view.
 func runTagPrepCmd(w io.Writer, session8 string, scope []view.Scope, more agentproto.ScopeFn) error {
@@ -29,7 +31,7 @@ func runTagPrepCmdWithSources(
 	more agentproto.ScopeFn,
 	registrations []source.Registration,
 ) error {
-	dbp, fullSID, err := refreshTagSession(session8, scope, more, registrations)
+	dbp, fullSID, toFold, err := refreshTagSession(session8, scope, more, registrations)
 	if err != nil {
 		return err
 	}
@@ -37,8 +39,39 @@ func runTagPrepCmdWithSources(
 	if err != nil {
 		return fmt.Errorf("open %q read-only: %w", dbp, err)
 	}
+
+	existingSegs := readConsolidatedTopics(fullSID)
+	prepErr := runTagPrepWithTopics(w, con, fullSID, existingSegs)
+	_ = con.Close()
+	if prepErr != nil {
+		return prepErr
+	}
+
+	// Ceiling comment: Trading immediate consolidated-store consistency for closeout latency:
+	// the tag-prep dump is already delivered to stdout from the proven-fresh refresh db,
+	// so if the 2.6GB consolidated store is currently busy/locked under concurrent write traffic,
+	// we defer the fold. The retained refresh db remains on disk and will be drained into the
+	// consolidated store on the next ingest or touch.
+	for _, refreshDB := range toFold {
+		if err := index.SyncConsolidatedFrom(refreshDB); err != nil {
+			if index.IsBusy(err) {
+				fmt.Fprintln(tagPrepStderr, "# fold deferred (store busy); refresh db retained, will fold on next ingest")
+				return nil
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+func readConsolidatedTopics(sessionID string) []store.TopicSegment {
+	con, err := store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		return nil
+	}
 	defer con.Close()
-	return runTagPrep(w, con, fullSID)
+	segs, _ := store.TopicsForSession(con, sessionID)
+	return segs
 }
 
 type tagSourceMatch struct {
@@ -52,7 +85,7 @@ func refreshTagSession(
 	scope []view.Scope,
 	more agentproto.ScopeFn,
 	registrations []source.Registration,
-) (string, string, error) {
+) (string, string, []string, error) {
 	// Probe only the consolidated store first. A scope builder returning nil prevents
 	// a stale/missing row from triggering the old all-project indexing sweep
 	// before the targeted source refresh gets a chance to run.
@@ -61,37 +94,44 @@ func refreshTagSession(
 		match, ok := locatedTagSource(dbp, fullSID, registrations)
 		if ok {
 			if _, err := os.Stat(match.container.Path); err == nil {
-				if err := refreshTagMatches([]tagSourceMatch{match}); err != nil {
-					return "", "", err
+				targetDBP, targetSID, toFold, err := refreshTagMatches([]tagSourceMatch{match}, sessionArg)
+				if err != nil {
+					return "", "", nil, err
 				}
-				return agentproto.LocateSession(fullSID, scope, more)
+				return targetDBP, targetSID, toFold, nil
 			} else if !os.IsNotExist(err) {
-				return "", "", fmt.Errorf("inspect live transcript %s: %w", match.container.Path, err)
+				return "", "", nil, fmt.Errorf("inspect live transcript %s: %w", match.container.Path, err)
 			}
 		}
 	}
 
 	stemMatches := stemTagSources(sessionArg, registrations)
 	if len(stemMatches) > 0 {
-		if err := refreshTagMatches(stemMatches); err != nil {
-			return "", "", err
+		targetDBP, targetSID, toFold, err := refreshTagMatches(stemMatches, sessionArg)
+		if err != nil {
+			return "", "", nil, err
 		}
-		return agentproto.LocateSession(sessionArg, scope, more)
+		return targetDBP, targetSID, toFold, nil
 	}
 
 	matches, discoverErr := discoverTagSources(sessionArg, registrations)
 	if len(matches) > 0 {
-		if err := refreshTagMatches(matches); err != nil {
-			return "", "", err
+		targetDBP, targetSID, toFold, err := refreshTagMatches(matches, sessionArg)
+		if err != nil {
+			return "", "", nil, err
 		}
-		return agentproto.LocateSession(sessionArg, scope, more)
+		return targetDBP, targetSID, toFold, nil
 	}
 	if discoverErr != nil {
-		return "", "", discoverErr
+		return "", "", nil, discoverErr
 	}
 	// No live source remains. Fall back to RawClaw's deliberately retained
 	// history, applying the caller's project scope only at this final read.
-	return agentproto.LocateSession(sessionArg, scope, more)
+	histDBP, histSID, histErr := agentproto.LocateSession(sessionArg, scope, more)
+	if histErr != nil {
+		return "", "", nil, histErr
+	}
+	return histDBP, histSID, nil, nil
 }
 
 func stemTagSources(
@@ -246,25 +286,45 @@ func discoverTagSources(
 	return matches, discoveryErr
 }
 
-func refreshTagMatches(matches []tagSourceMatch) error {
-	for _, match := range matches {
+func refreshTagMatches(matches []tagSourceMatch, sessionArg string) (string, string, []string, error) {
+	var (
+		targetDBP string
+		targetSID string
+		toFold    []string
+	)
+	prefix := agentproto.NormalizeSessionArg(sessionArg)
+
+	targetIdx := 0
+	for i, match := range matches {
+		if match.container.ID == prefix || match.container.ID == sessionArg || strings.HasPrefix(match.container.ID, prefix) {
+			targetIdx = i
+			break
+		}
+	}
+
+	for i, match := range matches {
 		dbp := index.RefreshDBPath(
 			match.registration.ID,
 			match.container.ID,
 			match.container.Path,
 		)
-		nMessages, err := index.EnsureFreshContainer(
+		nMessages, err := index.PrepareFreshContainer(
 			dbp,
 			match.container,
 			match.adapter.Messages,
 			match.registration.ID,
 		)
 		if err != nil {
-			return fmt.Errorf("refresh session %s from %s: %w", match.container.ID, match.registration.ID, err)
+			return "", "", nil, fmt.Errorf("refresh session %s from %s: %w", match.container.ID, match.registration.ID, err)
 		}
 		if nMessages == 0 {
-			return fmt.Errorf("live session %q has no messages to tag", lastSlice8(match.container.ID))
+			return "", "", nil, fmt.Errorf("live session %q has no messages to tag", lastSlice8(match.container.ID))
+		}
+		toFold = append(toFold, dbp)
+		if i == targetIdx {
+			targetDBP = dbp
+			targetSID = match.container.ID
 		}
 	}
-	return nil
+	return targetDBP, targetSID, toFold, nil
 }

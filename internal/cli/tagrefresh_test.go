@@ -512,3 +512,119 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 		t.Fatalf("runResume output missing expected resume command:\n%s", out.String())
 	}
 }
+
+func TestRunTagPrepCmd_ContentionDefersFoldAndFoldsOnNextTouch(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+
+	projDir := filepath.Join(configDir, "projects", "-contention-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir projDir: %v", err)
+	}
+
+	const fullSID = "contend1-session-uuid"
+	transcriptPath := filepath.Join(projDir, fullSID+".jsonl")
+	transcriptContent := `{"type":"user","uuid":"11112222-uuid","timestamp":"2026-08-25T10:00:00Z","message":{"role":"user","content":"busy lock contention message"}}` + "\n" +
+		`{"type":"assistant","uuid":"33334444-uuid","timestamp":"2026-08-25T10:00:01Z","message":{"role":"assistant","content":"busy lock response"}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	// 1. Ensure the consolidated store exists and hold BEGIN IMMEDIATE on it
+	consolidatedPath := index.ConsolidatedPath()
+	_ = os.MkdirAll(filepath.Dir(consolidatedPath), 0o755)
+	conConsolidated, err := store.ConnectRW(consolidatedPath)
+	if err != nil {
+		t.Fatalf("ConnectRW consolidated: %v", err)
+	}
+	if err := store.Rebuild(conConsolidated); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	if err := store.EnsureTopicSchema(conConsolidated); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
+	}
+	if _, err := conConsolidated.Exec("BEGIN IMMEDIATE"); err != nil {
+		t.Fatalf("BEGIN IMMEDIATE on consolidated store: %v", err)
+	}
+
+	// Capture stderr
+	var errOut strings.Builder
+	oldStderr := tagPrepStderr
+	tagPrepStderr = &errOut
+	defer func() { tagPrepStderr = oldStderr }()
+
+	// (a) Run tag-prep while consolidated store is locked
+	var out strings.Builder
+	err = runTagPrepCmd(&out, "contend1", nil, nil)
+	if err != nil {
+		t.Fatalf("runTagPrepCmd under held lock failed, want exit 0: %v", err)
+	}
+
+	// Dump must succeed and contain messages
+	if !strings.Contains(out.String(), "11112222 [user] busy lock contention message") {
+		t.Fatalf("dump missing user message; got:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "33334444 [assistant] busy lock response") {
+		t.Fatalf("dump missing assistant reply; got:\n%s", out.String())
+	}
+
+	// Stderr must contain the deferred note
+	wantNote := "# fold deferred (store busy); refresh db retained, will fold on next ingest"
+	if !strings.Contains(errOut.String(), wantNote) {
+		t.Fatalf("stderr = %q, want containing %q", errOut.String(), wantNote)
+	}
+
+	// Refresh DB must be retained on disk
+	reg := claude.Registration()
+	dbp := index.RefreshDBPath(reg.ID, fullSID, transcriptPath)
+	if _, err := os.Stat(dbp); err != nil {
+		t.Fatalf("refresh db %s not found on disk, want retained: %v", dbp, err)
+	}
+
+	// Release lock on consolidated store
+	if _, err := conConsolidated.Exec("ROLLBACK"); err != nil {
+		t.Fatalf("ROLLBACK: %v", err)
+	}
+	conConsolidated.Close()
+
+	// Verify session is not yet in consolidated store
+	roCon, err := store.ConnectRO(consolidatedPath)
+	if err != nil {
+		t.Fatalf("ConnectRO: %v", err)
+	}
+	var count int
+	_ = roCon.QueryRow("SELECT COUNT(*) FROM sessions WHERE id = ?", fullSID).Scan(&count)
+	roCon.Close()
+	if count != 0 {
+		t.Fatalf("session already in consolidated store before fold, count = %d, want 0", count)
+	}
+
+	// (b) Deferred refresh db folds on the next EnsureFreshContainer run
+	c := source.Container{
+		ID:   fullSID,
+		Path: transcriptPath,
+		CWD:  projDir,
+	}
+	adapter := reg.New()
+	n, err := index.EnsureFreshContainer(dbp, c, adapter.Messages, reg.ID)
+	if err != nil {
+		t.Fatalf("EnsureFreshContainer on next touch: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("EnsureFreshContainer n = %d, want 2", n)
+	}
+
+	// Verify session is now folded in consolidated store
+	roCon, err = store.ConnectRO(consolidatedPath)
+	if err != nil {
+		t.Fatalf("ConnectRO: %v", err)
+	}
+	defer roCon.Close()
+	if err := roCon.QueryRow("SELECT COUNT(*) FROM sessions WHERE id = ?", fullSID).Scan(&count); err != nil {
+		t.Fatalf("query consolidated store: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("session not folded into consolidated store, count = %d, want 1", count)
+	}
+}
