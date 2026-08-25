@@ -351,10 +351,14 @@ func IsLowSignal(text string) bool {
 	// Bare slash-command: the first whitespace-delimited word is a known
 	// control verb and nothing substantive follows beyond it.
 	if t[0] == '/' {
-		if fields := strings.Fields(lower); len(fields) > 0 {
-			if _, ok := slashCommands[fields[0]]; ok {
-				return true
-			}
+		head := lower
+		if i := strings.IndexFunc(lower, func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		}); i >= 0 {
+			head = lower[:i]
+		}
+		if _, ok := slashCommands[head]; ok {
+			return true
 		}
 	}
 
