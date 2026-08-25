@@ -188,3 +188,73 @@ func keysOf(m map[string]bool) string {
 	}
 	return strings.Join(out, ",")
 }
+
+func TestSessionHasRealSegments(t *testing.T) {
+	t.Run("missing table returns false and nil error", func(t *testing.T) {
+		con, _ := storetest.NewDB(t)
+		// Do not call EnsureTopicSchema, so topic_segment table does not exist
+		has, err := store.SessionHasRealSegments(con, "sess-1")
+		if err != nil {
+			t.Fatalf("expected nil error on missing table, got %v", err)
+		}
+		if has {
+			t.Fatalf("expected false on missing table, got true")
+		}
+	})
+
+	t.Run("returns true when session has real segment", func(t *testing.T) {
+		con, _ := storetest.NewDB(t)
+		if err := store.EnsureTopicSchema(con); err != nil {
+			t.Fatalf("EnsureTopicSchema: %v", err)
+		}
+		storetest.InsertMessage(t, con, storetest.Message{
+			SessionID: "sess-1", Role: "user", Content: "hello", UUID: "uuid-1",
+		})
+		if err := store.UpsertTopicSegment(con, "sess-1", "uuid-1", "", "billing", "summary", 1.0); err != nil {
+			t.Fatalf("UpsertTopicSegment: %v", err)
+		}
+
+		has, err := store.SessionHasRealSegments(con, "sess-1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !has {
+			t.Fatalf("expected true, got false")
+		}
+	})
+
+	t.Run("returns false when session has no real segment", func(t *testing.T) {
+		con, _ := storetest.NewDB(t)
+		if err := store.EnsureTopicSchema(con); err != nil {
+			t.Fatalf("EnsureTopicSchema: %v", err)
+		}
+		storetest.InsertMessage(t, con, storetest.Message{
+			SessionID: "sess-1", Role: "user", Content: "hello", UUID: "uuid-1",
+		})
+		if err := store.UpsertTopicSegment(con, "sess-1", "uuid-1", "", "", "summary only", 1.0); err != nil {
+			t.Fatalf("UpsertTopicSegment: %v", err)
+		}
+
+		has, err := store.SessionHasRealSegments(con, "sess-1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if has {
+			t.Fatalf("expected false for empty topic, got true")
+		}
+	})
+
+	t.Run("returns error on database failure", func(t *testing.T) {
+		con, _ := storetest.NewDB(t)
+		if err := store.EnsureTopicSchema(con); err != nil {
+			t.Fatalf("EnsureTopicSchema: %v", err)
+		}
+		// Close the database connection to force an error
+		con.Close()
+
+		_, err := store.SessionHasRealSegments(con, "sess-1")
+		if err == nil {
+			t.Fatalf("expected error on closed database connection, got nil")
+		}
+	})
+}
