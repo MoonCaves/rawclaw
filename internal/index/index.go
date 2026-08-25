@@ -926,8 +926,12 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 					if len(tailMs) == 0 && newOffset == prev.size {
 						continue // writer has only supplied an incomplete trailing record
 					}
-					newFP := provenance.FileFingerprint(f, newOffset)
-					if err := appendContainer(con, c, tailMs, sourceClaude, origin, rp, mtime, newOffset, newFP); err == nil {
+					newFP := checkPrefixFingerprint(f, newOffset)
+					appendErr := appendContainer(con, c, tailMs, sourceClaude, origin, rp, prev.size, mtime, newOffset, newFP)
+					if errors.Is(appendErr, errAppendStale) {
+						continue // another scan committed this tail first
+					}
+					if appendErr == nil {
 						IncrementalIngestCount.Add(1)
 						continue
 					}

@@ -3,6 +3,7 @@ package index
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,10 +59,11 @@ func TestIncrementalIngest_AppendFastPath_Claude(t *testing.T) {
 		t.Errorf("IncrementalIngestCount = %d, want 0", gotIncr)
 	}
 
-	// 2. Append new messages to the transcript
+	// 2. Append a complete message followed by a half-written message. The
+	// incremental watermark must anchor at the last complete newline, not EOF.
 	msg3 := `{"type":"user","message":{"role":"user","content":"What about connection timeouts?"},"uuid":"u-103","timestamp":"2026-08-20T10:01:00Z"}`
-	msg4 := `{"type":"assistant","message":{"role":"assistant","content":"Set DialTimeout to 5s and ReadTimeout to 3s."},"uuid":"u-104","timestamp":"2026-08-20T10:01:05Z"}`
-	appendedContent := msg3 + "\n" + msg4 + "\n"
+	msg4Partial := `{"type":"assistant","message":{"role":"assistant","content":"Set DialTimeout to 5s`
+	appendedContent := msg3 + "\n" + msg4Partial
 
 	fHandle, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -72,7 +74,8 @@ func TestIncrementalIngest_AppendFastPath_Claude(t *testing.T) {
 	}
 	_ = fHandle.Close()
 
-	// 3. Second index pass -> MUST use incremental fast path
+	// 3. Second index pass -> MUST use incremental fast path and retain the
+	// complete-lines prefix watermark before the partial record.
 	n2, status2, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", "")
 	if err != nil {
 		t.Fatalf("second indexing failed: %v", err)
@@ -88,7 +91,30 @@ func TestIncrementalIngest_AppendFastPath_Claude(t *testing.T) {
 		t.Errorf("FullReindexCount = %d, want 1 (should not have triggered full reindex)", gotFull)
 	}
 
-	// 4. Verify message count in database
+	// 4. Complete the pending record and ingest again. This must also use the
+	// incremental path; otherwise the stored fingerprint was anchored at EOF.
+	msg4Remainder := `s and ReadTimeout to 3s."},"uuid":"u-104","timestamp":"2026-08-20T10:01:05Z"}` + "\n"
+	fHandle2, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fHandle2.WriteString(msg4Remainder); err != nil {
+		t.Fatal(err)
+	}
+	_ = fHandle2.Close()
+
+	n3, status3, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", "")
+	if err != nil {
+		t.Fatalf("third indexing failed: %v", err)
+	}
+	if status3 != IndexFresh || n3 != 1 {
+		t.Fatalf("third index status=%v, n=%d", status3, n3)
+	}
+	if gotIncr := IncrementalIngestCount.Load(); gotIncr != 2 {
+		t.Errorf("IncrementalIngestCount = %d, want 2 after two appends", gotIncr)
+	}
+
+	// 5. Verify message count in database
 	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +137,7 @@ func TestIncrementalIngest_AppendFastPath_Claude(t *testing.T) {
 		t.Errorf("messages row count = %d, want 4", rowCount)
 	}
 
-	// 5. Compare against reference full reindex on dbRef: rows must be identical
+	// 6. Compare against reference full reindex on dbRef: rows must be identical
 	claudeFullMsgs := func(got source.Container) ([]model.Message, error) {
 		data, err := os.ReadFile(got.Path)
 		if err != nil {
@@ -531,6 +557,112 @@ func TestIncrementalIngest_IncompleteTrailingLine(t *testing.T) {
 	}
 	if msgCount2 != 4 {
 		t.Errorf("message_count after completion = %d, want 4", msgCount2)
+	}
+}
+
+func TestEnsureFreshContainer_IncompleteTrailingLine(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+
+	f := filepath.Join(cfg, "session.jsonl")
+	msg1 := `{"type":"user","message":{"role":"user","content":"Complete message"},"uuid":"strict-1","timestamp":"2026-08-20T10:00:00Z"}`
+	if err := os.WriteFile(f, []byte(msg1+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := source.Container{ID: "strict-partial", Path: f, CWD: "/work"}
+	msgsFn := func(got source.Container) ([]model.Message, error) {
+		data, err := os.ReadFile(got.Path)
+		if err != nil {
+			return nil, err
+		}
+		return parseClaudeTail(data)
+	}
+	dbp := RefreshDBPath("claude", c.ID, c.Path)
+
+	if n, err := EnsureFreshContainer(dbp, c, msgsFn, "claude"); err != nil || n != 1 {
+		t.Fatalf("initial refresh n=%d err=%v, want one message and no error", n, err)
+	}
+
+	partial := `{"type":"assistant","message":{"role":"assistant","content":"still writing`
+	fHandle, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fHandle.WriteString(partial); err != nil {
+		t.Fatal(err)
+	}
+	_ = fHandle.Close()
+
+	if n, err := EnsureFreshContainer(dbp, c, msgsFn, "claude"); err != nil || n != 1 {
+		t.Fatalf("partial refresh n=%d err=%v, want one message and no error", n, err)
+	}
+}
+
+func TestAppendContainer_StaleWatermarkIsNoOp(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+
+	dbp := filepath.Join(cfg, "stale-append.db")
+	f := filepath.Join(cfg, "session.jsonl")
+	msg1 := `{"type":"user","message":{"role":"user","content":"First"},"uuid":"cas-1","timestamp":"2026-08-20T10:00:00Z"}`
+	msg2 := `{"type":"assistant","message":{"role":"assistant","content":"Second"},"uuid":"cas-2","timestamp":"2026-08-20T10:00:05Z"}`
+	initial := msg1 + "\n" + msg2 + "\n"
+	if err := os.WriteFile(f, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := source.Container{ID: "cas-session", Path: f, CWD: "/work"}
+	msgsFn := func(got source.Container) ([]model.Message, error) {
+		data, err := os.ReadFile(got.Path)
+		if err != nil {
+			return nil, err
+		}
+		return parseClaudeTail(data)
+	}
+	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, msgsFn, "claude", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	msg3 := `{"type":"user","message":{"role":"user","content":"Third"},"uuid":"cas-3","timestamp":"2026-08-20T10:01:00Z"}` + "\n"
+	if fHandle, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644); err != nil {
+		t.Fatal(err)
+	} else {
+		if _, err := fHandle.WriteString(msg3); err != nil {
+			t.Fatal(err)
+		}
+		_ = fHandle.Close()
+	}
+
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	oldSize := int64(len(initial))
+	st, err := os.Stat(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tailMs, newOffset, ok := parseTailMessages(con, c, "claude", f, oldSize, st.Size())
+	if !ok || len(tailMs) != 1 {
+		t.Fatalf("tail parse ok=%v messages=%d, want one message", ok, len(tailMs))
+	}
+	newFP := checkPrefixFingerprint(f, newOffset)
+	if err := appendContainer(con, c, tailMs, "claude", "", realpath(f), oldSize, mtimeOf(st), newOffset, newFP); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	if err := appendContainer(con, c, tailMs, "claude", "", realpath(f), oldSize, mtimeOf(st), newOffset, newFP); !errors.Is(err, errAppendStale) {
+		t.Fatalf("second stale append error=%v, want errAppendStale", err)
+	}
+
+	var count int
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id=?", c.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Errorf("message count after stale append = %d, want 3", count)
 	}
 }
 
