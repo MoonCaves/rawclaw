@@ -1268,6 +1268,9 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 		rows = view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, projects)
 	} else {
 		for _, sc := range scope {
+			if o.Source != "" && sc.Source != "" && sc.Source != o.Source {
+				continue
+			}
 			dbp, _, err := scopes.Resolve(sc, o.Reindex)
 			if err != nil {
 				continue // an unresolvable scope can't contribute rows; others still can
