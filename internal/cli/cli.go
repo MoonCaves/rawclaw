@@ -605,16 +605,7 @@ func newReadCmd() *cobra.Command {
 					sessionPrefix = sessionPrefix[:idx]
 				}
 				if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil {
-					if sf.Status == index.SessionStale {
-						isStale = true
-						if maybeSpawnIngest(sf.SessionID) {
-							sfNote = "session may be stale (transcript updated) — background ingest triggered"
-						} else {
-							sfNote = sf.Note
-						}
-					} else {
-						sfNote = sf.Note
-					}
+					isStale, sfNote = sessionStaleNote(sf)
 				}
 			}
 			if jsonOut {
@@ -697,16 +688,7 @@ func newOutlineCmd() *cobra.Command {
 				defer con.Close()
 				sessionPrefix := agentproto.NormalizeSessionArg(args[0])
 				if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil {
-					if sf.Status == index.SessionStale {
-						isStale = true
-						if maybeSpawnIngest(sf.SessionID) {
-							sfNote = "session may be stale (transcript updated) — background ingest triggered"
-						} else {
-							sfNote = sf.Note
-						}
-					} else {
-						sfNote = sf.Note
-					}
+					isStale, sfNote = sessionStaleNote(sf)
 				}
 			}
 			if jsonOut {
@@ -1257,11 +1239,7 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 			defer con.Close()
 			if freshness, fErr := index.CheckIndexFreshness(con); fErr == nil && !freshness.Fresh {
 				indexStale = true
-				if maybeSpawnIngest("") {
-					staleNote = "sessions not yet ingested — background ingest triggered"
-				} else {
-					staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
-				}
+				staleNote = staleIngestNote()
 			}
 			if res, err := view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, []string{paths.ProjectLabel(td)}); err == nil && len(res) > 0 {
 				rows = make([]view.BrowseRow, 0, len(res))
@@ -1385,11 +1363,7 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 	}
 	if !o.Reindex && freshness != nil && !freshness.Fresh {
 		indexStale = true
-		if maybeSpawnIngest("") {
-			staleNote = "sessions not yet ingested — background ingest triggered"
-		} else {
-			staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
-		}
+		staleNote = staleIngestNote()
 	}
 
 	if o.JSON {
@@ -1580,24 +1554,17 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		if td != "" {
 			projLabel = paths.ProjectLabel(td)
 		}
+		stale := false
 		if con, _, err := index.OpenConsolidated(); err == nil {
 			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td, o.Source)
 			_ = con.Close()
-			if fErr != nil || !freshness.Fresh {
-				indexStale = true
-				if maybeSpawnIngest("") {
-					staleNote = "sessions not yet ingested — background ingest triggered"
-				} else {
-					staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
-				}
-			}
+			stale = fErr != nil || !freshness.Fresh
 		} else {
+			stale = true
+		}
+		if stale {
 			indexStale = true
-			if maybeSpawnIngest("") {
-				staleNote = "sessions not yet ingested — background ingest triggered"
-			} else {
-				staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
-			}
+			staleNote = staleIngestNote()
 		}
 	}
 
@@ -1860,6 +1827,25 @@ func registeredSourceIDs() []string {
 		out[i] = r.ID
 	}
 	return out
+}
+
+// staleIngestNote returns the status note when an index is stale, triggering a background ingest.
+func staleIngestNote() string {
+	if maybeSpawnIngest("") {
+		return "sessions not yet ingested — background ingest triggered"
+	}
+	return "sessions not yet ingested — run 'rawclaw ingest' to refresh"
+}
+
+// sessionStaleNote resolves the staleness state and note for a specific session.
+func sessionStaleNote(sf index.SessionFreshness) (bool, string) {
+	if sf.Status == index.SessionStale {
+		if maybeSpawnIngest(sf.SessionID) {
+			return true, "session may be stale (transcript updated) — background ingest triggered"
+		}
+		return true, sf.Note
+	}
+	return false, sf.Note
 }
 
 // validateChoice enforces an enum flag: empty = unset (allowed), else the value
