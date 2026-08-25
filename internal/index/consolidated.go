@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -365,6 +366,9 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return st, fmt.Errorf("ensure consolidated schema: %w", err)
 	}
+	if err := healUpgradedConsolidatedStore(con); err != nil {
+		slog.Debug("heal upgraded store failed", "err", err)
+	}
 	// The topic layer is gated separately from the keyword schema, so it has to
 	// be asked for explicitly. Creating it unconditionally means a topic query
 	// against the one store can answer "nothing is tagged yet" instead of
@@ -404,6 +408,9 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 	if err := con.QueryRow("SELECT COUNT(*) FROM messages").Scan(&st.Messages); err != nil {
 		return st, fmt.Errorf("count messages: %w", err)
 	}
+	if err := StampIngestWatermark(con); err != nil {
+		slog.Debug("stamp ingest watermark failed", "err", err)
+	}
 	return st, nil
 }
 
@@ -423,6 +430,9 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return fmt.Errorf("ensure consolidated schema: %w", err)
 	}
+	if err := healUpgradedConsolidatedStore(con); err != nil {
+		slog.Debug("heal upgraded store failed", "err", err)
+	}
 	if err := store.EnsureTopicSchema(con); err != nil {
 		return fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
@@ -433,7 +443,13 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if skipped || !changed {
 		return nil
 	}
-	return pruneTombstoned(con)
+	if err := pruneTombstoned(con); err != nil {
+		return err
+	}
+	if err := StampIngestWatermark(con); err != nil {
+		slog.Debug("stamp ingest watermark failed", "err", err)
+	}
+	return nil
 }
 
 // writeThroughConsolidated folds a per-project db into the consolidated store
@@ -598,6 +614,18 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("recount source sessions: %w", err)
 	}
+	if _, err := con.Exec(`
+		INSERT INTO main.file_index(path,mtime,size,fp,session_id)
+		SELECT path,mtime,size,fp,session_id FROM src.file_index
+		WHERE true
+		ON CONFLICT(path) DO UPDATE SET
+		  mtime = excluded.mtime,
+		  size = excluded.size,
+		  fp = excluded.fp,
+		  session_id = excluded.session_id
+	`); err != nil {
+		return 0, false, true, fmt.Errorf("merge file_index: %w", err)
+	}
 	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
 		return 0, false, true, fmt.Errorf("stamp sync watermark: %w", err)
 	}
@@ -732,6 +760,9 @@ func pruneTombstoned(con *sql.DB) error {
 		if _, err := con.Exec("DELETE FROM session_sources WHERE session_id = ? OR session_id LIKE ?", id, like); err != nil {
 			return fmt.Errorf("prune tombstoned session sources: %w", err)
 		}
+		if _, err := con.Exec("DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ?", id, like); err != nil {
+			return fmt.Errorf("prune tombstoned file_index: %w", err)
+		}
 	}
 	return nil
 }
@@ -755,4 +786,285 @@ func PerProjectDBs() ([]string, error) {
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// Meta keys for index-level freshness watermarks.
+const (
+	MetaLastIngestTime         = "last_ingest_time"
+	MetaLastIngestCatalogMTime = "last_ingest_catalog_mtime"
+)
+
+// StampIngestWatermark records the current epoch and catalog directory mtime in
+// the consolidated store's meta table so subsequent read verbs can verify freshness in O(1).
+func StampIngestWatermark(con *sql.DB) error {
+	now := strconv.FormatFloat(nowEpoch(), 'f', -1, 64)
+	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", MetaLastIngestTime, now); err != nil {
+		return fmt.Errorf("stamp %s: %w", MetaLastIngestTime, err)
+	}
+	catDir := paths.CatalogDir()
+	if st, err := os.Stat(catDir); err == nil {
+		catMTime := strconv.FormatFloat(mtimeOf(st), 'f', -1, 64)
+		if _, err := con.Exec("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", MetaLastIngestCatalogMTime, catMTime); err != nil {
+			return fmt.Errorf("stamp %s: %w", MetaLastIngestCatalogMTime, err)
+		}
+	}
+	return nil
+}
+
+// healUpgradedConsolidatedStore checks if the consolidated store was upgraded from an
+// older schema where session_sources or file_index were not populated. If sessions exist
+// but session_sources is empty, it invalidates the fold-in watermarks (deleting sync: keys)
+// to force a full re-fold that populates session_sources and file_index.
+func healUpgradedConsolidatedStore(con *sql.DB) error {
+	var (
+		nSessions int
+		nSources  int
+	)
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&nSessions); err != nil {
+		return err
+	}
+	if nSessions == 0 {
+		return nil
+	}
+	if err := con.QueryRow("SELECT COUNT(*) FROM session_sources").Scan(&nSources); err != nil {
+		return err
+	}
+	if nSources == 0 {
+		if _, err := con.Exec("DELETE FROM meta WHERE key LIKE 'sync:%'"); err != nil {
+			return fmt.Errorf("invalidate fold-in watermarks: %w", err)
+		}
+	}
+	return nil
+}
+
+// IndexFreshness reports the result of the O(1) index-level freshness check.
+type IndexFreshness struct {
+	Fresh  bool
+	Reason string
+}
+
+// CheckIndexFreshness evaluates whether the consolidated store is current by
+// comparing the last-ingest watermark in meta against a single stat of the session catalog dir.
+// It is strictly O(1): at most 1 stat of the catalog directory and 1 DB meta query.
+func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
+	var (
+		ingestTimeStr string
+		catMTimeStr   string
+	)
+	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestTime).Scan(&ingestTimeStr)
+	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestCatalogMTime).Scan(&catMTimeStr)
+
+	if ingestTimeStr == "" && catMTimeStr == "" {
+		return IndexFreshness{Fresh: false, Reason: "no_ingest_watermark"}, nil
+	}
+
+	catDir := paths.CatalogDir()
+	st, err := os.Stat(catDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Catalog does not exist on disk (hooks absent); missing signal must report not fresh.
+			return IndexFreshness{Fresh: false, Reason: "catalog_dir_missing"}, nil
+		}
+		return IndexFreshness{Fresh: false, Reason: "catalog_stat_failed"}, nil
+	}
+
+	curCatMTime := mtimeOf(st)
+	if catMTimeStr != "" {
+		lastCatMTime, pErr := strconv.ParseFloat(catMTimeStr, 64)
+		if pErr == nil {
+			if curCatMTime > lastCatMTime+0.001 {
+				return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
+			}
+			return IndexFreshness{Fresh: true}, nil
+		}
+	}
+
+	if ingestTimeStr != "" {
+		lastIngestTime, pErr := strconv.ParseFloat(ingestTimeStr, 64)
+		if pErr == nil {
+			if curCatMTime > lastIngestTime+0.001 {
+				return IndexFreshness{Fresh: false, Reason: "catalog_newer_than_ingest"}, nil
+			}
+			return IndexFreshness{Fresh: true}, nil
+		}
+	}
+
+	return IndexFreshness{Fresh: true}, nil
+}
+
+// CheckProjectFreshness checks whether a specific project's transcript files have changed
+// since they were last indexed into the consolidated store.
+// Missing signal (e.g. hooks absent, unindexed transcripts, or missing watermarks) reports Fresh: false.
+func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string) (IndexFreshness, error) {
+	if con == nil {
+		return IndexFreshness{Fresh: false, Reason: "no_connection"}, nil
+	}
+	globalFresh, err := CheckIndexFreshness(con)
+	if err != nil || !globalFresh.Fresh {
+		return globalFresh, err
+	}
+	if tdir == "" {
+		return IndexFreshness{Fresh: true}, nil
+	}
+	_, err = os.Stat(tdir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return IndexFreshness{Fresh: true}, nil
+		}
+		return IndexFreshness{Fresh: false, Reason: "stat_tdir_failed"}, nil
+	}
+
+	rows, err := con.Query(`
+		SELECT path, mtime, size, fp
+		FROM file_index
+		WHERE session_id IN (SELECT id FROM sessions WHERE project = ?)
+		   OR path LIKE ?
+	`, projectLabel, tdir+"/%")
+	if err != nil {
+		return IndexFreshness{Fresh: false, Reason: "query_file_index_failed"}, err
+	}
+	defer rows.Close()
+
+	nRows := 0
+	for rows.Next() {
+		nRows++
+		var (
+			p  string
+			mt float64
+			sz int64
+			fp string
+		)
+		if err := rows.Scan(&p, &mt, &sz, &fp); err != nil {
+			return IndexFreshness{Fresh: false, Reason: "scan_file_index_failed"}, err
+		}
+		rawPath := backingFilePath(p)
+		curMTime, curSize, curFP, statErr := backingFileState(rawPath)
+		if statErr != nil {
+			return IndexFreshness{Fresh: false, Reason: "transcript_stat_changed"}, nil
+		}
+		if absDiff(mt, curMTime) >= 0.001 || sz != curSize || (fp != "" && fp != curFP) {
+			return IndexFreshness{Fresh: false, Reason: "transcript_content_changed"}, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return IndexFreshness{Fresh: false, Reason: "iterate_file_index_failed"}, err
+	}
+	if nRows == 0 {
+		entries, _ := os.ReadDir(tdir)
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+				return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+			}
+		}
+	}
+
+	return IndexFreshness{Fresh: true}, nil
+}
+
+// SessionFreshnessStatus discriminates the freshness of an individual session.
+type SessionFreshnessStatus int
+
+const (
+	SessionFresh SessionFreshnessStatus = iota
+	SessionStale
+	SessionMissingBacking
+	SessionNotFound
+)
+
+// SessionFreshness contains the detailed outcome of an O(1) session freshness check.
+type SessionFreshness struct {
+	Status     SessionFreshnessStatus
+	SessionID  string
+	SourcePath string
+	Note       string
+}
+
+// CheckSessionFreshness checks a specific session's freshness in O(1) by comparing
+// its stored file_index watermark against a single stat of its backing transcript.
+func CheckSessionFreshness(con *sql.DB, sessionID string) (SessionFreshness, error) {
+	var (
+		fullID       string
+		sourcePath   sql.NullString
+		missingSince sql.NullFloat64
+		mtime        sql.NullFloat64
+		size         sql.NullInt64
+		fp           sql.NullString
+	)
+
+	err := con.QueryRow(`
+		SELECT s.id, s.source_path, s.missing_since, f.mtime, f.size, f.fp
+		FROM sessions s
+		LEFT JOIN file_index f ON (
+			f.path = s.source_path
+			OR (instr(s.source_path, '#') > 0 AND f.path = substr(s.source_path, 1, instr(s.source_path, '#') - 1))
+		)
+		WHERE s.id = ? OR s.id LIKE ?
+		ORDER BY (s.id = ?) DESC, (f.path = s.source_path) DESC, LENGTH(s.id) ASC
+		LIMIT 1
+	`, sessionID, sessionID+"%", sessionID).Scan(&fullID, &sourcePath, &missingSince, &mtime, &size, &fp)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return SessionFreshness{Status: SessionNotFound, SessionID: sessionID}, nil
+	}
+	if err != nil {
+		return SessionFreshness{Status: SessionNotFound, SessionID: sessionID}, fmt.Errorf("query session watermark: %w", err)
+	}
+
+	if missingSince.Valid && missingSince.Float64 > 0 {
+		return SessionFreshness{
+			Status:     SessionMissingBacking,
+			SessionID:  fullID,
+			SourcePath: sourcePath.String,
+			Note:       "source file gone — retained history",
+		}, nil
+	}
+
+	if !sourcePath.Valid || sourcePath.String == "" {
+		return SessionFreshness{
+			Status:     SessionMissingBacking,
+			SessionID:  fullID,
+			SourcePath: "",
+			Note:       "backing transcript path unknown — answering from indexed history",
+		}, nil
+	}
+
+	rawPath := backingFilePath(sourcePath.String)
+	if (!mtime.Valid || !size.Valid) && rawPath != "" {
+		_ = con.QueryRow("SELECT mtime, size, fp FROM file_index WHERE path = ? OR path = ? LIMIT 1", rawPath, sourcePath.String).Scan(&mtime, &size, &fp)
+	}
+
+	curMTime, curSize, curFP, statErr := backingFileState(rawPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return SessionFreshness{
+				Status:     SessionMissingBacking,
+				SessionID:  fullID,
+				SourcePath: rawPath,
+				Note:       "source file missing on disk — retained history",
+			}, nil
+		}
+		return SessionFreshness{
+			Status:     SessionStale,
+			SessionID:  fullID,
+			SourcePath: rawPath,
+			Note:       fmt.Sprintf("cannot inspect live transcript %s: %v", rawPath, statErr),
+		}, nil
+	}
+
+	if mtime.Valid && size.Valid && absDiff(mtime.Float64, curMTime) < 0.001 && size.Int64 == curSize {
+		if !fp.Valid || fp.String == "" || fp.String == curFP {
+			return SessionFreshness{
+				Status:     SessionFresh,
+				SessionID:  fullID,
+				SourcePath: rawPath,
+			}, nil
+		}
+	}
+
+	return SessionFreshness{
+		Status:     SessionStale,
+		SessionID:  fullID,
+		SourcePath: rawPath,
+		Note:       "session may be stale (transcript updated) — run 'rawclaw ingest' to refresh",
+	}, nil
 }
