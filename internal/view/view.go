@@ -8,6 +8,7 @@ package view
 
 import (
 	"database/sql"
+	"slices"
 	"sort"
 	"strings"
 
@@ -203,10 +204,8 @@ func TakeDisplayableTailWith(msgs []store.Msg, want int, includeTools, includeTh
 
 // Reversed returns msgs in the opposite order.
 func Reversed(msgs []store.Msg) []store.Msg {
-	out := make([]store.Msg, 0, len(msgs))
-	for i := len(msgs) - 1; i >= 0; i-- {
-		out = append(out, msgs[i])
-	}
+	out := slices.Clone(msgs)
+	slices.Reverse(out)
 	return out
 }
 
