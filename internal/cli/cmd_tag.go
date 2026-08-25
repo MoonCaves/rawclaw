@@ -338,7 +338,7 @@ func writeSegments(con *sql.DB, fullSID string, vis visibleSet, segs []rawSegmen
 		}
 	}
 	if gapAt >= 0 && gapAt < len(msgs) && !coversTail {
-		return 0, fmt.Errorf("dump was bookended (middle omitted) but no segment starts at or after "+
+		return 0, fmt.Errorf("dump was bookended (middle omitted) but no segment starts at or after " +
 			"the tail shown in the dump — segments must cover BOTH sides of the gap, not just the head")
 	}
 
