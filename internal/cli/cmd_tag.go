@@ -31,9 +31,6 @@ const condenseCap = 200
 // var, not const, so a test can shrink it to force chunking without huge sessions.
 var chunkByteCap = 60_000
 
-// dumpByteCap is retained for backward compatibility / tests that set it.
-var dumpByteCap = 120_000
-
 // uuid8Len is the prefix length of a message uuid printed by tag-prep and
 // resolved by tag-write — mirrors the <uuid8> refs the search/read path uses.
 const uuid8Len = 8
@@ -759,7 +756,7 @@ func writeSegments(con *sql.DB, fullSID string, chunk tagChunk, existingSegs []s
 		if startOK && endOK && priorStart <= priorEnd {
 			overlaps := false
 			for _, r := range chunk.ranges {
-				if !(priorEnd < r.start || priorStart > r.end) {
+				if priorEnd >= r.start && priorStart <= r.end {
 					overlaps = true
 					break
 				}
