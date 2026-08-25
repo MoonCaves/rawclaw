@@ -48,19 +48,37 @@ func Root() string { return paths.TranscriptsRoot() }
 // compares file_index paths against the source walk, so a vault-keyed row reads
 // as "source absent" and would stamp missing_since on a perfectly live session.
 type Meta struct {
-	ID           string  `json:"id"`
-	Source       string  `json:"source"`
-	Origin       string  `json:"origin,omitempty"`
-	Project      string  `json:"project,omitempty"`
-	CWD          string  `json:"cwd,omitempty"`
-	IsSubagent   bool    `json:"is_subagent,omitempty"`
-	ParentID     string  `json:"parent_id,omitempty"`
-	SourcePath   string  `json:"source_path,omitempty"`
-	SourceMTime  float64 `json:"source_mtime,omitempty"`
-	SourceSize   int64   `json:"source_size,omitempty"`
-	SourceFP     string  `json:"source_fp,omitempty"`
-	MissingSince float64 `json:"missing_since,omitempty"`
-	StoredAt     float64 `json:"stored_at,omitempty"`
+	ID            string  `json:"id"`
+	Source        string  `json:"source"`
+	Origin        string  `json:"origin,omitempty"`
+	Project       string  `json:"project,omitempty"`
+	CWD           string  `json:"cwd,omitempty"`
+	IsSubagent    bool    `json:"is_subagent,omitempty"`
+	ParentID      string  `json:"parent_id,omitempty"`
+	SourcePath    string  `json:"source_path,omitempty"`
+	SourceMTime   float64 `json:"source_mtime,omitempty"`
+	SourceSize    int64   `json:"source_size,omitempty"`
+	SourceFP      string  `json:"source_fp,omitempty"`
+	OnlyCopySince float64 `json:"only_copy_since,omitempty"`
+	StoredAt      float64 `json:"stored_at,omitempty"`
+}
+
+// UnmarshalJSON unmarshals Meta, supporting legacy sidecars carrying missing_since.
+func (m *Meta) UnmarshalJSON(data []byte) error {
+	type Alias Meta
+	aux := struct {
+		*Alias
+		LegacyMissingSince float64 `json:"missing_since,omitempty"`
+	}{
+		Alias: (*Alias)(m),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if m.OnlyCopySince == 0 && aux.LegacyMissingSince != 0 {
+		m.OnlyCopySince = aux.LegacyMissingSince
+	}
+	return nil
 }
 
 // Session is one vaulted session: its meta plus the transcript's absolute path,
@@ -83,7 +101,7 @@ type Session struct {
 // outlive the truth and mislabel a live session after the next rebuild.
 func StoreFile(m Meta, src string) error {
 	if unchanged(m) {
-		return SetMissingSince(m.ID, 0)
+		return SetOnlyCopySince(m.ID, 0)
 	}
 	body, err := os.ReadFile(src)
 	if err != nil {
@@ -314,11 +332,11 @@ func Has(id string) bool {
 	return err == nil
 }
 
-// SetMissingSince records (since > 0) or clears (since == 0) the retention
-// watermark on a vaulted session, so the "retained but its source is gone" flag
-// survives a delete-and-rebuild of the index. A session that was never vaulted
+// SetOnlyCopySince records (since > 0) or clears (since == 0) the retention
+// watermark on a vaulted session, indicating RawClaw is now the only copy after
+// the CLI deleted its transcript. A session that was never vaulted
 // is not an error: there is simply no durable copy to annotate.
-func SetMissingSince(id string, since float64) error {
+func SetOnlyCopySince(id string, since float64) error {
 	tp, err := PathFor(id)
 	if err != nil {
 		return err
@@ -333,10 +351,10 @@ func SetMissingSince(id string, since float64) error {
 	if m.ID == "" {
 		m.ID = id
 	}
-	if m.MissingSince == since {
+	if m.OnlyCopySince == since {
 		return nil
 	}
-	m.MissingSince = since
+	m.OnlyCopySince = since
 	b, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("durable: encode meta for %s: %w", id, err)
