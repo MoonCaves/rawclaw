@@ -573,3 +573,120 @@ func TestVecIndexCancellationStopsWork(t *testing.T) {
 		t.Fatalf("committed vectors %d != reported added %d", stored, added)
 	}
 }
+
+func TestMeasureCoverage(t *testing.T) {
+	t.Run("empty database", func(t *testing.T) {
+		con := openTestDB(t)
+		cov, err := MeasureCoverage(con)
+		if err != nil {
+			t.Fatalf("MeasureCoverage: %v", err)
+		}
+		if cov.Candidates != 0 || cov.Vectored != 0 || cov.Missing != 0 {
+			t.Errorf("got %+v, want all 0", cov)
+		}
+	})
+
+	t.Run("only short messages below MinChars", func(t *testing.T) {
+		con := openTestDB(t)
+		addMessage(t, con, "s1", "user", "ok", "2026-06-18T10:00:00Z", 0, "")
+		addMessage(t, con, "s1", "user", "yes", "2026-06-18T10:01:00Z", 0, "")
+		cov, err := MeasureCoverage(con)
+		if err != nil {
+			t.Fatalf("MeasureCoverage: %v", err)
+		}
+		if cov.Candidates != 0 || cov.Vectored != 0 || cov.Missing != 0 {
+			t.Errorf("got %+v, want all 0 for short messages", cov)
+		}
+	})
+
+	t.Run("candidate messages without chunk_vec", func(t *testing.T) {
+		con := openTestDB(t)
+		addMessage(t, con, "s1", "user", "first long candidate message for testing", "2026-06-18T10:00:00Z", 0, "")
+		addMessage(t, con, "s1", "user", "second long candidate message for testing", "2026-06-18T10:01:00Z", 0, "")
+		cov, err := MeasureCoverage(con)
+		if err != nil {
+			t.Fatalf("MeasureCoverage: %v", err)
+		}
+		if cov.Candidates != 2 || cov.Vectored != 0 || cov.Missing != 2 {
+			t.Errorf("got %+v, want Candidates: 2, Vectored: 0, Missing: 2", cov)
+		}
+	})
+
+	t.Run("candidate messages with partial vectors", func(t *testing.T) {
+		con := openTestDB(t)
+		msg1 := "first long candidate message for testing"
+		msg2 := "second long candidate message for testing"
+		msg3 := "third long candidate message for testing"
+		addMessage(t, con, "s1", "user", msg1, "2026-06-18T10:00:00Z", 0, "")
+		addMessage(t, con, "s1", "user", msg2, "2026-06-18T10:01:00Z", 0, "")
+		addMessage(t, con, "s1", "user", msg3, "2026-06-18T10:02:00Z", 0, "")
+
+		emb := fakeEmbedder{vecs: map[string][]float64{
+			msg1: {1, 0, 0},
+			msg2: {0, 1, 0},
+			msg3: {0, 0, 1},
+		}}
+		// VecIndex maxNew=1 embeds 1 message
+		if added, err := VecIndex(context.Background(), con, emb, 1); err != nil {
+			t.Fatalf("VecIndex: %v", err)
+		} else if added != 1 {
+			t.Fatalf("VecIndex added %d, want 1", added)
+		}
+
+		cov, err := MeasureCoverage(con)
+		if err != nil {
+			t.Fatalf("MeasureCoverage: %v", err)
+		}
+		if cov.Candidates != 3 || cov.Vectored != 1 || cov.Missing != 2 {
+			t.Errorf("got %+v, want Candidates: 3, Vectored: 1, Missing: 2", cov)
+		}
+	})
+
+	t.Run("candidate messages with full vectors", func(t *testing.T) {
+		con := openTestDB(t)
+		msg1 := "first long candidate message for testing"
+		msg2 := "second long candidate message for testing"
+		addMessage(t, con, "s1", "user", msg1, "2026-06-18T10:00:00Z", 0, "")
+		addMessage(t, con, "s1", "user", msg2, "2026-06-18T10:01:00Z", 0, "")
+
+		emb := fakeEmbedder{vecs: map[string][]float64{
+			msg1: {1, 0, 0},
+			msg2: {0, 1, 0},
+		}}
+		if _, err := VecIndex(context.Background(), con, emb, 0); err != nil {
+			t.Fatalf("VecIndex: %v", err)
+		}
+
+		cov, err := MeasureCoverage(con)
+		if err != nil {
+			t.Fatalf("MeasureCoverage: %v", err)
+		}
+		if cov.Candidates != 2 || cov.Vectored != 2 || cov.Missing != 0 {
+			t.Errorf("got %+v, want Candidates: 2, Vectored: 2, Missing: 0", cov)
+		}
+	})
+
+	t.Run("with project narrowing", func(t *testing.T) {
+		con := openTestDB(t)
+		storetest.InsertSession(t, con, storetest.Session{ID: "s1", Project: "proj-a"})
+		storetest.InsertSession(t, con, storetest.Session{ID: "s2", Project: "proj-b"})
+		storetest.InsertMessage(t, con, storetest.Message{SessionID: "s1", Role: "user", Content: "prose in project A about calibration", ISO: "2026-06-18T10:00:00Z"})
+		storetest.InsertMessage(t, con, storetest.Message{SessionID: "s2", Role: "user", Content: "prose in project B about billing", ISO: "2026-06-18T10:00:00Z"})
+
+		covA, err := MeasureCoverage(con, "proj-a")
+		if err != nil {
+			t.Fatalf("MeasureCoverage proj-a: %v", err)
+		}
+		if covA.Candidates != 1 || covA.Vectored != 0 || covA.Missing != 1 {
+			t.Errorf("proj-a cov = %+v, want Candidates: 1, Vectored: 0, Missing: 1", covA)
+		}
+
+		covBoth, err := MeasureCoverage(con, "proj-a", "proj-b")
+		if err != nil {
+			t.Fatalf("MeasureCoverage proj-a+b: %v", err)
+		}
+		if covBoth.Candidates != 2 || covBoth.Vectored != 0 || covBoth.Missing != 2 {
+			t.Errorf("proj-a+b cov = %+v, want Candidates: 2, Vectored: 0, Missing: 2", covBoth)
+		}
+	})
+}
