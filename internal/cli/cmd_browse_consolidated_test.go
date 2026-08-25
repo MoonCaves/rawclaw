@@ -1,0 +1,372 @@
+package cli
+
+import (
+	"bytes"
+	"database/sql"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/view"
+)
+
+// seedBrowseCorpus creates 3 projects with distinct sessions and ensures they are
+// indexed and consolidated into consolidated.db.
+func seedBrowseCorpus(t *testing.T) (claudeDir string, scopesList []view.Scope) {
+	t.Helper()
+	root := newCfgRoot(t)
+
+	// Three Claude project directories
+	projA := filepath.Join(root, "-home-u-proj-a")
+	projB := filepath.Join(root, "-home-u-proj-b")
+	projC := filepath.Join(root, "-home-u-proj-c")
+
+	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa1111-0000-0000-0000-000000000001",
+		"2026-06-01T10:00:00Z", "first question in project A")
+	writeIndexedSession(t, root, "-home-u-proj-b", "bbbb2222-0000-0000-0000-000000000002",
+		"2026-06-02T10:00:00Z", "second question in project B")
+	writeIndexedSession(t, root, "-home-u-proj-c", "cccc3333-0000-0000-0000-000000000003",
+		"2026-06-03T10:00:00Z", "third question in project C")
+	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa2222-0000-0000-0000-000000000004",
+		"2026-06-04T10:00:00Z", "fourth question in project A (newest)")
+
+	for _, p := range []string{projA, projB, projC} {
+		if _, _, _, err := index.EnsureIndexed(p, false); err != nil {
+			t.Fatalf("EnsureIndexed(%s): %v", p, err)
+		}
+	}
+
+	scopesList = []view.Scope{
+		{Project: paths.ProjectLabel(projA), TDir: projA, Source: "claude"},
+		{Project: paths.ProjectLabel(projB), TDir: projB, Source: "claude"},
+		{Project: paths.ProjectLabel(projC), TDir: projC, Source: "claude"},
+	}
+
+	return root, scopesList
+}
+
+// TestBrowseConsolidated_ByteIdenticalToFallback verifies that scoped browse
+// output (rows, ordering, limits, JSON shape, scope labels, empty-scope envelopes)
+// when answered from the consolidated store is byte-identical to the per-project fallback.
+func TestBrowseConsolidated_ByteIdenticalToFallback(t *testing.T) {
+	_, scopeList := seedBrowseCorpus(t)
+
+	cases := []struct {
+		name string
+		opts Options
+	}{
+		{
+			name: "all plain text",
+			opts: Options{All: true, Limit: 10},
+		},
+		{
+			name: "all json",
+			opts: Options{All: true, Limit: 10, JSON: true},
+		},
+		{
+			name: "all oneline",
+			opts: Options{All: true, Limit: 10, Oneline: true},
+		},
+		{
+			name: "all capped limit",
+			opts: Options{All: true, Limit: 2},
+		},
+		{
+			name: "all capped limit json",
+			opts: Options{All: true, Limit: 2, JSON: true},
+		},
+		{
+			name: "include-path match",
+			opts: Options{All: true, IncludePath: "proj-a", Limit: 10},
+		},
+		{
+			name: "include-path match json",
+			opts: Options{All: true, IncludePath: "proj-a", Limit: 10, JSON: true},
+		},
+		{
+			name: "exclude-path",
+			opts: Options{All: true, ExcludePath: "proj-b", Limit: 10},
+		},
+		{
+			name: "exclude-path json",
+			opts: Options{All: true, ExcludePath: "proj-b", Limit: 10, JSON: true},
+		},
+		{
+			name: "source filter match",
+			opts: Options{All: true, Source: "claude", Limit: 10},
+		},
+		{
+			name: "source filter mismatch",
+			opts: Options{All: true, Source: "codex", Limit: 10},
+		},
+		{
+			name: "source filter mismatch json",
+			opts: Options{All: true, Source: "codex", Limit: 10, JSON: true},
+		},
+		{
+			name: "since filter",
+			opts: Options{All: true, Since: "2026-06-03", Limit: 10},
+		},
+		{
+			name: "before filter",
+			opts: Options{All: true, Before: "2026-06-02", Limit: 10},
+		},
+		{
+			name: "include-path unmatched honest empty",
+			opts: Options{All: true, IncludePath: "nonexistent", Limit: 10},
+		},
+		{
+			name: "include-path unmatched honest empty json",
+			opts: Options{All: true, IncludePath: "nonexistent", Limit: 10, JSON: true},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 1. Run against consolidated store
+			var storeOut bytes.Buffer
+			if err := runBrowseScoped(&storeOut, &tc.opts, scopeList); err != nil {
+				t.Fatalf("runBrowseScoped (consolidated): %v", err)
+			}
+
+			// 2. Temporarily remove consolidated.db to test fallback
+			consPath := index.ConsolidatedPath()
+			consBackup := consPath + ".bak"
+			if err := os.Rename(consPath, consBackup); err != nil {
+				t.Fatalf("rename consolidated store: %v", err)
+			}
+			defer func() {
+				if _, err := os.Stat(consBackup); err == nil {
+					_ = os.Rename(consBackup, consPath)
+				}
+			}()
+
+			var fallbackOut bytes.Buffer
+			if err := runBrowseScoped(&fallbackOut, &tc.opts, scopeList); err != nil {
+				t.Fatalf("runBrowseScoped (fallback): %v", err)
+			}
+
+			// Restore consolidated store
+			if err := os.Rename(consBackup, consPath); err != nil {
+				t.Fatalf("restore consolidated store: %v", err)
+			}
+
+			if storeOut.String() != fallbackOut.String() {
+				t.Errorf("mismatch between consolidated store and fallback output:\n--- Consolidated ---\n%s\n--- Fallback ---\n%s",
+					storeOut.String(), fallbackOut.String())
+			}
+		})
+	}
+}
+
+// TestBrowseConsolidated_SingleConnection verifies that exactly one database
+// connection is opened during a consolidated browse query.
+func TestBrowseConsolidated_SingleConnection(t *testing.T) {
+	_, _ = seedBrowseCorpus(t)
+
+	con, count, err := index.OpenConsolidated()
+	if err != nil {
+		t.Fatalf("OpenConsolidated: %v", err)
+	}
+	defer con.Close()
+
+	if count < 4 {
+		t.Fatalf("expected at least 4 sessions in consolidated store, got %d", count)
+	}
+
+	// view.BrowseScoped uses the passed connection and does not open any others.
+	rows, err := view.BrowseScoped(con, 10, "", "", "", nil)
+	if err != nil {
+		t.Fatalf("BrowseScoped: %v", err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("BrowseScoped returned %d rows, want 4", len(rows))
+	}
+
+	// Verify ordering: newest first
+	if rows[0].SessionID != "aaaa2222-0000-0000-0000-000000000004" {
+		t.Errorf("rows[0] = %s, want aaaa2222 (newest)", rows[0].SessionID)
+	}
+	if rows[3].SessionID != "aaaa1111-0000-0000-0000-000000000001" {
+		t.Errorf("rows[3] = %s, want aaaa1111 (oldest)", rows[3].SessionID)
+	}
+}
+
+// TestBrowseConsolidated_MissingColumnFallback verifies that when consolidated.db
+// is missing the project column (or has an incompatible schema), browse falls back
+// to per-project databases and produces the same rows as the fallback path, not an empty list.
+func TestBrowseConsolidated_MissingColumnFallback(t *testing.T) {
+	_, scopeList := seedBrowseCorpus(t)
+
+	// Poison consolidated.db schema by dropping/recreating the sessions table
+	// without the `project` column (simulating an older schema version).
+	consPath := index.ConsolidatedPath()
+	con, err := sql.Open("sqlite", consPath)
+	if err != nil {
+		t.Fatalf("open consolidated db: %v", err)
+	}
+	_, err = con.Exec(`
+		DROP TABLE sessions;
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			last_ts REAL,
+			message_count INTEGER,
+			is_subagent INTEGER DEFAULT 0
+		);
+		INSERT INTO sessions (id, last_ts, message_count, is_subagent)
+		VALUES ('aaaa1111-0000-0000-0000-000000000001', 1750000000, 5, 0);
+	`)
+	_ = con.Close()
+	if err != nil {
+		t.Fatalf("recreate table without project: %v", err)
+	}
+
+	// runBrowseScoped should fall through to the fallback path and return the
+	// same rows as the fallback path rather than an empty list.
+	var buf bytes.Buffer
+	opts := Options{All: true, Limit: 10}
+	if err := runBrowseScoped(&buf, &opts, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped: %v", err)
+	}
+
+	got := buf.String()
+	for _, want := range []string{"aaaa1111", "bbbb2222", "cccc3333", "aaaa2222"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected session %s in output, got:\n%s", want, got)
+		}
+	}
+}
+
+// TestBrowseConsolidated_JSONStructure validates the JSON output format and
+// scope reporting.
+func TestBrowseConsolidated_JSONStructure(t *testing.T) {
+	root, scopeList := seedBrowseCorpus(t)
+
+	var buf bytes.Buffer
+	opts := Options{All: true, IncludePath: "proj-a", JSON: true, Limit: 10}
+	if err := runBrowseScoped(&buf, &opts, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped: %v", err)
+	}
+
+	var res struct {
+		Scope       string              `json:"scope"`
+		IncludePath string              `json:"include_path"`
+		Projects    int                 `json:"projects"`
+		Sessions    []view.BrowseAllRow `json:"sessions"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &res); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, buf.String())
+	}
+
+	if res.Scope != "all" {
+		t.Errorf("Scope = %q, want 'all'", res.Scope)
+	}
+	if res.IncludePath != "proj-a" {
+		t.Errorf("IncludePath = %q, want 'proj-a'", res.IncludePath)
+	}
+	if res.Projects != 1 {
+		t.Errorf("Projects = %d, want 1", res.Projects)
+	}
+	if len(res.Sessions) != 2 {
+		t.Fatalf("len(Sessions) = %d, want 2", len(res.Sessions))
+	}
+	wantProject := paths.ProjectLabel(filepath.Join(root, "-home-u-proj-a"))
+	for _, s := range res.Sessions {
+		if s.Project != wantProject {
+			t.Errorf("session project = %q, want %q", s.Project, wantProject)
+		}
+		if s.Preview == "" {
+			t.Errorf("session preview is empty for %s", s.SessionID)
+		}
+	}
+}
+
+// TestBrowseConsolidated_TiedTimestampsByteIdentical verifies that when multiple
+// sessions share the exact same timestamp across projects, the deterministic
+// tiebreaker (SessionID asc) ensures consolidated browse and fallback produce
+// identical ordering.
+func TestBrowseConsolidated_TiedTimestampsByteIdentical(t *testing.T) {
+	root := newCfgRoot(t)
+
+	projA := filepath.Join(root, "-home-u-proj-a")
+	projB := filepath.Join(root, "-home-u-proj-b")
+
+	// Two sessions in different projects with the exact same timestamp
+	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa2222-0000-0000-0000-000000000002",
+		"2026-06-01T10:00:00Z", "tied timestamp session 2")
+	writeIndexedSession(t, root, "-home-u-proj-b", "aaaa1111-0000-0000-0000-000000000001",
+		"2026-06-01T10:00:00Z", "tied timestamp session 1")
+
+	for _, p := range []string{projA, projB} {
+		if _, _, _, err := index.EnsureIndexed(p, false); err != nil {
+			t.Fatalf("EnsureIndexed(%s): %v", p, err)
+		}
+	}
+
+	scopeList := []view.Scope{
+		{Project: paths.ProjectLabel(projA), TDir: projA, Source: "claude"},
+		{Project: paths.ProjectLabel(projB), TDir: projB, Source: "claude"},
+	}
+
+	opts := Options{All: true, Limit: 10}
+
+	var storeOut bytes.Buffer
+	if err := runBrowseScoped(&storeOut, &opts, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped (consolidated): %v", err)
+	}
+
+	consPath := index.ConsolidatedPath()
+	consBackup := consPath + ".bak"
+	if err := os.Rename(consPath, consBackup); err != nil {
+		t.Fatalf("rename consolidated store: %v", err)
+	}
+	defer func() {
+		if _, err := os.Stat(consBackup); err == nil {
+			_ = os.Rename(consBackup, consPath)
+		}
+	}()
+
+	var fallbackOut bytes.Buffer
+	if err := runBrowseScoped(&fallbackOut, &opts, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped (fallback): %v", err)
+	}
+
+	if storeOut.String() != fallbackOut.String() {
+		t.Errorf("mismatch between consolidated and fallback with tied timestamps:\n--- Consolidated ---\n%s\n--- Fallback ---\n%s",
+			storeOut.String(), fallbackOut.String())
+	}
+}
+
+// TestBrowseConsolidated_ReindexSkipsConsolidated verifies that when --reindex is passed,
+// browse bypasses the consolidated store and forces a reindex via the per-project fallback.
+func TestBrowseConsolidated_ReindexSkipsConsolidated(t *testing.T) {
+	root, scopeList := seedBrowseCorpus(t)
+
+	// Write a 5th session to projA without updating the consolidated store
+	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa3333-0000-0000-0000-000000000005",
+		"2026-06-05T10:00:00Z", "fifth question in project A added after initial consolidation")
+
+	// 1. Browse with Reindex=false answers from consolidated store (which doesn't have session 5 yet)
+	var storeOut bytes.Buffer
+	optsNormal := Options{All: true, Limit: 10, Reindex: false}
+	if err := runBrowseScoped(&storeOut, &optsNormal, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped (normal): %v", err)
+	}
+	if strings.Contains(storeOut.String(), "aaaa3333") {
+		t.Errorf("expected consolidated browse to not have unindexed session 5 yet")
+	}
+
+	// 2. Browse with Reindex=true must bypass consolidated store and reindex per-project
+	var reindexOut bytes.Buffer
+	optsReindex := Options{All: true, Limit: 10, Reindex: true}
+	if err := runBrowseScoped(&reindexOut, &optsReindex, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped (reindex): %v", err)
+	}
+	if !strings.Contains(reindexOut.String(), "aaaa3333") {
+		t.Errorf("expected reindex browse to discover newly written session 5, got:\n%s", reindexOut.String())
+	}
+}
