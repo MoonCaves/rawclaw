@@ -42,6 +42,14 @@ func AcquireConsolidatedFence(ctx context.Context) (*ConsolidatedFence, error) {
 	defer cancel()
 	started := time.Now()
 	reportedHolder := false
+	// One timer, reused with Reset across retries — the lock is polled every
+	// consolidatedLockRetry for up to consolidatedLockWait (up to ~1200 ticks
+	// on a busy store), and this is a hot path: nearly every ingest hook
+	// acquires this fence. Reset is only ever called after the channel has
+	// already delivered (the timer.C case below), which is the one case
+	// that's safe to reuse without a drain dance on any Go version.
+	timer := time.NewTimer(consolidatedLockRetry)
+	defer timer.Stop()
 	for {
 		locked, err := lock.TryLock()
 		if err != nil {
@@ -54,14 +62,11 @@ func AcquireConsolidatedFence(ctx context.Context) (*ConsolidatedFence, error) {
 			logConsolidatedLockHolder()
 			reportedHolder = true
 		}
-		timer := time.NewTimer(consolidatedLockRetry)
 		select {
 		case <-waitCtx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
 			return nil, fmt.Errorf("wait for consolidated lock: %w", waitCtx.Err())
 		case <-timer.C:
+			timer.Reset(consolidatedLockRetry)
 		}
 	}
 }
