@@ -23,8 +23,8 @@ func TestConnectROPragmas(t *testing.T) {
 	if err := ro.QueryRow("PRAGMA mmap_size").Scan(&mmapSize); err != nil {
 		t.Fatalf("PRAGMA mmap_size: %v", err)
 	}
-	if mmapSize <= 0 {
-		t.Errorf("PRAGMA mmap_size = %d, want > 0", mmapSize)
+	if mmapSize != store.ROMmapSize {
+		t.Errorf("PRAGMA mmap_size = %d, want %d", mmapSize, store.ROMmapSize)
 	}
 
 	var busyTimeout int
