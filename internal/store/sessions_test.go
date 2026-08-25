@@ -138,6 +138,42 @@ func TestBrowseScopedSessions(t *testing.T) {
 	}
 }
 
+func TestBrowseScopedSessions_NullProjectAppearsUnderFilter(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	base := 1750000000.0
+
+	// Insert a session with an explicit project and a session with NULL project (unscoped/unstamped).
+	storetest.InsertSession(t, con, storetest.Session{
+		ID: "p1-stamped", Project: "proj-1", SourceTool: "claude", LastTS: base + 100, MessageCount: 2,
+	})
+	storetest.InsertSession(t, con, storetest.Session{
+		ID: "null-project", Project: "", SourceTool: "claude", LastTS: base + 200, MessageCount: 3,
+	})
+
+	// When filtering by project "proj-1", the NULL-project session must still appear (over-inclusive).
+	rows, err := store.BrowseScopedSessions(con, "", "", "", []string{"proj-1"}, 10)
+	if err != nil {
+		t.Fatalf("BrowseScopedSessions: %v", err)
+	}
+
+	foundNull := false
+	foundStamped := false
+	for _, r := range rows {
+		if r.SessionID == "null-project" {
+			foundNull = true
+		}
+		if r.SessionID == "p1-stamped" {
+			foundStamped = true
+		}
+	}
+	if !foundNull {
+		t.Errorf("expected null-project session to appear under project filter, rows = %+v", rows)
+	}
+	if !foundStamped {
+		t.Errorf("expected p1-stamped session to appear under project filter, rows = %+v", rows)
+	}
+}
+
 func TestSessionsByPrefix(t *testing.T) {
 	con, _ := storetest.NewDB(t)
 	storetest.InsertSession(t, con, storetest.Session{ID: "run-a"})
