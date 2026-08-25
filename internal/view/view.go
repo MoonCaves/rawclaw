@@ -236,7 +236,7 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 
 	// win = reversed(before) + after (both ascending by id).
 	slices.Reverse(before)
-	win := append(before, after...)
+	win := slices.Concat(before, after)
 	if len(win) == 0 {
 		return nil
 	}
