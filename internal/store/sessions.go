@@ -39,11 +39,19 @@ func BrowseScopedSessions(con *sql.DB, since, before, sourceTool string, project
 		args = append(args, before)
 	}
 	if sourceTool != "" {
-		where = append(where, "s.source_tool = ?")
+		// Deliberately over-inclusive so an unstamped session (NULL source_tool) is never
+		// invisible in browse. Known ceiling: cross-source project-label collisions can pull
+		// another source's sessions into a path-scoped browse (accepted, over-inclusion beats
+		// silent disappearance).
+		where = append(where, "(s.source_tool = ? OR s.source_tool IS NULL)")
 		args = append(args, sourceTool)
 	}
 	if len(projects) > 0 {
-		where = append(where, "s.project IN ("+placeholders(len(projects))+")")
+		// Deliberately over-inclusive so an unstamped session (NULL project) is never
+		// invisible in browse. Known ceiling: cross-source project-label collisions can pull
+		// another source's sessions into a path-scoped browse (accepted, over-inclusion beats
+		// silent disappearance).
+		where = append(where, "(s.project IN ("+placeholders(len(projects))+") OR s.project IS NULL)")
 		for _, p := range projects {
 			args = append(args, p)
 		}
