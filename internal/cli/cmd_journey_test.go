@@ -298,3 +298,98 @@ func TestCLIJourney_AntigravityCurrentSessionExclusion(t *testing.T) {
 		t.Errorf("expected just-typed prompt in results with --current-session off, got: %+v", envOff.Results)
 	}
 }
+
+// TestCLIJourney_AntigravityTranscriptRename tests that when a session's backing
+// transcript file transitions to a different filename (e.g. Antigravity serving
+// transcript.jsonl initially and then transcript_full.jsonl), any stale file_index
+// row under the previous path is deleted before writing the new watermark, so retention
+// does not misidentify the session as purged and the session remains searchable.
+func TestCLIJourney_AntigravityTranscriptRename(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg, ".claude"))
+	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+
+	// Hard-fail if the resolved cache store is not isolated inside cfg
+	cacheDir := store.CacheDir()
+	if !strings.HasPrefix(cacheDir, cfg) {
+		t.Fatalf("CRITICAL: store.CacheDir() = %q is not isolated inside temp dir %q", cacheDir, cfg)
+	}
+
+	agRoot := filepath.Join(cfg, ".gemini", "antigravity-cli")
+	sessID := "77770001-0000-0000-0000-000000000001"
+	workDir := filepath.Join(cfg, "work", "auth-service")
+
+	// Seed history.jsonl
+	histPath := filepath.Join(agRoot, "history.jsonl")
+	if err := os.MkdirAll(filepath.Dir(histPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(histPath, []byte(`{"conversationId":"`+sessID+`","workspace":"`+workDir+`"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Initial indexing under transcript.jsonl
+	logsDir := filepath.Join(agRoot, "brain", sessID, ".system_generated", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transPath := filepath.Join(logsDir, "transcript.jsonl")
+	initialJSONL := strings.Join([]string{
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:00Z","content":"<USER_REQUEST>rotate jwt signing keys</USER_REQUEST>"}`,
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:05Z","thinking":"rotating keys","content":"JWT keys rotated successfully"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transPath, []byte(initialJSONL), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "rotate jwt")
+	if err != nil {
+		t.Fatalf("initial search failed: %v\nout: %s", err, out)
+	}
+	var env agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("unmarshal search output: %v\nout: %s", err, out)
+	}
+	if env.Count < 1 || len(env.Results) == 0 || env.Results[0].SessionID != sessID {
+		t.Fatalf("expected session %s in initial search, got: %+v; out: %s", sessID, env, out)
+	}
+
+	// 2. Transition backing file to transcript_full.jsonl and remove transcript.jsonl
+	transFullPath := filepath.Join(logsDir, "transcript_full.jsonl")
+	fullJSONL := initialJSONL + `{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:10Z","content":"<USER_REQUEST>validate signature verification</USER_REQUEST>"}` + "\n"
+	if err := os.WriteFile(transFullPath, []byte(fullJSONL), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(transPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Re-index and search: the session must remain searchable
+	outAfter, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--reindex", "--json", "rotate jwt")
+	if err != nil {
+		t.Fatalf("search after rename failed: %v\nout: %s", err, outAfter)
+	}
+	var envAfter agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(outAfter), &envAfter); err != nil {
+		t.Fatalf("unmarshal after rename: %v\nout: %s", err, outAfter)
+	}
+	if envAfter.Count < 1 || len(envAfter.Results) == 0 || envAfter.Results[0].SessionID != sessID {
+		t.Fatalf("session %s not found in search after file rename: %+v; out: %s", sessID, envAfter, outAfter)
+	}
+
+	// 4. Verify incremental search finds newly appended turn from transcript_full.jsonl
+	outFull, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "validate signature")
+	if err != nil {
+		t.Fatalf("search full turn failed: %v\nout: %s", err, outFull)
+	}
+	var envFull agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(outFull), &envFull); err != nil {
+		t.Fatalf("unmarshal full turn: %v\nout: %s", err, outFull)
+	}
+	if envFull.Count < 1 || len(envFull.Results) == 0 || envFull.Results[0].SessionID != sessID {
+		t.Fatalf("session %s turn not found in search: %+v; out: %s", sessID, envFull, outFull)
+	}
+}
