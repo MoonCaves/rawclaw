@@ -109,38 +109,28 @@ func ReplaceSessionSegments(con *sql.DB, sessionID string, segs []TopicSegment) 
 	return nil
 }
 
-// ReplaceSessionRangeSegments selectively updates a session's topic segments:
-// it deletes existing segments matching deleteStartUUIDs and inserts newSegs
-// atomically in one transaction. Existing segments not matching deleteStartUUIDs
-// are preserved.
-func ReplaceSessionRangeSegments(con *sql.DB, sessionID string, deleteStartUUIDs []string, newSegs []TopicSegment) error {
+// InsertTopicSegments appends new topic segments to topic_segment. Segments
+// are only ever added — prior segments are preserved.
+func InsertTopicSegments(con *sql.DB, segs []TopicSegment) error {
+	if len(segs) == 0 {
+		return nil
+	}
 	tx, err := con.Begin()
 	if err != nil {
-		return fmt.Errorf("begin replace range segments: %w", err)
+		return fmt.Errorf("begin insert segments: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
-	if len(deleteStartUUIDs) > 0 {
-		stmt := "DELETE FROM topic_segment WHERE session_id=? AND start_uuid IN (" + placeholders(len(deleteStartUUIDs)) + ")"
-		args := make([]any, 0, len(deleteStartUUIDs)+1)
-		args = append(args, sessionID)
-		for _, u := range deleteStartUUIDs {
-			args = append(args, u)
-		}
-		if _, err := tx.Exec(stmt, args...); err != nil {
-			return fmt.Errorf("delete overlapping segments: %w", err)
-		}
-	}
-	for _, s := range newSegs {
+	for _, s := range segs {
 		if _, err := tx.Exec(
 			`INSERT INTO topic_segment(session_id, start_uuid, end_uuid, topic, summary, tagged_at, origin_machine)
 			 VALUES(?,?,?,?,?,?,NULLIF(?,''))`,
-			sessionID, s.StartUUID, s.EndUUID, s.Topic, s.Summary, s.TaggedAt, s.OriginMachine,
+			s.SessionID, s.StartUUID, s.EndUUID, s.Topic, s.Summary, s.TaggedAt, s.OriginMachine,
 		); err != nil {
 			return fmt.Errorf("insert segment: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit replace range segments: %w", err)
+		return fmt.Errorf("commit insert segments: %w", err)
 	}
 	return nil
 }
@@ -336,9 +326,8 @@ LIMIT ?`, args...)
 // where there is no FTS topic match to attach. It uses the message's id order:
 // the segment is the latest one in the session whose start message id is <= the
 // target message id, and (if end_uuid is set) whose end message id is >= the
-// target. When no range matches, it falls back to the session's single topic if
-// there is exactly one — otherwise "". Kept deliberately simple; a missing topic
-// table reads as "".
+// target. When no range matches, it returns "". Kept deliberately simple; a missing
+// topic table reads as "".
 func TopicForMessage(con *sql.DB, sessionID, msgUUID string) string {
 	// Resolve the target message's rowid (the ordering key within a session).
 	var targetID int
@@ -359,10 +348,8 @@ ORDER BY sm.id`, sessionID)
 	}
 	defer rows.Close()
 	var (
-		segCount int
-		soleTop  string
-		bestTop  string
-		bestSt   = -1
+		bestTop string
+		bestSt  = -1
 	)
 	for rows.Next() {
 		var (
@@ -373,8 +360,6 @@ ORDER BY sm.id`, sessionID)
 		if err := rows.Scan(&topic, &startID, &endID); err != nil {
 			return ""
 		}
-		segCount++
-		soleTop = topic.String
 		// Range containment: start <= target, and (no end OR end >= target).
 		if startID <= targetID && (!endID.Valid || int(endID.Int64) >= targetID) {
 			if startID > bestSt { // latest qualifying start wins
@@ -388,9 +373,6 @@ ORDER BY sm.id`, sessionID)
 	}
 	if bestSt >= 0 {
 		return bestTop
-	}
-	if segCount == 1 {
-		return soleTop // session has a single topic — attach it
 	}
 	return ""
 }

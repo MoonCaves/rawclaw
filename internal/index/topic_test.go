@@ -171,20 +171,19 @@ func TestTopicForMessageRangeContainment(t *testing.T) {
 	}
 }
 
-func TestTopicForMessageSingleTopicFallback(t *testing.T) {
+func TestTopicForMessageUntaggedReturnsEmpty(t *testing.T) {
 	con, _ := openTestDB(t)
 	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 	addTopicMsg(t, con, "sess1", "user", "m1", "u1")
 	addTopicMsg(t, con, "sess1", "assistant", "m2", "u2")
-	// One segment covering only u1; u2 is outside the range. With a single session
-	// topic, the fallback attaches it anyway.
+	// One segment covering only u1; u2 is outside the range -> returns "".
 	if err := store.UpsertTopicSegment(con, "sess1", "u1", "u1", "only topic", "", 1.0); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if got := store.TopicForMessage(con, "sess1", "u2"); got != "only topic" {
-		t.Errorf("TopicForMessage(u2) single-topic fallback = %q, want only topic", got)
+	if got := store.TopicForMessage(con, "sess1", "u2"); got != "" {
+		t.Errorf("TopicForMessage(u2) = %q, want empty for untagged message", got)
 	}
 }
 
