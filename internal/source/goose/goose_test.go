@@ -378,3 +378,68 @@ func TestGooseRealSchema_DiscoveredAndIndexed(t *testing.T) {
 		t.Errorf("unexpected msgs2[0].Text = %q", msgs2[0].Text)
 	}
 }
+
+// TestGooseMessages_RowsErr_TruncationError verifies that an iteration failure
+// during rows.Next() in Messages() returns an error rather than silently returning
+// a truncated list of messages.
+func TestGooseMessages_RowsErr_TruncationError(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "sessions.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	// Create tables with an index so SQLite streams row 1 before encountering the error on row 2.
+	_, err = db.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			working_dir TEXT
+		);
+		CREATE TABLE raw_messages (
+			id INTEGER PRIMARY KEY,
+			session_id TEXT,
+			role TEXT,
+			raw_payload TEXT,
+			created_at TEXT
+		);
+		CREATE INDEX idx_sess_time ON raw_messages(session_id, created_at);
+
+		INSERT INTO sessions (id, working_dir) VALUES
+			('sess-corrupt', '/workspace/corrupt');
+		INSERT INTO raw_messages (id, session_id, role, raw_payload, created_at) VALUES
+			(1, 'sess-corrupt', 'user', 'valid message 1', '2026-08-25T10:00:00Z'),
+			(2, 'sess-corrupt', 'assistant', '{"bad json', '2026-08-25T10:00:05Z');
+
+		CREATE VIEW messages AS
+		SELECT
+			id,
+			session_id,
+			role,
+			CASE WHEN id = 2 THEN json_extract(raw_payload, '$.valid') ELSE raw_payload END AS content,
+			created_at
+		FROM raw_messages;
+	`)
+	if err != nil {
+		t.Fatalf("setup database: %v", err)
+	}
+
+	adapter := NewRoot(tmpDir)
+	containers, err := adapter.Discover()
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(containers) != 1 {
+		t.Fatalf("got %d containers, want 1", len(containers))
+	}
+
+	msgs, err := adapter.Messages(containers[0])
+	if err == nil {
+		t.Fatalf("expected error on mid-iteration rows error, got nil error with %d messages (silent truncation)", len(msgs))
+	}
+	if msgs != nil {
+		t.Fatalf("expected nil messages on error, got %d messages", len(msgs))
+	}
+}
