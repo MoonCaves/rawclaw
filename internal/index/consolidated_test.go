@@ -1436,3 +1436,104 @@ func TestConsolidate_PartialSessionSourcesBackfill(t *testing.T) {
 		}
 	}
 }
+
+func TestConsolidateFrom_PrunesLegacySourceAfterFullPass(t *testing.T) {
+	isolateCache(t)
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		con.Close()
+		t.Fatalf("ensure schema: %v", err)
+	}
+	for _, id := range []string{"gains-real", "legacy-only"} {
+		if _, err := con.Exec(`
+			INSERT INTO sessions (
+				id, started_at, last_ts, message_count, is_subagent, parent_id,
+				origin_machine, source_tool, source_path, missing_since, project, cwd
+			) VALUES (?, 100, 200, 1, 0, NULL, 'machine', 'claude', '/tmp/' || ? || '.jsonl', NULL, 'project', '/tmp')
+		`, id, id); err != nil {
+			con.Close()
+			t.Fatalf("seed session %s: %v", id, err)
+		}
+	}
+	con.Close()
+
+	src := seedSessionDB(t, "real.db", sessionRow{
+		id: "gains-real", project: "project", cwd: "/tmp",
+		msgs: []msgRow{{"real-1", "user", "hello", 100}},
+	})
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db='' "); got != "0" {
+		t.Errorf("legacy row for session with real source = %s, want 0", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db='real.db'"); got != "1" {
+		t.Errorf("real row for session with real source = %s, want 1", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='legacy-only' AND source_db='' "); got != "1" {
+		t.Errorf("legacy-only row = %s, want 1", got)
+	}
+}
+
+func TestConsolidateFrom_HealFailureAbortsBeforeBackfill(t *testing.T) {
+	isolateCache(t)
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		con.Close()
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := con.Exec("INSERT INTO sessions(id, source_path, message_count) VALUES('heal-failure', '/tmp/heal.jsonl', 1)"); err != nil {
+		con.Close()
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err := con.Exec("INSERT INTO meta(key, value) VALUES('sync:old.db', 'old-mark')"); err != nil {
+		con.Close()
+		t.Fatalf("seed watermark: %v", err)
+	}
+	if _, err := con.Exec(`
+		CREATE TRIGGER inject_heal_failure
+		BEFORE DELETE ON meta
+		WHEN OLD.key LIKE 'sync:%'
+		BEGIN
+			SELECT RAISE(ABORT, 'injected heal failure');
+		END
+	`); err != nil {
+		con.Close()
+		t.Fatalf("install heal failure trigger: %v", err)
+	}
+	con.Close()
+
+	if _, err := ConsolidateFrom(nil, false); err == nil || !strings.Contains(err.Error(), "heal upgraded store") {
+		t.Fatalf("ConsolidateFrom error = %v, want heal failure", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources"); got != "0" {
+		t.Errorf("session_sources after failed heal = %s, want 0", got)
+	}
+	con.Close()
+
+	con, err = store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("reopen consolidated: %v", err)
+	}
+	if _, err := con.Exec("DROP TRIGGER inject_heal_failure"); err != nil {
+		con.Close()
+		t.Fatalf("remove heal failure trigger: %v", err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom(nil, false); err != nil {
+		t.Fatalf("ConsolidateFrom after heal failure: %v", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='heal-failure'"); got != "1" {
+		t.Errorf("session_sources after retry = %s, want 1", got)
+	}
+}
