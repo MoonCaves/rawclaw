@@ -105,7 +105,10 @@ func stemTagSources(
 	}
 	var matches []tagSourceMatch
 	for _, hit := range hits {
-		reg, ok := registrationFor("claude", hit.Path, registrations)
+		reg, ok := registrationFor("", hit.Path, registrations)
+		if !ok {
+			reg, ok = registrationFor("claude", hit.Path, registrations)
+		}
 		if !ok || reg.New == nil {
 			continue
 		}

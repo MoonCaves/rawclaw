@@ -600,3 +600,205 @@ func TestWriteCatalogEntry_InvalidSessionID(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveSession_CatalogDirectHit(t *testing.T) {
+	catDir := t.TempDir()
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir()) // empty projects
+
+	transcriptDir := t.TempDir()
+	transcriptPath := filepath.Join(transcriptDir, "exact-session-uuid-0001.jsonl")
+	writeJSONL(t, transcriptPath, `{"cwd":"/home/user/myproject"}`)
+
+	entry := CatalogEntry{
+		SessionID:      "exact-session-uuid-0001",
+		TranscriptPath: transcriptPath,
+		CWD:            "/home/user/myproject",
+		Source:         "claude",
+	}
+	if err := WriteCatalogEntry(catDir, entry); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	hits := ResolveSession("exact-session-uuid-0001")
+	if len(hits) != 1 {
+		t.Fatalf("ResolveSession(exact) got %d hits, want 1: %+v", len(hits), hits)
+	}
+	h := hits[0]
+	if h.SessionID != "exact-session-uuid-0001" {
+		t.Errorf("SessionID = %q, want exact-session-uuid-0001", h.SessionID)
+	}
+	if h.Path != transcriptPath {
+		t.Errorf("Path = %q, want %q", h.Path, transcriptPath)
+	}
+	if h.CWD != "/home/user/myproject" {
+		t.Errorf("CWD = %q, want /home/user/myproject", h.CWD)
+	}
+	if h.Project != "myproject" {
+		t.Errorf("Project = %q, want myproject", h.Project)
+	}
+}
+
+func TestResolveSession_CatalogPrefixHit(t *testing.T) {
+	catDir := t.TempDir()
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir()) // empty projects
+
+	transcriptDir := t.TempDir()
+	transcriptPath := filepath.Join(transcriptDir, "prefix01-long-session-uuid.jsonl")
+	writeJSONL(t, transcriptPath, `{"cwd":"/home/user/coolproj"}`)
+
+	entry := CatalogEntry{
+		SessionID:      "prefix01-long-session-uuid",
+		TranscriptPath: transcriptPath,
+		CWD:            "/home/user/coolproj",
+		Source:         "claude",
+	}
+	if err := WriteCatalogEntry(catDir, entry); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	hits := ResolveSession("prefix01")
+	if len(hits) != 1 {
+		t.Fatalf("ResolveSession(prefix01) got %d hits, want 1: %+v", len(hits), hits)
+	}
+	h := hits[0]
+	if h.SessionID != "prefix01-long-session-uuid" {
+		t.Errorf("SessionID = %q", h.SessionID)
+	}
+	if h.Path != transcriptPath {
+		t.Errorf("Path = %q, want %q", h.Path, transcriptPath)
+	}
+	if h.CWD != "/home/user/coolproj" {
+		t.Errorf("CWD = %q", h.CWD)
+	}
+	if h.Project != "coolproj" {
+		t.Errorf("Project = %q, want coolproj", h.Project)
+	}
+}
+
+func TestResolveSession_CatalogAmbiguousPrefix(t *testing.T) {
+	catDir := t.TempDir()
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+
+	transcriptDir := t.TempDir()
+	tPath1 := filepath.Join(transcriptDir, "ambig001-session-a.jsonl")
+	tPath2 := filepath.Join(transcriptDir, "ambig001-session-b.jsonl")
+	writeJSONL(t, tPath1, `{"cwd":"/home/user/proj-a"}`)
+	writeJSONL(t, tPath2, `{"cwd":"/home/user/proj-b"}`)
+
+	_ = WriteCatalogEntry(catDir, CatalogEntry{
+		SessionID:      "ambig001-session-a",
+		TranscriptPath: tPath1,
+		CWD:            "/home/user/proj-a",
+		Source:         "claude",
+	})
+	_ = WriteCatalogEntry(catDir, CatalogEntry{
+		SessionID:      "ambig001-session-b",
+		TranscriptPath: tPath2,
+		CWD:            "/home/user/proj-b",
+		Source:         "claude",
+	})
+
+	hits := ResolveSession("ambig001")
+	if len(hits) != 2 {
+		t.Fatalf("ResolveSession(ambig001) got %d hits, want 2: %+v", len(hits), hits)
+	}
+	ids := []string{hits[0].SessionID, hits[1].SessionID}
+	slices.Sort(ids)
+	if ids[0] != "ambig001-session-a" || ids[1] != "ambig001-session-b" {
+		t.Fatalf("unexpected session IDs: %v", ids)
+	}
+}
+
+func TestResolveSession_CatalogFallbacks(t *testing.T) {
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", claudeDir)
+	projects := filepath.Join(claudeDir, "projects")
+	projDir := filepath.Join(projects, "-home-user-fallback")
+	fallbackPath := filepath.Join(projDir, "fall0001-stem-session.jsonl")
+	writeJSONL(t, fallbackPath, `{"cwd":"/home/user/fallback"}`)
+
+	t.Run("empty catalog falls back to stem resolution", func(t *testing.T) {
+		catDir := t.TempDir()
+		t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+
+		hits := ResolveSession("fall0001")
+		if len(hits) != 1 {
+			t.Fatalf("got %d hits, want 1: %+v", len(hits), hits)
+		}
+		if hits[0].SessionID != "fall0001-stem-session" {
+			t.Fatalf("SessionID = %q, want fall0001-stem-session", hits[0].SessionID)
+		}
+	})
+
+	t.Run("nonexistent catalog dir falls back to stem resolution", func(t *testing.T) {
+		t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(t.TempDir(), "nonexistent"))
+
+		hits := ResolveSession("fall0001")
+		if len(hits) != 1 {
+			t.Fatalf("got %d hits, want 1: %+v", len(hits), hits)
+		}
+		if hits[0].SessionID != "fall0001-stem-session" {
+			t.Fatalf("SessionID = %q, want fall0001-stem-session", hits[0].SessionID)
+		}
+	})
+
+	t.Run("unparseable catalog entry falls back to stem resolution", func(t *testing.T) {
+		catDir := t.TempDir()
+		t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+
+		// Corrupted/0-byte entry for the matching prefix
+		if err := os.WriteFile(filepath.Join(catDir, "fall0001-stem-session"), []byte("not json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		hits := ResolveSession("fall0001")
+		if len(hits) != 1 {
+			t.Fatalf("got %d hits, want 1: %+v", len(hits), hits)
+		}
+		if hits[0].SessionID != "fall0001-stem-session" {
+			t.Fatalf("SessionID = %q, want fall0001-stem-session", hits[0].SessionID)
+		}
+	})
+
+	t.Run("field-incomplete catalog entry falls back to stem resolution", func(t *testing.T) {
+		catDir := t.TempDir()
+		t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+
+		// Minimal entry containing only session_id, missing transcript_path
+		if err := os.WriteFile(filepath.Join(catDir, "fall0001-stem-session"), []byte(`{"session_id":"fall0001-stem-session"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		hits := ResolveSession("fall0001")
+		if len(hits) != 1 {
+			t.Fatalf("got %d hits, want 1: %+v", len(hits), hits)
+		}
+		if hits[0].SessionID != "fall0001-stem-session" {
+			t.Fatalf("SessionID = %q, want fall0001-stem-session", hits[0].SessionID)
+		}
+	})
+
+	t.Run("missing transcript on disk falls back to stem resolution", func(t *testing.T) {
+		catDir := t.TempDir()
+		t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+
+		// Catalog entry points to a non-existent file
+		_ = WriteCatalogEntry(catDir, CatalogEntry{
+			SessionID:      "fall0001-stem-session",
+			TranscriptPath: filepath.Join(t.TempDir(), "deleted-transcript.jsonl"),
+			CWD:            "/home/user/fallback",
+			Source:         "claude",
+		})
+
+		hits := ResolveSession("fall0001")
+		if len(hits) != 1 {
+			t.Fatalf("got %d hits, want 1: %+v", len(hits), hits)
+		}
+		if hits[0].SessionID != "fall0001-stem-session" {
+			t.Fatalf("SessionID = %q, want fall0001-stem-session", hits[0].SessionID)
+		}
+	})
+}
