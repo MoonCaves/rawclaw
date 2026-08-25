@@ -103,10 +103,7 @@ func bookendFetch(opts AnchoredViewOpts) int {
 	if opts.IncludeTools {
 		return opts.Bookend
 	}
-	if opts.Bookend > bookendScan {
-		return opts.Bookend
-	}
-	return bookendScan
+	return max(opts.Bookend, bookendScan)
 }
 
 // IsDisplayable reports whether a record still says something after everything
