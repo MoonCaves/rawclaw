@@ -15,6 +15,7 @@ import (
 // the real retrieve engine. Gated by RAWCLAW_CODEX_INTEGRATION so normal
 // `go test` never depends on real local data or touches the shared cache.
 func TestCodexRealDataSearchable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	if os.Getenv("RAWCLAW_CODEX_INTEGRATION") == "" {
 		t.Skip("set RAWCLAW_CODEX_INTEGRATION=1 to run against real ~/.codex/sessions")
 	}
