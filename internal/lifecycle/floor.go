@@ -31,13 +31,7 @@ func EvaluateMathFloor(messages []model.Message) (bool, FloorStats) {
 		}
 	}
 
-	if stats.SubstantiveHumanTurns == 0 && stats.TotalMessages <= 2 {
-		return true, stats
-	}
-	if stats.SubstantiveHumanTurns <= 1 &&
-		stats.TotalMessages <= 4 &&
-		stats.AssistantProseBytes <= 400 {
-		return true, stats
-	}
-	return false, stats
+	routine := (stats.SubstantiveHumanTurns == 0 && stats.TotalMessages <= 2) ||
+		(stats.SubstantiveHumanTurns <= 1 && stats.TotalMessages <= 4 && stats.AssistantProseBytes <= 400)
+	return routine, stats
 }

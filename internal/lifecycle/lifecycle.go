@@ -289,7 +289,6 @@ func matchInDir(dir string, opts DeleteOpts) ([]PlanItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("glob %q: %w", dir, err)
 	}
-	sort.Strings(files)
 
 	label := filepath.Base(filepath.Clean(dir))
 	out := []PlanItem{}
@@ -369,7 +368,6 @@ func projectDirs(root string) ([]string, error) {
 			out = append(out, dir)
 		}
 	}
-	sort.Strings(out)
 	return out, nil
 }
 
@@ -411,12 +409,7 @@ func appendTombstones(path string, ids []string) error {
 	}
 	defer f.Close()
 
-	var b strings.Builder
-	for _, id := range ids {
-		b.WriteString(id)
-		b.WriteByte('\n')
-	}
-	if _, err := f.WriteString(b.String()); err != nil {
+	if _, err := f.WriteString(strings.Join(ids, "\n") + "\n"); err != nil {
 		return fmt.Errorf("append tombstone: %w", err)
 	}
 	return nil
@@ -455,11 +448,7 @@ func moveFile(src, dst string) error {
 // --- small fs/path helpers (kept local so the package carries no deps) ---
 
 func sessionFileName(pathOrID string) string {
-	base := filepath.Base(pathOrID)
-	if strings.HasSuffix(base, ".jsonl") {
-		return base
-	}
-	return base + ".jsonl"
+	return strings.TrimSuffix(filepath.Base(pathOrID), ".jsonl") + ".jsonl"
 }
 
 func fileExists(path string) bool {
