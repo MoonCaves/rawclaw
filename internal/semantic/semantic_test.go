@@ -289,6 +289,21 @@ func TestVecKNNDimMismatchSkipped(t *testing.T) {
 	}
 }
 
+func TestVecKNNNegativeK(t *testing.T) {
+	con := openTestDB(t)
+	addMessage(t, con, "s1", "user", "a three dim message stored in the index", "2026-06-18T10:00:00Z", 0, "")
+	emb := fakeEmbedder{vecs: map[string][]float64{
+		"a three dim message stored in the index": {1, 0, 0},
+	}}
+	if _, err := VecIndex(context.Background(), con, emb, 0); err != nil {
+		t.Fatalf("VecIndex: %v", err)
+	}
+	got := VecKNN(con, []float64{1, 0, 0}, -1, false)
+	if got == nil || len(got) != 0 {
+		t.Fatalf("VecKNN with k=-1 = %v (len %d), want empty non-nil result", got, len(got))
+	}
+}
+
 func TestFuseRRF(t *testing.T) {
 	con := openTestDB(t)
 

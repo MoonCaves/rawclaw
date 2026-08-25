@@ -371,6 +371,9 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 // VecKNN returns up to k vector-anchor VecHits nearest to qvec, existence-checked
 // against the live messages table.
 func VecKNN(con *sql.DB, qvec []float64, k int, includeSubagents bool) []VecHit {
+	if k <= 0 {
+		return []VecHit{}
+	}
 	// store.VecAll fully drains + closes its scan before returning — the
 	// single-conn pool is free for the existence-check queries below (D3). Any
 	// error (missing table, read error, late cursor error) reads as "no
