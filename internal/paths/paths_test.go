@@ -587,8 +587,15 @@ func TestWriteCatalogEntry_InvalidSessionID(t *testing.T) {
 		id   string
 	}{
 		{"empty session id", ""},
-		{"session id with forward slash", "subagent/123"},
-		{"session id with path separator", "subagent" + string(os.PathSeparator) + "123"},
+		{"dot", "."},
+		{"parent", ".."},
+		{"parent traversal", ".." + string(filepath.Separator) + "escape"},
+		{"traversal after cleaning", "nested" + string(filepath.Separator) + ".." + string(filepath.Separator) + "escape"},
+		{"absolute path", filepath.Join(string(filepath.Separator), "escape")},
+		{"empty component", "nested" + string(filepath.Separator) + string(filepath.Separator) + "escape"},
+		{"dot component", "nested" + string(filepath.Separator) + "." + string(filepath.Separator) + "escape"},
+		{"symlink parent component", "link" + string(filepath.Separator) + "escape"},
+		{"session id with path separator", "subagent" + string(filepath.Separator) + "123"},
 	}
 
 	for _, tt := range tests {
