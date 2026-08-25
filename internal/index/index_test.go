@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
@@ -62,6 +63,48 @@ func TestEnsureSchemaMigratesPreV4DB(t *testing.T) {
 	}
 	if v == "3" {
 		t.Errorf("schema_version still '3' after migration — rebuild did not stamp the new version")
+	}
+}
+
+func TestEnsureIndexed_StampsPerProjectFreshness(t *testing.T) {
+	home := isolateCache(t)
+	catDir := filepath.Join(home, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	if err := os.MkdirAll(catDir, 0o755); err != nil {
+		t.Fatalf("create catalog: %v", err)
+	}
+
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	writeJSONL(t, filepath.Join(project, "session.jsonl"),
+		`{"type":"user","message":{"role":"user","content":"fresh per-project index"},"uuid":"fresh-uuid","timestamp":"2026-08-26T00:00:00Z"}`,
+	)
+
+	dbp, _, status, err := EnsureIndexed(project, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+	if status != IndexFresh {
+		t.Fatalf("EnsureIndexed status = %v, want IndexFresh", status)
+	}
+
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("open per-project db: %v", err)
+	}
+	defer con.Close()
+	freshness, err := CheckIndexFreshness(con)
+	if err != nil {
+		t.Fatalf("CheckIndexFreshness: %v", err)
+	}
+	if !freshness.Fresh {
+		t.Fatalf("freshly indexed per-project db reported %q, want fresh", freshness.Reason)
+	}
+
+	if _, err := os.Stat(paths.CatalogDir()); err != nil {
+		t.Fatalf("catalog dir: %v", err)
 	}
 }
 
