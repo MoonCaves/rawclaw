@@ -109,6 +109,42 @@ func ReplaceSessionSegments(con *sql.DB, sessionID string, segs []TopicSegment) 
 	return nil
 }
 
+// ReplaceSessionRangeSegments selectively updates a session's topic segments:
+// it deletes existing segments matching deleteStartUUIDs and inserts newSegs
+// atomically in one transaction. Existing segments not matching deleteStartUUIDs
+// are preserved.
+func ReplaceSessionRangeSegments(con *sql.DB, sessionID string, deleteStartUUIDs []string, newSegs []TopicSegment) error {
+	tx, err := con.Begin()
+	if err != nil {
+		return fmt.Errorf("begin replace range segments: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+	if len(deleteStartUUIDs) > 0 {
+		stmt := "DELETE FROM topic_segment WHERE session_id=? AND start_uuid IN (" + placeholders(len(deleteStartUUIDs)) + ")"
+		args := make([]any, 0, len(deleteStartUUIDs)+1)
+		args = append(args, sessionID)
+		for _, u := range deleteStartUUIDs {
+			args = append(args, u)
+		}
+		if _, err := tx.Exec(stmt, args...); err != nil {
+			return fmt.Errorf("delete overlapping segments: %w", err)
+		}
+	}
+	for _, s := range newSegs {
+		if _, err := tx.Exec(
+			`INSERT INTO topic_segment(session_id, start_uuid, end_uuid, topic, summary, tagged_at, origin_machine)
+			 VALUES(?,?,?,?,?,?,NULLIF(?,''))`,
+			sessionID, s.StartUUID, s.EndUUID, s.Topic, s.Summary, s.TaggedAt, s.OriginMachine,
+		); err != nil {
+			return fmt.Errorf("insert segment: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit replace range segments: %w", err)
+	}
+	return nil
+}
+
 // SessionHasRealSegments reports whether a session carries at least one real topic
 // segment (a non-empty topic) — the read-time signal that "a real tag beats
 // routine" (a routine verdict is inert when real segments exist) and the
