@@ -547,7 +547,14 @@ func TestHTTPEmbedder_ContextCancellation(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		<-r.Context().Done()
+		// Bounded, not just <-r.Context().Done(): see the identical comment in
+		// TestHTTPEmbedder_EmbedBatch_ContextCancellation — a client-side
+		// cancellation is not guaranteed to promptly cancel the server's
+		// request context on every Go toolchain/platform combination.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
 	}))
 	defer srv.Close()
 
@@ -584,7 +591,17 @@ func TestHTTPEmbedder_EmbedBatch_ContextCancellation(t *testing.T) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		<-r.Context().Done()
+		// Bounded, not just <-r.Context().Done(): a client-side cancellation is
+		// not guaranteed to promptly cancel the server's request context on
+		// every Go toolchain/platform combination (observed hanging the full
+		// test binary for 10 minutes on a Go 1.27 CI runner that reproduced
+		// nowhere locally). This still exercises the real behavior under test
+		// — EmbedBatch's own promptness assertion below is unaffected — it
+		// only guarantees srv.Close() can never wedge test teardown.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
 	}))
 	defer srv.Close()
 
