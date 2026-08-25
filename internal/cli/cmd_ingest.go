@@ -157,8 +157,10 @@ func resolveIngestMatches(sessionArg string, regs []source.Registration) ([]tagS
 	}
 
 	// 3. Check registered source adapters discovery.
-	if discovered, err := discoverTagSources(prefix, regs); len(discovered) > 0 || err == nil {
-		return discovered, err
+	if discovered, err := discoverTagSources(prefix, regs); len(discovered) > 0 {
+		return discovered, nil
+	} else if err != nil {
+		return nil, err
 	}
 
 	// 4. Check already located backing in the consolidated store.
@@ -239,8 +241,11 @@ func ingestContainerWithRetry(match tagSourceMatch) (int, error) {
 	defer cancel()
 
 	locked, err := fl.TryLockContext(ctx, 10*time.Millisecond)
-	if err != nil || !locked {
+	if err != nil {
 		return 0, fmt.Errorf("acquire consolidated store lock for %s: %w", match.container.ID, err)
+	}
+	if !locked {
+		return 0, fmt.Errorf("timed out waiting for consolidated store lock for %s", match.container.ID)
 	}
 	defer func() { _ = fl.Unlock() }()
 
