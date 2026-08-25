@@ -192,6 +192,8 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 			"Searches every project by default; --this-project (with --dir) or --include-path <regex> to scope. " +
 			"Add --json for structured output. A search that finds nothing prints a no-matches note and exits 0 — " +
 			"empty is a valid answer, not an error. Results are raw session history — verify against current state before acting.\n\n" +
+			"Session ids use the durable session catalog for fast exact/prefix lookup when available, then fall back to transcript discovery if the catalog misses; a catalog miss is not itself a failure.\n\n" +
+			"Bare browse normally answers from the consolidated store; use --reindex to bypass it and refresh the selected source indexes before browsing.\n\n" +
 			"Retention: when a source tool purges a transcript (e.g. Claude Code's ~30-day cleanup), rawclaw KEEPS its " +
 			"indexed copy — searchable and readable, labeled as retained history. `rawclaw delete` still removes a " +
 			"session permanently. Set RAWCLAW_RETENTION=mirror to instead drop sessions whose source file is gone. " +
@@ -232,7 +234,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
 	f.BoolVar(&opts.IncludeTools, "include-tools", false, "also match/show tool calls + tool-only hits")
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
-	f.BoolVar(&opts.Reindex, "reindex", false, "force a full re-index before searching")
+	f.BoolVar(&opts.Reindex, "reindex", false, "force a full re-index before searching or browsing")
 	f.BoolVar(&opts.JSON, "json", false, "machine-readable JSON output (for agents/scripts)")
 	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready resume command (claude/codex/agy/goose) for a session id (use the 8-char id from search output)")
 	f.BoolVar(&opts.Stats, "stats", false, "corpus overview (sessions/messages/date span) for this project, or --all for every project")
@@ -580,7 +582,8 @@ func newReadCmd() *cobra.Command {
 		Short: "Read a bounded excerpt around a search ref (--more to widen)",
 		Long: "Read a bounded excerpt around a search ref taken from `rawclaw \"query\"` output.\n\n" +
 			"The ref is <session8>:<uuid8> — copy it from a search hit. The excerpt is whole by default; " +
-			"--budget N caps it, --more widens the window, --around N shifts it — all on the same ref.",
+			"--budget N caps it, --more widens the window, --around N shifts it — all on the same ref.\n\n" +
+			"The excerpt is indexed session history, not a guarantee of the live transcript's current tail; verify current state before acting. Human output adds a freshness note when applicable.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -689,7 +692,8 @@ func newOutlineCmd() *cobra.Command {
 		Use:   "outline <session8>",
 		Short: "Show a session's goal→resolution arc",
 		Long: "Outline a session's arc — its opening goal and closing resolution — to decide where to read next. " +
-			"Takes the 8-char session id from a search hit.",
+			"Takes the 8-char session id from a search hit.\n\n" +
+			"The arc is read from the indexed session record. It may lag a transcript that is still being written; verify current state before acting. A human-rendered result may add a staleness note when the index is behind the source.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
