@@ -101,7 +101,12 @@ func ReadCatalogEntry(path string) (CatalogEntry, error) {
 
 // WriteCatalogEntry writes a catalog entry to dir/<session_id> atomically.
 func WriteCatalogEntry(catalogDir string, entry CatalogEntry) error {
-	if entry.SessionID == "" || strings.ContainsRune(entry.SessionID, os.PathSeparator) || strings.ContainsRune(entry.SessionID, '/') {
+	cleanSessionID := filepath.Clean(entry.SessionID)
+	isDot := cleanSessionID == "."
+	isClean := cleanSessionID == entry.SessionID
+	isFlat := filepath.Base(cleanSessionID) == cleanSessionID
+	isLocal := filepath.IsLocal(cleanSessionID)
+	if isDot || !isClean || !isFlat || !isLocal {
 		return fmt.Errorf("invalid session id: %q", entry.SessionID)
 	}
 	if err := os.MkdirAll(catalogDir, 0o755); err != nil {
