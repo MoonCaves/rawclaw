@@ -91,9 +91,7 @@ func Registered() []Registration {
 // DetectID returns the ID of the first registered source whose Detect matches
 // path, or "" if none do. Used to auto-attribute a path to its runtime.
 func DetectID(path string) string {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	for _, r := range registry {
+	for _, r := range Registered() {
 		if r.Detect != nil && r.Detect(path) {
 			return r.ID
 		}
