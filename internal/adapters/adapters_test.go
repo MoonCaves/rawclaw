@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -531,5 +532,99 @@ func TestHTTPEmbedder_EmbedBatch_FailuresReturnNil(t *testing.T) {
 				t.Fatalf("EmbedBatch = %v, want nil for whole-batch failure", got)
 			}
 		})
+	}
+}
+
+// TestHTTPEmbedder_ContextCancellation verifies that in-flight EmbedWithContext
+// cancels promptly when the caller context is cancelled, without waiting for the full HTTP timeout.
+func TestHTTPEmbedder_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	reqStarted := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(reqStarted)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	e := newTestEmbedder(srv.URL, wireOllama, "", "", 0)
+	e.Timeout = 10 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-reqStarted
+		cancel()
+	}()
+
+	start := time.Now()
+	got := e.EmbedWithContext(ctx, "hello")
+	elapsed := time.Since(start)
+
+	if got != nil {
+		t.Fatalf("EmbedWithContext = %v, want nil on cancellation", got)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("EmbedWithContext took %v, want prompt cancellation < 2s", elapsed)
+	}
+}
+
+// TestHTTPEmbedder_EmbedBatch_ContextCancellation verifies that in-flight EmbedBatchWithContext
+// cancels promptly when the caller context is cancelled.
+func TestHTTPEmbedder_EmbedBatch_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	reqStarted := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(reqStarted)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	e := newTestEmbedder(srv.URL, wireOpenAI, "", "", 0)
+	e.Timeout = 10 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-reqStarted
+		cancel()
+	}()
+
+	start := time.Now()
+	got := e.EmbedBatchWithContext(ctx, []string{"first", "second"})
+	elapsed := time.Since(start)
+
+	if got != nil {
+		t.Fatalf("EmbedBatchWithContext = %v, want nil on cancellation", got)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("EmbedBatchWithContext took %v, want prompt cancellation < 2s", elapsed)
+	}
+}
+
+// TestHTTPEmbedder_ContextPreCanceled verifies that calling EmbedWithContext or
+// EmbedBatchWithContext with an already-canceled context returns nil immediately.
+func TestHTTPEmbedder_ContextPreCanceled(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"embedding":[1,2,3]}`)
+	}))
+	defer srv.Close()
+
+	e := newTestEmbedder(srv.URL, wireOllama, "", "", 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel
+
+	if got := e.EmbedWithContext(ctx, "test"); got != nil {
+		t.Fatalf("EmbedWithContext with pre-canceled context = %v, want nil", got)
+	}
+	if got := e.EmbedBatchWithContext(ctx, []string{"test"}); got != nil {
+		t.Fatalf("EmbedBatchWithContext with pre-canceled context = %v, want nil", got)
+	}
+	if called {
+		t.Fatal("pre-canceled context should not have dispatched HTTP request to server")
 	}
 }
