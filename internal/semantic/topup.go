@@ -116,14 +116,7 @@ func SetSpawnVectorTopup(fn func(string)) {
 // 2. adapters.GetEmbedder() returns nil -> return (unconfigured, zero spawns).
 // 3. AcquireTopupToken(dbp, now) -> rate-limit spawns per store.
 func MaybeVectorTopup(dbp string) {
-	if IsNoVector() {
-		return
-	}
-	emb := adapters.GetEmbedder()
-	if emb == nil {
-		return
-	}
-	if !AcquireTopupToken(dbp, time.Now()) {
+	if IsNoVector() || adapters.GetEmbedder() == nil || !AcquireTopupToken(dbp, time.Now()) {
 		return
 	}
 	spawnMu.RLock()
