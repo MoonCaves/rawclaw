@@ -227,12 +227,12 @@ func TestMigrateScopeColumns_UpgradesInPlace(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("session count = %d after migration, want 2 — the upgrade dropped rows", n)
 	}
-	var stillMissing int
-	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='purged' AND missing_since IS NOT NULL").Scan(&stillMissing); err != nil {
+	var stillOnlyCopy int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='purged' AND only_copy_since IS NOT NULL").Scan(&stillOnlyCopy); err != nil {
 		t.Fatal(err)
 	}
-	if stillMissing != 1 {
-		t.Error("the retained (purged) session lost its missing_since watermark in the upgrade")
+	if stillOnlyCopy != 1 {
+		t.Error("the retained (purged) session lost its only_copy_since watermark in the upgrade")
 	}
 
 	// The live session's file is still readable, so the backfill recovers its

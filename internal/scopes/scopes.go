@@ -121,7 +121,7 @@ func Claude() []view.Scope {
 //
 // liveDBs is the set of db paths already covered by a live project scope; those
 // are skipped so a project is never listed twice. Each candidate is reconciled
-// against an empty live scan (stamping missing_since, deleting tombstoned rows)
+// against an empty live scan (stamping only_copy_since, deleting tombstoned rows)
 // and included only if it still holds >=1 non-tombstoned top-level session — so a
 // db whose only sessions were deleted still reads as deleted. Codex dbs (prefix
 // "codex-") are left to Codex(), which reindexes them from live discovery.
@@ -261,7 +261,7 @@ func RefreshCodexCWD(cwd string) {
 //
 // liveDBs is the set of db paths already covered by a live cwd group this
 // call; those are skipped so a cwd is never listed twice. Each candidate is
-// reconciled against an empty live scan (stamping missing_since, deleting
+// reconciled against an empty live scan (stamping only_copy_since, deleting
 // tombstoned rows) and included only if it still holds >=1 non-tombstoned
 // top-level session — so a db whose only sessions were deleted still reads as
 // deleted.

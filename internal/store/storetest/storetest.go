@@ -139,14 +139,14 @@ func CountTrigramRows(t testing.TB, con *sql.DB, probe string) int {
 // settableSessionFields is the allowlist for SetSessionField — the fixture
 // mutations the durable-retention and provenance tests need.
 var settableSessionFields = map[string]bool{
-	"missing_since":  true,
-	"origin_machine": true,
-	"is_subagent":    true,
-	"source_path":    true,
+	"only_copy_since": true,
+	"origin_machine":  true,
+	"is_subagent":     true,
+	"source_path":     true,
 }
 
 // SetSessionField sets one allowlisted sessions column
-// (missing_since / origin_machine / is_subagent / source_path) on one session.
+// (only_copy_since / origin_machine / is_subagent / source_path) on one session.
 // The column name is allowlisted, never interpolated from arbitrary input.
 func SetSessionField(t testing.TB, con *sql.DB, sid, field string, value any) {
 	t.Helper()

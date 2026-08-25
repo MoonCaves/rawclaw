@@ -374,18 +374,16 @@ func TestFuseEmptyVectorPath(t *testing.T) {
 	}
 }
 
-// TestFuseVectorOnlyCarriesMissingSince is the F1 (D7) guard: a retained-but-
-// missing session (missing_since > 0) matched ONLY by the vector path must keep
-// its missing_since on the synthesized vector-only anchor — so the search
-// envelope can still flag it (SearchRef.Missing = MissingSince > 0) instead of
-// reading a stale session as current. Before the fix, VecKNN never hydrated
-// missing_since and Fuse left it zero on the synthesized anchor.
-func TestFuseVectorOnlyCarriesMissingSince(t *testing.T) {
+// TestFuseVectorOnlyCarriesOnlyCopySince is the F1 (D7) guard: a retained-but-
+// only-copy session (only_copy_since > 0) matched ONLY by the vector path must keep
+// its only_copy_since on the synthesized vector-only anchor — so the search
+// envelope can still flag it (SearchRef.Missing = OnlyCopySince > 0).
+func TestFuseVectorOnlyCarriesOnlyCopySince(t *testing.T) {
 	con := openTestDB(t)
 
-	// A session whose backing file is gone: the row is retained and flagged.
+	// A session whose backing file is deleted upstream: the row is retained and flagged.
 	mVec := addMessage(t, con, "smissing", "user", "vector only retained beacon message", "2026-06-18T10:00:00Z", 0, "")
-	storetest.SetSessionField(t, con, "smissing", "missing_since", 1750000000)
+	storetest.SetSessionField(t, con, "smissing", "only_copy_since", 1750000000)
 
 	emb := fakeEmbedder{vecs: map[string][]float64{
 		"vector only retained beacon message": {1, 0, 0},
@@ -410,10 +408,10 @@ func TestFuseVectorOnlyCarriesMissingSince(t *testing.T) {
 	if got.Cov != 0 {
 		t.Errorf("expected a vector-only (Cov 0) anchor, got Cov=%d", got.Cov)
 	}
-	// The fix: the synthesized vector-only anchor carries missing_since, so the
-	// envelope's `Missing: MissingSince > 0` fires for a vector-only retained hit.
-	if got.MissingSince <= 0 {
-		t.Errorf("vector-only anchor dropped missing_since (got %v) — a retained session would read as current (F1)", got.MissingSince)
+	// The fix: the synthesized vector-only anchor carries only_copy_since, so the
+	// envelope's `Missing: OnlyCopySince > 0` fires for a vector-only retained hit.
+	if got.OnlyCopySince <= 0 {
+		t.Errorf("vector-only anchor dropped only_copy_since (got %v)", got.OnlyCopySince)
 	}
 	// NOTE: the synthesized vector-only anchor has no UUID (VecKNN does not hydrate
 	// m.uuid). agentproto.Search drops uuid-less anchors BEFORE setting Missing, so

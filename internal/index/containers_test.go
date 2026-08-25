@@ -420,13 +420,13 @@ func TestEnsureIndexedContainers_StaleWatermarkDroppedOnRename(t *testing.T) {
 		t.Errorf("file_index path = %q, want %q", fiPath, realpath(f2))
 	}
 
-	// missing_since must NOT be stamped
-	var missing sql.NullFloat64
-	if err := con.QueryRow("SELECT missing_since FROM sessions WHERE id='sess-rename'").Scan(&missing); err != nil {
+	// only_copy_since must NOT be stamped
+	var onlyCopy sql.NullFloat64
+	if err := con.QueryRow("SELECT only_copy_since FROM sessions WHERE id='sess-rename'").Scan(&onlyCopy); err != nil {
 		t.Fatal(err)
 	}
-	if missing.Valid {
-		t.Errorf("missing_since = %v, want NULL (session is live, not missing)", missing.Float64)
+	if onlyCopy.Valid {
+		t.Errorf("only_copy_since = %v, want NULL (session is live, not only copy)", onlyCopy.Float64)
 	}
 }
 

@@ -189,15 +189,15 @@ func TestMessageUUIDAndMeta(t *testing.T) {
 		t.Errorf("MessageUUID(missing) = %q, want empty", got)
 	}
 
-	iso, parent, isSub, missing, ok := store.MessageMeta(con, mid)
-	if !ok || iso != "2026-06-01T10:00:00Z" || parent != "root" || !isSub || missing != 0 {
-		t.Errorf("MessageMeta = (%q,%q,%v,%v,%v), want (iso,root,true,0,true)", iso, parent, isSub, missing, ok)
+	iso, parent, isSub, onlyCopy, ok := store.MessageMeta(con, mid)
+	if !ok || iso != "2026-06-01T10:00:00Z" || parent != "root" || !isSub || onlyCopy != 0 {
+		t.Errorf("MessageMeta = (%q,%q,%v,%v,%v), want (iso,root,true,0,true)", iso, parent, isSub, onlyCopy, ok)
 	}
 
-	// missing_since (durable retention watermark) surfaces through the join.
-	storetest.SetSessionField(t, con, "s", "missing_since", 42.5)
-	if _, _, _, missing, ok := store.MessageMeta(con, mid); !ok || missing != 42.5 {
-		t.Errorf("MessageMeta missing_since = (%v,%v), want (42.5,true)", missing, ok)
+	// only_copy_since (durable retention watermark) surfaces through the join.
+	storetest.SetSessionField(t, con, "s", "only_copy_since", 42.5)
+	if _, _, _, onlyCopy, ok := store.MessageMeta(con, mid); !ok || onlyCopy != 42.5 {
+		t.Errorf("MessageMeta only_copy_since = (%v,%v), want (42.5,true)", onlyCopy, ok)
 	}
 
 	// A churned/gone rowid reads as ok=false.

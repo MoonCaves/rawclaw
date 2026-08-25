@@ -165,7 +165,7 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 		}
 		st.Sessions++
 		st.Messages += len(rows)
-		if v.MissingSince != 0 {
+		if v.OnlyCopySince != 0 {
 			st.Missing++
 		}
 	}
@@ -206,7 +206,7 @@ type restoreSessionParams struct {
 // The watermark is keyed on the ORIGINAL source path, never the vault path.
 // That matters: the next live pass compares file_index paths against the source
 // walk, so a vault-keyed row would read as "source absent" and stamp
-// missing_since on a session that is perfectly alive.
+// only_copy_since on a session that is perfectly alive.
 func restoreSession(con *sql.DB, params restoreSessionParams) error {
 	v := params.session
 	rows := params.rows
@@ -241,9 +241,9 @@ func restoreSession(con *sql.DB, params restoreSessionParams) error {
 	if v.ParentID != "" {
 		parentArg = v.ParentID
 	}
-	var missingArg any
-	if v.MissingSince != 0 {
-		missingArg = v.MissingSince
+	var onlyCopyArg any
+	if v.OnlyCopySince != 0 {
+		onlyCopyArg = v.OnlyCopySince
 	}
 	// The sidecar's scope wins when it has one; a stranded transcript with no
 	// sidecar still yields a scope, because the cwd is recorded in the file.
@@ -260,8 +260,8 @@ func restoreSession(con *sql.DB, params restoreSessionParams) error {
 		sourcePathArg = v.SourcePath
 	}
 	if _, err := tx.Exec(
-		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-		v.ID, started, last, len(rows), b2i(v.IsSubagent), parentArg, originOr(v.Origin), source, sourcePathArg, missingArg, projectArg, cwdArg,
+		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,only_copy_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+		v.ID, started, last, len(rows), b2i(v.IsSubagent), parentArg, originOr(v.Origin), source, sourcePathArg, onlyCopyArg, projectArg, cwdArg,
 	); err != nil {
 		return fmt.Errorf("restore session %s: %w", v.ID, err)
 	}

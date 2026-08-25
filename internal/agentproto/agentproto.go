@@ -606,7 +606,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			ISO:       r.ISO,
 			Snippet:   r.Snip,
 			ReadRef:   fmtRef(r.SessionID, r.UUID),
-			Missing:   r.MissingSince > 0,
+			Missing:   r.OnlyCopySince > 0,
 			Routine:   r.Routine,
 		})
 		picked = append(picked, r)

@@ -165,18 +165,18 @@ func TestClaudeUnionsOrphanedDBs(t *testing.T) {
 		t.Errorf("live project db double-listed as an orphan scope")
 	}
 
-	// The retained orphan was stamped missing_since (own-source, source gone).
+	// The retained orphan was stamped only_copy_since (own-source, source gone).
 	con, err := store.ConnectRO(orphanDBP)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer con.Close()
 	var ms sql.NullFloat64
-	if err := con.QueryRow("SELECT missing_since FROM sessions WHERE id='orphansess'").Scan(&ms); err != nil {
-		t.Fatalf("read orphansess.missing_since: %v", err)
+	if err := con.QueryRow("SELECT only_copy_since FROM sessions WHERE id='orphansess'").Scan(&ms); err != nil {
+		t.Fatalf("read orphansess.only_copy_since: %v", err)
 	}
 	if !ms.Valid || ms.Float64 <= 0 {
-		t.Errorf("orphan session not stamped missing_since, got %+v", ms)
+		t.Errorf("orphan session not stamped only_copy_since, got %+v", ms)
 	}
 }
 

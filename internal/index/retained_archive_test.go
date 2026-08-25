@@ -9,7 +9,7 @@ import (
 )
 
 // newRetainedDB creates an index db at cacheDir/name holding one retained
-// (missing_since set) top-level session with the given id.
+// (only_copy_since set) top-level session with the given id.
 func newRetainedDB(t *testing.T, cacheDir, name, sessionID string) {
 	t.Helper()
 	dbp := filepath.Join(cacheDir, name)
@@ -22,7 +22,7 @@ func newRetainedDB(t *testing.T, cacheDir, name, sessionID string) {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
 	if _, err := con.Exec(
-		`INSERT INTO sessions (id, source_path, message_count, is_subagent, missing_since)
+		`INSERT INTO sessions (id, source_path, message_count, is_subagent, only_copy_since)
 		   VALUES (?, ?, 1, 0, ?)`,
 		sessionID, "/gone/proj/"+sessionID+".jsonl", float64(time.Now().Unix())); err != nil {
 		t.Fatalf("insert retained row: %v", err)

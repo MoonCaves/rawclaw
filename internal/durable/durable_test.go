@@ -182,41 +182,41 @@ func TestSubagentIDNestsAsDirectories(t *testing.T) {
 	}
 }
 
-// TestMissingSinceRoundTrips is the watermark surviving outside the db — the
+// TestOnlyCopySinceRoundTrips is the watermark surviving outside the db — the
 // property that lets a rebuild label a retained session correctly.
-func TestMissingSinceRoundTrips(t *testing.T) {
+func TestOnlyCopySinceRoundTrips(t *testing.T) {
 	isolate(t)
 	if err := StoreMessages(Meta{ID: "s", Source: "claude"}, []model.Message{
 		{Role: "user", Text: "hi", TSISO: "2026-06-01T10:00:00Z"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetMissingSince("s", 1780000000); err != nil {
-		t.Fatalf("SetMissingSince: %v", err)
+	if err := SetOnlyCopySince("s", 1780000000); err != nil {
+		t.Fatalf("SetOnlyCopySince: %v", err)
 	}
 	list, err := List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].MissingSince != 1780000000 {
-		t.Fatalf("MissingSince not persisted: %+v", list)
+	if len(list) != 1 || list[0].OnlyCopySince != 1780000000 {
+		t.Fatalf("OnlyCopySince not persisted: %+v", list)
 	}
-	if err := SetMissingSince("s", 0); err != nil {
-		t.Fatalf("SetMissingSince(clear): %v", err)
+	if err := SetOnlyCopySince("s", 0); err != nil {
+		t.Fatalf("SetOnlyCopySince(clear): %v", err)
 	}
 	list, _ = List()
-	if list[0].MissingSince != 0 {
-		t.Errorf("MissingSince = %v after clear, want 0", list[0].MissingSince)
+	if list[0].OnlyCopySince != 0 {
+		t.Errorf("OnlyCopySince = %v after clear, want 0", list[0].OnlyCopySince)
 	}
 }
 
-// TestSetMissingSinceOnUnvaultedSessionIsNoOp: retention reports ids for
+// TestSetOnlyCopySinceOnUnvaultedSessionIsNoOp: retention reports ids for
 // sessions indexed before the vault existed. Those must not error, and must not
 // conjure a sidecar with no transcript beside it.
-func TestSetMissingSinceOnUnvaultedSessionIsNoOp(t *testing.T) {
+func TestSetOnlyCopySinceOnUnvaultedSessionIsNoOp(t *testing.T) {
 	root := isolate(t)
-	if err := SetMissingSince("never-vaulted", 1780000000); err != nil {
-		t.Fatalf("SetMissingSince on an unvaulted session: %v", err)
+	if err := SetOnlyCopySince("never-vaulted", 1780000000); err != nil {
+		t.Fatalf("SetOnlyCopySince on an unvaulted session: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "never-vaulted.meta.json")); !os.IsNotExist(err) {
 		t.Errorf("a sidecar was written with no transcript beside it (err=%v)", err)
@@ -318,7 +318,7 @@ func TestStoreFileClearsStaleMissingFlagOnSkip(t *testing.T) {
 	if err := StoreFile(m, src); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetMissingSince("s", 1780000000); err != nil {
+	if err := SetOnlyCopySince("s", 1780000000); err != nil {
 		t.Fatal(err)
 	}
 
@@ -332,8 +332,8 @@ func TestStoreFileClearsStaleMissingFlagOnSkip(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("List = %+v, want one entry", list)
 	}
-	if list[0].MissingSince != 0 {
-		t.Errorf("MissingSince = %v after re-indexing a present file, want 0", list[0].MissingSince)
+	if list[0].OnlyCopySince != 0 {
+		t.Errorf("OnlyCopySince = %v after re-indexing a present file, want 0", list[0].OnlyCopySince)
 	}
 }
 
@@ -369,5 +369,18 @@ func TestListOnMissingRootIsEmpty(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Errorf("List = %+v, want empty", list)
+	}
+}
+
+// TestLegacyMetaMissingSinceDecodes asserts that sidecars written with the old
+// missing_since JSON key decode into OnlyCopySince seamlessly.
+func TestLegacyMetaMissingSinceDecodes(t *testing.T) {
+	raw := []byte(`{"id":"s","source":"claude","missing_since":1780000000}`)
+	var m Meta
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if m.OnlyCopySince != 1780000000 {
+		t.Errorf("OnlyCopySince = %v, want 1780000000", m.OnlyCopySince)
 	}
 }

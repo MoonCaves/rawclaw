@@ -2,7 +2,7 @@
 //
 // lifecycle.Delete's matchSessions walks the live projects tree only — it can
 // never see a row whose backing .jsonl the source tool already purged. That is
-// exactly the row set durable retention creates (missing_since set, content
+// exactly the row set durable retention creates (only_copy_since set, content
 // still indexed), so without this the feature's own contract — "explicit
 // delete is the ONLY way retained history dies" — was unreachable in practice
 // (live-verified: `delete --project <purged>` reported "no
@@ -34,7 +34,7 @@ type RetainedSession struct {
 	MessageCount int
 }
 
-// RetainedMatches enumerates every RETAINED top-level session (missing_since
+// RetainedMatches enumerates every RETAINED top-level session (only_copy_since
 // IS NOT NULL, is_subagent=0) across every index db under cacheDir, applying
 // the same filter semantics lifecycle.DeleteOpts uses so a delete plan can
 // union live matches with retained ones. cacheDir defaults to store.CacheDir() when
@@ -76,7 +76,7 @@ func RetainedMatches(cacheDir string, project string, before time.Time, maxMessa
 		// Archive-replica dbs (the "archive-" namespace, same predicate the
 		// orphan scan uses) hold FOREIGN machines' sessions — read-only
 		// replicas that must never enter the delete/tombstone path, even if
-		// a row in one ever carried a stray missing_since.
+		// a row in one ever carried a stray only_copy_since.
 		if strings.HasPrefix(filepath.Base(dbp), ArchiveDBPrefix) {
 			continue
 		}
@@ -107,7 +107,7 @@ func retainedInDB(dbp, project string, before time.Time, maxMessages int, sessio
 
 	rows, err := con.Query(
 		`SELECT id, source_path, last_ts, message_count FROM sessions
-		   WHERE missing_since IS NOT NULL AND is_subagent=0`)
+		   WHERE only_copy_since IS NOT NULL AND is_subagent=0`)
 	if err != nil {
 		return nil, fmt.Errorf("query retained %q: %w", dbp, err)
 	}
