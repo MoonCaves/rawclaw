@@ -667,3 +667,56 @@ func TestRunTagPrepCmdGooseOptedOutServesIndexedCopy(t *testing.T) {
 		t.Fatalf("output refreshed opted-out goose session:\n%s", out.String())
 	}
 }
+
+// TestRunTagPrepCmd_NonBusyFoldFailureIsReportedNotSwallowed proves a fold
+// error that is NOT store-contention (index.IsBusy) still surfaces on
+// stderr instead of vanishing silently — the dump itself already succeeded
+// and stdout is honest, but a genuine fold failure (as opposed to the
+// expected "try again later" busy case) must not print nothing.
+func TestRunTagPrepCmd_NonBusyFoldFailureIsReportedNotSwallowed(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+
+	projDir := filepath.Join(configDir, "projects", "-foldfail-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir projDir: %v", err)
+	}
+
+	const fullSID = "foldfail-session-uuid"
+	transcriptPath := filepath.Join(projDir, fullSID+".jsonl")
+	transcriptContent := `{"type":"user","uuid":"77778888-uuid","timestamp":"2026-08-25T10:00:00Z","message":{"role":"user","content":"fold failure message"}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	// Make the consolidated store path a DIRECTORY: a real, unmocked way to
+	// force store.ConnectRW(ConsolidatedPath()) to fail with something that is
+	// neither a SQLite busy/locked string nor a fence-timeout — a genuine
+	// non-busy fold error.
+	consolidatedPath := index.ConsolidatedPath()
+	if err := os.MkdirAll(consolidatedPath, 0o755); err != nil {
+		t.Fatalf("mkdir consolidatedPath (as a directory, not a file): %v", err)
+	}
+
+	var errOut strings.Builder
+	oldStderr := tagPrepStderr
+	tagPrepStderr = &errOut
+	defer func() { tagPrepStderr = oldStderr }()
+
+	var out strings.Builder
+	if err := runTagPrepCmd(&out, "foldfa", nil, nil); err != nil {
+		t.Fatalf("runTagPrepCmd failed, want exit 0 (the dump itself must still succeed): %v", err)
+	}
+
+	if !strings.Contains(out.String(), "77778888 [user] fold failure message") {
+		t.Fatalf("dump missing message; got:\n%s", out.String())
+	}
+
+	if strings.Contains(errOut.String(), "fold deferred (store busy)") {
+		t.Fatalf("stderr wrongly reported a busy-deferral for a non-busy error:\n%s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "fold failed") {
+		t.Fatalf("stderr = %q, want a non-silent \"fold failed\" note for the non-busy error", errOut.String())
+	}
+}

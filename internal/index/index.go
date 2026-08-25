@@ -4,6 +4,7 @@
 package index
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1235,10 +1236,16 @@ func ensureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions
 	return nSessions, IndexFresh, nil
 }
 
-// isBusy reports whether err is a SQLite busy/locked condition.
+// isBusy reports whether err is a SQLite busy/locked condition, OR a
+// consolidated-store fence wait that timed out (AcquireConsolidatedFence
+// wraps context.DeadlineExceeded) — both mean "the store is contended right
+// now," and callers on this path treat them identically: fall back / defer.
 func isBusy(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "database is locked") ||
