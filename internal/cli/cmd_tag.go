@@ -302,7 +302,12 @@ func uuid8(u string) string {
 // vis.gapAt is visibleMessages' bookend boundary (-1 if none): a segment
 // starting before it never gets an end past it, even if the subagent's
 // segments imply otherwise — a bookended dump's dropped middle can never be
-// silently claimed by whatever topic was open on either side of it.
+// silently claimed by whatever topic was open on either side of it. And a
+// bookended dump with a real tail (gapAt < len(msgs)) REQUIRES at least one
+// segment starting at or after the gap: a lazy single segment covering "the
+// whole thing" is rejected outright, rather than accepted-but-clamped. A
+// session never gets left half-labeled — either it's tagged properly on both
+// sides of the gap, or tag-write errors and the subagent tries again.
 //
 // Returns the number of rows written.
 func writeSegments(con *sql.DB, fullSID string, vis visibleSet, segs []rawSegment, taggedAt float64) (int, error) {
@@ -315,6 +320,7 @@ func writeSegments(con *sql.DB, fullSID string, vis visibleSet, segs []rawSegmen
 	// First pass: validate each row and resolve its start_uuid → message index, so
 	// the end-boundary computation can look at the next segment's resolved index.
 	startIdx := make([]int, len(segs))
+	coversTail := false
 	for i, seg := range segs {
 		if strings.TrimSpace(seg.StartUUID) == "" {
 			return 0, fmt.Errorf("segment %d: missing start_uuid", i)
@@ -327,6 +333,13 @@ func writeSegments(con *sql.DB, fullSID string, vis visibleSet, segs []rawSegmen
 			return 0, fmt.Errorf("segment %d: %w", i, err)
 		}
 		startIdx[i] = idx
+		if idx >= gapAt {
+			coversTail = true
+		}
+	}
+	if gapAt >= 0 && gapAt < len(msgs) && !coversTail {
+		return 0, fmt.Errorf("dump was bookended (middle omitted) but no segment starts at or after "+
+			"the tail shown in the dump — segments must cover BOTH sides of the gap, not just the head")
 	}
 
 	out := make([]store.TopicSegment, len(segs))

@@ -168,23 +168,42 @@ func TestRunTagWriteRespectsBookendGap(t *testing.T) {
 		addBookendFixture(t, con, sid)
 		defer setBookendCap(t)()
 
+		// A single segment covering only the head, with nothing for the tail, must
+		// be REJECTED outright — not accepted-but-clamped. A session never gets
+		// left half-labeled: tag-write errors, and the subagent has to retry with
+		// segments on both sides of the gap.
 		jsonIn := `[{"start_uuid":"11111111","topic":"whole session","summary":"ignored the gap note"}]`
+		_, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0)
+		if err == nil {
+			t.Fatal("expected an error: a bookended dump requires segments on both sides of the gap")
+		}
+		if !strings.Contains(err.Error(), "BOTH sides") {
+			t.Errorf("error = %q, want a message about covering both sides of the gap", err)
+		}
+		if segs, _ := store.TopicsForSession(con, sid); len(segs) != 0 {
+			t.Errorf("rejected write left %d segments stored, want 0 (nothing half-labeled)", len(segs))
+		}
+	})
+
+	t.Run("well-behaved: the dropped middle reads back as genuinely untagged", func(t *testing.T) {
+		con := newTagTestDB(t)
+		sid := "sess-bookend-4"
+		addBookendFixture(t, con, sid)
+		defer setBookendCap(t)()
+
+		jsonIn := `[
+			{"start_uuid":"11111111","topic":"setup","summary":"head"},
+			{"start_uuid":"44444444","topic":"conclusion","summary":"tail"}
+		]`
 		if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0); err != nil {
 			t.Fatalf("runTagWrite: %v", err)
 		}
-		segs, err := store.TopicsForSession(con, sid)
-		if err != nil {
-			t.Fatalf("TopicsForSession: %v", err)
-		}
-		if len(segs) != 1 {
-			t.Fatalf("stored %d segments, want 1", len(segs))
-		}
-		// The bug this guards against: without the clamp, this would resolve to
-		// "44444444-dddd" (the last shown message), silently claiming the dropped
-		// middle (and the untouched tail) under one topic the subagent never saw.
-		if segs[0].EndUUID != "11111111-aaaa" {
-			t.Errorf("end_uuid = %q, want 11111111-aaaa (clamped before the gap) — "+
-				"a single segment claimed coverage across the dropped middle", segs[0].EndUUID)
+		// Message 2 was in the dropped middle — never shown to the subagent, never
+		// covered by either stored segment. It must come back as genuinely
+		// untagged, not silently inherit "setup" or "conclusion" via a
+		// single-segment fallback meant for ordinary, non-bookended sessions.
+		if topic := store.TopicForMessage(con, sid, "22222222-bbbb"); topic != "" {
+			t.Errorf("TopicForMessage(dropped-middle message) = %q, want \"\" (untagged)", topic)
 		}
 	})
 }
