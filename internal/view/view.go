@@ -292,10 +292,7 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 	}
 	bookendEnd := TakeDisplayableTailWith(rev, opts.Bookend, opts.IncludeTools, opts.IncludeThinking, dispCap)
 
-	messagesBefore := len(before) - 1
-	if messagesBefore < 0 {
-		messagesBefore = 0
-	}
+	messagesBefore := max(0, len(before)-1)
 	return &AnchoredView{
 		BookendStart:   bookendStart,
 		Window:         wmsgs,
