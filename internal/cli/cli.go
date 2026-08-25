@@ -1609,22 +1609,28 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		staleNote  string
 	)
 
-	// An explicit --reindex, explicit --dir, or --this-project refreshes the targeted project.
-	// Default cross-project search answers first from the consolidated store and never blocks on indexing.
+	// An explicit --reindex, explicit --dir, or --this-project refreshes the targeted
+	// project. Default search is gated by the O(1) per-project freshness check: fresh
+	// skips discovery entirely; stale or UNKNOWN refreshes the current project
+	// synchronously — search must never miss the conversation happening right now.
+	// indexStale/staleNote stay unset on this path: the answer-first stale-note
+	// machinery belongs to the other read verbs, where a targeted refresh isn't possible.
 	if o.Reindex || o.DirSet || o.ThisProject {
 		refreshThisProject(o)
 	} else {
+		td := resolveTDir(o.Dir, o.DirSet)
+		projLabel := ""
+		if td != "" {
+			projLabel = paths.ProjectLabel(td)
+		}
 		if con, _, err := index.OpenConsolidated(); err == nil {
-			freshness, fErr := index.CheckIndexFreshness(con)
+			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td)
 			_ = con.Close()
-			if fErr == nil && !freshness.Fresh {
-				indexStale = true
-				if maybeSpawnIngest("") {
-					staleNote = "sessions not yet ingested — background ingest triggered"
-				} else {
-					staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
-				}
+			if fErr != nil || !freshness.Fresh {
+				refreshThisProject(o)
 			}
+		} else {
+			refreshThisProject(o)
 		}
 	}
 

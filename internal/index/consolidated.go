@@ -366,6 +366,9 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return st, fmt.Errorf("ensure consolidated schema: %w", err)
 	}
+	if err := healUpgradedConsolidatedStore(con); err != nil {
+		slog.Debug("heal upgraded store failed", "err", err)
+	}
 	// The topic layer is gated separately from the keyword schema, so it has to
 	// be asked for explicitly. Creating it unconditionally means a topic query
 	// against the one store can answer "nothing is tagged yet" instead of
@@ -426,6 +429,9 @@ func SyncConsolidatedFrom(srcPath string) error {
 	defer con.Close()
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return fmt.Errorf("ensure consolidated schema: %w", err)
+	}
+	if err := healUpgradedConsolidatedStore(con); err != nil {
+		slog.Debug("heal upgraded store failed", "err", err)
 	}
 	if err := store.EnsureTopicSchema(con); err != nil {
 		return fmt.Errorf("ensure consolidated topic schema: %w", err)
@@ -805,6 +811,32 @@ func StampIngestWatermark(con *sql.DB) error {
 	return nil
 }
 
+// healUpgradedConsolidatedStore checks if the consolidated store was upgraded from an
+// older schema where session_sources or file_index were not populated. If sessions exist
+// but session_sources is empty, it invalidates the fold-in watermarks (deleting sync: keys)
+// to force a full re-fold that populates session_sources and file_index.
+func healUpgradedConsolidatedStore(con *sql.DB) error {
+	var (
+		nSessions int
+		nSources  int
+	)
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&nSessions); err != nil {
+		return err
+	}
+	if nSessions == 0 {
+		return nil
+	}
+	if err := con.QueryRow("SELECT COUNT(*) FROM session_sources").Scan(&nSources); err != nil {
+		return err
+	}
+	if nSources == 0 {
+		if _, err := con.Exec("DELETE FROM meta WHERE key LIKE 'sync:%'"); err != nil {
+			return fmt.Errorf("invalidate fold-in watermarks: %w", err)
+		}
+	}
+	return nil
+}
+
 // IndexFreshness reports the result of the O(1) index-level freshness check.
 type IndexFreshness struct {
 	Fresh  bool
@@ -830,8 +862,8 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 	st, err := os.Stat(catDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Catalog does not exist on disk yet; if we have an ingest watermark, index is current.
-			return IndexFreshness{Fresh: true}, nil
+			// Catalog does not exist on disk (hooks absent); missing signal must report not fresh.
+			return IndexFreshness{Fresh: false, Reason: "catalog_dir_missing"}, nil
 		}
 		return IndexFreshness{Fresh: false, Reason: "catalog_stat_failed"}, nil
 	}
@@ -854,6 +886,75 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 				return IndexFreshness{Fresh: false, Reason: "catalog_newer_than_ingest"}, nil
 			}
 			return IndexFreshness{Fresh: true}, nil
+		}
+	}
+
+	return IndexFreshness{Fresh: true}, nil
+}
+
+// CheckProjectFreshness checks whether a specific project's transcript files have changed
+// since they were last indexed into the consolidated store.
+// Missing signal (e.g. hooks absent, unindexed transcripts, or missing watermarks) reports Fresh: false.
+func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string) (IndexFreshness, error) {
+	if con == nil {
+		return IndexFreshness{Fresh: false, Reason: "no_connection"}, nil
+	}
+	globalFresh, err := CheckIndexFreshness(con)
+	if err != nil || !globalFresh.Fresh {
+		return globalFresh, err
+	}
+	if tdir == "" {
+		return IndexFreshness{Fresh: true}, nil
+	}
+	_, err = os.Stat(tdir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return IndexFreshness{Fresh: true}, nil
+		}
+		return IndexFreshness{Fresh: false, Reason: "stat_tdir_failed"}, nil
+	}
+
+	rows, err := con.Query(`
+		SELECT path, mtime, size, fp
+		FROM file_index
+		WHERE session_id IN (SELECT id FROM sessions WHERE project = ?)
+		   OR path LIKE ?
+	`, projectLabel, tdir+"/%")
+	if err != nil {
+		return IndexFreshness{Fresh: false, Reason: "query_file_index_failed"}, err
+	}
+	defer rows.Close()
+
+	nRows := 0
+	for rows.Next() {
+		nRows++
+		var (
+			p  string
+			mt float64
+			sz int64
+			fp string
+		)
+		if err := rows.Scan(&p, &mt, &sz, &fp); err != nil {
+			return IndexFreshness{Fresh: false, Reason: "scan_file_index_failed"}, err
+		}
+		rawPath := backingFilePath(p)
+		curMTime, curSize, curFP, statErr := backingFileState(rawPath)
+		if statErr != nil {
+			return IndexFreshness{Fresh: false, Reason: "transcript_stat_changed"}, nil
+		}
+		if absDiff(mt, curMTime) >= 0.001 || sz != curSize || (fp != "" && fp != curFP) {
+			return IndexFreshness{Fresh: false, Reason: "transcript_content_changed"}, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return IndexFreshness{Fresh: false, Reason: "iterate_file_index_failed"}, err
+	}
+	if nRows == 0 {
+		entries, _ := os.ReadDir(tdir)
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+				return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+			}
 		}
 	}
 
@@ -893,9 +994,12 @@ func CheckSessionFreshness(con *sql.DB, sessionID string) (SessionFreshness, err
 	err := con.QueryRow(`
 		SELECT s.id, s.source_path, s.missing_since, f.mtime, f.size, f.fp
 		FROM sessions s
-		LEFT JOIN file_index f ON (f.session_id = s.id OR f.path = s.source_path)
+		LEFT JOIN file_index f ON (
+			f.path = s.source_path
+			OR (instr(s.source_path, '#') > 0 AND f.path = substr(s.source_path, 1, instr(s.source_path, '#') - 1))
+		)
 		WHERE s.id = ? OR s.id LIKE ?
-		ORDER BY (s.id = ?) DESC, LENGTH(s.id) ASC
+		ORDER BY (s.id = ?) DESC, (f.path = s.source_path) DESC, LENGTH(s.id) ASC
 		LIMIT 1
 	`, sessionID, sessionID+"%", sessionID).Scan(&fullID, &sourcePath, &missingSince, &mtime, &size, &fp)
 
@@ -925,6 +1029,10 @@ func CheckSessionFreshness(con *sql.DB, sessionID string) (SessionFreshness, err
 	}
 
 	rawPath := backingFilePath(sourcePath.String)
+	if (!mtime.Valid || !size.Valid) && rawPath != "" {
+		_ = con.QueryRow("SELECT mtime, size, fp FROM file_index WHERE path = ? OR path = ? LIMIT 1", rawPath, sourcePath.String).Scan(&mtime, &size, &fp)
+	}
+
 	curMTime, curSize, curFP, statErr := backingFileState(rawPath)
 	if statErr != nil {
 		if os.IsNotExist(statErr) {
