@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -345,7 +347,7 @@ func TestCLIJourney_AntigravityTranscriptRename(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "rotate jwt")
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", workDir, "--json", "rotate jwt")
 	if err != nil {
 		t.Fatalf("initial search failed: %v\nout: %s", err, out)
 	}
@@ -367,8 +369,9 @@ func TestCLIJourney_AntigravityTranscriptRename(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 3. Re-index and search: the session must remain searchable
-	outAfter, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--reindex", "--json", "rotate jwt")
+	// 3. Search without --reindex: the database carries forward, incremental index
+	// picks up transcript_full.jsonl, and the session must remain searchable.
+	outAfter, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", workDir, "--json", "rotate jwt")
 	if err != nil {
 		t.Fatalf("search after rename failed: %v\nout: %s", err, outAfter)
 	}
@@ -379,9 +382,12 @@ func TestCLIJourney_AntigravityTranscriptRename(t *testing.T) {
 	if envAfter.Count < 1 || len(envAfter.Results) == 0 || envAfter.Results[0].SessionID != sessID {
 		t.Fatalf("session %s not found in search after file rename: %+v; out: %s", sessID, envAfter, outAfter)
 	}
+	if envAfter.Results[0].Missing {
+		t.Errorf("session %s flagged as missing after rename (stale watermark not dropped)", sessID)
+	}
 
 	// 4. Verify incremental search finds newly appended turn from transcript_full.jsonl
-	outFull, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "validate signature")
+	outFull, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", workDir, "--json", "validate signature")
 	if err != nil {
 		t.Fatalf("search full turn failed: %v\nout: %s", err, outFull)
 	}
@@ -391,5 +397,47 @@ func TestCLIJourney_AntigravityTranscriptRename(t *testing.T) {
 	}
 	if envFull.Count < 1 || len(envFull.Results) == 0 || envFull.Results[0].SessionID != sessID {
 		t.Fatalf("session %s turn not found in search: %+v; out: %s", sessID, envFull, outFull)
+	}
+	if envFull.Results[0].Missing {
+		t.Errorf("session %s flagged as missing after append (stale watermark not dropped)", sessID)
+	}
+
+	// 5. Verify database dropped the stale transcript.jsonl watermark:
+	// exactly 1 file_index row pointing to transcript_full.jsonl and missing_since is NULL.
+	dbs, err := index.PerProjectDBs()
+	if err != nil {
+		t.Fatalf("list per-project DBs: %v", err)
+	}
+	if len(dbs) == 0 {
+		t.Fatalf("expected per-project DB in cache")
+	}
+	pcon, err := store.ConnectRO(dbs[0])
+	if err != nil {
+		t.Fatalf("open per-project DB %s: %v", dbs[0], err)
+	}
+	defer pcon.Close()
+
+	var fiCount int
+	if err := pcon.QueryRow("SELECT COUNT(*) FROM file_index WHERE session_id=?", sessID).Scan(&fiCount); err != nil {
+		t.Fatalf("query file_index count: %v", err)
+	}
+	if fiCount != 1 {
+		t.Errorf("file_index row count for %s = %d, want 1", sessID, fiCount)
+	}
+
+	var fiPath string
+	if err := pcon.QueryRow("SELECT path FROM file_index WHERE session_id=?", sessID).Scan(&fiPath); err != nil {
+		t.Fatalf("query file_index path: %v", err)
+	}
+	if fiPath != realpathExpand(transFullPath) {
+		t.Errorf("file_index path = %q, want %q", fiPath, realpathExpand(transFullPath))
+	}
+
+	var missing sql.NullFloat64
+	if err := pcon.QueryRow("SELECT missing_since FROM sessions WHERE id=?", sessID).Scan(&missing); err != nil {
+		t.Fatalf("query missing_since: %v", err)
+	}
+	if missing.Valid {
+		t.Errorf("missing_since = %v, want NULL (session is live, not missing)", missing.Float64)
 	}
 }
