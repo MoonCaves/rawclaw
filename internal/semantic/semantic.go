@@ -103,6 +103,9 @@ type embedItem struct {
 // vector committed before cancellation stays committed — the pass is
 // resumable, so a cancelled run costs only the batch in flight.
 func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew int) (added int, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	if err := store.EnsureVecSchema(con); err != nil {
 		return 0, err
 	}
