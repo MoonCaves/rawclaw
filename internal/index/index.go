@@ -1068,8 +1068,10 @@ func loadFileIndex(con *sql.DB) (map[string]fileMeta, error) {
 type IndexStatus int
 
 const (
+	// IndexStatusUnknown: uninitialised or indeterminate status (e.g. error returned).
+	IndexStatusUnknown IndexStatus = iota
 	// IndexFresh: the index was built/updated this call (the result is current).
-	IndexFresh IndexStatus = iota
+	IndexFresh
 	// IndexStale: a busy/lock collision forced a fall-back to the EXISTING
 	// (possibly out-of-date) cached index — the result may be incomplete.
 	IndexStale
@@ -1154,19 +1156,19 @@ func ensureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
+		return 0, IndexStatusUnknown, fmt.Errorf("ensure schema: %w", err)
 	}
 	if err := updateIndexWithOrigin(con, tdir, origin); err != nil {
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return 0, IndexFresh, fmt.Errorf("update index: %w", err)
+		return 0, IndexStatusUnknown, fmt.Errorf("update index: %w", err)
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&nSessions); err != nil {
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return 0, IndexFresh, fmt.Errorf("count sessions: %w", err)
+		return 0, IndexStatusUnknown, fmt.Errorf("count sessions: %w", err)
 	}
 	return nSessions, IndexFresh, nil
 }
