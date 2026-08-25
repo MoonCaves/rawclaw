@@ -95,7 +95,7 @@ func TestIncrementalTagging_CloseoutGrowCloseout(t *testing.T) {
 		{"start_uuid":"11111111","topic":"setup","summary":"first half"},
 		{"start_uuid":"33333333","topic":"execution","summary":"second half"}
 	]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(pass1JSON), 10.0); err != nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(pass1JSON), 10.0, false); err != nil {
 		t.Fatalf("pass 1 runTagWrite: %v", err)
 	}
 
@@ -126,7 +126,7 @@ func TestIncrementalTagging_CloseoutGrowCloseout(t *testing.T) {
 
 	// Write pass 2
 	pass2JSON := `[{"start_uuid":"55555555","topic":"closeout","summary":"final part"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(pass2JSON), 20.0); err != nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(pass2JSON), 20.0, false); err != nil {
 		t.Fatalf("pass 2 runTagWrite: %v", err)
 	}
 
@@ -189,7 +189,7 @@ func TestIncrementalTagging_RerunMarker(t *testing.T) {
 
 	// Write pass 1
 	json1 := `[{"start_uuid":"11111111","topic":"chunk1","summary":"first two"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(json1), 1.0); err != nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(json1), 1.0, false); err != nil {
 		t.Fatalf("pass 1 runTagWrite: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestIncrementalTagging_RerunMarker(t *testing.T) {
 
 	// Write pass 2
 	json2 := `[{"start_uuid":"33333333","topic":"chunk2","summary":"second two"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(json2), 2.0); err != nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(json2), 2.0, false); err != nil {
 		t.Fatalf("pass 2 runTagWrite: %v", err)
 	}
 
@@ -229,72 +229,6 @@ func TestIncrementalTagging_RerunMarker(t *testing.T) {
 	}
 }
 
-// TestRunTagWrite_PreservesNonOverlappingPriorSegments verifies that tag-write
-// only replaces overlapping segments and preserves non-overlapping prior ones.
-func TestRunTagWrite_PreservesNonOverlappingPriorSegments(t *testing.T) {
-	con := newTagTestDB(t)
-	sid := "sess-preserve-1"
-	addMsg(t, con, sid, "user", "one", "11111111-aaaa")
-	addMsg(t, con, sid, "user", "two", "22222222-bbbb")
-	addMsg(t, con, sid, "user", "three", "33333333-cccc")
-	addMsg(t, con, sid, "user", "four", "44444444-dddd")
-	addMsg(t, con, sid, "user", "five", "55555555-eeee")
-	addMsg(t, con, sid, "user", "six", "66666666-ffff")
-	addMsg(t, con, sid, "user", "seven", "77777777-gggg")
-	addMsg(t, con, sid, "user", "eight", "88888888-hhhh")
-
-	// Seed segment 1 (1..3) and segment 3 (7..8). Messages 4..6 are an interior untagged hole.
-	if err := store.UpsertTopicSegment(con, sid, "11111111-aaaa", "33333333-cccc", "opening", "first 3", 10.0); err != nil {
-		t.Fatalf("seed seg 1: %v", err)
-	}
-	if err := store.UpsertTopicSegment(con, sid, "77777777-gggg", "88888888-hhhh", "closing", "last 2", 10.0); err != nil {
-		t.Fatalf("seed seg 3: %v", err)
-	}
-
-	// Tag-prep should dump only the interior hole (44444444..66666666)
-	var dump strings.Builder
-	if err := runTagPrep(&dump, con, sid); err != nil {
-		t.Fatalf("runTagPrep: %v", err)
-	}
-	out := dump.String()
-	if !strings.Contains(out, "44444444") || !strings.Contains(out, "66666666") {
-		t.Errorf("dump missing interior hole (4..6); got:\n%s", out)
-	}
-	if strings.Contains(out, "11111111") || strings.Contains(out, "88888888") {
-		t.Errorf("dump should not contain already-tagged 1..3 or 7..8; got:\n%s", out)
-	}
-	if !strings.Contains(out, `# previous topic: "opening" (ended at 33333333)`) {
-		t.Errorf("dump missing previous topic context; got:\n%s", out)
-	}
-
-	// Tag-write for the interior hole
-	jsonIn := `[{"start_uuid":"44444444","topic":"middle","summary":"interior hole filled"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 20.0); err != nil {
-		t.Fatalf("runTagWrite: %v", err)
-	}
-
-	segs, err := store.TopicsForSession(con, sid)
-	if err != nil {
-		t.Fatalf("TopicsForSession: %v", err)
-	}
-	if len(segs) != 3 {
-		t.Fatalf("stored %d segments, want 3", len(segs))
-	}
-	segByTopic := make(map[string]store.TopicSegment)
-	for _, s := range segs {
-		segByTopic[s.Topic] = s
-	}
-	if s, ok := segByTopic["opening"]; !ok || s.StartUUID != "11111111-aaaa" || s.EndUUID != "33333333-cccc" {
-		t.Errorf("seg opening = %+v, want 1..3", s)
-	}
-	if s, ok := segByTopic["middle"]; !ok || s.StartUUID != "44444444-dddd" || s.EndUUID != "66666666-ffff" {
-		t.Errorf("seg middle = %+v, want 4..6", s)
-	}
-	if s, ok := segByTopic["closing"]; !ok || s.StartUUID != "77777777-gggg" || s.EndUUID != "88888888-hhhh" {
-		t.Errorf("seg closing = %+v, want 7..8", s)
-	}
-}
-
 // TestRunTagPrep_FullyTaggedIsNoOp verifies that running tag-prep on a fully tagged
 // session outputs a no-op notice and exits with no error.
 func TestRunTagPrep_FullyTaggedIsNoOp(t *testing.T) {
@@ -304,7 +238,7 @@ func TestRunTagPrep_FullyTaggedIsNoOp(t *testing.T) {
 	addMsg(t, con, sid, "user", "bravo", "22222222-bbbb")
 
 	jsonIn := `[{"start_uuid":"11111111","topic":"full","summary":"all"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0); err != nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0, false); err != nil {
 		t.Fatalf("runTagWrite: %v", err)
 	}
 
@@ -320,58 +254,46 @@ func TestRunTagPrep_FullyTaggedIsNoOp(t *testing.T) {
 	}
 }
 
-// TestRunTagWrite_ClampsToDumpedRangesAndValidatesMultiRange tests clamping and
-// validation when a dump contains multiple disjoint ranges.
-func TestRunTagWrite_ClampsToDumpedRangesAndValidatesMultiRange(t *testing.T) {
+// TestRunTagWrite_RejectsSegmentOutsideWindow verifies that tag-write validates
+// every incoming segment lies within the declared untagged window [start, end]
+// and rejects the write otherwise.
+func TestRunTagWrite_RejectsSegmentOutsideWindow(t *testing.T) {
 	con := newTagTestDB(t)
-	sid := "sess-clamp-1"
-	addMsg(t, con, sid, "user", "alpha", "11111111-aaaa")
-	addMsg(t, con, sid, "user", "bravo", "22222222-bbbb")
-	addMsg(t, con, sid, "user", "charl", "33333333-cccc")
-	addMsg(t, con, sid, "user", "delta", "44444444-dddd")
-	addMsg(t, con, sid, "user", "echo", "55555555-eeee")
-	addMsg(t, con, sid, "user", "foxtrot", "66666666-ffff")
+	sid := "sess-window-val-1"
+	// 1. Initial 2 messages, tagged in pass 1
+	addMsg(t, con, sid, "user", "one", "11111111-aaaa")
+	addMsg(t, con, sid, "user", "two", "22222222-bbbb")
 
-	// Seed existing segment covering messages 3..4 (33333333..44444444)
-	if err := store.UpsertTopicSegment(con, sid, "33333333-cccc", "44444444-dddd", "existing middle", "summary", 10.0); err != nil {
-		t.Fatalf("seed middle: %v", err)
+	pass1 := `[{"start_uuid":"11111111","topic":"head","summary":"first two"}]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(pass1), 1.0, false); err != nil {
+		t.Fatalf("pass 1 write: %v", err)
 	}
 
-	// Untagged ranges are [0, 1] (11111111..22222222) and [4, 5] (55555555..66666666).
-	// Submitting a single segment starting at 11111111 that ignores the tail range must fail.
-	lazyJSON := `[{"start_uuid":"11111111","topic":"head only","summary":"s"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(lazyJSON), 20.0); err == nil {
-		t.Fatal("expected error when segments fail to cover all ranges in multi-range dump")
+	// 2. Grow session with 2 more messages [3..4]
+	addMsg(t, con, sid, "user", "three", "33333333-cccc")
+	addMsg(t, con, sid, "user", "four", "44444444-dddd")
+
+	// 2. Untagged window is now [3..4] (33333333..44444444).
+	// Submitting a segment starting at 11111111 (outside window) must be rejected!
+	outOfWindowJSON := `[{"start_uuid":"11111111","topic":"bad","summary":"outside window"}]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(outOfWindowJSON), 2.0, false); err == nil {
+		t.Fatal("expected error when segment start_uuid is outside untagged window")
+	} else if !strings.Contains(err.Error(), "outside window") {
+		t.Errorf("expected 'outside window' error, got: %v", err)
 	}
 
-	// Submitting segments for both ranges should succeed and clamp segment 1 to 22222222-bbbb
-	validJSON := `[
-		{"start_uuid":"11111111","topic":"head","summary":"s1"},
-		{"start_uuid":"55555555","topic":"tail","summary":"s2"}
-	]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(validJSON), 20.0); err != nil {
-		t.Fatalf("runTagWrite with valid segments: %v", err)
+	// 3. Submitting valid segment for window [3..4] succeeds
+	validJSON := `[{"start_uuid":"33333333","topic":"tail","summary":"last two"}]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(validJSON), 2.0, false); err != nil {
+		t.Fatalf("valid window write failed: %v", err)
 	}
 
-	segs, err := store.TopicsForSession(con, sid)
-	if err != nil {
-		t.Fatalf("TopicsForSession: %v", err)
-	}
-	if len(segs) != 3 {
-		t.Fatalf("stored %d segments, want 3", len(segs))
-	}
-	segByTopic := make(map[string]store.TopicSegment)
-	for _, s := range segs {
-		segByTopic[s.Topic] = s
-	}
-	if s, ok := segByTopic["head"]; !ok || s.StartUUID != "11111111-aaaa" || s.EndUUID != "22222222-bbbb" {
-		t.Errorf("head segment = %+v, want end clamped to 22222222-bbbb", s)
-	}
-	if s, ok := segByTopic["existing middle"]; !ok || s.StartUUID != "33333333-cccc" || s.EndUUID != "44444444-dddd" {
-		t.Errorf("existing middle segment = %+v, want preserved", s)
-	}
-	if s, ok := segByTopic["tail"]; !ok || s.StartUUID != "55555555-eeee" || s.EndUUID != "66666666-ffff" {
-		t.Errorf("tail segment = %+v, want 5..6", s)
+	// 4. Session is now fully tagged. Writing again without --retag-all must be rejected.
+	extraJSON := `[{"start_uuid":"33333333","topic":"extra","summary":"extra"}]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(extraJSON), 3.0, false); err == nil {
+		t.Fatal("expected error writing to already fully tagged session without retagAll")
+	} else if !strings.Contains(err.Error(), "already fully tagged") {
+		t.Errorf("expected 'already fully tagged' error, got: %v", err)
 	}
 }
 
@@ -394,7 +316,7 @@ func TestRunTagWritePopulatesSegments(t *testing.T) {
 		{"start_uuid":"33333333","topic":"schema gating","summary":"sidecar persistence discussed"}
 	]`
 
-	n, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 42.0)
+	n, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 42.0, false)
 	if err != nil {
 		t.Fatalf("runTagWrite: %v", err)
 	}
@@ -427,9 +349,9 @@ func TestRunTagWritePopulatesSegments(t *testing.T) {
 }
 
 // TestRunTagWriteRetagReplaces locks the maintainer-requested behavior: re-tagging a
-// session REDOES its tags — it does not stack a second set beside the first, and
-// it does not error. A first pass writes two segments; a second pass with DIFFERENT
-// boundaries + labels must leave ONLY the second set behind.
+// session with --retag-all REDOES its tags — it does not stack a second set beside
+// the first, and it does not error. A first pass writes two segments; a second pass
+// with DIFFERENT boundaries + labels must leave ONLY the second set behind.
 func TestRunTagWriteRetagReplaces(t *testing.T) {
 	con := newTagTestDB(t)
 	sid := "sess-retag-1"
@@ -443,15 +365,14 @@ func TestRunTagWriteRetagReplaces(t *testing.T) {
 		{"start_uuid":"11111111","topic":"ranking fusion","summary":"first pass"},
 		{"start_uuid":"33333333","topic":"schema gating","summary":"first pass"}
 	]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(first), 1.0); err != nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(first), 1.0, false); err != nil {
 		t.Fatalf("first runTagWrite: %v", err)
 	}
 
 	// Second pass: a SINGLE segment with a shifted boundary (start at msg 2) and a
-	// new label. Under the old per-(session,start_uuid) upsert this would have left
-	// both first-pass rows behind (different start_uuids) — the stacking bug.
+	// new label. With retagAll=true, this replaces the whole set.
 	second := `[{"start_uuid":"22222222","topic":"one merged topic","summary":"second pass"}]`
-	n, err := runTagWrite(con, sid, strings.NewReader(second), 2.0)
+	n, err := runTagWrite(con, sid, strings.NewReader(second), 2.0, true)
 	if err != nil {
 		t.Fatalf("second runTagWrite: %v", err)
 	}
@@ -484,7 +405,7 @@ func TestRunTagWriteUnknownStartUUID(t *testing.T) {
 	addMsg(t, con, sid, "assistant", "second", "bbbb2222")
 
 	jsonIn := `[{"start_uuid":"zzzz9999","topic":"ghost","summary":"never existed"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0); err == nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0, false); err == nil {
 		t.Fatal("expected an error for a start_uuid matching no message")
 	} else if !strings.Contains(err.Error(), "no message") {
 		t.Errorf("error = %q, want a 'matches no message' message", err)
@@ -501,7 +422,7 @@ func TestRunTagWriteAmbiguousStartUUID(t *testing.T) {
 
 	// "dupe" is a prefix of both message uuids → ambiguous.
 	jsonIn := `[{"start_uuid":"dupe","topic":"t","summary":"s"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0); err == nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0, false); err == nil {
 		t.Fatal("expected an error for an ambiguous start_uuid prefix")
 	} else if !strings.Contains(err.Error(), "ambiguous") {
 		t.Errorf("error = %q, want an 'ambiguous' message", err)
@@ -514,7 +435,7 @@ func TestRunTagWriteEmptyArray(t *testing.T) {
 	sid := "sess-write-4"
 	addMsg(t, con, sid, "user", "first", "aaaa1111")
 
-	if _, err := runTagWrite(con, sid, strings.NewReader(`[]`), 1.0); err == nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(`[]`), 1.0, false); err == nil {
 		t.Fatal("expected an error for an empty segment array")
 	}
 }
@@ -526,7 +447,7 @@ func TestRunTagWriteMissingTopic(t *testing.T) {
 	addMsg(t, con, sid, "user", "first", "aaaa1111")
 
 	jsonIn := `[{"start_uuid":"aaaa1111","summary":"no topic here"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0); err == nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0, false); err == nil {
 		t.Fatal("expected an error for a segment missing its topic")
 	} else if !strings.Contains(err.Error(), "topic") {
 		t.Errorf("error = %q, want a 'missing topic' message", err)
@@ -537,7 +458,7 @@ func TestRunTagWriteMissingTopic(t *testing.T) {
 func TestRunTagWriteNoMessages(t *testing.T) {
 	con := newTagTestDB(t)
 	jsonIn := `[{"start_uuid":"x","topic":"t","summary":"s"}]`
-	if _, err := runTagWrite(con, "missing-session", strings.NewReader(jsonIn), 1.0); err == nil {
+	if _, err := runTagWrite(con, "missing-session", strings.NewReader(jsonIn), 1.0, false); err == nil {
 		t.Fatal("expected an error writing to a session with no messages")
 	}
 }
@@ -577,7 +498,7 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	scope := []view.Scope{{Project: "proj-tag", TDir: dir}}
 	jsonIn := `[{"start_uuid":"11111111","topic":"watermark","summary":"how the watermark is advanced"}]`
 	var out strings.Builder
-	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, ""); err != nil {
+	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, "", false); err != nil {
 		t.Fatalf("runTagWriteCmd: %v\nout: %s", err, out.String())
 	}
 
@@ -609,7 +530,7 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 
 	scope := []view.Scope{{Project: "proj-routine", TDir: dir}}
 	var out strings.Builder
-	if err := runTagWriteCmd(&out, strings.NewReader(""), sid[:8], scope, nil, true, store.VerdictSourceAgent); err != nil {
+	if err := runTagWriteCmd(&out, strings.NewReader(""), sid[:8], scope, nil, true, store.VerdictSourceAgent, false); err != nil {
 		t.Fatalf("runTagWriteCmd --routine: %v\nout: %s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "marked "+sid[:8]+" as routine (source: agent)") {
@@ -655,7 +576,7 @@ func TestRunTagWriteRoutine_ReTagReverses(t *testing.T) {
 
 	// 2. Tag with real topic segments -> demotes routine
 	jsonIn := `[{"start_uuid":"11111111","topic":"real topic","summary":"not routine"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 20.0); err != nil {
+	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 20.0, false); err != nil {
 		t.Fatalf("runTagWrite with segments: %v", err)
 	}
 	if eff, _ := store.IsEffectivelyRoutine(con, sid); eff {
@@ -719,7 +640,7 @@ func TestRunTagWriteRoutine_FloorPreservesRealTopics(t *testing.T) {
 	sid := "sess-floor-topic"
 	addMsg(t, con, sid, "user", "real work", "11111111-aaaa")
 	if _, err := runTagWrite(con, sid, strings.NewReader(
-		`[{"start_uuid":"11111111","topic":"real","summary":"work"}]`), 1.0); err != nil {
+		`[{"start_uuid":"11111111","topic":"real","summary":"work"}]`), 1.0, false); err != nil {
 		t.Fatalf("seed topic: %v", err)
 	}
 
