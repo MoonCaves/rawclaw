@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -147,13 +147,13 @@ func FindTranscriptDir(cwd string) string {
 
 	if isDir(root) {
 		entries, _ := filepath.Glob(filepath.Join(root, "*"))
-		sort.Strings(entries)
+		slices.Sort(entries)
 		for _, d := range entries {
 			if !isDir(d) {
 				continue
 			}
 			files, _ := filepath.Glob(filepath.Join(d, "*.jsonl"))
-			sort.Strings(files)
+			slices.Sort(files)
 			for _, f := range files { // check ALL top-level files, not just first
 				rec := firstCWD(f)
 				if rec != "" && realpath(rec) == target {
@@ -273,7 +273,7 @@ func ProjectDirOf(jsonlPath string) string {
 func AllProjectDirs() []string {
 	root := ProjectsRoot()
 	entries, _ := filepath.Glob(filepath.Join(root, "*"))
-	sort.Strings(entries)
+	slices.Sort(entries)
 
 	out := []string{}
 	for _, d := range entries {
@@ -393,7 +393,7 @@ func resolveSessionStem(prefix string) []SessionHit {
 	hits := []SessionHit{}
 	for _, d := range AllProjectDirs() {
 		files, _ := filepath.Glob(filepath.Join(d, "*.jsonl")) // top-level only (no subagents/ recursion)
-		sort.Strings(files)
+		slices.Sort(files)
 		for _, f := range files {
 			stem := strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))
 			if strings.HasPrefix(stem, prefix) {
@@ -450,7 +450,7 @@ func firstTopLevelJSONL(tdir string) []string {
 	if len(files) == 0 {
 		return nil
 	}
-	sort.Strings(files)
+	slices.Sort(files)
 	return files[:1]
 }
 
@@ -468,7 +468,7 @@ func globRecursiveJSONL(root string) []string {
 		}
 		return nil
 	})
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
