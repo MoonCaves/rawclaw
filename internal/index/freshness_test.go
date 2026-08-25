@@ -82,6 +82,75 @@ func TestCheckIndexFreshness_WatermarkAndCatalog(t *testing.T) {
 	}
 }
 
+func TestCheckIndexFreshness_ReturnsDatabaseError(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	catDir := filepath.Join(cfg, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	if err := os.MkdirAll(catDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	con, err := store.ConnectRW(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatal(err)
+	}
+	if err := StampIngestWatermark(con); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("UPDATE meta SET value = NULL WHERE key = ?", MetaLastIngestTime); err != nil {
+		t.Fatal(err)
+	}
+
+	freshness, err := CheckIndexFreshness(con)
+	if err == nil {
+		t.Fatalf("CheckIndexFreshness returned nil error with unreadable watermark: %+v", freshness)
+	}
+	if freshness.Fresh {
+		t.Fatalf("unreadable watermark reported fresh: %+v", freshness)
+	}
+}
+
+func TestCheckProjectFreshness_ReturnsDirectoryError(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	catDir := filepath.Join(cfg, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	if err := os.MkdirAll(catDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	con, err := store.ConnectRW(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatal(err)
+	}
+	if err := StampIngestWatermark(con); err != nil {
+		t.Fatal(err)
+	}
+
+	notADirectory := filepath.Join(cfg, "project")
+	if err := os.WriteFile(notADirectory, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	freshness, err := CheckProjectFreshness(con, "project", notADirectory)
+	if err == nil {
+		t.Fatalf("CheckProjectFreshness returned nil error for unreadable project directory: %+v", freshness)
+	}
+	if freshness.Fresh {
+		t.Fatalf("unreadable project directory reported fresh: %+v", freshness)
+	}
+}
+
 func TestCheckSessionFreshness_FreshStaleAndMissing(t *testing.T) {
 	cfg := t.TempDir()
 	t.Setenv("HOME", cfg)
