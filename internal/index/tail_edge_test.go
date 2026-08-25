@@ -1,7 +1,6 @@
 package index
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,10 +26,7 @@ func TestTailEdge_EmptyTail(t *testing.T) {
 	f := filepath.Join(dir, "empty_tail.jsonl")
 
 	msg1 := `{"type":"user","message":{"role":"user","content":"Initial message"},"uuid":"u-empty-1","timestamp":"2026-08-25T10:00:00Z"}` + "\n"
-	if err := os.WriteFile(f, []byte(msg1), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
+	writeFile(t, f, msg1)
 	fileSize := int64(len(msg1))
 
 	// 1. Direct unit checks on readTailChunk boundaries
@@ -57,13 +53,7 @@ func TestTailEdge_EmptyTail(t *testing.T) {
 	// 2. parseTailMessages when fromOffset == toOffset
 	c := source.Container{ID: "sess-empty-tail", Path: f, CWD: "/work"}
 	dbp := filepath.Join(dir, "empty_tail.db")
-	msgsFn := func(got source.Container) ([]model.Message, error) {
-		data, err := os.ReadFile(got.Path)
-		if err != nil {
-			return nil, err
-		}
-		return parseClaudeTail(data)
-	}
+	msgsFn := claudeTailMsgsFn()
 
 	ResetIngestCountersForTesting()
 	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, msgsFn, "claude", ""); err != nil {
@@ -82,15 +72,7 @@ func TestTailEdge_EmptyTail(t *testing.T) {
 	}
 
 	// 3. Append only newlines (blank lines) after watermark
-	blankLines := "\n\n\n"
-	fHandle, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fHandle.WriteString(blankLines); err != nil {
-		t.Fatal(err)
-	}
-	_ = fHandle.Close()
+	appendFile(t, f, "\n\n\n")
 
 	ResetIngestCountersForTesting()
 	n, status, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", "")
@@ -100,35 +82,23 @@ func TestTailEdge_EmptyTail(t *testing.T) {
 	if status != IndexFresh || n != 1 {
 		t.Errorf("status = %v, n = %d, want IndexFresh, 1", status, n)
 	}
-	// Incremental ingest succeeds because blank lines yield 0 messages without error,
-	// advancing the watermark to the new file size.
 	if gotIncr := IncrementalIngestCount.Load(); gotIncr != 1 {
 		t.Errorf("IncrementalIngestCount after blank lines = %d, want 1", gotIncr)
 	}
-	var msgCount int
-	if err := con.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id=?", c.ID).Scan(&msgCount); err != nil {
-		t.Fatal(err)
-	}
-	if msgCount != 1 {
-		t.Errorf("message count after blank lines = %d, want 1", msgCount)
+	if got := scalarInt(t, con, "SELECT COUNT(*) FROM messages WHERE session_id=?", c.ID); got != 1 {
+		t.Errorf("message count after blank lines = %d, want 1", got)
 	}
 
 	// 4. Initial 0-byte empty file behavior:
 	// An empty file has prev.size = 0. Appending first message requires full reindex
 	// because incremental path is guarded by `prev.size > 0`.
 	emptyF := filepath.Join(dir, "zero_byte.jsonl")
-	if err := os.WriteFile(emptyF, []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, emptyF, "")
 	emptyC := source.Container{ID: "sess-zero-byte", Path: emptyF, CWD: "/work"}
 	emptyDBP := filepath.Join(dir, "zero_byte.db")
-	emptyMsgsFn := func(got source.Container) ([]model.Message, error) {
-		data, _ := os.ReadFile(got.Path)
-		return parseClaudeTail(data)
-	}
 
 	ResetIngestCountersForTesting()
-	if _, _, err := EnsureIndexedContainers(emptyDBP, true, []source.Container{emptyC}, emptyMsgsFn, "claude", ""); err != nil {
+	if _, _, err := EnsureIndexedContainers(emptyDBP, true, []source.Container{emptyC}, msgsFn, "claude", ""); err != nil {
 		t.Fatalf("initial zero byte indexing: %v", err)
 	}
 	if gotFull := FullReindexCount.Load(); gotFull != 1 {
@@ -136,14 +106,11 @@ func TestTailEdge_EmptyTail(t *testing.T) {
 	}
 
 	// Write first message to the zero-byte file
-	if err := os.WriteFile(emptyF, []byte(msg1), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, emptyF, msg1)
 	ResetIngestCountersForTesting()
-	if _, _, err := EnsureIndexedContainers(emptyDBP, false, []source.Container{emptyC}, emptyMsgsFn, "claude", ""); err != nil {
+	if _, _, err := EnsureIndexedContainers(emptyDBP, false, []source.Container{emptyC}, msgsFn, "claude", ""); err != nil {
 		t.Fatalf("indexing after first content in 0-byte file: %v", err)
 	}
-	// Initial transition from 0 bytes to non-zero uses full reindex as designed (prev.size was 0).
 	if gotFull := FullReindexCount.Load(); gotFull != 1 {
 		t.Errorf("FullReindexCount after first content in 0-byte file = %d, want 1", gotFull)
 	}
@@ -158,27 +125,16 @@ func TestTailEdge_EmptyTail(t *testing.T) {
 // 2. EnsureFreshContainer verifies the container as fresh and returns the exact count.
 // 3. checkPrefixFingerprint at file length matches provenance.FileFingerprint.
 func TestTailEdge_WatermarkExactlyAtFileEnd(t *testing.T) {
-	cfg := t.TempDir()
-	t.Setenv("HOME", cfg)
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	cfg := isolateCache(t)
 
 	f := filepath.Join(cfg, "at_end.jsonl")
 	msg1 := `{"type":"user","message":{"role":"user","content":"Watermark at end query"},"uuid":"u-end-1","timestamp":"2026-08-25T10:00:00Z"}` + "\n"
 	msg2 := `{"type":"assistant","message":{"role":"assistant","content":"Watermark at end response"},"uuid":"u-end-2","timestamp":"2026-08-25T10:00:05Z"}` + "\n"
-	fullData := []byte(msg1 + msg2)
-	if err := os.WriteFile(f, fullData, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, f, msg1+msg2)
 
 	c := source.Container{ID: "sess-at-end", Path: f, CWD: "/work"}
 	dbp := RefreshDBPath("claude", c.ID, c.Path)
-	msgsFn := func(got source.Container) ([]model.Message, error) {
-		data, err := os.ReadFile(got.Path)
-		if err != nil {
-			return nil, err
-		}
-		return parseClaudeTail(data)
-	}
+	msgsFn := claudeTailMsgsFn()
 
 	// 1. Initial indexing
 	ResetIngestCountersForTesting()
@@ -239,79 +195,18 @@ func TestTailEdge_WatermarkExactlyAtFileEnd(t *testing.T) {
 }
 
 // TestTailEdge_TruncatedTailRecord covers truncated and malformed records:
-// 1. Incomplete line without trailing newline for Claude, Codex, and Antigravity.
-// 2. Watermark preservation during partial write.
-// 3. Recovery upon subsequent line completion.
-// 4. Corrupt JSON ending in newline (falls back to full reindex).
-// 5. Empty-text or non-indexable record in Claude tail (falls back to full reindex).
-// 6. Unknown sourceID and SQLite DB backing path fallback.
+// 1. Incomplete line without trailing newline for Codex and Antigravity.
+// 2. Claude non-indexable record in tail (falls back to full reindex).
+// 3. Unknown sourceID and SQLite DB backing path fallback.
 func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 	dir := t.TempDir()
 
-	// --- 1. Claude incomplete line without newline ---
-	fClaude := filepath.Join(dir, "claude_trunc.jsonl")
-	msgC1 := `{"type":"user","message":{"role":"user","content":"Claude query 1"},"uuid":"uc-1","timestamp":"2026-08-25T10:00:00Z"}` + "\n"
-	if err := os.WriteFile(fClaude, []byte(msgC1), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cClaude := source.Container{ID: "sess-claude-trunc", Path: fClaude, CWD: "/work"}
-	dbClaude := filepath.Join(dir, "claude_trunc.db")
-	msgsClaude := func(got source.Container) ([]model.Message, error) {
-		data, _ := os.ReadFile(got.Path)
-		return parseClaudeTail(data)
-	}
-
-	ResetIngestCountersForTesting()
-	if _, _, err := EnsureIndexedContainers(dbClaude, true, []source.Container{cClaude}, msgsClaude, "claude", ""); err != nil {
-		t.Fatalf("claude initial index: %v", err)
-	}
-
-	// Append partial line (no newline)
-	partialC := `{"type":"assistant","message":{"role":"assistant","content":"Claude partial`
-	fH, err := os.OpenFile(fClaude, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(partialC); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
-
-	ResetIngestCountersForTesting()
-	if _, _, err := EnsureIndexedContainers(dbClaude, false, []source.Container{cClaude}, msgsClaude, "claude", ""); err != nil {
-		t.Fatalf("claude partial ingest: %v", err)
-	}
-	if gotIncr := IncrementalIngestCount.Load(); gotIncr != 0 {
-		t.Errorf("IncrementalIngestCount on partial write = %d, want 0", gotIncr)
-	}
-	if gotFull := FullReindexCount.Load(); gotFull != 0 {
-		t.Errorf("FullReindexCount on partial write = %d, want 0", gotFull)
-	}
-
-	// Complete the line
-	fH, err = os.OpenFile(fClaude, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(` complete"},"uuid":"uc-2","timestamp":"2026-08-25T10:00:05Z"}` + "\n"); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
-
-	if _, _, err := EnsureIndexedContainers(dbClaude, false, []source.Container{cClaude}, msgsClaude, "claude", ""); err != nil {
-		t.Fatalf("claude completed ingest: %v", err)
-	}
-	if gotIncr := IncrementalIngestCount.Load(); gotIncr != 1 {
-		t.Errorf("IncrementalIngestCount after completing partial write = %d, want 1", gotIncr)
-	}
-
-	// --- 2. Codex incomplete line without newline ---
+	// --- 1. Codex incomplete line without newline ---
 	fCodex := filepath.Join(dir, "codex_trunc.jsonl")
 	header := `{"type":"session_meta","payload":{"id":"sess-codex-trunc","cwd":"/work"}}` + "\n"
 	item1 := `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Codex prompt"}]},"timestamp":"2026-08-25T10:00:00Z"}` + "\n"
-	if err := os.WriteFile(fCodex, []byte(header+item1), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, fCodex, header+item1)
+
 	cCodex := source.Container{ID: "sess-codex-trunc", Path: fCodex, CWD: "/work"}
 	dbCodex := filepath.Join(dir, "codex_trunc.db")
 	msgsCodex := func(got source.Container) ([]model.Message, error) {
@@ -327,14 +222,7 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 
 	// Append partial Codex line
 	partialCodex := `{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Codex in-progress`
-	fH, err = os.OpenFile(fCodex, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(partialCodex); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
+	appendFile(t, fCodex, partialCodex)
 
 	ResetIngestCountersForTesting()
 	if _, _, err := EnsureIndexedContainers(dbCodex, false, []source.Container{cCodex}, msgsCodex, "codex", ""); err != nil {
@@ -345,15 +233,7 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 	}
 
 	// Complete Codex line
-	fH, err = os.OpenFile(fCodex, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(` done"}]},"timestamp":"2026-08-25T10:00:05Z"}` + "\n"); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
-
+	appendFile(t, fCodex, ` done"}]},"timestamp":"2026-08-25T10:00:05Z"}`+"\n")
 	if _, _, err := EnsureIndexedContainers(dbCodex, false, []source.Container{cCodex}, msgsCodex, "codex", ""); err != nil {
 		t.Fatalf("codex completed ingest: %v", err)
 	}
@@ -361,12 +241,11 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 		t.Errorf("Codex IncrementalIngestCount after completion = %d, want 1", gotIncr)
 	}
 
-	// --- 3. Antigravity incomplete line without newline ---
+	// --- 2. Antigravity incomplete line without newline ---
 	fAgy := filepath.Join(dir, "agy_trunc.jsonl")
 	agyStep1 := `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"<USER_REQUEST>Agy prompt</USER_REQUEST>","created_at":"2026-08-25T10:00:00Z"}` + "\n"
-	if err := os.WriteFile(fAgy, []byte(agyStep1), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, fAgy, agyStep1)
+
 	cAgy := source.Container{ID: "sess-agy-trunc", Path: fAgy, CWD: "/work"}
 	dbAgy := filepath.Join(dir, "agy_trunc.db")
 	msgsAgy := func(got source.Container) ([]model.Message, error) {
@@ -382,14 +261,7 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 
 	// Append partial Antigravity step
 	partialAgy := `{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","content":"Writing code...`
-	fH, err = os.OpenFile(fAgy, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(partialAgy); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
+	appendFile(t, fAgy, partialAgy)
 
 	ResetIngestCountersForTesting()
 	if _, _, err := EnsureIndexedContainers(dbAgy, false, []source.Container{cAgy}, msgsAgy, "antigravity", ""); err != nil {
@@ -400,15 +272,7 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 	}
 
 	// Complete Antigravity line
-	fH, err = os.OpenFile(fAgy, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(` done","created_at":"2026-08-25T10:00:05Z"}` + "\n"); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
-
+	appendFile(t, fAgy, ` done","created_at":"2026-08-25T10:00:05Z"}`+"\n")
 	if _, _, err := EnsureIndexedContainers(dbAgy, false, []source.Container{cAgy}, msgsAgy, "antigravity", ""); err != nil {
 		t.Fatalf("agy completed ingest: %v", err)
 	}
@@ -416,73 +280,14 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 		t.Errorf("Antigravity IncrementalIngestCount after completion = %d, want 1", gotIncr)
 	}
 
-	// --- 4. Corrupt JSON ending with newline (falls back to full reindex) ---
-	fCorrupt := filepath.Join(dir, "corrupt.jsonl")
-	if err := os.WriteFile(fCorrupt, []byte(msgC1), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cCorrupt := source.Container{ID: "sess-corrupt", Path: fCorrupt, CWD: "/work"}
-	dbCorrupt := filepath.Join(dir, "corrupt.db")
-
-	ResetIngestCountersForTesting()
-	if _, _, err := EnsureIndexedContainers(dbCorrupt, true, []source.Container{cCorrupt}, msgsClaude, "claude", ""); err != nil {
-		t.Fatalf("corrupt test initial index: %v", err)
-	}
-
-	// Append broken JSON followed by a newline
-	fH, err = os.OpenFile(fCorrupt, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(`{"type":"broken_json_not_valid` + "\n"); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
-
-	// msgsClaude handles full parse (or skips bad line)
-	corruptMsgsFn := func(got source.Container) ([]model.Message, error) {
-		data, err := os.ReadFile(got.Path)
-		if err != nil {
-			return nil, err
-		}
-		var out []model.Message
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			var o map[string]any
-			if err := json.Unmarshal([]byte(line), &o); err != nil || !indexable(o) {
-				continue
-			}
-			text := parse.ExtractText(o)
-			if text == "" {
-				continue
-			}
-			iso, _ := o["timestamp"].(string)
-			out = append(out, model.Message{Role: parse.MsgRole(o), Text: text, TS: parse.ISOToEpoch(iso), TSISO: iso, UUID: parse.MsgUUID(o)})
-		}
-		return out, nil
-	}
-
-	ResetIngestCountersForTesting()
-	if _, _, err := EnsureIndexedContainers(dbCorrupt, false, []source.Container{cCorrupt}, corruptMsgsFn, "claude", ""); err != nil {
-		t.Fatalf("ingest after corrupt tail line: %v", err)
-	}
-	if gotIncr := IncrementalIngestCount.Load(); gotIncr != 0 {
-		t.Errorf("IncrementalIngestCount on corrupt complete tail = %d, want 0", gotIncr)
-	}
-	if gotFull := FullReindexCount.Load(); gotFull != 1 {
-		t.Errorf("FullReindexCount on corrupt complete tail = %d, want 1 (fallback)", gotFull)
-	}
-
-	// --- 5. Claude non-indexable record type in tail (falls back to full reindex) ---
+	// --- 3. Claude non-indexable record type in tail (falls back to full reindex) ---
 	fNonIdx := filepath.Join(dir, "non_idx.jsonl")
-	if err := os.WriteFile(fNonIdx, []byte(msgC1), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	msgC1 := `{"type":"user","message":{"role":"user","content":"Claude query 1"},"uuid":"uc-1","timestamp":"2026-08-25T10:00:00Z"}` + "\n"
+	writeFile(t, fNonIdx, msgC1)
+
 	cNonIdx := source.Container{ID: "sess-non-idx", Path: fNonIdx, CWD: "/work"}
 	dbNonIdx := filepath.Join(dir, "non_idx.db")
+	corruptMsgsFn := claudeFullMsgsFn()
 
 	ResetIngestCountersForTesting()
 	if _, _, err := EnsureIndexedContainers(dbNonIdx, true, []source.Container{cNonIdx}, corruptMsgsFn, "claude", ""); err != nil {
@@ -490,14 +295,7 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 	}
 
 	// Append non-indexable progress line
-	fH, err = os.OpenFile(fNonIdx, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(`{"type":"progress","data":{"percent":50}}` + "\n"); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
+	appendFile(t, fNonIdx, `{"type":"progress","data":{"percent":50}}`+"\n")
 
 	ResetIngestCountersForTesting()
 	if _, _, err := EnsureIndexedContainers(dbNonIdx, false, []source.Container{cNonIdx}, corruptMsgsFn, "claude", ""); err != nil {
@@ -510,37 +308,30 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 		t.Errorf("FullReindexCount on non-indexable tail = %d, want 1 (fallback)", gotFull)
 	}
 
-	// --- 6. Unsupported source and container path with '#' or '.db' ---
-	conClaude, err := store.ConnectRO(dbClaude)
+	// --- 4. Unsupported source and container path with '#' or '.db' ---
+	conClaude, err := store.ConnectRO(dbNonIdx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conClaude.Close()
 
-	stClaude, err := os.Stat(fClaude)
+	stNonIdx, err := os.Stat(fNonIdx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Unknown source with complete chunk -> hits default in switch, returns ok=false
-	if _, _, ok := parseTailMessages(conClaude, cClaude, "unknown_source", fClaude, 0, stClaude.Size()); ok {
+	if _, _, ok := parseTailMessages(conClaude, cNonIdx, "unknown_source", fNonIdx, 0, stNonIdx.Size()); ok {
 		t.Error("parseTailMessages with unknown source and complete chunk returned ok=true, want false")
 	}
-
-	// Incomplete chunk without newline (pending) -> returns ok=true, msgs=nil, offset=fromOffset
-	if msgs, off, ok := parseTailMessages(conClaude, cClaude, "unknown_source", fClaude, 0, 50); !ok || len(msgs) != 0 || off != 0 {
+	if msgs, off, ok := parseTailMessages(conClaude, cNonIdx, "unknown_source", fNonIdx, 0, 50); !ok || len(msgs) != 0 || off != 0 {
 		t.Errorf("parseTailMessages with pending chunk returned (msgs=%v, off=%d, ok=%v), want (nil, 0, true)", msgs, off, ok)
 	}
-
-	// Path containing '#' -> returns ok=false at top of parseTailMessages
-	cFragment := source.Container{ID: "sess-frag", Path: fClaude + "#frag", CWD: "/work"}
-	if _, _, ok := parseTailMessages(conClaude, cFragment, "claude", fClaude, 0, stClaude.Size()); ok {
+	cFragment := source.Container{ID: "sess-frag", Path: fNonIdx + "#frag", CWD: "/work"}
+	if _, _, ok := parseTailMessages(conClaude, cFragment, "claude", fNonIdx, 0, stNonIdx.Size()); ok {
 		t.Error("parseTailMessages with # container path returned ok=true, want false")
 	}
-
-	// Path with .db suffix -> returns ok=false at top of parseTailMessages
 	cDB := source.Container{ID: "sess-db", Path: "/path/to/source.db", CWD: "/work"}
-	if _, _, ok := parseTailMessages(conClaude, cDB, "claude", "/path/to/source.db", 0, stClaude.Size()); ok {
+	if _, _, ok := parseTailMessages(conClaude, cDB, "claude", "/path/to/source.db", 0, stNonIdx.Size()); ok {
 		t.Error("parseTailMessages with .db path returned ok=true, want false")
 	}
 }
@@ -556,32 +347,22 @@ func TestTailEdge_ContentAppendedAfterWatermark(t *testing.T) {
 	f := filepath.Join(dir, "session_seq.jsonl")
 
 	msg1 := `{"type":"user","message":{"role":"user","content":"Question 1"},"uuid":"u-seq-1","timestamp":"2026-08-25T10:00:00Z"}` + "\n"
-	if err := os.WriteFile(f, []byte(msg1), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, f, msg1)
 
 	c := source.Container{ID: "sess-seq", Path: f, CWD: "/work"}
-	msgsFn := func(got source.Container) ([]model.Message, error) {
-		data, err := os.ReadFile(got.Path)
-		if err != nil {
-			return nil, err
-		}
-		return parseClaudeTail(data)
-	}
+	msgsFn := claudeTailMsgsFn()
 
 	ResetIngestCountersForTesting()
 	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, msgsFn, "claude", ""); err != nil {
 		t.Fatalf("initial indexing: %v", err)
 	}
 
-	// Step-by-step appends
-	type appendStep struct {
+	steps := []struct {
 		name      string
 		content   string
 		wantTotal int
 		wantLast  string
-	}
-	steps := []appendStep{
+	}{
 		{
 			name:      "single message append",
 			content:   `{"type":"assistant","message":{"role":"assistant","content":"Answer 1"},"uuid":"u-seq-2","timestamp":"2026-08-25T10:00:05Z"}` + "\n",
@@ -611,14 +392,7 @@ func TestTailEdge_ContentAppendedAfterWatermark(t *testing.T) {
 
 	for i, step := range steps {
 		t.Run(step.name, func(t *testing.T) {
-			fH, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := fH.WriteString(step.content); err != nil {
-				t.Fatal(err)
-			}
-			_ = fH.Close()
+			appendFile(t, f, step.content)
 
 			ResetIngestCountersForTesting()
 			n, status, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", "")
@@ -655,7 +429,7 @@ func TestTailEdge_ContentAppendedAfterWatermark(t *testing.T) {
 	}
 
 	// Verify all 5 messages are sequentially stored
-	rows, err := con.Query("SELECT uuid, content FROM messages WHERE session_id='sess-seq' ORDER BY id ASC")
+	rows, err := con.Query("SELECT uuid FROM messages WHERE session_id='sess-seq' ORDER BY id ASC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,8 +437,8 @@ func TestTailEdge_ContentAppendedAfterWatermark(t *testing.T) {
 
 	var gotUUIDs []string
 	for rows.Next() {
-		var u, text string
-		if err := rows.Scan(&u, &text); err != nil {
+		var u string
+		if err := rows.Scan(&u); err != nil {
 			t.Fatal(err)
 		}
 		gotUUIDs = append(gotUUIDs, u)
@@ -684,7 +458,6 @@ func TestTailEdge_ContentAppendedAfterWatermark(t *testing.T) {
 		fLarge := filepath.Join(dir, "large_session.jsonl")
 		dbLarge := filepath.Join(dir, "large_session.db")
 
-		// Create ~10KB initial transcript (20 messages with 500 bytes of content each)
 		var b strings.Builder
 		for i := 0; i < 20; i++ {
 			pad := strings.Repeat("A", 450)
@@ -695,18 +468,10 @@ func TestTailEdge_ContentAppendedAfterWatermark(t *testing.T) {
 		if len(initialLarge) <= 8192 {
 			t.Fatalf("initial large content size = %d, want > 8192 bytes", len(initialLarge))
 		}
-		if err := os.WriteFile(fLarge, []byte(initialLarge), 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeFile(t, fLarge, initialLarge)
 
 		cLarge := source.Container{ID: "sess-large", Path: fLarge, CWD: "/work"}
-		msgsLarge := func(got source.Container) ([]model.Message, error) {
-			data, err := os.ReadFile(got.Path)
-			if err != nil {
-				return nil, err
-			}
-			return parseClaudeTail(data)
-		}
+		msgsLarge := claudeTailMsgsFn()
 
 		ResetIngestCountersForTesting()
 		if _, _, err := EnsureIndexedContainers(dbLarge, true, []source.Container{cLarge}, msgsLarge, "claude", ""); err != nil {
@@ -720,14 +485,7 @@ func TestTailEdge_ContentAppendedAfterWatermark(t *testing.T) {
 			line := fmt.Sprintf(`{"type":"assistant","message":{"role":"assistant","content":"Appended Msg %d %s"},"uuid":"u-lg-%d","timestamp":"2026-08-25T10:01:00Z"}`+"\n", i, pad, i)
 			appendB.WriteString(line)
 		}
-		fH, err := os.OpenFile(fLarge, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := fH.WriteString(appendB.String()); err != nil {
-			t.Fatal(err)
-		}
-		_ = fH.Close()
+		appendFile(t, fLarge, appendB.String())
 
 		ResetIngestCountersForTesting()
 		if _, _, err := EnsureIndexedContainers(dbLarge, false, []source.Container{cLarge}, msgsLarge, "claude", ""); err != nil {
@@ -746,12 +504,8 @@ func TestTailEdge_ContentAppendedAfterWatermark(t *testing.T) {
 		}
 		defer conLg.Close()
 
-		var lgCount int
-		if err := conLg.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id='sess-large'").Scan(&lgCount); err != nil {
-			t.Fatal(err)
-		}
-		if lgCount != 25 {
-			t.Errorf("large session message count = %d, want 25", lgCount)
+		if got := scalarInt(t, conLg, "SELECT COUNT(*) FROM messages WHERE session_id='sess-large'"); got != 25 {
+			t.Errorf("large session message count = %d, want 25", got)
 		}
 	})
 }
@@ -762,27 +516,16 @@ func TestTailEdge_ContentAppendedAfterWatermark(t *testing.T) {
 // 3. Repeated calls to EnsureFreshContainer return identical results.
 // 4. Ingest safely recovers if a previous transaction was rolled back.
 func TestTailEdge_ReingestIdempotency(t *testing.T) {
-	cfg := t.TempDir()
-	t.Setenv("HOME", cfg)
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
-
+	cfg := isolateCache(t)
 	dbp := filepath.Join(cfg, "idempotent.db")
 	f := filepath.Join(cfg, "session_idem.jsonl")
 
 	msg1 := `{"type":"user","message":{"role":"user","content":"Idempotency query 1"},"uuid":"u-id-1","timestamp":"2026-08-25T10:00:00Z"}` + "\n"
 	msg2 := `{"type":"assistant","message":{"role":"assistant","content":"Idempotency answer 1"},"uuid":"u-id-2","timestamp":"2026-08-25T10:00:05Z"}` + "\n"
-	if err := os.WriteFile(f, []byte(msg1+msg2), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, f, msg1+msg2)
 
 	c := source.Container{ID: "sess-idem", Path: f, CWD: "/work"}
-	msgsFn := func(got source.Container) ([]model.Message, error) {
-		data, err := os.ReadFile(got.Path)
-		if err != nil {
-			return nil, err
-		}
-		return parseClaudeTail(data)
-	}
+	msgsFn := claudeTailMsgsFn()
 
 	// 1. Initial indexing
 	ResetIngestCountersForTesting()
@@ -813,14 +556,7 @@ func TestTailEdge_ReingestIdempotency(t *testing.T) {
 
 	// 3. Append msg 3
 	msg3 := `{"type":"user","message":{"role":"user","content":"Idempotency query 2"},"uuid":"u-id-3","timestamp":"2026-08-25T10:01:00Z"}` + "\n"
-	fH, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(msg3); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
+	appendFile(t, f, msg3)
 
 	// Ingest once (incremental fast path)
 	ResetIngestCountersForTesting()
@@ -866,7 +602,6 @@ func TestTailEdge_ReingestIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Install trigger that fails on uuid='u-fail'
 	if _, err := conRW.Exec("CREATE TRIGGER test_append_fail BEFORE INSERT ON messages WHEN new.uuid = 'u-fail' BEGIN SELECT RAISE(ABORT, 'forced append error'); END;"); err != nil {
 		t.Fatal(err)
 	}
@@ -874,14 +609,7 @@ func TestTailEdge_ReingestIdempotency(t *testing.T) {
 
 	// Append failing message
 	msgFail := `{"type":"assistant","message":{"role":"assistant","content":"Fail msg"},"uuid":"u-fail","timestamp":"2026-08-25T10:02:00Z"}` + "\n"
-	fH, err = os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(msgFail); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
+	appendFile(t, f, msgFail)
 
 	// Ingest must fail and rollback cleanly
 	_, _, err = EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", "")
@@ -889,17 +617,12 @@ func TestTailEdge_ReingestIdempotency(t *testing.T) {
 		t.Fatal("EnsureIndexedContainers should have failed on injected trigger error")
 	}
 
-	// Verify database is still intact with 3 messages
 	conRO, err := store.ConnectRO(dbp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var countAfterRollback int
-	if err := conRO.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id='sess-idem'").Scan(&countAfterRollback); err != nil {
-		t.Fatal(err)
-	}
-	if countAfterRollback != 3 {
-		t.Errorf("message count after rollback = %d, want 3", countAfterRollback)
+	if got := scalarInt(t, conRO, "SELECT COUNT(*) FROM messages WHERE session_id='sess-idem'"); got != 3 {
+		t.Errorf("message count after rollback = %d, want 3", got)
 	}
 	conRO.Close()
 
@@ -922,12 +645,8 @@ func TestTailEdge_ReingestIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conRO.Close()
-	var countAfterRecovery int
-	if err := conRO.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id='sess-idem'").Scan(&countAfterRecovery); err != nil {
-		t.Fatal(err)
-	}
-	if countAfterRecovery != 4 {
-		t.Errorf("message count after recovery = %d, want 4", countAfterRecovery)
+	if got := scalarInt(t, conRO, "SELECT COUNT(*) FROM messages WHERE session_id='sess-idem'"); got != 4 {
+		t.Errorf("message count after recovery = %d, want 4", got)
 	}
 }
 
@@ -943,18 +662,10 @@ func TestTailEdge_InterleavedAppendThenRead(t *testing.T) {
 	f := filepath.Join(dir, "interleaved.jsonl")
 
 	msg1 := `{"type":"user","message":{"role":"user","content":"How do I configure distributed raft consensus?"},"uuid":"u-int-1","timestamp":"2026-08-25T10:00:00Z"}` + "\n"
-	if err := os.WriteFile(f, []byte(msg1), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, f, msg1)
 
 	c := source.Container{ID: "sess-interleaved", Path: f, CWD: "/work"}
-	msgsFn := func(got source.Container) ([]model.Message, error) {
-		data, err := os.ReadFile(got.Path)
-		if err != nil {
-			return nil, err
-		}
-		return parseClaudeTail(data)
-	}
+	msgsFn := claudeTailMsgsFn()
 
 	// 1. Initial indexing
 	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, msgsFn, "claude", ""); err != nil {
@@ -967,68 +678,42 @@ func TestTailEdge_InterleavedAppendThenRead(t *testing.T) {
 	}
 	defer con.Close()
 
-	// Query FTS for 'distributed' and 'raft'
 	assertFTSMatchCount(t, con, "distributed", 1)
 	assertFTSMatchCount(t, con, "raft", 1)
 	assertFTSMatchCount(t, con, "snapshotting", 0)
 
 	// 2. Append reply mentioning 'snapshotting'
 	msg2 := `{"type":"assistant","message":{"role":"assistant","content":"Configure raft with log compaction and state machine snapshotting."},"uuid":"u-int-2","timestamp":"2026-08-25T10:00:05Z"}` + "\n"
-	fH, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(msg2); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
+	appendFile(t, f, msg2)
 
 	if _, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", ""); err != nil {
 		t.Fatalf("second indexing: %v", err)
 	}
 
-	// Query FTS: both old and new terms match
 	assertFTSMatchCount(t, con, "distributed", 1)
 	assertFTSMatchCount(t, con, "snapshotting", 1)
 	assertFTSMatchCount(t, con, "heartbeat", 0)
 
 	// 3. Append partial query mentioning 'heartbeat' without newline
 	partialMsg3 := `{"type":"user","message":{"role":"user","content":"What is the recommended heartbeat interval?`
-	fH, err = os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(partialMsg3); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
+	appendFile(t, f, partialMsg3)
 
 	if _, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", ""); err != nil {
 		t.Fatalf("partial indexing: %v", err)
 	}
 
-	// Query FTS: partial write is NOT indexed yet
 	assertFTSMatchCount(t, con, "snapshotting", 1)
 	assertFTSMatchCount(t, con, "heartbeat", 0)
 
 	// 4. Complete message 3 with newline and append message 4
 	msg3Remainder := `"},"uuid":"u-int-3","timestamp":"2026-08-25T10:01:00Z"}` + "\n"
 	msg4 := `{"type":"assistant","message":{"role":"assistant","content":"Set heartbeat interval to 150ms and election timeout to 1000ms."},"uuid":"u-int-4","timestamp":"2026-08-25T10:01:05Z"}` + "\n"
-
-	fH, err = os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fH.WriteString(msg3Remainder + msg4); err != nil {
-		t.Fatal(err)
-	}
-	_ = fH.Close()
+	appendFile(t, f, msg3Remainder+msg4)
 
 	if _, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", ""); err != nil {
 		t.Fatalf("completed indexing: %v", err)
 	}
 
-	// Query FTS: 'heartbeat' now matches 2 messages (msg3 and msg4), 'election' matches 1
 	assertFTSMatchCount(t, con, "heartbeat", 2)
 	assertFTSMatchCount(t, con, "election", 1)
 
@@ -1036,7 +721,6 @@ func TestTailEdge_InterleavedAppendThenRead(t *testing.T) {
 	var wg sync.WaitGroup
 	readDone := make(chan struct{})
 
-	// Start reader goroutines continuously querying FTS
 	for i := 0; i < 3; i++ {
 		wg.Add(1)
 		go func() {
@@ -1060,18 +744,10 @@ func TestTailEdge_InterleavedAppendThenRead(t *testing.T) {
 		}()
 	}
 
-	// Append 5 more messages with short delay
 	for i := 5; i <= 9; i++ {
 		time.Sleep(5 * time.Millisecond)
 		line := fmt.Sprintf(`{"type":"user","message":{"role":"user","content":"Concurrent message %d"},"uuid":"u-int-%d","timestamp":"2026-08-25T10:02:%02dZ"}`+"\n", i, i, i)
-		fH, err = os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := fH.WriteString(line); err != nil {
-			t.Fatal(err)
-		}
-		_ = fH.Close()
+		appendFile(t, f, line)
 
 		if _, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", ""); err != nil {
 			t.Fatalf("concurrent ingest step %d: %v", i, err)
@@ -1081,12 +757,8 @@ func TestTailEdge_InterleavedAppendThenRead(t *testing.T) {
 	close(readDone)
 	wg.Wait()
 
-	var finalCount int
-	if err := con.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id='sess-interleaved'").Scan(&finalCount); err != nil {
-		t.Fatal(err)
-	}
-	if finalCount != 9 {
-		t.Errorf("final message count after concurrent operations = %d, want 9", finalCount)
+	if got := scalarInt(t, con, "SELECT COUNT(*) FROM messages WHERE session_id='sess-interleaved'"); got != 9 {
+		t.Errorf("final message count after concurrent operations = %d, want 9", got)
 	}
 }
 
@@ -1094,7 +766,6 @@ func TestTailEdge_InterleavedAppendThenRead(t *testing.T) {
 // and Antigravity tail parsing functions.
 func TestTailEdge_ParserEdgeCases(t *testing.T) {
 	t.Run("Claude tail parser edge cases", func(t *testing.T) {
-		// Valid messages with blank and whitespace-only lines interspersed
 		chunk := []byte("\n  \n" +
 			`{"type":"user","message":{"role":"user","content":"Line 1"},"uuid":"u-1","timestamp":"2026-08-25T10:00:00Z"}` + "\n" +
 			"\t\n" +
@@ -1108,24 +779,18 @@ func TestTailEdge_ParserEdgeCases(t *testing.T) {
 			t.Fatalf("got %d messages, want 2", len(msgs))
 		}
 
-		// Malformed JSON
 		if _, err := parseClaudeTail([]byte(`{"type":"user", broken` + "\n")); err == nil {
 			t.Error("parseClaudeTail should fail on malformed JSON")
 		}
-
-		// Non-indexable record type
 		if _, err := parseClaudeTail([]byte(`{"type":"file-history-viewer","data":{}}` + "\n")); err == nil {
 			t.Error("parseClaudeTail should fail on non-indexable record type")
 		}
-
-		// Empty text
 		if _, err := parseClaudeTail([]byte(`{"type":"user","message":{"role":"user","content":""},"uuid":"u-0"}` + "\n")); err == nil {
 			t.Error("parseClaudeTail should fail on empty text")
 		}
 	})
 
 	t.Run("Codex tail parser edge cases", func(t *testing.T) {
-		// Test all Codex response_item payload types
 		items := []string{
 			`{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"User msg"}]},"timestamp":"2026-08-25T10:00:00Z"}`,
 			`{"type":"response_item","payload":{"type":"reasoning","summary":"Thinking process"},"timestamp":"2026-08-25T10:00:01Z"}`,
@@ -1146,25 +811,20 @@ func TestTailEdge_ParserEdgeCases(t *testing.T) {
 			t.Fatalf("got %d messages, want %d", len(msgs), len(items))
 		}
 
-		// Verify thinking message prefix
 		if !strings.HasPrefix(msgs[1].Text, "[THINKING]") {
 			t.Errorf("reasoning text = %q, want prefix '[THINKING]'", msgs[1].Text)
 		}
 
-		// Non response_item type (e.g. session_meta in tail) fails
 		metaChunk := []byte(`{"type":"session_meta","payload":{"id":"sess-codex-all"}}` + "\n")
 		if _, err := parseCodexTail(metaChunk, "sess-codex-all", 0); err == nil {
 			t.Error("parseCodexTail should fail on session_meta in tail")
 		}
-
-		// Malformed JSON fails
 		if _, err := parseCodexTail([]byte(`{"type":"response_item", broken`+"\n"), "sess-codex-all", 0); err == nil {
 			t.Error("parseCodexTail should fail on malformed JSON")
 		}
 	})
 
 	t.Run("Antigravity tail parser edge cases", func(t *testing.T) {
-		// Test all Antigravity step types
 		steps := []string{
 			`{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","content":"<USER_REQUEST>User prompt here</USER_REQUEST>","created_at":"2026-08-25T10:00:00Z"}`,
 			`{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","thinking":"Planning step","content":"Executing command","tool_calls":[{"name":"run_command","args":{"CommandLine":"go test"}}],"created_at":"2026-08-25T10:00:01Z"}`,
@@ -1180,25 +840,19 @@ func TestTailEdge_ParserEdgeCases(t *testing.T) {
 			t.Fatalf("got %d messages, want %d", len(msgs), len(steps))
 		}
 
-		// Verify USER_INPUT extracts request text
 		if msgs[0].Text != "User prompt here" {
 			t.Errorf("extracted user request = %q, want 'User prompt here'", msgs[0].Text)
 		}
-
-		// Verify PLANNER_RESPONSE combines thinking, content, and tool call
 		if !strings.Contains(msgs[1].Text, "[THINKING] Planning step") ||
 			!strings.Contains(msgs[1].Text, "Executing command") ||
 			!strings.Contains(msgs[1].Text, "[TOOL:run_command] go test") {
 			t.Errorf("planner response text = %q, want thinking, content, and tool call", msgs[1].Text)
 		}
 
-		// Non-indexable steps (CONVERSATION_HISTORY, CHECKPOINT) fail in tail
 		histChunk := []byte(`{"step_index":4,"type":"CONVERSATION_HISTORY","created_at":"2026-08-25T10:00:04Z"}` + "\n")
 		if _, err := parseAntigravityTail(histChunk, "sess-agy-all", 4); err == nil {
 			t.Error("parseAntigravityTail should fail on CONVERSATION_HISTORY in tail")
 		}
-
-		// Malformed JSON fails
 		if _, err := parseAntigravityTail([]byte(`{"step_index":5, broken`+"\n"), "sess-agy-all", 5); err == nil {
 			t.Error("parseAntigravityTail should fail on malformed JSON")
 		}
@@ -1211,15 +865,12 @@ func TestTailEdge_FingerprintWindowBoundaries(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "boundary_test.dat")
 
-	// Create 12KB file of deterministic pseudo-data
 	fullSize := 12288
 	data := make([]byte, fullSize)
 	for i := range data {
 		data[i] = byte((i*31 + 17) % 256)
 	}
-	if err := os.WriteFile(f, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFile(t, f, string(data))
 
 	testOffsets := []int64{
 		100,   // < 4096 (small)
@@ -1235,11 +886,8 @@ func TestTailEdge_FingerprintWindowBoundaries(t *testing.T) {
 		if prefixFP == "" {
 			t.Errorf("checkPrefixFingerprint(offset=%d) returned empty string", off)
 		}
-		// Write prefix slice to a temp file and verify that provenance.FileFingerprint matches
 		tmpF := filepath.Join(dir, fmt.Sprintf("prefix_%d.dat", off))
-		if err := os.WriteFile(tmpF, data[:off], 0o644); err != nil {
-			t.Fatal(err)
-		}
+		writeFile(t, tmpF, string(data[:off]))
 		wantFP := provenance.FileFingerprint(tmpF, off)
 		if prefixFP != wantFP {
 			t.Errorf("offset %d: checkPrefixFingerprint = %q, want FileFingerprint = %q", off, prefixFP, wantFP)
