@@ -351,24 +351,31 @@ func scanSpawnedSubagents(path string) []string {
 	return children
 }
 
-// extractParentFromPrompt parses the caller parent ID from a <subagent_reminder> block.
-func extractParentFromPrompt(s string) string {
-	const startTag = "<subagent_reminder>"
-	const endTag = "</subagent_reminder>"
+// tagContent returns the substring between startTag and endTag (or up to the
+// end of s if endTag is absent). Returns "" when startTag is absent.
+func tagContent(s, startTag, endTag string) string {
 	start := strings.Index(s, startTag)
 	if start < 0 {
 		return ""
 	}
 	sub := s[start+len(startTag):]
 	if end := strings.Index(sub, endTag); end >= 0 {
-		sub = sub[:end]
+		return sub[:end]
+	}
+	return sub
+}
+
+// extractParentFromPrompt parses the caller parent ID from a <subagent_reminder> block.
+func extractParentFromPrompt(s string) string {
+	sub := tagContent(s, "<subagent_reminder>", "</subagent_reminder>")
+	if sub == "" {
+		return ""
 	}
 	for _, line := range strings.Split(sub, "\n") {
 		if strings.Contains(line, "caller agent") || strings.Contains(line, "id:") || strings.Contains(line, "id =") {
 			if idx := strings.Index(line, "id:"); idx >= 0 {
-				val := strings.TrimSpace(line[idx+len("id:"):])
-				val = strings.Trim(val, "\", \t\r\n\\)")
-				if val != "" && len(val) >= 8 {
+				val := strings.Trim(strings.TrimSpace(line[idx+len("id:"):]), "\", \t\r\n\\)")
+				if len(val) >= 8 {
 					return val
 				}
 			}
@@ -385,22 +392,14 @@ func extractParentFromPrompt(s string) string {
 
 // extractCWDFromUserInformation parses the workspace URI from <user_information>.
 func extractCWDFromUserInformation(content string) string {
-	start := strings.Index(content, "<user_information>")
-	if start < 0 {
+	sub := tagContent(content, "<user_information>", "</user_information>")
+	if sub == "" {
 		return ""
-	}
-	sub := content[start+len("<user_information>"):]
-	end := strings.Index(sub, "</user_information>")
-	if end >= 0 {
-		sub = sub[:end]
 	}
 	for _, line := range strings.Split(sub, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.Contains(line, " -> ") {
-			parts := strings.Split(line, " -> ")
-			if len(parts) >= 1 && isAbsPath(strings.TrimSpace(parts[0])) {
-				return strings.TrimSpace(parts[0])
-			}
+		if before, _, ok := strings.Cut(line, " -> "); ok && isAbsPath(strings.TrimSpace(before)) {
+			return strings.TrimSpace(before)
 		}
 		if isAbsPath(line) {
 			return line
@@ -521,15 +520,8 @@ func NormalizeRecord(rec map[string]any) (role, text string, ok bool) {
 
 // parseUserRequest extracts the human request from an Antigravity USER_INPUT content.
 func parseUserRequest(s string) string {
-	const startTag = "<USER_REQUEST>"
-	const endTag = "</USER_REQUEST>"
-	start := strings.Index(s, startTag)
-	if start >= 0 {
-		sub := s[start+len(startTag):]
-		if end := strings.Index(sub, endTag); end >= 0 {
-			return strings.TrimSpace(sub[:end])
-		}
-		return strings.TrimSpace(sub)
+	if inner := tagContent(s, "<USER_REQUEST>", "</USER_REQUEST>"); inner != "" {
+		return strings.TrimSpace(inner)
 	}
 	return strings.TrimSpace(s)
 }
