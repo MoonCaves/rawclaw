@@ -194,23 +194,23 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 		cols := tableColumns(db, "sessions")
 		if len(cols) > 0 {
 			idCol := findMatchingCol(cols, "id", "session_id", "name")
-			if idCol != "" {
+			if idCol != "" && isSafeIdent(idCol) {
 				cwdCol := findMatchingCol(cols, "working_dir", "cwd", "workdir", "directory", "project_path")
 				parentCol := findMatchingCol(cols, "parent_id", "parent_session_id", "parent")
 				isSubCol := findMatchingCol(cols, "is_subagent", "subagent", "is_sub")
 
 				selectCols := []string{idCol}
-				if cwdCol != "" {
+				if cwdCol != "" && isSafeIdent(cwdCol) {
 					selectCols = append(selectCols, cwdCol)
 				} else {
 					selectCols = append(selectCols, "'' AS cwd")
 				}
-				if parentCol != "" {
+				if parentCol != "" && isSafeIdent(parentCol) {
 					selectCols = append(selectCols, parentCol)
 				} else {
 					selectCols = append(selectCols, "'' AS parent_id")
 				}
-				if isSubCol != "" {
+				if isSubCol != "" && isSafeIdent(isSubCol) {
 					selectCols = append(selectCols, isSubCol)
 				} else {
 					selectCols = append(selectCols, "0 AS is_sub")
@@ -265,7 +265,7 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 		}
 		idCol := findMatchingCol(cols, "id", "session_id", "key")
 		valCol := findMatchingCol(cols, "value", "val", "data")
-		if idCol != "" && valCol != "" {
+		if idCol != "" && valCol != "" && isSafeIdent(idCol) && isSafeIdent(valCol) {
 			rows, qErr := db.Query("SELECT " + idCol + ", " + valCol + " FROM session_meta LIMIT 10")
 			if qErr == nil {
 				defer rows.Close()
@@ -315,7 +315,7 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 
 	// Find the message table
 	msgTable := findMessageTable(db)
-	if msgTable == "" {
+	if msgTable == "" || !isSafeIdent(msgTable) {
 		return nil, nil // empty / unsupported
 	}
 
@@ -330,17 +330,17 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 	tsCol := findMatchingCol(cols, "created_timestamp", "created_at", "timestamp", "created", "ts", "time", "date")
 	sessionCol := findMatchingCol(cols, "session_id", "session", "sess_id", "thread_id")
 
-	if roleCol == "" || contentCol == "" {
+	if roleCol == "" || !isSafeIdent(roleCol) || contentCol == "" || !isSafeIdent(contentCol) {
 		return nil, nil
 	}
 
 	selectCols := []string{roleCol, contentCol}
-	if idCol != "" {
+	if idCol != "" && isSafeIdent(idCol) {
 		selectCols = append([]string{idCol}, selectCols...)
 	} else {
 		selectCols = append([]string{"rowid"}, selectCols...)
 	}
-	if tsCol != "" {
+	if tsCol != "" && isSafeIdent(tsCol) {
 		selectCols = append(selectCols, tsCol)
 	} else {
 		selectCols = append(selectCols, "'' AS ts")
@@ -348,18 +348,21 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(selectCols, ", "), msgTable)
 	var args []any
-	if sessionCol != "" && c.ID != "" {
+	if sessionCol != "" && c.ID != "" && isSafeIdent(sessionCol) {
 		query += fmt.Sprintf(" WHERE %s = ?", sessionCol)
 		args = append(args, c.ID)
 	}
 
 	// Determine ordering
 	orderCol := ""
-	if tsCol != "" {
+	if tsCol != "" && isSafeIdent(tsCol) {
 		orderCol = tsCol
-	} else if idCol != "" {
+	} else if idCol != "" && isSafeIdent(idCol) {
 		orderCol = idCol
 	} else {
+		orderCol = "rowid"
+	}
+	if !isSafeIdent(orderCol) {
 		orderCol = "rowid"
 	}
 	query += fmt.Sprintf(" ORDER BY %s ASC", orderCol)
@@ -420,6 +423,9 @@ func findMessageTable(db *sql.DB) string {
 }
 
 func tableColumns(db *sql.DB, tableName string) []string {
+	if !isSafeIdent(tableName) {
+		return nil
+	}
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 	if err != nil {
 		return nil
@@ -437,10 +443,26 @@ func tableColumns(db *sql.DB, tableName string) []string {
 			pk        int
 		)
 		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err == nil {
-			cols = append(cols, strings.ToLower(name))
+			name = strings.ToLower(strings.TrimSpace(name))
+			if isSafeIdent(name) {
+				cols = append(cols, name)
+			}
 		}
 	}
 	return cols
+}
+
+// isSafeIdent reports whether s is a valid and safe SQL identifier ([a-zA-Z0-9_]+).
+func isSafeIdent(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func findMatchingCol(cols []string, matches ...string) string {

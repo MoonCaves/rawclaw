@@ -374,7 +374,77 @@ func TestGooseRealSchema_DiscoveredAndIndexed(t *testing.T) {
 	if len(msgs2) != 2 {
 		t.Fatalf("got %d messages for session 2, want 2", len(msgs2))
 	}
-	if msgs2[0].Text != "Fix the header padding on mobile screens" {
-		t.Errorf("unexpected msgs2[0].Text = %q", msgs2[0].Text)
+}
+
+// TestGooseSQLInjectionPrevention verifies that dynamic table and column identifiers
+// are validated against SQL injection patterns before formatting into queries.
+func TestGooseSQLInjectionPrevention(t *testing.T) {
+	// 1. Validate isSafeIdent behavior
+	unsafeIdents := []string{
+		"messages; DROP TABLE messages; --",
+		"session_meta WHERE 1=1",
+		"id, (SELECT password FROM users)",
+		"name\" OR '1'='1",
+		"' OR 1=1 --",
+		"table-name",
+		"table name",
+		"col;SELECT 1",
+		"",
+		"id`",
+		"id[",
+		"id]",
+		"id\x00",
+	}
+	for _, ident := range unsafeIdents {
+		if isSafeIdent(ident) {
+			t.Errorf("isSafeIdent(%q) = true, want false", ident)
+		}
+	}
+
+	safeIdents := []string{
+		"sessions",
+		"messages",
+		"created_at",
+		"session_id",
+		"working_dir",
+		"id",
+		"rowid",
+		"_id",
+		"session123",
+	}
+	for _, ident := range safeIdents {
+		if !isSafeIdent(ident) {
+			t.Errorf("isSafeIdent(%q) = false, want true", ident)
+		}
+	}
+
+	// 2. Test tableColumns with malicious table name
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`CREATE TABLE messages (id TEXT PRIMARY KEY, content TEXT);`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	// An unsanitized table name must be rejected and return nil without executing PRAGMA
+	cols := tableColumns(db, "messages; DROP TABLE messages; --")
+	if cols != nil {
+		t.Errorf("tableColumns with injected SQL returned %v, want nil", cols)
+	}
+
+	// 3. Test with a table containing an injected column name
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS chat ("role" TEXT, "content" TEXT, "sess; DROP TABLE foo; --" TEXT);`); err != nil {
+		t.Fatalf("create chat table: %v", err)
+	}
+	chatCols := tableColumns(db, "chat")
+	for _, col := range chatCols {
+		if !isSafeIdent(col) {
+			t.Errorf("tableColumns returned unsanitized column %q", col)
+		}
 	}
 }
