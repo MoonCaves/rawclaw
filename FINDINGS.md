@@ -6,12 +6,16 @@ Root command wiring refactor pass.
 ## Findings
 
 - `internal/cli/cli.go:L160-175`, `L1940-1945`: stdlib: manual empty-string defaults in `BuildInfo.versionString` and `orQ`. Replace with `cmp.Or`.
-- `internal/cli/cli.go:L402-409`: shrink: `isReindexVectorsInvocation` creates a second `pflag.FlagSet` and parses argv twice. Bind `--reindex-vectors` to primary probe flagset in `resolveTimeoutFromArgs` and delete `isReindexVectorsInvocation`.
 - `internal/cli/cli.go:L1099-1159`: shrink: 3 identical 20-line resume hit helpers (`codexResumeHits`, `antigravityResumeHits`, `gooseResumeHits`). Consolidate into single `scopeResumeHits(scopes, prefix)` helper.
 - `internal/cli/cli.go:L1412-1439`: delete: duplicate `!checkedFreshness` block and redundant `scopes.Resolve` before/after in `runBrowseScoped` loop. Keep single freshness check after successful resolve.
 - `internal/cli/cli.go:L627-634`, `L719-726`, `L1320-1326`, `L1457-1463`, `L1658-1671`: shrink: repeated 8-line stale note generation and `maybeSpawnIngest` handling across read, outline, browse, and search. Extract small `staleIngestNote` and `sessionStaleNote` helpers.
 - `internal/cli/cli.go:L467-480`: shrink: `isArchiveSyncInvocation` branch cascade with redundant length checks. Simplify to direct match on leading tokens.
+- `internal/cli/cli.go:L402-409`: [RESTORED per review ruling]: Combining timeout and `--reindex-vectors` probes into a single `pflag.FlagSet` coupled parse error handling across sibling flags. Restored independent lenient probes in `resolveTimeoutFromArgs` and `isReindexVectorsInvocation`.
 - `internal/cli/cli.go:L307-320`, `L782-785`: shrink: duplicate loops collecting source IDs from `sources.Registered()` in flag completion and `runRoot`. Extract local `validSourceIDs` helper.
+
+## Review Rulings & Restorations
+
+- `internal/cli/cli.go:344` (RULED FIX-RESTORE): Combining the `--timeout` and `--reindex-vectors` preparse probes coupled their parse errors (a malformed sibling flag changed the other probe result). Restored independent lenient `pflag.FlagSet` probing for both flags.
 
 ## Cross-Package / Cross-File Opportunities (Reported, Unmodified per Fence)
 
@@ -22,4 +26,4 @@ Root command wiring refactor pass.
 
 ## Scoring
 
-net: -95 lines possible.
+net: -83 lines.
