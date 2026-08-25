@@ -93,7 +93,12 @@ func spawnIngestChild(sessionArg string) {
 	if err := cmd.Start(); err != nil {
 		return
 	}
-	_ = cmd.Process.Release()
+	// Do not release the process in a long-lived test binary: the detached
+	// child still needs to be waited on, or every stale read can leave a
+	// cli.test ingest orphan behind. The goroutine is deliberately
+	// best-effort; production callers may exit immediately after this
+	// function returns, while test callers stay alive long enough to reap it.
+	go func() { _ = cmd.Wait() }()
 }
 
 // openIngestLog opens the ingest log in the cache dir for append, rotating an
