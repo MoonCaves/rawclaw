@@ -22,6 +22,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/retention"
+	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/store"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (FTS5 + bm25 + snippet)
@@ -900,13 +901,38 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 		}
 		mtime := mtimeOf(st)
 		size := st.Size()
-		if prev, found := cur[rp]; found {
+		var prev fileMeta
+		var found bool
+		if prev, found = cur[rp]; found {
 			if absDiff(prev.mtime, mtime) < 0.001 && prev.size == size {
 				if prev.fp == provenance.FileFingerprint(f, size) {
 					continue // genuinely unchanged
 				}
 			}
 		}
+
+		if found && prev.size > 0 && size > prev.size {
+			headFP := provenance.FileFingerprint(f, prev.size)
+			if headFP != "" && headFP == prev.fp {
+				sid, isSub, parent := provenance.SessionIDFor(f, transcriptDir)
+				c := source.Container{
+					ID:         sid,
+					Path:       f,
+					IsSubagent: isSub == 1,
+					ParentID:   parent,
+				}
+				tailMs, newOffset, ok := parseTailMessages(con, c, sourceClaude, f, prev.size, size)
+				if ok {
+					newFP := provenance.FileFingerprint(f, newOffset)
+					if err := appendContainer(con, c, tailMs, sourceClaude, origin, rp, mtime, newOffset, newFP); err == nil {
+						IncrementalIngestCount.Add(1)
+						continue
+					}
+				}
+			}
+		}
+
+		FullReindexCount.Add(1)
 		if err := reindexFileWithOrigin(con, f, transcriptDir, origin, scope, rp, mtime, size); err != nil {
 			return err
 		}
