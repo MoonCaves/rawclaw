@@ -59,6 +59,8 @@ if [ -n "$session_id" ]; then
 	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
 	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+	# Fallback ladder uses 'true >' not ': >': ':' is a POSIX special builtin, so
+	# its redirection failure exits dash (Linux /bin/sh) despite the '|| true'.
 	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
 	{
 		printf '{\n'
@@ -67,7 +69,7 @@ if [ -n "$session_id" ]; then
 		printf '  "cwd": "%s",\n' "$esc_cwd"
 		printf '  "source": "claude"\n'
 		printf '}\n'
-	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || : > "$entry" 2>/dev/null || true
+	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
 fi
 
 cat <<'BANNER'
@@ -132,6 +134,8 @@ if [ -n "$session_id" ]; then
 	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
 	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+	# Fallback ladder uses 'true >' not ': >': ':' is a POSIX special builtin, so
+	# its redirection failure exits dash (Linux /bin/sh) despite the '|| true'.
 	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
 	{
 		printf '{\n'
@@ -140,7 +144,7 @@ if [ -n "$session_id" ]; then
 		printf '  "cwd": "%s",\n' "$esc_cwd"
 		printf '  "source": "codex"\n'
 		printf '}\n'
-	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || : > "$entry" 2>/dev/null || true
+	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
 fi
 
 # No python3 for JSON encoding — silent no-op rather than a hook error (a

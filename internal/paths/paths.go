@@ -113,7 +113,7 @@ func WriteCatalogEntry(catalogDir string, entry CatalogEntry) error {
 	}
 	target := filepath.Join(catalogDir, entry.SessionID)
 	tmp := filepath.Join(catalogDir, fmt.Sprintf(".tmp.%s.%d", entry.SessionID, os.Getpid()))
-	defer os.Remove(tmp)
+	defer func() { _ = os.Remove(tmp) }()
 	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
 		return err
 	}
