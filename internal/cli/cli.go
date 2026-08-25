@@ -346,7 +346,6 @@ func resolveTimeoutFromArgs(args []string, env string) time.Duration {
 	probe.ParseErrorsWhitelist.UnknownFlags = true
 	probe.SetOutput(io.Discard)
 	to := probe.Duration("timeout", defaultTimeout, "")
-	rv := probe.Bool("reindex-vectors", false, "")
 	_ = probe.Parse(args)
 
 	flagSet := probe.Changed("timeout")
@@ -380,11 +379,23 @@ func resolveTimeoutFromArgs(args []string, env string) time.Duration {
 		// parking the run. A 30s default here made the README's documented
 		// "embed your history once" flow impossible to finish on any real
 		// corpus — it self-terminated partway through, every time.
-		if *rv {
+		if isReindexVectorsInvocation(args) {
 			return 0
 		}
 	}
 	return resolved
+}
+
+// isReindexVectorsInvocation reports whether args ask for the vector backfill.
+// It is a root FLAG, not a subcommand, so this probes the flag rather than the
+// leading tokens.
+func isReindexVectorsInvocation(args []string) bool {
+	probe := pflag.NewFlagSet("rawclaw-reindex-probe", pflag.ContinueOnError)
+	probe.ParseErrorsWhitelist.UnknownFlags = true
+	probe.SetOutput(io.Discard)
+	rv := probe.Bool("reindex-vectors", false, "")
+	_ = probe.Parse(args)
+	return *rv
 }
 
 // rootValueFlags are the root command's value-taking flags whose
