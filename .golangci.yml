@@ -33,3 +33,10 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+
+issues:
+  # The dupl/gocritic/modernize findings inventoried in
+  # docs/notes/lint-baseline-20260826.md are a paydown work-list, not a CI
+  # gate: only code changed after the linters were enabled (43cb92f) is
+  # linted. Remove this ratchet once the baseline is cleared.
+  new-from-rev: 43cb92f

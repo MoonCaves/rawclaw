@@ -45,17 +45,31 @@ func pruneStaleRefreshDBs() {
 	if err != nil {
 		return
 	}
-	now := time.Now()
+	mtimes := make(map[string]time.Time, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil {
+		if info, err := entry.Info(); err == nil {
+			mtimes[entry.Name()] = info.ModTime()
+		}
+	}
+	now := time.Now()
+	// A db and its WAL/SHM sidecars age as one group: a fresh -wal means the
+	// database is still live even when the .db file itself has an old mtime.
+	for name, mt := range mtimes {
+		base := strings.TrimSuffix(strings.TrimSuffix(name, "-wal"), "-shm")
+		if !strings.HasSuffix(base, ".db") {
 			continue
 		}
-		if now.Sub(info.ModTime()) > refreshStaleAfter {
-			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		newest := mt
+		for _, sib := range []string{base, base + "-wal", base + "-shm"} {
+			if t, ok := mtimes[sib]; ok && t.After(newest) {
+				newest = t
+			}
+		}
+		if now.Sub(newest) > refreshStaleAfter {
+			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
 }
