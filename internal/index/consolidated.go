@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -404,6 +405,9 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 	if err := con.QueryRow("SELECT COUNT(*) FROM messages").Scan(&st.Messages); err != nil {
 		return st, fmt.Errorf("count messages: %w", err)
 	}
+	if err := StampIngestWatermark(con); err != nil {
+		slog.Debug("stamp ingest watermark failed", "err", err)
+	}
 	return st, nil
 }
 
@@ -433,7 +437,13 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if skipped || !changed {
 		return nil
 	}
-	return pruneTombstoned(con)
+	if err := pruneTombstoned(con); err != nil {
+		return err
+	}
+	if err := StampIngestWatermark(con); err != nil {
+		slog.Debug("stamp ingest watermark failed", "err", err)
+	}
+	return nil
 }
 
 // writeThroughConsolidated folds a per-project db into the consolidated store
@@ -598,6 +608,18 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("recount source sessions: %w", err)
 	}
+	if _, err := con.Exec(`
+		INSERT INTO main.file_index(path,mtime,size,fp,session_id)
+		SELECT path,mtime,size,fp,session_id FROM src.file_index
+		WHERE true
+		ON CONFLICT(path) DO UPDATE SET
+		  mtime = excluded.mtime,
+		  size = excluded.size,
+		  fp = excluded.fp,
+		  session_id = excluded.session_id
+	`); err != nil {
+		return 0, false, true, fmt.Errorf("merge file_index: %w", err)
+	}
 	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
 		return 0, false, true, fmt.Errorf("stamp sync watermark: %w", err)
 	}
@@ -732,6 +754,9 @@ func pruneTombstoned(con *sql.DB) error {
 		if _, err := con.Exec("DELETE FROM session_sources WHERE session_id = ? OR session_id LIKE ?", id, like); err != nil {
 			return fmt.Errorf("prune tombstoned session sources: %w", err)
 		}
+		if _, err := con.Exec("DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ?", id, like); err != nil {
+			return fmt.Errorf("prune tombstoned file_index: %w", err)
+		}
 	}
 	return nil
 }
@@ -755,4 +780,183 @@ func PerProjectDBs() ([]string, error) {
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// Meta keys for index-level freshness watermarks.
+const (
+	MetaLastIngestTime         = "last_ingest_time"
+	MetaLastIngestCatalogMTime = "last_ingest_catalog_mtime"
+)
+
+// StampIngestWatermark records the current epoch and catalog directory mtime in
+// the consolidated store's meta table so subsequent read verbs can verify freshness in O(1).
+func StampIngestWatermark(con *sql.DB) error {
+	now := strconv.FormatFloat(nowEpoch(), 'f', -1, 64)
+	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", MetaLastIngestTime, now); err != nil {
+		return fmt.Errorf("stamp %s: %w", MetaLastIngestTime, err)
+	}
+	catDir := paths.CatalogDir()
+	if st, err := os.Stat(catDir); err == nil {
+		catMTime := strconv.FormatFloat(mtimeOf(st), 'f', -1, 64)
+		if _, err := con.Exec("INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)", MetaLastIngestCatalogMTime, catMTime); err != nil {
+			return fmt.Errorf("stamp %s: %w", MetaLastIngestCatalogMTime, err)
+		}
+	}
+	return nil
+}
+
+// IndexFreshness reports the result of the O(1) index-level freshness check.
+type IndexFreshness struct {
+	Fresh  bool
+	Reason string
+}
+
+// CheckIndexFreshness evaluates whether the consolidated store is current by
+// comparing the last-ingest watermark in meta against a single stat of the session catalog dir.
+// It is strictly O(1): at most 1 stat of the catalog directory and 1 DB meta query.
+func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
+	var (
+		ingestTimeStr string
+		catMTimeStr   string
+	)
+	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestTime).Scan(&ingestTimeStr)
+	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestCatalogMTime).Scan(&catMTimeStr)
+
+	if ingestTimeStr == "" && catMTimeStr == "" {
+		return IndexFreshness{Fresh: false, Reason: "no_ingest_watermark"}, nil
+	}
+
+	catDir := paths.CatalogDir()
+	st, err := os.Stat(catDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Catalog does not exist on disk yet; if we have an ingest watermark, index is current.
+			return IndexFreshness{Fresh: true}, nil
+		}
+		return IndexFreshness{Fresh: false, Reason: "catalog_stat_failed"}, nil
+	}
+
+	curCatMTime := mtimeOf(st)
+	if catMTimeStr != "" {
+		lastCatMTime, pErr := strconv.ParseFloat(catMTimeStr, 64)
+		if pErr == nil {
+			if curCatMTime > lastCatMTime+0.001 {
+				return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
+			}
+			return IndexFreshness{Fresh: true}, nil
+		}
+	}
+
+	if ingestTimeStr != "" {
+		lastIngestTime, pErr := strconv.ParseFloat(ingestTimeStr, 64)
+		if pErr == nil {
+			if curCatMTime > lastIngestTime+0.001 {
+				return IndexFreshness{Fresh: false, Reason: "catalog_newer_than_ingest"}, nil
+			}
+			return IndexFreshness{Fresh: true}, nil
+		}
+	}
+
+	return IndexFreshness{Fresh: true}, nil
+}
+
+// SessionFreshnessStatus discriminates the freshness of an individual session.
+type SessionFreshnessStatus int
+
+const (
+	SessionFresh SessionFreshnessStatus = iota
+	SessionStale
+	SessionMissingBacking
+	SessionNotFound
+)
+
+// SessionFreshness contains the detailed outcome of an O(1) session freshness check.
+type SessionFreshness struct {
+	Status     SessionFreshnessStatus
+	SessionID  string
+	SourcePath string
+	Note       string
+}
+
+// CheckSessionFreshness checks a specific session's freshness in O(1) by comparing
+// its stored file_index watermark against a single stat of its backing transcript.
+func CheckSessionFreshness(con *sql.DB, sessionID string) (SessionFreshness, error) {
+	var (
+		fullID       string
+		sourcePath   sql.NullString
+		missingSince sql.NullFloat64
+		mtime        sql.NullFloat64
+		size         sql.NullInt64
+		fp           sql.NullString
+	)
+
+	err := con.QueryRow(`
+		SELECT s.id, s.source_path, s.missing_since, f.mtime, f.size, f.fp
+		FROM sessions s
+		LEFT JOIN file_index f ON (f.session_id = s.id OR f.path = s.source_path)
+		WHERE s.id = ? OR s.id LIKE ?
+		ORDER BY (s.id = ?) DESC
+		LIMIT 1
+	`, sessionID, sessionID+"/%", sessionID).Scan(&fullID, &sourcePath, &missingSince, &mtime, &size, &fp)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return SessionFreshness{Status: SessionNotFound, SessionID: sessionID}, nil
+	}
+	if err != nil {
+		return SessionFreshness{Status: SessionNotFound, SessionID: sessionID}, fmt.Errorf("query session watermark: %w", err)
+	}
+
+	if missingSince.Valid && missingSince.Float64 > 0 {
+		return SessionFreshness{
+			Status:     SessionMissingBacking,
+			SessionID:  fullID,
+			SourcePath: sourcePath.String,
+			Note:       "source file gone — retained history",
+		}, nil
+	}
+
+	if !sourcePath.Valid || sourcePath.String == "" {
+		return SessionFreshness{
+			Status:     SessionMissingBacking,
+			SessionID:  fullID,
+			SourcePath: "",
+			Note:       "backing transcript path unknown — answering from indexed history",
+		}, nil
+	}
+
+	rawPath := backingFilePath(sourcePath.String)
+	curMTime, curSize, curFP, statErr := backingFileState(rawPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return SessionFreshness{
+				Status:     SessionMissingBacking,
+				SessionID:  fullID,
+				SourcePath: rawPath,
+				Note:       "source file missing on disk — retained history",
+			}, nil
+		}
+		return SessionFreshness{
+			Status:     SessionStale,
+			SessionID:  fullID,
+			SourcePath: rawPath,
+			Note:       fmt.Sprintf("cannot inspect live transcript %s: %v", rawPath, statErr),
+		}, nil
+	}
+
+	if mtime.Valid && size.Valid && absDiff(mtime.Float64, curMTime) < 0.001 && size.Int64 == curSize {
+		if !fp.Valid || fp.String == "" || fp.String == curFP {
+			return SessionFreshness{
+				Status:     SessionFresh,
+				SessionID:  fullID,
+				SourcePath: rawPath,
+			}, nil
+		}
+	}
+
+	return SessionFreshness{
+		Status:     SessionStale,
+		SessionID:  fullID,
+		SourcePath: rawPath,
+		Note:       "session may be stale (transcript updated) — run 'rawclaw ingest' to refresh",
+	}, nil
 }
