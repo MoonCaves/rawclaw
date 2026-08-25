@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -138,7 +139,14 @@ func verifyFreshContainer(dbp string, c source.Container) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("verify refreshed transcript %s: %w", c.Path, err)
 	}
-	if sessionID != c.ID || size != wantSize || absDiff(mtime, wantMTime) >= 0.001 || fp != wantFP {
+	watermarkMatches := size == wantSize && fp == wantFP && absDiff(mtime, wantMTime) < 0.001
+	if size > 0 && size < wantSize {
+		// An active writer may leave a final JSONL record incomplete. The
+		// incremental path intentionally keeps the watermark at the last
+		// complete newline, so verify that prefix rather than demanding EOF.
+		watermarkMatches = checkPrefixFingerprint(rawPath, size) == fp
+	}
+	if sessionID != c.ID || !watermarkMatches {
 		return 0, fmt.Errorf("live transcript %s changed or was not fully refreshed", c.Path)
 	}
 
@@ -273,8 +281,12 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 					if len(tailMs) == 0 && newOffset == prev.size {
 						continue // writer has only supplied an incomplete trailing record
 					}
-					newFP := provenance.FileFingerprint(rawPath, newOffset)
-					if err := appendContainer(con, c, tailMs, sourceID, origin, rp, mtime, newOffset, newFP); err == nil {
+					newFP := checkPrefixFingerprint(rawPath, newOffset)
+					appendErr := appendContainer(con, c, tailMs, sourceID, origin, rp, prev.size, mtime, newOffset, newFP)
+					if errors.Is(appendErr, errAppendStale) {
+						continue // another scan committed this tail first
+					}
+					if appendErr == nil {
 						IncrementalIngestCount.Add(1)
 						continue
 					}
@@ -429,7 +441,9 @@ func reindexContainer(con *sql.DB, params reindexContainerParams) error {
 // appendContainer atomically appends new messages to an existing session under a single
 // transaction: messages, sessions message_count/last_ts, and file_index watermark are
 // updated together. If any statement or vault write fails, the transaction is rolled back.
-func appendContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64, fp string) error {
+var errAppendStale = errors.New("append watermark changed")
+
+func appendContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, expectedSize int64, mtime float64, size int64, fp string) error {
 	tx, err := con.Begin()
 	if err != nil {
 		return fmt.Errorf("session %s begin tx for append: %w", c.ID, err)
@@ -465,11 +479,17 @@ func appendContainer(con *sql.DB, c source.Container, ms []model.Message, source
 	if _, err := tx.Exec("DELETE FROM file_index WHERE session_id=? AND path<>?", c.ID, rp); err != nil {
 		return fmt.Errorf("delete stale file_index for %s: %w", c.ID, err)
 	}
-	if _, err := tx.Exec(
-		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-		rp, mtime, size, fp, c.ID,
-	); err != nil {
-		return fmt.Errorf("session %s insert file_index on append: %w", c.ID, err)
+	result, err := tx.Exec(
+		"UPDATE file_index SET mtime=?,size=?,fp=? WHERE path=? AND session_id=? AND size=?",
+		mtime, size, fp, rp, c.ID, expectedSize,
+	)
+	if err != nil {
+		return fmt.Errorf("session %s update file_index on append: %w", c.ID, err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("session %s inspect append watermark: %w", c.ID, err)
+	} else if affected != 1 {
+		return errAppendStale
 	}
 
 	if origin == "" {
