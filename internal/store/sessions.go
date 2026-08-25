@@ -7,9 +7,10 @@ package store
 import "database/sql"
 
 // BrowseSession is one recent-session row returned by BrowseSessions:
-// (id, last_ts, message_count). Preview text is a caller concern.
+// (id, project, last_ts, message_count). Preview text is a caller concern.
 type BrowseSession struct {
 	SessionID    string
+	Project      string
 	LastTS       float64
 	MessageCount int
 }
@@ -20,6 +21,13 @@ type BrowseSession struct {
 // The rows are fully drained before returning, so the single connection is free
 // for follow-up queries (D3). [view.Browse]
 func BrowseSessions(con *sql.DB, since, before string, limit int) ([]BrowseSession, error) {
+	return BrowseScopedSessions(con, since, before, "", nil, limit)
+}
+
+// BrowseScopedSessions returns the most-recent TOP-LEVEL sessions (is_subagent=0)
+// matching the optional date, source_tool, and project filters, newest first by
+// last_ts. The rows are fully drained before returning.
+func BrowseScopedSessions(con *sql.DB, since, before, sourceTool string, projects []string, limit int) ([]BrowseSession, error) {
 	where := []string{"s.is_subagent=0"}
 	var args []any
 	if since != "" {
@@ -30,14 +38,36 @@ func BrowseSessions(con *sql.DB, since, before string, limit int) ([]BrowseSessi
 		where = append(where, "date(s.last_ts,'unixepoch','localtime') <= ?")
 		args = append(args, before)
 	}
+	if sourceTool != "" {
+		// Deliberately over-inclusive so an unstamped session (NULL source_tool) is never
+		// invisible in browse. Known ceiling: cross-source project-label collisions can pull
+		// another source's sessions into a path-scoped browse (accepted, over-inclusion beats
+		// silent disappearance).
+		where = append(where, "(s.source_tool = ? OR s.source_tool IS NULL)")
+		args = append(args, sourceTool)
+	}
+	if len(projects) > 0 {
+		// Deliberately over-inclusive so an unstamped session (NULL project) is never
+		// invisible in browse.
+		//
+		// Accepted ceilings:
+		// 1. Project labels are directory basenames, so a path-scoped browse can
+		//    over-include a same-basename project from another path.
+		// 2. Reads answer from the store without triggering indexing by design
+		//    (ingest-on-write — freshness comes from write-through, see issues 7 and 8).
+		where = append(where, "(s.project IN ("+placeholders(len(projects))+") OR s.project IS NULL)")
+		for _, p := range projects {
+			args = append(args, p)
+		}
+	}
 	args = append(args, limit)
 
 	whereSQL := where[0]
 	for _, w := range where[1:] {
 		whereSQL += " AND " + w
 	}
-	q := `SELECT s.id, s.last_ts, s.message_count
-	      FROM sessions s WHERE ` + whereSQL + ` ORDER BY s.last_ts DESC LIMIT ?`
+	q := `SELECT s.id, COALESCE(s.project,''), s.last_ts, s.message_count
+	      FROM sessions s WHERE ` + whereSQL + ` ORDER BY s.last_ts DESC, s.id LIMIT ?`
 
 	rows, err := con.Query(q, args...)
 	if err != nil {
@@ -48,14 +78,20 @@ func BrowseSessions(con *sql.DB, since, before string, limit int) ([]BrowseSessi
 	var out []BrowseSession
 	for rows.Next() {
 		var (
-			id     string
-			lastTS sql.NullFloat64
-			n      sql.NullInt64
+			id      string
+			project string
+			lastTS  sql.NullFloat64
+			n       sql.NullInt64
 		)
-		if err := rows.Scan(&id, &lastTS, &n); err != nil {
+		if err := rows.Scan(&id, &project, &lastTS, &n); err != nil {
 			return nil, err
 		}
-		out = append(out, BrowseSession{SessionID: id, LastTS: lastTS.Float64, MessageCount: int(n.Int64)})
+		out = append(out, BrowseSession{
+			SessionID:    id,
+			Project:      project,
+			LastTS:       lastTS.Float64,
+			MessageCount: int(n.Int64),
+		})
 	}
 	return out, rows.Err()
 }

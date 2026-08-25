@@ -403,6 +403,34 @@ func BrowseDB(dbp string, limit int, since, before string) []BrowseRow {
 	return out
 }
 
+// BrowseScoped queries recent sessions from an open connection (draining rows
+// first) and populates preview and last activity using the same connection.
+func BrowseScoped(con *sql.DB, limit int, since, before, sourceTool string, projects []string) ([]BrowseAllRow, error) {
+	sessions, err := store.BrowseScopedSessions(con, since, before, sourceTool, projects, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]BrowseAllRow, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, BrowseAllRow{
+			Project: s.Project,
+			BrowseRow: BrowseRow{
+				SessionID: s.SessionID,
+				LastTS:    s.LastTS,
+				N:         s.MessageCount,
+			},
+		})
+	}
+
+	// Connection is now free — fill each row's two texts with their own queries.
+	for i := range out {
+		out[i].Preview = SessionPreview(con, out[i].SessionID, browsePreviewCap)
+		out[i].Last = SessionLastActivity(con, out[i].SessionID)
+	}
+	return out, nil
+}
+
 // lastActivityScan is how many trailing messages SessionLastActivity inspects
 // before giving up. A busy session's tail is mostly tool results and injected
 // envelopes, so the window has to clear those to reach real conversation —
