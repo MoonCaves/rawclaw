@@ -111,3 +111,49 @@ We constructed an explicit test simulating uncheckpointed WAL writes followed by
 ### Conclusion & Recommendation
 - Moving only a `.db` file degrades cleanly to the last-checkpointed state rather than causing runtime crashes or database read errors.
 - For maximum fidelity when archiving standalone `.db` files, callers should ideally copy or checkpoint sidecars, but the adapter's read behavior degrades safely under current conditions.
+
+---
+
+## 5. Step 4 — Hermetic Upstream Schema Test Suite & E2E Verification (#205 Resolved)
+
+To definitively complete Tracker #205, we constructed a hermetic test suite under `internal/source/goose/` that models the verified upstream Block/AAIF Goose v1.10.0+ schema directly:
+
+### 1. Hermetic Fixture Builder (`fixture_test.go`)
+`setupUpstreamGooseFixture(t, baseDir)` sets up a WAL-journaled `sessions.db` with:
+- Exact upstream DDL for `sessions` and `messages` tables.
+- Diverse realistic test sessions:
+  - **Session 1:** Multi-turn coding session with MCP JSON arrays (`[{"type":"text","text":"..."}]`), multi-block assistant responses, and MCP tool results (`[{"type":"tool_result","content":"..."}]`).
+  - **Session 2:** Web UI session with `user_set_name = 1` and isolated message history.
+  - **Session 3:** System role session with plain text fallback (non-JSON strings).
+  - **Session 4:** Empty session with zero message rows.
+
+### 2. Verification Test Suite (`e2e_test.go`)
+The adapter was exercised against this fixture across all key subsystems:
+1. **Discovery & Container Metadata (`TestGooseUpstreamSchema_DiscoveryAndContainerMetadata`):**
+   - Discovers all 4 sessions with `#<session_id>` container paths.
+   - Accurately maps `working_dir` -> `CWD`.
+   - Verifies that absent `parent_id` and `is_subagent` columns in upstream schema gracefully default to `ParentID: ""` and `IsSubagent: false`.
+   - Confirms `ResumeArgv` produces `["goose", "session", "--resume", "--session-id", <id>]`.
+2. **Message Extraction & Content Parsing (`TestGooseUpstreamSchema_MessageExtractionAndContentParsing`):**
+   - Verifies strict session isolation (`session_id = ?`) with zero message bleed.
+   - Verifies chronological ordering by timestamp.
+   - Confirms `extractContent` unpacks MCP JSON blocks, joins multi-block text with newlines, extracts tool results, and preserves plain strings.
+   - Confirms `parseTimestamp` parses SQLite `CURRENT_TIMESTAMP` format (`YYYY-MM-DD HH:MM:SS`) into epoch floats and RFC3339 strings.
+   - Confirms empty sessions return zero messages without error.
+3. **Full RawClaw Indexing & FTS5 Recall (`TestGooseUpstreamSchema_FullRawClawIndexingAndSearch`):**
+   - Feeds discovered containers through `index.EnsureIndexedContainers` into an isolated RawClaw SQLite store.
+   - Verifies that all sessions and 9 messages are indexed cleanly (`IndexFresh`).
+   - Executes FTS5 queries against `messages_fts` (e.g. searching "checkout", "navbar", "checkpoint"), verifying accurate hit counts and session mapping.
+
+### 3. Upstream Divergence Summary
+- **No breaking divergences found.**
+- Upstream Goose does not store subagent lineage or parent IDs in `sessions.db`; the adapter's column discovery handles this without errors or schema modifications.
+- Upstream message content formats (MCP JSON arrays and plain strings) are fully handled by `extractContent`.
+
+---
+
+## 6. Final Status
+
+- **Tracker #205 (Goose adapter verification against real schema):** **RESOLVED.** Verified hermetically against primary-source schema and MCP content block shapes with full indexing and FTS5 recall tests.
+- **Tracker #206 (Stranded-sidecar WAL behavior):** **RESOLVED.** Verified that moving a `.db` without `-wal`/`-shm` degrades cleanly to the last checkpoint without crashes or corruption.
+
