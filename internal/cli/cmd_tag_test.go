@@ -348,6 +348,43 @@ func TestRunTagWritePopulatesSegments(t *testing.T) {
 	}
 }
 
+// TestRunTagWriteRejectsOutOfOrderSegments verifies that tag-write rejects
+// segment starts that move backwards through the session before writing any
+// topic_segment rows.
+func TestRunTagWriteRejectsOutOfOrderSegments(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "sess-write-order-1"
+	addMsg(t, con, sid, "user", "first", "11111111-aaaa")
+	addMsg(t, con, sid, "assistant", "second", "22222222-bbbb")
+	addMsg(t, con, sid, "user", "third", "33333333-cccc")
+
+	jsonIn := `[
+		{"start_uuid":"33333333","topic":"later","summary":"third message"},
+		{"start_uuid":"11111111","topic":"earlier","summary":"first message"}
+	]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0, false); err == nil {
+		t.Fatal("expected out-of-order segment starts to be rejected")
+	} else {
+		if !strings.Contains(err.Error(), "segment 1") {
+			t.Errorf("error = %q, want the offending segment number", err)
+		}
+		if !strings.Contains(err.Error(), "segment 0") {
+			t.Errorf("error = %q, want the preceding segment number", err)
+		}
+		if !strings.Contains(err.Error(), "not after") {
+			t.Errorf("error = %q, want an ordering rejection", err)
+		}
+	}
+
+	segs, err := store.TopicsForSession(con, sid)
+	if err != nil {
+		t.Fatalf("TopicsForSession: %v", err)
+	}
+	if len(segs) != 0 {
+		t.Fatalf("stored %d segments after rejected input, want none: %+v", len(segs), segs)
+	}
+}
+
 // TestRunTagWriteRetagReplaces locks the maintainer-requested behavior: re-tagging a
 // session with --retag-all REDOES its tags — it does not stack a second set beside
 // the first, and it does not error. A first pass writes two segments; a second pass
