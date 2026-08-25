@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -300,20 +299,17 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64, fp string) error {
 	tx, err := con.Begin()
 	if err != nil {
-		slog.Warn("reindex container begin tx failed", "session", c.ID, "err", err)
-		return fmt.Errorf("begin tx: %w", err)
+		return fmt.Errorf("session %s begin tx: %w", c.ID, err)
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
 
 	if _, err := tx.Exec("DELETE FROM messages WHERE session_id=?", c.ID); err != nil {
-		slog.Warn("reindex container delete messages failed", "session", c.ID, "err", err)
-		return fmt.Errorf("delete messages: %w", err)
+		return fmt.Errorf("session %s delete messages: %w", c.ID, err)
 	}
 	if _, err := tx.Exec("DELETE FROM sessions WHERE id=?", c.ID); err != nil {
-		slog.Warn("reindex container delete sessions failed", "session", c.ID, "err", err)
-		return fmt.Errorf("delete session: %w", err)
+		return fmt.Errorf("session %s delete session: %w", c.ID, err)
 	}
 	var started, last float64
 	var startedSet, lastSet bool
@@ -322,8 +318,7 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 			"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
 			c.ID, m.Role, m.Text, m.TS, m.TSISO, m.UUID,
 		); err != nil {
-			slog.Warn("reindex container insert message failed", "session", c.ID, "err", err)
-			return fmt.Errorf("insert message: %w", err)
+			return fmt.Errorf("session %s insert message: %w", c.ID, err)
 		}
 		if m.TS != 0 {
 			if !startedSet || m.TS < started {
@@ -343,8 +338,7 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
 		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, originOr(origin), sourceID, realpath(c.Path), projectArg, cwdArg,
 	); err != nil {
-		slog.Warn("reindex container insert session failed", "session", c.ID, "err", err)
-		return fmt.Errorf("insert session: %w", err)
+		return fmt.Errorf("session %s insert session: %w", c.ID, err)
 	}
 
 	// Drop any watermark this session held under a DIFFERENT path before writing
@@ -364,22 +358,19 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
 		rp, mtime, size, fp, c.ID,
 	); err != nil {
-		slog.Warn("reindex container insert file_index failed", "session", c.ID, "err", err)
-		return fmt.Errorf("insert file_index: %w", err)
+		return fmt.Errorf("session %s insert file_index: %w", c.ID, err)
 	}
 
 	// Vault rawclaw's own copy inside the atomic success gate: own sessions
 	// only, and a failure rolls back the transaction and withholds the watermark.
 	if origin == "" {
 		if err := vaultContainer(c, ms, sourceID, projectArg, cwdArg); err != nil {
-			slog.Warn("durable transcript not written", "session", c.ID, "err", err)
-			return fmt.Errorf("vault container: %w", err)
+			return fmt.Errorf("session %s vault container: %w", c.ID, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		slog.Warn("reindex container commit failed", "session", c.ID, "err", err)
-		return fmt.Errorf("commit tx: %w", err)
+		return fmt.Errorf("session %s commit tx: %w", c.ID, err)
 	}
 	return nil
 }
