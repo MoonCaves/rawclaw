@@ -293,7 +293,98 @@ func ProjectCWD(tdir string) string {
 
 // ResolveSession finds the TOP-LEVEL session(s) whose id starts with `prefix`
 // (the 8-char label printed in search output). Subagent threads are skipped.
+// It checks the durable session catalog first for O(1) direct or flat-dir prefix
+// resolution, falling back to project-dir stem resolution if the catalog misses.
 func ResolveSession(prefix string) []SessionHit {
+	if hits := resolveSessionCatalog(prefix); len(hits) > 0 {
+		return hits
+	}
+	return resolveSessionStem(prefix)
+}
+
+func resolveSessionCatalog(prefix string) []SessionHit {
+	catDir := CatalogDir()
+	if catDir == "" {
+		return nil
+	}
+
+	// 1. Direct O(1) lookup if prefix is an exact session id / file name.
+	if prefix != "" && !strings.ContainsRune(prefix, os.PathSeparator) && !strings.ContainsRune(prefix, '/') {
+		exactPath := filepath.Join(catDir, prefix)
+		if entry, err := ReadCatalogEntry(exactPath); err == nil {
+			if hit, ok := validateCatalogHit(entry, prefix); ok {
+				return []SessionHit{hit}
+			}
+		}
+	}
+
+	// 2. Prefix scan: readdir the flat catalog directory.
+	entries, err := os.ReadDir(catDir)
+	if err != nil {
+		return nil
+	}
+
+	var hits []SessionHit
+	for _, de := range entries {
+		if de.IsDir() || strings.HasPrefix(de.Name(), ".") {
+			continue
+		}
+		if !strings.HasPrefix(de.Name(), prefix) {
+			continue
+		}
+		entryPath := filepath.Join(catDir, de.Name())
+		entry, err := ReadCatalogEntry(entryPath)
+		if err != nil {
+			continue
+		}
+		if hit, ok := validateCatalogHit(entry, prefix); ok {
+			hits = append(hits, hit)
+		}
+	}
+	return hits
+}
+
+func validateCatalogHit(entry CatalogEntry, prefix string) (SessionHit, bool) {
+	if entry.SessionID == "" || !strings.HasPrefix(entry.SessionID, prefix) {
+		return SessionHit{}, false
+	}
+	if entry.TranscriptPath == "" {
+		return SessionHit{}, false
+	}
+	fi, err := os.Stat(entry.TranscriptPath)
+	if err != nil || fi.IsDir() {
+		return SessionHit{}, false
+	}
+	return sessionHitFromCatalog(entry), true
+}
+
+func sessionHitFromCatalog(entry CatalogEntry) SessionHit {
+	cwd := entry.CWD
+	if cwd == "" {
+		cwd = firstCWD(entry.TranscriptPath)
+	}
+	var proj string
+	if pdir := ProjectDirOf(entry.TranscriptPath); pdir != "" {
+		proj = ProjectLabel(pdir)
+	} else if cwd != "" {
+		if base := baseName(strings.TrimRight(cwd, "/")); base != "" {
+			proj = base
+		} else {
+			proj = cwd
+		}
+	}
+	if proj == "" {
+		proj = ProjectLabel(filepath.Dir(entry.TranscriptPath))
+	}
+	return SessionHit{
+		SessionID: entry.SessionID,
+		Path:      entry.TranscriptPath,
+		CWD:       cwd,
+		Project:   proj,
+	}
+}
+
+func resolveSessionStem(prefix string) []SessionHit {
 	hits := []SessionHit{}
 	for _, d := range AllProjectDirs() {
 		files, _ := filepath.Glob(filepath.Join(d, "*.jsonl")) // top-level only (no subagents/ recursion)
