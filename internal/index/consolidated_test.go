@@ -1126,6 +1126,60 @@ func TestConsolidate_DeletesSessionRemovedFromSource(t *testing.T) {
 	}
 }
 
+// TestConsolidate_DistinguishesSourcesWithTheSameBasename proves that two
+// source databases in different directories keep independent contributions.
+// Otherwise syncing the second sessions.db overwrites the first contribution,
+// and deleting the second source incorrectly removes the still-live session.
+func TestConsolidate_DistinguishesSourcesWithTheSameBasename(t *testing.T) {
+	isolateCache(t)
+	const id = "same-basename-session"
+	first := seedSessionDB(t, "sessions.db", sessionRow{
+		id: id, project: "first", cwd: "/w/first", missing: 0,
+		msgs: []msgRow{{"first", "user", "first source", 100}},
+	})
+	second := seedSessionDB(t, "sessions.db", sessionRow{
+		id: id, project: "second", cwd: "/w/second", missing: 0,
+		msgs: []msgRow{{"first", "user", "first source", 100}, {"second", "user", "second source", 200}},
+	})
+
+	for _, src := range []string{first, second} {
+		if err := SyncConsolidatedFrom(src); err != nil {
+			t.Fatalf("initial sync %s: %v", src, err)
+		}
+	}
+
+	src, err := store.ConnectRW(second)
+	if err != nil {
+		t.Fatalf("open second source: %v", err)
+	}
+	if _, err := src.Exec("DELETE FROM messages WHERE session_id=?", id); err != nil {
+		src.Close()
+		t.Fatalf("delete second source messages: %v", err)
+	}
+	if _, err := src.Exec("DELETE FROM sessions WHERE id=?", id); err != nil {
+		src.Close()
+		t.Fatalf("delete second source session: %v", err)
+	}
+	if err := src.Close(); err != nil {
+		t.Fatalf("close second source: %v", err)
+	}
+
+	if err := SyncConsolidatedFrom(second); err != nil {
+		t.Fatalf("sync deleted second source: %v", err)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id=?", id); got != "1" {
+		t.Errorf("session count after deleting one same-basename source = %s, want 1", got)
+	}
+	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("missing_since after deleting one same-basename source = %s, want NULL", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id=?", id); got != "1" {
+		t.Errorf("session source count after deleting one same-basename source = %s, want 1", got)
+	}
+}
+
 // TestConsolidate_MergedSessionHonestPerContributionSemantics tests ticket #181:
 //   - A session merged from 3 sources where 1 or 2 are purged remains LIVE (missing_since = NULL).
 //   - When ALL 3 contributing sources are purged, the merged row learns of it and stamps
