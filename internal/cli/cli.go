@@ -456,15 +456,17 @@ func isConsolidateInvocation(args []string) bool {
 // default watchdog.
 func isArchiveSyncInvocation(args []string) bool {
 	w := leadingSubcommandTokens(args, 2)
-	if len(w) >= 2 && w[0] == "setup" && w[1] == "live" {
-		return true
-	}
-	if len(w) < 2 || w[0] != "archive" {
+	if len(w) < 2 {
 		return false
 	}
-	switch w[1] {
-	case "init", "push", "pull", "autosync":
+	if w[0] == "setup" && w[1] == "live" {
 		return true
+	}
+	if w[0] == "archive" {
+		switch w[1] {
+		case "init", "push", "pull", "autosync":
+			return true
+		}
 	}
 	return false
 }
