@@ -91,9 +91,13 @@ func pullDue(now time.Time) bool {
 	return age <= -pullThrottleWindow || age >= pullThrottleWindow
 }
 
-// stampPull records a successful pull by (re)writing the stamp file, updating
+// stampPull records a successful pull by (re)writing the stamp file and setting
 // its mtime to now. Best-effort: a failed stamp only means the next throttled
 // pull runs again.
 func stampPull() {
-	writeStamp(pullStampPath())
+	p := pullStampPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(p, nil, 0o644)
 }
