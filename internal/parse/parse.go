@@ -289,7 +289,21 @@ func isUpper(b byte) bool { return b >= 'A' && b <= 'Z' }
 // collapseSpaces replaces every run of whitespace with a single space and trims
 // leading/trailing spaces.
 func collapseSpaces(s string) string {
-	return strings.Join(strings.Fields(s), " ")
+	var out strings.Builder
+	out.Grow(len(s))
+	inSpace := false
+	for i := 0; i < len(s); i++ {
+		if isSpace(s[i]) {
+			inSpace = true
+			continue
+		}
+		if inSpace && out.Len() > 0 {
+			out.WriteByte(' ')
+		}
+		inSpace = false
+		out.WriteByte(s[i])
+	}
+	return out.String()
 }
 
 // TitleCap is the rune ceiling for a derived session title.
