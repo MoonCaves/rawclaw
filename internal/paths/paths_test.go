@@ -575,4 +575,3 @@ func TestCatalogEntry_ReadWrite(t *testing.T) {
 		t.Fatalf("readBack = %+v, want %+v", readBack, entry)
 	}
 }
-
