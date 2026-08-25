@@ -172,6 +172,12 @@ func TestGooseUpstreamSchema_MessageExtractionAndContentParsing(t *testing.T) {
 // of the upstream Goose database into a RawClaw cache store and verifies FTS5 keyword recall.
 func TestGooseUpstreamSchema_FullRawClawIndexingAndSearch(t *testing.T) {
 	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpDir, "data"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmpDir, "cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmpDir, "config"))
+	t.Setenv("GOOSE_HOME", filepath.Join(tmpDir, "goose"))
+
 	fix := setupUpstreamGooseFixture(t, tmpDir)
 	storeDB := filepath.Join(tmpDir, "rawclaw_index.db")
 
@@ -233,9 +239,9 @@ func TestGooseUpstreamSchema_FullRawClawIndexingAndSearch(t *testing.T) {
 
 	for _, tc := range checks {
 		rows, err := con.Query(`
-			SELECT m.session_id, m.text
+			SELECT m.session_id, m.content
 			FROM messages_fts f
-			JOIN messages m ON f.rowid = m.rowid
+			JOIN messages m ON f.rowid = m.id
 			WHERE messages_fts MATCH ?
 		`, tc.term)
 		if err != nil {
