@@ -610,20 +610,45 @@ func newReadCmd() *cobra.Command {
 				Window:           window,
 				Around:           around,
 			}
-			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], scope, more, ropts, jsonOut); err != nil {
+			var (
+				isStale bool
+				sfNote  string
+			)
+			if con, _, err := index.OpenConsolidated(); err == nil {
+				defer con.Close()
+				sessionPrefix := agentproto.NormalizeSessionArg(args[0])
+				if idx := strings.Index(sessionPrefix, ":"); idx >= 0 {
+					sessionPrefix = sessionPrefix[:idx]
+				}
+				if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil {
+					if sf.Status == index.SessionStale {
+						isStale = true
+						maybeSpawnIngest(sf.SessionID)
+					}
+					sfNote = sf.Note
+				}
+			}
+			if jsonOut {
+				ropts.ScopeFallback = more
+				res, err := agentproto.Read(args[0], scope, ropts)
+				if err != nil {
+					return err
+				}
+				return EmitJSON(cmd.OutOrStdout(), struct {
+					*agentproto.ReadResult
+					Stale     bool   `json:"stale,omitempty"`
+					StaleNote string `json:"stale_note,omitempty"`
+				}{
+					ReadResult: res,
+					Stale:      isStale,
+					StaleNote:  sfNote,
+				})
+			}
+			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], scope, more, ropts, false); err != nil {
 				return err
 			}
-			if !jsonOut {
-				if con, _, err := index.OpenConsolidated(); err == nil {
-					defer con.Close()
-					sessionPrefix := agentproto.NormalizeSessionArg(args[0])
-					if idx := strings.Index(sessionPrefix, ":"); idx >= 0 {
-						sessionPrefix = sessionPrefix[:idx]
-					}
-					if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil && sf.Note != "" {
-						fmt.Fprintf(cmd.OutOrStdout(), "note: %s\n", sf.Note)
-					}
-				}
+			if sfNote != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "note: %s\n", sfNote)
 			}
 			maybeAutosync() // after the excerpt is printed; never before
 			return nil
@@ -674,18 +699,43 @@ func newOutlineCmd() *cobra.Command {
 				IncludeThinking:  thinking,
 				IncludeSubagents: subagents,
 			}
+			var (
+				isStale bool
+				sfNote  string
+			)
+			if con, _, err := index.OpenConsolidated(); err == nil {
+				defer con.Close()
+				sessionPrefix := agentproto.NormalizeSessionArg(args[0])
+				if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil {
+					if sf.Status == index.SessionStale {
+						isStale = true
+						maybeSpawnIngest(sf.SessionID)
+					}
+					sfNote = sf.Note
+				}
+			}
+			if jsonOut {
+				oopts.ScopeFallback = more
+				res, err := agentproto.OutlineWith(args[0], scope, oopts)
+				if err != nil {
+					return err
+				}
+				return EmitJSON(cmd.OutOrStdout(), struct {
+					*agentproto.OutlineResult
+					Stale     bool   `json:"stale,omitempty"`
+					StaleNote string `json:"stale_note,omitempty"`
+				}{
+					OutlineResult: res,
+					Stale:         isStale,
+					StaleNote:     sfNote,
+				})
+			}
 			if err := agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0],
-				scope, more, oopts, jsonOut); err != nil {
+				scope, more, oopts, false); err != nil {
 				return err
 			}
-			if !jsonOut {
-				if con, _, err := index.OpenConsolidated(); err == nil {
-					defer con.Close()
-					sessionPrefix := agentproto.NormalizeSessionArg(args[0])
-					if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil && sf.Note != "" {
-						fmt.Fprintf(cmd.OutOrStdout(), "\nnote: %s\n", sf.Note)
-					}
-				}
+			if sfNote != "" {
+				fmt.Fprintf(cmd.OutOrStdout(), "\nnote: %s\n", sfNote)
 			}
 			maybeAutosync() // after the arc is printed; never before
 			return nil
@@ -1245,9 +1295,18 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 	_ = sc
 	var rows []view.BrowseRow
 	usedConsolidated := false
+	var (
+		indexStale bool
+		staleNote  string
+	)
 	if !o.Reindex {
 		if con, _, err := index.OpenConsolidated(); err == nil {
 			defer con.Close()
+			if freshness, fErr := index.CheckIndexFreshness(con); fErr == nil && !freshness.Fresh {
+				indexStale = true
+				staleNote = "sessions not yet ingested — background ingest triggered"
+				maybeSpawnIngest("")
+			}
 			if res, err := view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, []string{paths.ProjectLabel(td)}); err == nil && len(res) > 0 {
 				rows = make([]view.BrowseRow, 0, len(res))
 				for _, r := range res {
@@ -1262,9 +1321,16 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 	}
 	if o.JSON {
 		return EmitJSON(w, struct {
-			Project  string           `json:"project"`
-			Sessions []view.BrowseRow `json:"sessions"`
-		}{paths.ProjectLabel(td), rows})
+			Project   string           `json:"project"`
+			Stale     bool             `json:"stale,omitempty"`
+			StaleNote string           `json:"stale_note,omitempty"`
+			Sessions  []view.BrowseRow `json:"sessions"`
+		}{
+			Project:   paths.ProjectLabel(td),
+			Stale:     indexStale,
+			StaleNote: staleNote,
+			Sessions:  rows,
+		})
 	}
 	if o.oneline() {
 		for _, r := range rows {
@@ -1275,6 +1341,9 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 		return nil
 	}
 	render.PrintBrowse(w, rows, paths.ProjectLabel(td))
+	if staleNote != "" {
+		fmt.Fprintf(w, "\nnote: %s\n", staleNote)
+	}
 	return nil
 }
 
@@ -1292,11 +1361,18 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 	var (
 		rows             []view.BrowseAllRow
 		usedConsolidated bool
+		indexStale       bool
+		staleNote        string
 	)
 
 	if !o.Reindex {
 		if con, _, err := index.OpenConsolidated(); err == nil {
 			defer con.Close()
+			if freshness, fErr := index.CheckIndexFreshness(con); fErr == nil && !freshness.Fresh {
+				indexStale = true
+				staleNote = "sessions not yet ingested — background ingest triggered"
+				maybeSpawnIngest("")
+			}
 			var projects []string
 			if o.pathScoped() || o.ThisProject {
 				seen := make(map[string]bool, len(scope))
@@ -1342,7 +1418,7 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 	}
 
 	if o.JSON {
-		return EmitJSON(w, browseScopeJSON(o, len(scope), rows))
+		return EmitJSON(w, browseScopeJSON(o, len(scope), rows, indexStale, staleNote))
 	}
 	if o.oneline() {
 		for _, r := range rows {
@@ -1353,6 +1429,9 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 		return nil
 	}
 	render.PrintBrowseAll(w, rows, browseScopeLabel(o))
+	if staleNote != "" {
+		fmt.Fprintf(w, "\nnote: %s\n", staleNote)
+	}
 	return nil
 }
 
@@ -1364,7 +1443,7 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 // an honestly empty scope is an answer, not an error.
 func browseNoScopeMatch(w io.Writer, o *Options, universe int) error {
 	if o.JSON {
-		return EmitJSON(w, browseScopeJSON(o, 0, []view.BrowseAllRow{}))
+		return EmitJSON(w, browseScopeJSON(o, 0, []view.BrowseAllRow{}, false, ""))
 	}
 	fmt.Fprintf(w, "No project matches %s (0 of %d searchable). Try --list to see their working dirs.\n",
 		pathScopePhrase(o), universe)
@@ -1406,7 +1485,7 @@ func browseScopeLabel(o *Options) string {
 // many projects survived them — so an agent reading `sessions: []` can tell an
 // empty corpus from a filter that matched no project at all. Same
 // incompleteness-as-data posture as the search envelope's scope reports.
-func browseScopeJSON(o *Options, projects int, rows []view.BrowseAllRow) any {
+func browseScopeJSON(o *Options, projects int, rows []view.BrowseAllRow, stale bool, staleNote string) any {
 	scope := "all"
 	if o.ThisProject {
 		scope = "project"
@@ -1417,8 +1496,10 @@ func browseScopeJSON(o *Options, projects int, rows []view.BrowseAllRow) any {
 		IncludePath string              `json:"include_path,omitempty"`
 		ExcludePath string              `json:"exclude_path,omitempty"`
 		Projects    int                 `json:"projects"`
+		Stale       bool                `json:"stale,omitempty"`
+		StaleNote   string              `json:"stale_note,omitempty"`
 		Sessions    []view.BrowseAllRow `json:"sessions"`
-	}{scope, o.Source, o.IncludePath, o.ExcludePath, projects, rows}
+	}{scope, o.Source, o.IncludePath, o.ExcludePath, projects, stale, staleNote, rows}
 }
 
 // runSearch dispatches a query to the FALLBACK / BRIEF / DISCOVERY shapes.
@@ -1507,21 +1588,25 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		label = "across all projects"
 	}
 
-	// Keep the project you are working in searchable if not fresh or if an explicit
-	// folder was requested. If the index is current during default search, skip refreshing
-	// the current project entirely — O(1) reads perform no source discovery or transcript stats.
-	if !o.Reindex && !o.DirSet && !o.ThisProject {
+	var (
+		indexStale bool
+		staleNote  string
+	)
+
+	// An explicit --reindex, explicit --dir, or --this-project refreshes the targeted project.
+	// Default cross-project search answers first from the consolidated store and never blocks on indexing.
+	if o.Reindex || o.DirSet || o.ThisProject {
+		refreshThisProject(o)
+	} else {
 		if con, _, err := index.OpenConsolidated(); err == nil {
 			freshness, fErr := index.CheckIndexFreshness(con)
 			_ = con.Close()
-			if fErr != nil || !freshness.Fresh {
-				refreshThisProject(o)
+			if fErr == nil && !freshness.Fresh {
+				indexStale = true
+				staleNote = "sessions not yet ingested — background ingest triggered"
+				maybeSpawnIngest("")
 			}
-		} else {
-			refreshThisProject(o)
 		}
-	} else {
-		refreshThisProject(o)
 	}
 
 	var emb embed.Embedder
@@ -1529,9 +1614,6 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		emb = adapters.GetEmbedder()
 	}
 
-	// An explicit --reindex asks for the transcripts to be re-read, which only the
-	// per-project path does; hand it a real scope so the request is honored rather
-	// than answered from a store it never rebuilt.
 	var scope []view.Scope
 	if o.Reindex {
 		scope = sopts.ScopeFallback()
@@ -1539,7 +1621,35 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 			scope = []view.Scope{}
 		}
 	}
-	return agentproto.SearchAndRender(w, q, scope, sopts, emb, label, o.JSON)
+
+	if o.JSON {
+		env := agentproto.Search(q, scope, sopts, emb)
+		if indexStale {
+			env.Complete = false
+			env.Warnings = append(env.Warnings, agentproto.Warning{
+				Code:    "index_stale",
+				Message: staleNote,
+				Facts:   map[string]any{"stale": true},
+			})
+		}
+		return EmitJSON(w, struct {
+			agentproto.SearchEnvelope
+			Stale     bool   `json:"stale,omitempty"`
+			StaleNote string `json:"stale_note,omitempty"`
+		}{
+			SearchEnvelope: env,
+			Stale:          indexStale,
+			StaleNote:      staleNote,
+		})
+	}
+
+	if err := agentproto.SearchAndRender(w, q, scope, sopts, emb, label, false); err != nil {
+		return err
+	}
+	if !o.oneline() && indexStale {
+		fmt.Fprintf(w, "note: %s\n", staleNote)
+	}
+	return nil
 }
 
 // refreshThisProject indexes the project this command is running in, so a search
