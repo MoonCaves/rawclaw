@@ -180,7 +180,7 @@ func (a *Adapter) DiscoverRoots(roots []string) ([]source.Container, error) {
 // is found, it yields one container per session (keyed with path#id). Otherwise,
 // it treats the entire file as a standalone single-session database.
 func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
-	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro&_pragma=busy_timeout(1000)")
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro&_pragma=busy_timeout(1000)&_pragma=mmap_size(268435456)")
 	if err != nil {
 		return nil, false
 	}
@@ -306,7 +306,7 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 		backingPath = backingPath[:idx]
 	}
 
-	db, err := sql.Open("sqlite", "file:"+backingPath+"?mode=ro&_pragma=busy_timeout(1000)")
+	db, err := sql.Open("sqlite", "file:"+backingPath+"?mode=ro&_pragma=busy_timeout(1000)&_pragma=mmap_size(268435456)")
 	if err != nil {
 		return nil, fmt.Errorf("goose: open database %s: %w", backingPath, err)
 	}

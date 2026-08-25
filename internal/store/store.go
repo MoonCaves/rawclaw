@@ -297,7 +297,8 @@ func Rebuild(con *sql.DB) error {
 }
 
 // ConnectRO opens dbp in read-only mode (file:<dbp>?mode=ro). Exported so
-// sibling packages can reuse it.
+// sibling packages can reuse it. Configured with a 5s busy timeout and a
+// 256MB mmap_size so hot queries serve directly from memory-mapped pages.
 //
 // SINGLE-CONN DISCIPLINE: the pool is capped at ONE connection, so a
 // caller MUST fully drain + close a result set (rows.Close) before issuing the
@@ -305,7 +306,7 @@ func Rebuild(con *sql.DB) error {
 // rows from the first are still open — blocks forever waiting for a second
 // connection (the view.Browse / semantic.VecKNN deadlock class).
 func ConnectRO(dbp string) (*sql.DB, error) {
-	dsn := "file:" + dbp + "?mode=ro&_pragma=busy_timeout(5000)"
+	dsn := "file:" + dbp + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=mmap_size(268435456)"
 	con, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only db: %w", err)
