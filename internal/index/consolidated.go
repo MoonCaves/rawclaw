@@ -1013,7 +1013,7 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 // CheckProjectFreshness checks whether a specific project's transcript files have changed
 // since they were last indexed into the consolidated store.
 // Missing signal (e.g. hooks absent, unindexed transcripts, or missing watermarks) reports Fresh: false.
-func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string) (IndexFreshness, error) {
+func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ...string) (IndexFreshness, error) {
 	if con == nil {
 		return IndexFreshness{Fresh: false, Reason: "no_connection"}, nil
 	}
@@ -1031,13 +1031,20 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string) (IndexFreshne
 		}
 		return IndexFreshness{Fresh: false, Reason: "stat_tdir_failed"}, nil
 	}
+	selectedSource := ""
+	if len(sourceTool) > 0 {
+		selectedSource = sourceTool[0]
+	}
 
 	rows, err := con.Query(`
 		SELECT path, mtime, size, fp
 		FROM file_index
-		WHERE session_id IN (SELECT id FROM sessions WHERE project = ?)
-		   OR path LIKE ?
-	`, projectLabel, tdir+"/%")
+		WHERE (? = '' AND path LIKE ?)
+		   OR session_id IN (
+				SELECT id FROM sessions
+				WHERE project = ? AND (? = '' OR source_tool = ?)
+			)
+	`, selectedSource, tdir+"/%", projectLabel, selectedSource, selectedSource)
 	if err != nil {
 		return IndexFreshness{Fresh: false, Reason: "query_file_index_failed"}, err
 	}
