@@ -289,7 +289,6 @@ func matchInDir(dir string, opts DeleteOpts) ([]PlanItem, error) {
 	if err != nil {
 		return nil, fmt.Errorf("glob %q: %w", dir, err)
 	}
-	sort.Strings(files)
 
 	label := filepath.Base(filepath.Clean(dir))
 	out := []PlanItem{}
@@ -369,7 +368,6 @@ func projectDirs(root string) ([]string, error) {
 			out = append(out, dir)
 		}
 	}
-	sort.Strings(out)
 	return out, nil
 }
 
