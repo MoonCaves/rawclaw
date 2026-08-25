@@ -13,6 +13,7 @@
 package semantic
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha1"
 	"database/sql"
@@ -20,9 +21,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -56,23 +58,27 @@ func packVec(vec []float64) []byte {
 	return buf
 }
 
-// unpackVec decodes little-endian float32 bytes back into a float64 slice.
-// A length not divisible by 4 yields nil.
-func unpackVec(blob []byte) []float64 {
-	if len(blob)%4 != 0 {
-		return nil
-	}
-	out := make([]float64, len(blob)/4)
-	for i := range out {
-		out[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:])))
-	}
-	return out
-}
-
 // contentHash is the first 16 hex chars of the SHA-1 of the text.
 func contentHash(text string) string {
 	sum := sha1.Sum([]byte(text))
-	return hex.EncodeToString(sum[:])[:16]
+	return hex.EncodeToString(sum[:8])
+}
+
+// cleanCandidate returns the stripped prose and true if text length >= MinChars.
+// StripGenerated, not StripTools: every retrieval path scores against
+// the generated-stripped form, and the vector arm has to see the same
+// text or the two halves of the fusion are reading different corpora.
+// StripTools only drops tool runs; it leaves the runtime's own injected
+// envelopes — system reminders, task notifications, slash-command
+// plumbing, captured shell IO — which are machinery nobody said, repeat
+// near-identically across thousands of messages, and would crowd real
+// neighbours out of the cosine ranking.
+func cleanCandidate(content string) (string, bool) {
+	text := strings.TrimSpace(parse.StripGenerated(content))
+	if utf8.RuneCountInString(text) < MinChars {
+		return "", false
+	}
+	return text, true
 }
 
 // curEntry is one current (sid, hash) -> (msg_id, text) row.
@@ -119,24 +125,9 @@ func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew 
 	}
 	current := map[vecKey]curEntry{}
 	for _, m := range msgs {
-		// StripGenerated, not StripTools: every retrieval path scores against
-		// the generated-stripped form, and the vector arm has to see the same
-		// text or the two halves of the fusion are reading different corpora.
-		// StripTools only drops tool runs; it leaves the runtime's own injected
-		// envelopes — system reminders, task notifications, slash-command
-		// plumbing, captured shell IO — which are machinery nobody said, repeat
-		// near-identically across thousands of messages, and would crowd real
-		// neighbours out of the cosine ranking.
-		//
-		// This changes the content hash for any message that carried an
-		// envelope, so the prune pass below drops those stale vectors and they
-		// re-embed from the clean text. Messages that never had one hash
-		// identically and are left alone.
-		text := strings.TrimSpace(parse.StripGenerated(m.Content))
-		if len([]rune(text)) < MinChars {
-			continue
+		if text, ok := cleanCandidate(m.Content); ok {
+			current[vecKey{m.SessionID, contentHash(text)}] = curEntry{m.ID, text}
 		}
-		current[vecKey{m.SessionID, contentHash(text)}] = curEntry{m.ID, text}
 	}
 
 	// Load what we already have: (sid, hash) -> stored msg_id.
@@ -227,10 +218,7 @@ func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew 
 		vec  []float64
 	}
 
-	numWorkers := 8
-	if len(batches) < numWorkers {
-		numWorkers = len(batches)
-	}
+	numWorkers := min(8, len(batches))
 
 	batchChan := make(chan []embedItem, len(batches))
 	for _, b := range batches {
@@ -323,6 +311,9 @@ type ranked struct {
 // knn runs the brute-force cosine scan and returns the top-`k` candidates,
 // nearest first. Vectors whose dim != len(qvec) are skipped.
 func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
+	if k <= 0 {
+		return []ranked{}
+	}
 	qn := 0.0
 	for _, x := range qvec {
 		qn += x * x
@@ -333,6 +324,7 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 	}
 
 	out := make([]ranked, 0, len(rows))
+	qLenBytes := len(qvec) * 4
 	for _, r := range rows {
 		// Score straight off the packed blob rather than unpackVec'ing it first.
 		// The scan is brute-force over EVERY stored vector, so a per-row
@@ -346,7 +338,7 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 		// linear in corpus size (~4KB read per vector), which is fine at this
 		// scale and is the thing to revisit if the corpus grows an order of
 		// magnitude — not the allocation.
-		if len(r.Vec) != len(qvec)*4 {
+		if len(r.Vec) != qLenBytes {
 			continue
 		}
 		dot, nn := 0.0, 0.0
@@ -363,18 +355,13 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 	}
 
 	// Descending over (sim, msg_id, sid): sim first, then msg_id, then sid.
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].sim != out[j].sim {
-			return out[i].sim > out[j].sim
-		}
-		if out[i].msgID != out[j].msgID {
-			return out[i].msgID > out[j].msgID
-		}
-		return out[i].sid > out[j].sid
+	slices.SortFunc(out, func(a, b ranked) int {
+		return cmp.Or(
+			cmp.Compare(b.sim, a.sim),
+			cmp.Compare(b.msgID, a.msgID),
+			cmp.Compare(b.sid, a.sid),
+		)
 	})
-	if k < 0 {
-		k = 0
-	}
 	if len(out) > k {
 		out = out[:k]
 	}
@@ -384,20 +371,20 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 // VecKNN returns up to k vector-anchor VecHits nearest to qvec, existence-checked
 // against the live messages table.
 func VecKNN(con *sql.DB, qvec []float64, k int, includeSubagents bool) []VecHit {
+	if k <= 0 {
+		return []VecHit{}
+	}
 	// store.VecAll fully drains + closes its scan before returning — the
 	// single-conn pool is free for the existence-check queries below (D3). Any
 	// error (missing table, read error, late cursor error) reads as "no
 	// vectors", never a partial set.
 	stored, err := store.VecAll(con)
-	if err != nil {
-		return []VecHit{}
-	}
-	if len(stored) == 0 {
+	if err != nil || len(stored) == 0 {
 		return []VecHit{}
 	}
 
 	cand := knn(qvec, stored, k*3)
-	out := []VecHit{}
+	out := make([]VecHit, 0, min(k, len(cand)))
 	for _, c := range cand {
 		iso, parent, isSub, onlyCopy, ok := store.MessageMeta(con, c.msgID)
 		if !ok { // churned / gone row
@@ -458,11 +445,11 @@ func Fuse(con *sql.DB, kwRows []retrieve.Anchor, qvec []float64, knnK int, inclu
 	for id := range score {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		if score[ids[i]] != score[ids[j]] {
-			return score[ids[i]] > score[ids[j]]
-		}
-		return ids[i] < ids[j]
+	slices.SortFunc(ids, func(a, b int) int {
+		return cmp.Or(
+			cmp.Compare(score[b], score[a]),
+			cmp.Compare(a, b),
+		)
 	})
 
 	merged := make([]retrieve.Anchor, 0, len(ids))
@@ -498,14 +485,12 @@ func MeasureCoverage(con *sql.DB, projects ...string) (CoverageStats, error) {
 
 	current := map[vecKey]struct{}{}
 	for _, m := range msgs {
-		text := strings.TrimSpace(parse.StripGenerated(m.Content))
-		if len([]rune(text)) < MinChars {
-			continue
+		if text, ok := cleanCandidate(m.Content); ok {
+			current[vecKey{m.SessionID, contentHash(text)}] = struct{}{}
 		}
-		current[vecKey{m.SessionID, contentHash(text)}] = struct{}{}
 	}
 	if len(current) == 0 {
-		return CoverageStats{Candidates: 0, Vectored: 0, Missing: 0}, nil
+		return CoverageStats{}, nil
 	}
 
 	keys, err := store.VecKeys(con)

@@ -1,13 +1,14 @@
 package semantic
 
 import (
-	"github.com/MoonCaves/rawclaw/internal/index"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/adapters"
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/gofrs/flock"
 )
@@ -21,17 +22,21 @@ const DefaultTopupMaxNew = 50
 // database store. Within it an ordinary invocation costs one stat check.
 const topupWindow = 1 * time.Minute
 
+// topupPath returns <state-dir>/vector-topup/<encoded-dbp><ext>.
+func topupPath(dbp, ext string) string {
+	enc := filepath.Base(filepath.Clean(dbp))
+	return filepath.Join(store.CacheDir(), "vector-topup", enc+ext)
+}
+
 // topupLockPath returns the flock file path for serializing vector top-ups on a store:
 // <state-dir>/vector-topup/<encoded-dbp>.lock
 func topupLockPath(dbp string) string {
-	enc := filepath.Base(filepath.Clean(dbp))
-	return filepath.Join(store.CacheDir(), "vector-topup", enc+".lock")
+	return topupPath(dbp, ".lock")
 }
 
 // topupTokenPath returns <state-dir>/vector-topup/<encoded-dbp>.token — the spawn throttle token.
 func topupTokenPath(dbp string) string {
-	enc := filepath.Base(filepath.Clean(dbp))
-	return filepath.Join(store.CacheDir(), "vector-topup", enc+".token")
+	return topupPath(dbp, ".token")
 }
 
 // VectorTopupLogPath is <state-dir>/vector-topup.log — where the detached
@@ -46,7 +51,7 @@ func AcquireTopupToken(dbp string, now time.Time) bool {
 	p := topupTokenPath(dbp)
 	st, err := os.Stat(p)
 	if err == nil {
-		if age := now.Sub(st.ModTime()); age > -topupWindow && age < topupWindow {
+		if now.Sub(st.ModTime()).Abs() < topupWindow {
 			return false
 		}
 		_ = os.Remove(p)
@@ -80,23 +85,16 @@ func TryAcquireTopupLock(dbp string) (release func(), ok bool) {
 	return func() { _ = fl.Unlock() }, true
 }
 
-var (
-	noVectorMu sync.RWMutex
-	noVector   bool
-)
+var noVector atomic.Bool
 
 // SetNoVector records whether --no-vector is active for the current process/invocation.
 func SetNoVector(v bool) {
-	noVectorMu.Lock()
-	noVector = v
-	noVectorMu.Unlock()
+	noVector.Store(v)
 }
 
 // IsNoVector reports whether --no-vector is active.
 func IsNoVector() bool {
-	noVectorMu.RLock()
-	defer noVectorMu.RUnlock()
-	return noVector
+	return noVector.Load()
 }
 
 var (
@@ -118,14 +116,7 @@ func SetSpawnVectorTopup(fn func(string)) {
 // 2. adapters.GetEmbedder() returns nil -> return (unconfigured, zero spawns).
 // 3. AcquireTopupToken(dbp, now) -> rate-limit spawns per store.
 func MaybeVectorTopup(dbp string) {
-	if IsNoVector() {
-		return
-	}
-	emb := adapters.GetEmbedder()
-	if emb == nil {
-		return
-	}
-	if !AcquireTopupToken(dbp, time.Now()) {
+	if IsNoVector() || adapters.GetEmbedder() == nil || !AcquireTopupToken(dbp, time.Now()) {
 		return
 	}
 	spawnMu.RLock()

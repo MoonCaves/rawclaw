@@ -3,6 +3,7 @@ package semantic
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strings"
@@ -42,6 +43,18 @@ func (f fakeEmbedder) Embed(_ context.Context, text string) []float64 { return f
 type nilEmbedder struct{}
 
 func (nilEmbedder) Embed(context.Context, string) []float64 { return nil }
+
+// unpackVec decodes little-endian float32 bytes back into a float64 slice for testing.
+func unpackVec(blob []byte) []float64 {
+	if len(blob)%4 != 0 {
+		return nil
+	}
+	out := make([]float64, len(blob)/4)
+	for i := range out {
+		out[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:])))
+	}
+	return out
+}
 
 func TestPackUnpackRoundTrip(t *testing.T) {
 	cases := [][]float64{
@@ -273,6 +286,21 @@ func TestVecKNNDimMismatchSkipped(t *testing.T) {
 	// Query with a 4-dim vector: the 3-dim stored vector is skipped.
 	if got := VecKNN(con, []float64{1, 0, 0, 0}, 5, false); len(got) != 0 {
 		t.Fatalf("dim-mismatched query returned %d hits, want 0", len(got))
+	}
+}
+
+func TestVecKNNNegativeK(t *testing.T) {
+	con := openTestDB(t)
+	addMessage(t, con, "s1", "user", "a three dim message stored in the index", "2026-06-18T10:00:00Z", 0, "")
+	emb := fakeEmbedder{vecs: map[string][]float64{
+		"a three dim message stored in the index": {1, 0, 0},
+	}}
+	if _, err := VecIndex(context.Background(), con, emb, 0); err != nil {
+		t.Fatalf("VecIndex: %v", err)
+	}
+	got := VecKNN(con, []float64{1, 0, 0}, -1, false)
+	if got == nil || len(got) != 0 {
+		t.Fatalf("VecKNN with k=-1 = %v (len %d), want empty non-nil result", got, len(got))
 	}
 }
 
