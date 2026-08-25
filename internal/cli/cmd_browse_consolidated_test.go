@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
@@ -177,7 +179,10 @@ func TestBrowseConsolidated_SingleConnection(t *testing.T) {
 	}
 
 	// view.BrowseScoped uses the passed connection and does not open any others.
-	rows := view.BrowseScoped(con, 10, "", "", "", nil)
+	rows, err := view.BrowseScoped(con, 10, "", "", "", nil)
+	if err != nil {
+		t.Fatalf("BrowseScoped: %v", err)
+	}
 	if len(rows) != 4 {
 		t.Fatalf("BrowseScoped returned %d rows, want 4", len(rows))
 	}
@@ -188,6 +193,51 @@ func TestBrowseConsolidated_SingleConnection(t *testing.T) {
 	}
 	if rows[3].SessionID != "aaaa1111-0000-0000-0000-000000000001" {
 		t.Errorf("rows[3] = %s, want aaaa1111 (oldest)", rows[3].SessionID)
+	}
+}
+
+// TestBrowseConsolidated_MissingColumnFallback verifies that when consolidated.db
+// is missing the project column (or has an incompatible schema), browse falls back
+// to per-project databases and produces the same rows as the fallback path, not an empty list.
+func TestBrowseConsolidated_MissingColumnFallback(t *testing.T) {
+	_, scopeList := seedBrowseCorpus(t)
+
+	// Poison consolidated.db schema by dropping/recreating the sessions table
+	// without the `project` column (simulating an older schema version).
+	consPath := index.ConsolidatedPath()
+	con, err := sql.Open("sqlite", consPath)
+	if err != nil {
+		t.Fatalf("open consolidated db: %v", err)
+	}
+	_, err = con.Exec(`
+		DROP TABLE sessions;
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			last_ts REAL,
+			message_count INTEGER,
+			is_subagent INTEGER DEFAULT 0
+		);
+		INSERT INTO sessions (id, last_ts, message_count, is_subagent)
+		VALUES ('aaaa1111-0000-0000-0000-000000000001', 1750000000, 5, 0);
+	`)
+	_ = con.Close()
+	if err != nil {
+		t.Fatalf("recreate table without project: %v", err)
+	}
+
+	// runBrowseScoped should fall through to the fallback path and return the
+	// same rows as the fallback path rather than an empty list.
+	var buf bytes.Buffer
+	opts := Options{All: true, Limit: 10}
+	if err := runBrowseScoped(&buf, &opts, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped: %v", err)
+	}
+
+	got := buf.String()
+	for _, want := range []string{"aaaa1111", "bbbb2222", "cccc3333", "aaaa2222"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected session %s in output, got:\n%s", want, got)
+		}
 	}
 }
 

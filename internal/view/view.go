@@ -386,10 +386,10 @@ func BrowseDB(dbp string, limit int, since, before string) []BrowseRow {
 
 // BrowseScoped queries recent sessions from an open connection (draining rows
 // first) and populates preview and last activity using the same connection.
-func BrowseScoped(con *sql.DB, limit int, since, before, sourceTool string, projects []string) []BrowseAllRow {
+func BrowseScoped(con *sql.DB, limit int, since, before, sourceTool string, projects []string) ([]BrowseAllRow, error) {
 	sessions, err := store.BrowseScopedSessions(con, since, before, sourceTool, projects, limit)
 	if err != nil {
-		return []BrowseAllRow{}
+		return nil, err
 	}
 
 	out := make([]BrowseAllRow, 0, len(sessions))
@@ -409,7 +409,7 @@ func BrowseScoped(con *sql.DB, limit int, since, before, sourceTool string, proj
 		out[i].Preview = SessionPreview(con, out[i].SessionID, browsePreviewCap)
 		out[i].Last = SessionLastActivity(con, out[i].SessionID)
 	}
-	return out
+	return out, nil
 }
 
 // lastActivityScan is how many trailing messages SessionLastActivity inspects

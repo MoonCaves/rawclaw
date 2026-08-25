@@ -1251,7 +1251,10 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 		return browseNoScopeMatch(w, o, len(universe))
 	}
 
-	rows := []view.BrowseAllRow{} // non-nil so --json emits [] rather than null
+	var (
+		rows             []view.BrowseAllRow
+		usedConsolidated bool
+	)
 
 	if con, _, err := index.OpenConsolidated(); err == nil {
 		defer con.Close()
@@ -1265,8 +1268,14 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 				}
 			}
 		}
-		rows = view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, projects)
-	} else {
+		if res, err := view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, projects); err == nil {
+			rows = res
+			usedConsolidated = true
+		}
+	}
+
+	if !usedConsolidated {
+		rows = []view.BrowseAllRow{}
 		for _, sc := range scope {
 			if o.Source != "" && sc.Source != "" && sc.Source != o.Source {
 				continue
