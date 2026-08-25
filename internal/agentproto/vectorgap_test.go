@@ -16,7 +16,7 @@ type fakeCoverageEmbedder struct {
 	vecs map[string][]float64
 }
 
-func (f fakeCoverageEmbedder) Embed(text string) []float64 {
+func (f fakeCoverageEmbedder) Embed(_ context.Context, text string) []float64 {
 	if v, ok := f.vecs[text]; ok {
 		return v
 	}
