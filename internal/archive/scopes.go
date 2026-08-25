@@ -210,10 +210,14 @@ func (a *Archive) claudeScopes(m manifest, stale, reindex, ingest bool) []view.S
 			continue
 		}
 		dbp := archiveScopeDBPath(m.Name, "claude", e.Name())
+		scopeStale := stale
 		if ingest {
-			if _, _, err := index.EnsureIndexedTree(dbp, d, reindex, m.MachineID); err != nil {
+			if _, istatus, err := index.EnsureIndexedTree(dbp, d, reindex, m.MachineID); err != nil {
 				slog.Warn("archive: foreign claude scope index failed",
 					"machine", m.Name, "dir", d, "err", err)
+				scopeStale = true
+			} else if istatus == index.IndexStale {
+				scopeStale = true
 			}
 		}
 		out = append(out, view.Scope{
@@ -223,7 +227,7 @@ func (a *Archive) claudeScopes(m manifest, stale, reindex, ingest bool) []view.S
 			Source:     "claude",
 			Origin:     m.MachineID,
 			OriginName: m.Name,
-			Stale:      stale,
+			Stale:      scopeStale,
 		})
 	}
 	return out
@@ -260,12 +264,16 @@ func (a *Archive) codexScopes(m manifest, stale, reindex, ingest bool) []view.Sc
 	out := make([]view.Scope, 0, len(cwds))
 	for _, cwd := range cwds {
 		dbp := archiveScopeDBPath(m.Name, "codex", cwd)
+		scopeStale := stale
 		if ingest {
-			if _, _, ierr := index.EnsureIndexedContainers(
+			if _, istatus, ierr := index.EnsureIndexedContainers(
 				dbp, reindex, byCWD[cwd], ad.Messages, codex.Registration().ID, m.MachineID,
 			); ierr != nil {
 				slog.Warn("archive: foreign codex scope index failed",
 					"machine", m.Name, "cwd", cwd, "err", ierr)
+				scopeStale = true
+			} else if istatus == index.IndexStale {
+				scopeStale = true
 			}
 		}
 		out = append(out, view.Scope{
@@ -275,7 +283,7 @@ func (a *Archive) codexScopes(m manifest, stale, reindex, ingest bool) []view.Sc
 			Source:     "codex",
 			Origin:     m.MachineID,
 			OriginName: m.Name,
-			Stale:      stale,
+			Stale:      scopeStale,
 		})
 	}
 	return out
@@ -336,12 +344,16 @@ func (a *Archive) antigravityScopes(m manifest, stale, reindex, ingest bool) []v
 	out := make([]view.Scope, 0, len(cwds))
 	for _, cwd := range cwds {
 		dbp := archiveScopeDBPath(m.Name, antigravity.ID, cwd)
+		scopeStale := stale
 		if ingest {
-			if _, _, ierr := index.EnsureIndexedContainers(
+			if _, istatus, ierr := index.EnsureIndexedContainers(
 				dbp, reindex, byCWD[cwd], ad.Messages, antigravity.Registration().ID, m.MachineID,
 			); ierr != nil {
 				slog.Warn("archive: foreign antigravity scope index failed",
 					"machine", m.Name, "cwd", cwd, "err", ierr)
+				scopeStale = true
+			} else if istatus == index.IndexStale {
+				scopeStale = true
 			}
 		}
 		out = append(out, view.Scope{
@@ -351,7 +363,7 @@ func (a *Archive) antigravityScopes(m manifest, stale, reindex, ingest bool) []v
 			Source:     antigravity.ID,
 			Origin:     m.MachineID,
 			OriginName: m.Name,
-			Stale:      stale,
+			Stale:      scopeStale,
 		})
 	}
 	return out
