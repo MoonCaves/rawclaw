@@ -471,7 +471,6 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 // NormalizeRecord maps one transcript step to (role, flattened-text, ok).
 func NormalizeRecord(rec map[string]any) (role, text string, ok bool) {
 	stepType, _ := rec["type"].(string)
-	sourceVal, _ := rec["source"].(string)
 
 	switch stepType {
 	case "USER_INPUT":
@@ -522,11 +521,6 @@ func NormalizeRecord(rec map[string]any) (role, text string, ok bool) {
 		// Tool execution outputs (RUN_COMMAND, VIEW_FILE, GREP_SEARCH, SEARCH_WEB, CALL_MCP_TOOL, etc.)
 		if content, _ := rec["content"].(string); strings.TrimSpace(content) != "" {
 			return "tool", "[TOOL_RESULT] " + strings.TrimSpace(content), true
-		}
-		if sourceVal == "MODEL" || sourceVal == "SYSTEM" {
-			if content, _ := rec["content"].(string); strings.TrimSpace(content) != "" {
-				return "tool", "[TOOL_RESULT] " + strings.TrimSpace(content), true
-			}
 		}
 		return "", "", false
 	}
