@@ -543,9 +543,19 @@ func TestHTTPEmbedder_ContextCancellation(t *testing.T) {
 	reqStarted := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(reqStarted)
-		<-r.Context().Done()
+		// Bounded escape: on some platforms a cancelled client request does not
+		// promptly close the TCP conn, so a handler parked only on r.Context()
+		// can outlive the test and deadlock srv.Close(), which waits for active
+		// conns. The timer guarantees the handler always returns.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(3 * time.Second):
+		}
 	}))
-	defer srv.Close()
+	defer func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	}()
 
 	e := newTestEmbedder(srv.URL, wireOllama, "", "", 0)
 	e.Timeout = 10 * time.Second
@@ -576,9 +586,19 @@ func TestHTTPEmbedder_EmbedBatch_ContextCancellation(t *testing.T) {
 	reqStarted := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(reqStarted)
-		<-r.Context().Done()
+		// Bounded escape: on some platforms a cancelled client request does not
+		// promptly close the TCP conn, so a handler parked only on r.Context()
+		// can outlive the test and deadlock srv.Close(), which waits for active
+		// conns. The timer guarantees the handler always returns.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(3 * time.Second):
+		}
 	}))
-	defer srv.Close()
+	defer func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	}()
 
 	e := newTestEmbedder(srv.URL, wireOpenAI, "", "", 0)
 	e.Timeout = 10 * time.Second
