@@ -558,9 +558,9 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 	}
 }
 
-// TestRunTagWriteRoutine_ReTagReverses verifies that tagging real topic segments
-// demotes routine, and re-tagging with --routine re-establishes routine.
-func TestRunTagWriteRoutine_ReTagReverses(t *testing.T) {
+// TestRunTagWriteRoutine_ReTagPreservesTopics verifies that tagging real topic
+// segments demotes routine, and re-tagging with --routine retains those topics.
+func TestRunTagWriteRoutine_ReTagPreservesTopics(t *testing.T) {
 	con := newTagTestDB(t)
 	sid := "sess-retag-1"
 	addMsg(t, con, sid, "user", "routine test session", "11111111-aaaa")
@@ -587,8 +587,15 @@ func TestRunTagWriteRoutine_ReTagReverses(t *testing.T) {
 	if err := runTagWriteRoutine(con, sid, store.VerdictSourceAgent, 30.0); err != nil {
 		t.Fatalf("runTagWriteRoutine second time: %v", err)
 	}
-	if eff, _ := store.IsEffectivelyRoutine(con, sid); !eff {
-		t.Error("expected re-tagging with routine to re-establish routine (IsEffectivelyRoutine = true)")
+	if eff, _ := store.IsEffectivelyRoutine(con, sid); eff {
+		t.Error("expected retained real topic to keep routine verdict demoted (IsEffectivelyRoutine = false)")
+	}
+	segs, err := store.TopicsForSession(con, sid)
+	if err != nil {
+		t.Fatalf("read topics after routine re-tag: %v", err)
+	}
+	if len(segs) != 1 || segs[0].Topic != "real topic" {
+		t.Fatalf("topics after routine re-tag = %+v, want existing real topic preserved", segs)
 	}
 }
 
@@ -653,5 +660,29 @@ func TestRunTagWriteRoutine_FloorPreservesRealTopics(t *testing.T) {
 	}
 	if len(segs) != 1 || segs[0].Topic != "real" {
 		t.Fatalf("topics after floor = %+v, want existing real topic preserved", segs)
+	}
+}
+
+func TestRunTagWriteRoutine_AgentPreservesRealTopics(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "sess-agent-topic"
+	addMsg(t, con, sid, "user", "real work", "11111111-aaaa")
+	if _, err := runTagWrite(con, sid, strings.NewReader(
+		`[{"start_uuid":"11111111","topic":"real","summary":"work"}]`), 1.0, false); err != nil {
+		t.Fatalf("seed topic: %v", err)
+	}
+
+	if err := runTagWriteRoutine(con, sid, store.VerdictSourceAgent, 2.0); err != nil {
+		t.Fatalf("apply agent routine: %v", err)
+	}
+	segs, err := store.TopicsForSession(con, sid)
+	if err != nil {
+		t.Fatalf("read topics: %v", err)
+	}
+	if len(segs) != 1 || segs[0].Topic != "real" {
+		t.Fatalf("topics after agent routine = %+v, want existing real topic preserved", segs)
+	}
+	if eff, err := store.IsEffectivelyRoutine(con, sid); err != nil || eff {
+		t.Fatalf("IsEffectivelyRoutine = %v, %v, want false because the real topic survives", eff, err)
 	}
 }
