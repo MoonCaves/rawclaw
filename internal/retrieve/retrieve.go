@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -323,7 +324,7 @@ func rankMethod(in ExplainInputs) string {
 // reported as -1 (honest: we cannot recover the pre-resort bm25 ordinal here).
 func Explain(covs []int, in ExplainInputs) []ScoreExplain {
 	method := rankMethod(in)
-	terms := append([]string(nil), in.Terms...) // defensive copy; never alias the caller's slice
+	terms := slices.Clone(in.Terms) // defensive copy; never alias the caller's slice
 	out := make([]ScoreExplain, 0, len(covs))
 	for i, cov := range covs {
 		tier := "normal"
@@ -334,7 +335,7 @@ func Explain(covs []int, in ExplainInputs) []ScoreExplain {
 			Coverage: cov,
 			Final:    i,
 			Method:   method,
-			Terms:    append([]string(nil), terms...), // each hit owns its own copy
+			Terms:    slices.Clone(terms), // each hit owns its own copy
 			Tier:     tier,
 		}
 		switch method {
