@@ -43,40 +43,27 @@ func capRunes(s string, n int) string {
 	return s
 }
 
-// asString returns (v, true) when v is a JSON string. Decoded JSON objects hold
-// strings as the Go string type.
-func asString(v any) (string, bool) {
-	s, ok := v.(string)
-	return s, ok
-}
-
-// asMap returns (v, true) when v is a decoded JSON object.
-func asMap(v any) (map[string]any, bool) {
-	m, ok := v.(map[string]any)
-	return m, ok
-}
-
 // ExtractText flattens one decoded transcript record into a searchable string.
 // Includes text, thinking, system, summary, and marker-tagged tool_use /
 // tool_result so they are matchable. `obj` is a decoded JSON object.
 func ExtractText(obj map[string]any) string {
-	t, _ := asString(obj["type"])
+	t, _ := obj["type"].(string)
 
 	if t == "summary" {
-		if s, ok := asString(obj["summary"]); ok {
+		if s, ok := obj["summary"].(string); ok {
 			return "[SUMMARY] " + capRunes(s, BlockCap)
 		}
 	}
 	if t == "system" {
-		if s, ok := asString(obj["content"]); ok {
+		if s, ok := obj["content"].(string); ok {
 			return "[SYSTEM] " + capRunes(s, BlockCap)
 		}
 	}
 
-	msg, ok := asMap(obj["message"])
+	msg, ok := obj["message"].(map[string]any)
 	if !ok {
 		// No message object: fall back to a top-level string content.
-		if c, ok := asString(obj["content"]); ok {
+		if c, ok := obj["content"].(string); ok {
 			label := t
 			if label == "" {
 				label = "MISC"
@@ -87,7 +74,7 @@ func ExtractText(obj map[string]any) string {
 	}
 
 	// message.content may be a plain string.
-	if c, ok := asString(msg["content"]); ok {
+	if c, ok := msg["content"].(string); ok {
 		return capRunes(c, BlockCap)
 	}
 
@@ -97,42 +84,32 @@ func ExtractText(obj map[string]any) string {
 		return ""
 	}
 
-	parts := make([]string, 0, len(blocks))
+	var parts []string
 	for _, raw := range blocks {
-		b, ok := asMap(raw)
-		if !ok {
-			continue
-		}
-		parts = appendBlock(parts, b)
-	}
-
-	// Drop empty parts, then join the rest on a single space.
-	nonEmpty := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p != "" {
-			nonEmpty = append(nonEmpty, p)
+		if b, ok := raw.(map[string]any); ok {
+			parts = appendBlock(parts, b)
 		}
 	}
-	return strings.Join(nonEmpty, " ")
+	return strings.Join(parts, " ")
 }
 
 // appendBlock appends the flattened text for one content block, dispatching on
 // the block's type (text, thinking, tool_use, tool_result).
 func appendBlock(parts []string, b map[string]any) []string {
-	bt, _ := asString(b["type"])
+	bt, _ := b["type"].(string)
 	switch bt {
 	case "text":
-		if s, ok := asString(b["text"]); ok {
+		if s, ok := b["text"].(string); ok && s != "" {
 			parts = append(parts, capRunes(s, BlockCap))
 		}
 	case "thinking":
-		if s, ok := asString(b["thinking"]); ok {
+		if s, ok := b["thinking"].(string); ok && s != "" {
 			parts = append(parts, "[THINKING] "+capRunes(s, BlockCap))
 		}
 	case "tool_use":
-		name := "?"
-		if n, ok := asString(b["name"]); ok {
-			name = n
+		name, _ := b["name"].(string)
+		if name == "" {
+			name = "?"
 		}
 		input := b["input"]
 		if input == nil {
@@ -149,7 +126,7 @@ func appendBlock(parts []string, b map[string]any) []string {
 // directly; a list yields one tagged part per object block that carries a text
 // string.
 func appendToolResult(parts []string, content any) []string {
-	if s, ok := asString(content); ok {
+	if s, ok := content.(string); ok && s != "" {
 		return append(parts, "[TOOL_RESULT] "+capRunes(s, ToolResCap))
 	}
 	list, ok := content.([]any)
@@ -157,12 +134,10 @@ func appendToolResult(parts []string, content any) []string {
 		return parts
 	}
 	for _, raw := range list {
-		x, ok := asMap(raw)
-		if !ok {
-			continue
-		}
-		if s, ok := asString(x["text"]); ok {
-			parts = append(parts, "[TOOL_RESULT] "+capRunes(s, ToolResCap))
+		if x, ok := raw.(map[string]any); ok {
+			if s, ok := x["text"].(string); ok && s != "" {
+				parts = append(parts, "[TOOL_RESULT] "+capRunes(s, ToolResCap))
+			}
 		}
 	}
 	return parts
@@ -410,7 +385,7 @@ func DeriveTitle(records []map[string]any) (string, bool) {
 			continue
 		}
 		for _, key := range titleFields {
-			if s, ok := asString(rec[key]); ok {
+			if s, ok := rec[key].(string); ok {
 				if cleaned := titleClean(s); cleaned != "" {
 					return cleaned, true
 				}
@@ -444,10 +419,10 @@ func DeriveTitle(records []map[string]any) (string, bool) {
 // anchors the external read-ref. A record with no uuid is still indexed and
 // searchable; it is simply not returned as a primary read anchor.
 func MsgUUID(obj map[string]any) string {
-	if u, ok := asString(obj["uuid"]); ok && u != "" {
+	if u, _ := obj["uuid"].(string); u != "" {
 		return u
 	}
-	if u, ok := asString(obj["leafUuid"]); ok && u != "" {
+	if u, _ := obj["leafUuid"].(string); u != "" {
 		return u
 	}
 	return ""
@@ -457,12 +432,12 @@ func MsgUUID(obj map[string]any) string {
 // non-empty, otherwise the record type. An empty/missing role falls through to
 // type; an empty string is the result when neither yields a non-empty value.
 func MsgRole(obj map[string]any) string {
-	if msg, ok := asMap(obj["message"]); ok {
-		if role, ok := asString(msg["role"]); ok && role != "" {
+	if msg, ok := obj["message"].(map[string]any); ok {
+		if role, _ := msg["role"].(string); role != "" {
 			return role
 		}
 	}
-	if t, ok := asString(obj["type"]); ok {
+	if t, _ := obj["type"].(string); t != "" {
 		return t
 	}
 	return ""
