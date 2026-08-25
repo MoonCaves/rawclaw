@@ -1347,25 +1347,21 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 
 	if !usedConsolidated {
 		rows = []view.BrowseAllRow{}
-		var checkedFreshness bool
 		for _, sc := range scope {
-			if !checkedFreshness {
-				if dbp, _, err := scopes.Resolve(sc, o.Reindex); err == nil {
-					if db, dbErr := store.ConnectRO(dbp); dbErr == nil {
-						if f, fErr := index.CheckIndexFreshness(db); fErr == nil {
-							freshness = &f
-						}
-						_ = db.Close()
-					}
-				}
-				checkedFreshness = true
-			}
-			if o.Source != "" && sc.Source != "" && sc.Source != o.Source {
-				continue
-			}
 			dbp, _, err := scopes.Resolve(sc, o.Reindex)
 			if err != nil {
 				continue // an unresolvable scope can't contribute rows; others still can
+			}
+			if freshness == nil {
+				if db, dbErr := store.ConnectRO(dbp); dbErr == nil {
+					if f, fErr := index.CheckIndexFreshness(db); fErr == nil {
+						freshness = &f
+					}
+					_ = db.Close()
+				}
+			}
+			if o.Source != "" && sc.Source != "" && sc.Source != o.Source {
+				continue
 			}
 			for _, r := range view.BrowseDB(dbp, o.Limit, o.Since, o.Before) {
 				rows = append(rows, view.BrowseAllRow{Project: sc.Project, BrowseRow: r})
@@ -1384,8 +1380,12 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 		}
 	}
 	if !o.Reindex && freshness != nil && !freshness.Fresh {
-		indexStale = true
-		staleNote = staleIngestNote()
+		if freshness.Reason == "no_ingest_watermark" {
+			staleNote = freshnessUnknownNote()
+		} else {
+			indexStale = true
+			staleNote = staleIngestNote()
+		}
 	}
 
 	if o.JSON {
@@ -1857,6 +1857,13 @@ func staleIngestNote() string {
 		return "sessions not yet ingested — background ingest triggered"
 	}
 	return "sessions not yet ingested — run 'rawclaw ingest' to refresh"
+}
+
+func freshnessUnknownNote() string {
+	if maybeSpawnIngest("") {
+		return "index freshness unknown — background ingest triggered"
+	}
+	return "index freshness unknown — run 'rawclaw ingest' to establish it"
 }
 
 // sessionStaleNote resolves the staleness state and note for a specific session.
