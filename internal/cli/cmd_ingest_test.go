@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
@@ -420,5 +421,33 @@ func TestIngestCmd_ErrorLogging(t *testing.T) {
 	content := string(b)
 	if !strings.Contains(content, testSID) || !strings.Contains(content, "sql: connection is already closed") {
 		t.Errorf("ingest.log missing error details; got: %q", content)
+	}
+}
+
+// TestIngestCmd_HookChainDoesNotNestTheConsolidatedLock pins the #4 writer-fence
+// bug: ingestContainerWithRetry -> EnsureFreshContainer -> SyncConsolidatedFrom
+// must acquire the consolidated-store lock EXACTLY ONCE. Two independent
+// flock.New() calls on the same path do not nest even within one process
+// (flock() locks belong to the open file description, not the process), so a
+// caller that ALSO locks before this chain runs would make every hook-
+// triggered ingest hang for the fence's full wait window and then fail.
+// Reproduced live before the fix: this exact test hung 40s+ and timed out.
+func TestIngestCmd_HookChainDoesNotNestTheConsolidatedLock(t *testing.T) {
+	_, _, sessionID, _, _ := setupFreshnessTestEnv(t)
+
+	done := make(chan struct{})
+	var out string
+	var err error
+	go func() {
+		out, err = runCmd(t, NewRootCmd(BuildInfo{}), "", "ingest", sessionID)
+		close(done)
+	}()
+	select {
+	case <-done:
+		if err != nil {
+			t.Fatalf("ingest failed: %v, out: %s", err, out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ingest hook chain hung past 5s — the consolidated lock nested (see #4)")
 	}
 }
