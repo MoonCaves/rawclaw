@@ -69,10 +69,14 @@ func TestPrintDebugSearch(t *testing.T) {
 		// Full parseable ISO: pins the timefmt-seam normalization to marked UTC.
 		{SessionID: "alphasession", ISO: "2026-06-01T10:00:00.123Z", Role: "user", Snippet: "kube"},
 		{SessionID: "betasession", ISO: "", Role: "user", Snippet: "redis", Routine: true},
+		{SessionID: "gammasession", ISO: "2026-06-01T11:00:00Z", Role: "assistant", IsSubagent: true, Parent: "alphasession", Snippet: "child task"},
+		{SessionID: "deltasession", ISO: "2026-06-01T12:00:00Z", Role: "assistant", IsSubagent: true, Parent: "betasession", Snippet: "sub routine", Routine: true},
 	}
 	explains := []retrieve.ScoreExplain{
 		{BM25Rank: 0, Coverage: 1, Recency: 0, Final: 0, Method: retrieve.MethodBM25, Terms: []string{"kube"}, Tier: "normal"},
-		// deliberately omit the second explain to exercise the short-slice path
+		{BM25Rank: 1, Coverage: 1, Recency: 0, Final: 1, Method: retrieve.MethodBM25, Terms: []string{"redis"}, Tier: "routine"},
+		{BM25Rank: 2, Coverage: 1, Recency: 0, Final: 2, Method: retrieve.MethodBM25, Terms: []string{"child"}, Tier: "normal"},
+		// deliberately omit the fourth explain to exercise the short-slice path
 	}
 
 	var buf bytes.Buffer
@@ -80,14 +84,16 @@ func TestPrintDebugSearch(t *testing.T) {
 	out := buf.String()
 
 	for _, w := range []string{
-		"2 hit(s)", "scoring explainer",
+		"4 hit(s)", "scoring explainer",
 		"alphases",             // sid8 truncation of "alphasession"
 		"2026-06-01T10:00:00Z", // stored ISO normalized to marked UTC (timefmt seam)
 		retrieve.MethodBM25,
 		"tier=normal",
-		"betasess · routine", // second hit has routine marker
-		"?",                  // empty ISO rendered as "?"
-		"(no breakdown)",     // second hit has no matching explain
+		"betasess · routine",                     // second hit has routine marker
+		"gammases · subagent⟵alphases",           // third hit has subagent attribution
+		"deltases · subagent⟵betasess · routine", // fourth hit has subagent and routine marker
+		"?",              // empty ISO rendered as "?"
+		"(no breakdown)", // fourth hit has no matching explain
 	} {
 		if !strings.Contains(out, w) {
 			t.Errorf("PrintDebugSearch output missing %q in:\n%s", w, out)
