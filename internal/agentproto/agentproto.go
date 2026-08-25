@@ -143,6 +143,9 @@ const (
 	// WarnProjectSpread: the hits span several projects, so the set is wider than
 	// one context. Facts: projects, sample.
 	WarnProjectSpread = "project_spread"
+	// WarnVectorGap: the semantic tier ran with partial vector coverage over the
+	// searched corpus. Facts: candidate_msgs, vectored_msgs, missing_msgs.
+	WarnVectorGap = "vector_gap"
 	// WarnRawHistory: the standing reminder that these are raw transcripts, not
 	// current truth. No facts — it is a property of the corpus, not of this query.
 	WarnRawHistory = "raw_history"
@@ -161,6 +164,15 @@ type Warning struct {
 	Code    string         `json:"code"`
 	Message string         `json:"message"`
 	Facts   map[string]any `json:"facts,omitempty"`
+}
+
+// VectorCoverage records candidate embedding coverage across the searched
+// corpus, and whether the semantic tier ran.
+type VectorCoverage struct {
+	Ran           bool `json:"ran"`
+	CandidateMsgs int  `json:"candidate_msgs"`
+	VectoredMsgs  int  `json:"vectored_msgs"`
+	MissingMsgs   int  `json:"missing_msgs"`
 }
 
 // SearchEnvelope wraps the ranked results with the per-scope completeness
@@ -184,6 +196,10 @@ type SearchEnvelope struct {
 	TotalIsLowerBound bool   `json:"total_is_lower_bound,omitempty"`
 	HasMore           bool   `json:"has_more"`
 	NextCommand       string `json:"next_command,omitempty"`
+
+	// VectorCoverage reports candidate embedding coverage across the searched
+	// corpus, and whether the semantic tier ran.
+	VectorCoverage VectorCoverage `json:"vector_coverage"`
 
 	// Warnings carries every advisory the search wants to raise, as data. Each
 	// entry states a code, the fact that triggered it, and the human line — so an
@@ -515,13 +531,14 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		cands      []retrieve.Anchor
 		reports    []ScopeReport
 		hitCeiling bool
+		vecCov     VectorCoverage
 		answered   bool
 		storeName  = StoreConsolidated
 		storeNote  string
 	)
 
 	if scope == nil {
-		cands, reports, hitCeiling, storeNote, answered = searchOneStore(rawQuery, fetch, limit, p, qvecFn, opts)
+		cands, reports, hitCeiling, vecCov, storeNote, answered = searchOneStore(rawQuery, fetch, limit, p, qvecFn, opts)
 	}
 
 	if !answered {
@@ -533,6 +550,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			return SearchEnvelope{
 				Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true,
 				Store: storeName, StoreNote: storeNote,
+				VectorCoverage: VectorCoverage{Ran: qvecFn != nil},
 			}
 		}
 		// Apply the same scope filtering the human path does: a path predicate drops
@@ -545,10 +563,11 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 				return SearchEnvelope{
 					Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true,
 					Store: storeName, StoreNote: storeNote,
+					VectorCoverage: VectorCoverage{Ran: qvecFn != nil},
 				}
 			}
 		}
-		cands, reports, hitCeiling = collectCandidates(scope, rawQuery, fetch, p, qvecFn)
+		cands, reports, hitCeiling, vecCov = collectCandidates(scope, rawQuery, fetch, p, qvecFn)
 	}
 
 	// Withhold the caller's own live turn before anything is ranked: the prompt
@@ -636,15 +655,17 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		TotalIsLowerBound: hitCeiling,
 		HasMore:           hasMore,
 		NextCommand:       nextCmd,
+		VectorCoverage:    vecCov,
 		Warnings: buildWarnings(warningInputs{
-			results:     results,
-			reports:     reports,
-			sort:        opts.Sort,
-			newestISO:   newestISO,
-			total:       total,
-			hitCeiling:  hitCeiling,
-			droppedTurn: droppedTurn,
-			storeNote:   storeNote,
+			results:        results,
+			reports:        reports,
+			sort:           opts.Sort,
+			newestISO:      newestISO,
+			total:          total,
+			hitCeiling:     hitCeiling,
+			droppedTurn:    droppedTurn,
+			storeNote:      storeNote,
+			vectorCoverage: vecCov,
 		}),
 		ExcludedCurrentTurn: droppedTurn,
 		Store:               storeName,
@@ -656,16 +677,15 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 // struct keeps the decision in a single pure function that a test can drive
 // directly, rather than spreading conditions through the envelope literal.
 type warningInputs struct {
-	results     []SearchRef
-	reports     []ScopeReport
-	sort        string
-	newestISO   string
-	total       int
-	hitCeiling  bool
-	droppedTurn int
-	// storeNote is set only when the one store did not answer and the per-project
-	// fan-out did, and it names the reason. Empty on the normal path.
-	storeNote string
+	results        []SearchRef
+	reports        []ScopeReport
+	sort           string
+	newestISO      string
+	total          int
+	hitCeiling     bool
+	droppedTurn    int
+	storeNote      string
+	vectorCoverage VectorCoverage
 }
 
 // broadQueryMatches is the distinct-match count at which a query is called
@@ -773,6 +793,21 @@ func buildWarnings(in warningInputs) []Warning {
 		})
 	}
 
+	// Vector coverage gap: when the semantic tier ran but only part of the
+	// candidate messages have embeddings, semantic search was partial.
+	if in.vectorCoverage.Ran && in.vectorCoverage.MissingMsgs > 0 {
+		out = append(out, Warning{
+			Code: WarnVectorGap,
+			Facts: map[string]any{
+				"candidate_msgs": in.vectorCoverage.CandidateMsgs,
+				"vectored_msgs":  in.vectorCoverage.VectoredMsgs,
+				"missing_msgs":   in.vectorCoverage.MissingMsgs,
+			},
+			Message: fmt.Sprintf("semantic tier has partial coverage (%d of %d candidate messages vectored, %d missing) — run `rawclaw --reindex-vectors`",
+				in.vectorCoverage.VectoredMsgs, in.vectorCoverage.CandidateMsgs, in.vectorCoverage.MissingMsgs),
+		})
+	}
+
 	// Which reader answered: the one store and the fan-out rank differently, so a
 	// fallback has to be announced. Only the fallback is worth a warning — the one
 	// store answering is the normal path and says nothing.
@@ -825,23 +860,23 @@ func searchOneStore(
 	p retrieve.SearchParams,
 	qvecFn func() []float64,
 	opts SearchOpts,
-) (cands []retrieve.Anchor, reports []ScopeReport, hitCeiling bool, note string, ok bool) {
+) (cands []retrieve.Anchor, reports []ScopeReport, hitCeiling bool, vecCov VectorCoverage, note string, ok bool) {
 	con, sessions, err := index.OpenConsolidated()
 	if err != nil {
-		return nil, nil, false, "one store unavailable (" + err.Error() + ") — searched per project instead", false
+		return nil, nil, false, VectorCoverage{}, "one store unavailable (" + err.Error() + ") — searched per project instead", false
 	}
 	defer con.Close()
 
 	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.IncludePath, opts.ExcludePath)
 	if err != nil {
-		return nil, nil, false, "one store scope lookup failed (" + err.Error() + ") — searched per project instead", false
+		return nil, nil, false, VectorCoverage{}, "one store scope lookup failed (" + err.Error() + ") — searched per project instead", false
 	}
 	if narrowed && len(projects) == 0 {
 		// The store holds no project matching this narrowing. That is not the same
 		// as "no matches": the project's own database may exist and simply not be
 		// folded in yet, so answering empty here would hide a corpus that is on
 		// disk. The fan-out can still open it directly.
-		return nil, nil, false, "one store knows no project matching this scope — searched per project instead", false
+		return nil, nil, false, VectorCoverage{}, "one store knows no project matching this scope — searched per project instead", false
 	}
 	p.Projects = projects
 	p.SourceTool = opts.Source
@@ -852,11 +887,26 @@ func searchOneStore(
 	// conversations, not where the matches ran out. Measured pre-fusion, as the
 	// fan-out measures its own ceiling.
 	hitCeiling = !exhausted
+
+	if qvecFn != nil {
+		vecCov.Ran = true
+		var cov semantic.CoverageStats
+		if narrowed {
+			cov, _ = semantic.MeasureCoverage(con, projects...)
+		} else {
+			cov, _ = semantic.MeasureCoverage(con)
+		}
+		vecCov.CandidateMsgs = cov.Candidates
+		vecCov.VectoredMsgs = cov.Vectored
+		vecCov.MissingMsgs = cov.Missing
+	}
+
 	// Ask the open store before paying for an embedding: no chunk_vec rows means
 	// the fusion below can only reproduce keyword order.
 	if qvecFn != nil && store.HasVectors(con) {
 		rows = semantic.Fuse(con, rows, qvecFn(), fetch, p.IncludeSubagents)
 	}
+
 	dbp := index.ConsolidatedPath()
 	for i := range rows {
 		rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
@@ -889,7 +939,7 @@ func searchOneStore(
 			})
 		}
 	}
-	return cands, reports, hitCeiling, "", true
+	return cands, reports, hitCeiling, vecCov, "", true
 }
 
 // maxStoreWindow caps how far storeAnchors will widen its candidate window. It
@@ -1068,10 +1118,14 @@ func collectCandidates(
 	fetch int,
 	p retrieve.SearchParams,
 	qvecFn func() []float64,
-) ([]retrieve.Anchor, []ScopeReport, bool) {
+) ([]retrieve.Anchor, []ScopeReport, bool, VectorCoverage) {
 	cands := []retrieve.Anchor{}
 	reports := make([]ScopeReport, 0, len(scope))
 	hitCeiling := false
+	var vecCov VectorCoverage
+	if qvecFn != nil {
+		vecCov.Ran = true
+	}
 	for _, sc := range scope {
 		rep := ScopeReport{Project: sc.Project, Dir: sc.TDir}
 		dbp, status, err := scopes.Resolve(sc, false)
@@ -1095,6 +1149,12 @@ func collectCandidates(
 			// ceiling is measured on the keyword fetch (pre-fusion), since that is
 			// what saturated.
 			hitCeiling = true
+		}
+		if qvecFn != nil {
+			cov, _ := semantic.MeasureCoverage(con)
+			vecCov.CandidateMsgs += cov.Candidates
+			vecCov.VectoredMsgs += cov.Vectored
+			vecCov.MissingMsgs += cov.Missing
 		}
 		// RRF-fuse keyword anchors with vector-KNN when this database actually
 		// holds vectors (relevance mode only — qvecFn is nil under --sort).
@@ -1123,7 +1183,7 @@ func collectCandidates(
 		}
 		reports = append(reports, rep)
 	}
-	return cands, reports, hitCeiling
+	return cands, reports, hitCeiling, vecCov
 }
 
 // dropCurrentTurn removes the caller's CURRENT TURN from the candidate pool and

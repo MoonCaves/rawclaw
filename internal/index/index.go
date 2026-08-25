@@ -313,18 +313,22 @@ func migrateDurabilityColumns(con *sql.DB, sourceID string) error {
 	// A row with no file_index watermark simply stays NULL on source_path;
 	// missing_since stays NULL — an existing session is present until a scan proves
 	// otherwise.
-	var needsBackfill int
-	if err := con.QueryRow("SELECT 1 FROM sessions WHERE origin_machine IS NULL LIMIT 1").Scan(&needsBackfill); err == nil && needsBackfill == 1 {
-		if _, err := con.Exec(
-			`UPDATE sessions
-			    SET origin_machine = ?,
-			        source_tool = ?,
-			        source_path = (SELECT path FROM file_index WHERE file_index.session_id = sessions.id)
-			  WHERE origin_machine IS NULL`,
-			provenance.MachineID(), sourceID,
-		); err != nil {
-			return fmt.Errorf("backfill provenance: %w", err)
-		}
+	//
+	// The UPDATE runs unconditionally. Its own WHERE clause is the row-state gate, so
+	// on an already-stamped db it matches zero rows and costs nothing worth guarding.
+	// A SELECT probe in front of it was tried and removed: it could only skip a no-op,
+	// and it turned every probe-time failure — SQLITE_BUSY, an I/O error — into a
+	// silent success, because a non-nil Scan error fell through to `return nil` and
+	// reported a fully migrated schema to callers that then wrote against it.
+	if _, err := con.Exec(
+		`UPDATE sessions
+		    SET origin_machine = ?,
+		        source_tool = ?,
+		        source_path = (SELECT path FROM file_index WHERE file_index.session_id = sessions.id)
+		  WHERE origin_machine IS NULL`,
+		provenance.MachineID(), sourceID,
+	); err != nil {
+		return fmt.Errorf("backfill provenance: %w", err)
 	}
 	return nil
 }
@@ -566,42 +570,41 @@ func ReindexFile(con *sql.DB, path, transcriptDir string) bool {
 		return false
 	}
 	rp := realpath(path)
-	return reindexFileWithOrigin(con, path, transcriptDir, "", dirScope(transcriptDir), rp, mtimeOf(st), st.Size())
+	return reindexFileWithOrigin(con, path, transcriptDir, "", dirScope(transcriptDir), rp, mtimeOf(st), st.Size()) == nil
 }
 
 // reindexFileWithOrigin atomically replaces one session's rows under a single
 // transaction: messages, sessions row, and file_index watermark are written
 // together. If any statement or the durable vault write fails, the transaction
-// is rolled back.
-func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scope projectScope, rp string, mtime float64, size int64) bool {
+// is rolled back. Returns an error on any failure.
+func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scope projectScope, rp string, mtime float64, size int64) error {
 	sid, isSub, parent := provenance.SessionIDFor(path, transcriptDir)
 
 	rows, started, last, cwd, ok := parseTranscript(path, sid)
 	if !ok {
-		return false // parse failed -> leave existing rows + watermark untouched
+		return nil // parse failed -> leave existing rows + watermark untouched
 	}
 
 	tx, err := con.Begin()
 	if err != nil {
-		slog.Warn("reindex file begin tx failed", "session", sid, "err", err)
-		return false
+		return fmt.Errorf("session %s begin tx: %w", sid, err)
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
 
 	if _, err := tx.Exec("DELETE FROM messages WHERE session_id=?", sid); err != nil {
-		return false
+		return fmt.Errorf("session %s delete messages: %w", sid, err)
 	}
 	if _, err := tx.Exec("DELETE FROM sessions WHERE id=?", sid); err != nil {
-		return false
+		return fmt.Errorf("session %s delete session: %w", sid, err)
 	}
 	for _, r := range rows {
 		if _, err := tx.Exec(
 			"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
 			sid, r.role, r.content, r.ts, r.tsISO, r.uuid,
 		); err != nil {
-			return false
+			return fmt.Errorf("session %s insert message: %w", sid, err)
 		}
 	}
 	var parentArg any
@@ -613,29 +616,34 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scop
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
 		sid, started, last, len(rows), isSub, parentArg, originOr(origin), sourceClaude, realpath(path), projectArg, cwdArg,
 	); err != nil {
-		return false
+		return fmt.Errorf("session %s insert session: %w", sid, err)
 	}
 
+	// Drop any watermark this session held under a DIFFERENT path before writing
+	// the current one — see the same guard in reindexContainer. Keyed by path, an
+	// orphaned row looks to retention like a purged source and prunes a session
+	// that is still present.
+	if _, err := tx.Exec("DELETE FROM file_index WHERE session_id=? AND path<>?", sid, rp); err != nil {
+		return fmt.Errorf("delete stale file_index: %w", err)
+	}
 	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
 		rp, mtime, size, provenance.FileFingerprint(path, size), sid,
 	); err != nil {
-		return false
+		return fmt.Errorf("session %s insert file_index: %w", sid, err)
 	}
 
 	// Vault rawclaw's own copy inside the atomic success gate.
 	if origin == "" {
 		if err := vaultFile(path, sid, isSub, parent, projectArg, cwdArg); err != nil {
-			slog.Warn("durable transcript not written", "session", sid, "err", err)
-			return false
+			return fmt.Errorf("session %s vault file: %w", sid, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		slog.Warn("reindex file commit failed", "session", sid, "err", err)
-		return false
+		return fmt.Errorf("session %s commit tx: %w", sid, err)
 	}
-	return true
+	return nil
 }
 
 // vaultFile stores rawclaw's own copy of a Claude-shape transcript, carrying the
@@ -899,8 +907,8 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 				}
 			}
 		}
-		if !reindexFileWithOrigin(con, f, transcriptDir, origin, scope, rp, mtime, size) {
-			continue
+		if err := reindexFileWithOrigin(con, f, transcriptDir, origin, scope, rp, mtime, size); err != nil {
+			return err
 		}
 	}
 
