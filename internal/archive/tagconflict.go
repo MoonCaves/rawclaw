@@ -3,7 +3,7 @@ package archive
 import (
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,15 +27,9 @@ func writeTagConflicts(sids []string) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
-	uniq := map[string]struct{}{}
-	for _, s := range sids {
-		uniq[s] = struct{}{}
-	}
-	sorted := make([]string, 0, len(uniq))
-	for s := range uniq {
-		sorted = append(sorted, s)
-	}
-	sort.Strings(sorted)
+	sorted := slices.Clone(sids)
+	slices.Sort(sorted)
+	sorted = slices.Compact(sorted)
 	body := strings.Join(sorted, "\n")
 	if body != "" {
 		body += "\n"
@@ -109,8 +103,9 @@ func stampTagIngest() {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return
 	}
-	_ = os.WriteFile(p, nil, 0o644)
-	_ = os.Chtimes(p, time.Time{}, time.Now())
+	if err := os.WriteFile(p, nil, 0o644); err == nil {
+		_ = os.Chtimes(p, time.Time{}, time.Now())
+	}
 }
 
 // allMachineDirs lists every machine dir name in the clone — this machine plus

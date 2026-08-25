@@ -3,7 +3,7 @@ package archive
 import (
 	"crypto/sha1"
 	"encoding/hex"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -110,12 +110,9 @@ func resolveVerdict(files []TagFile) (*TagVerdict, string) {
 // hasRealSegment reports whether a segment set carries at least one non-empty
 // topic — the "real tag" signal that outranks a routine/empty file.
 func hasRealSegment(segs []TagSegment) bool {
-	for _, s := range segs {
-		if strings.TrimSpace(s.Topic) != "" {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(segs, func(s TagSegment) bool {
+		return strings.TrimSpace(s.Topic) != ""
+	})
 }
 
 // segHash is a content hash of a segment set, order-independent (segments are
@@ -123,9 +120,10 @@ func hasRealSegment(segs []TagSegment) bool {
 // any row order — collide and are not treated as a conflict. Covers the fields a
 // human would call "the tagging": boundaries + topic + summary.
 func segHash(segs []TagSegment) string {
-	sorted := make([]TagSegment, len(segs))
-	copy(sorted, segs)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].StartUUID < sorted[j].StartUUID })
+	sorted := slices.Clone(segs)
+	slices.SortFunc(sorted, func(a, b TagSegment) int {
+		return strings.Compare(a.StartUUID, b.StartUUID)
+	})
 	h := sha1.New()
 	for _, s := range sorted {
 		// NUL-delimit so field boundaries can't be forged by content.

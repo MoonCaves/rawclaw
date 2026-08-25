@@ -39,16 +39,14 @@ func sanitizeMachineName(host string) string {
 	if i := strings.IndexByte(host, '.'); i >= 0 {
 		host = host[:i]
 	}
-	var b strings.Builder
-	for _, r := range host {
+	out := strings.Trim(strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
-			b.WriteRune(r)
+			return r
 		default:
-			b.WriteByte('-')
+			return '-'
 		}
-	}
-	out := strings.Trim(b.String(), "-")
+	}, host), "-")
 	if out == "" {
 		return "machine"
 	}

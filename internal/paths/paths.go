@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -48,6 +48,13 @@ func ConfigDir() string {
 	return expandHome("~/.claude")
 }
 
+func rawclawDataDir(subdir string) string {
+	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
+		return filepath.Join(x, "rawclaw", subdir)
+	}
+	return expandHome(filepath.Join("~/.local/share/rawclaw", subdir))
+}
+
 // TranscriptsRoot is the durable home for rawclaw's OWN copy of every session
 // it indexes — the transcript vault. It lives in the XDG DATA dir, NOT the
 // disposable cache (which holds only rebuildable index dbs), because the vault
@@ -57,10 +64,7 @@ func ConfigDir() string {
 // NOT when the session was last active: freshness comes from the live
 // sources, which are re-indexed on every invoke.
 func TranscriptsRoot() string {
-	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
-		return filepath.Join(x, "rawclaw", "transcripts")
-	}
-	return expandHome("~/.local/share/rawclaw/transcripts")
+	return rawclawDataDir("transcripts")
 }
 
 // CatalogDir is the durable home for rawclaw's session catalog: one flat
@@ -71,10 +75,7 @@ func CatalogDir() string {
 	if c := os.Getenv("RAWCLAW_CATALOG_DIR"); c != "" {
 		return c
 	}
-	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
-		return filepath.Join(x, "rawclaw", "catalog")
-	}
-	return expandHome("~/.local/share/rawclaw/catalog")
+	return rawclawDataDir("catalog")
 }
 
 // CatalogEntry is one entry in the durable session catalog.
@@ -147,13 +148,13 @@ func FindTranscriptDir(cwd string) string {
 
 	if isDir(root) {
 		entries, _ := filepath.Glob(filepath.Join(root, "*"))
-		sort.Strings(entries)
+		slices.Sort(entries)
 		for _, d := range entries {
 			if !isDir(d) {
 				continue
 			}
 			files, _ := filepath.Glob(filepath.Join(d, "*.jsonl"))
-			sort.Strings(files)
+			slices.Sort(files)
 			for _, f := range files { // check ALL top-level files, not just first
 				rec := firstCWD(f)
 				if rec != "" && realpath(rec) == target {
@@ -234,10 +235,8 @@ func ProjectLabel(tdir string) string {
 // path: a caller storing a cwd needs to tell "the sessions here ran in /x/y"
 // apart from "nothing here records where it ran."
 func DirCWD(tdir string) string {
-	for _, f := range firstTopLevelJSONL(tdir) {
-		if c := firstCWD(f); c != "" {
-			return c
-		}
+	if f := firstTopLevelJSONL(tdir); f != "" {
+		return firstCWD(f)
 	}
 	return ""
 }
@@ -273,7 +272,7 @@ func ProjectDirOf(jsonlPath string) string {
 func AllProjectDirs() []string {
 	root := ProjectsRoot()
 	entries, _ := filepath.Glob(filepath.Join(root, "*"))
-	sort.Strings(entries)
+	slices.Sort(entries)
 
 	out := []string{}
 	for _, d := range entries {
@@ -393,7 +392,7 @@ func resolveSessionStem(prefix string) []SessionHit {
 	hits := []SessionHit{}
 	for _, d := range AllProjectDirs() {
 		files, _ := filepath.Glob(filepath.Join(d, "*.jsonl")) // top-level only (no subagents/ recursion)
-		sort.Strings(files)
+		slices.Sort(files)
 		for _, f := range files {
 			stem := strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))
 			if strings.HasPrefix(stem, prefix) {
@@ -443,15 +442,15 @@ func firstCWD(jsonlPath string) string {
 	return ""
 }
 
-// firstTopLevelJSONL returns the first (sorted) top-level *.jsonl in tdir, or an
-// empty slice. Used by project_label / project_cwd to sample one transcript.
-func firstTopLevelJSONL(tdir string) []string {
+// firstTopLevelJSONL returns the first (sorted) top-level *.jsonl in tdir, or
+// "". Used by project_label / project_cwd to sample one transcript.
+func firstTopLevelJSONL(tdir string) string {
 	files, _ := filepath.Glob(filepath.Join(tdir, "*.jsonl"))
 	if len(files) == 0 {
-		return nil
+		return ""
 	}
-	sort.Strings(files)
-	return files[:1]
+	slices.Sort(files)
+	return files[0]
 }
 
 // globRecursiveJSONL returns every *.jsonl at any depth under root (including
@@ -468,7 +467,7 @@ func globRecursiveJSONL(root string) []string {
 		}
 		return nil
 	})
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -509,7 +508,7 @@ func expandHome(path string) string {
 	if path == "~" {
 		return home
 	}
-	return filepath.Join(home, path[2:])
+	return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 }
 
 // realpath canonicalizes a path, resolving symlinks for the components that
