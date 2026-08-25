@@ -225,7 +225,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.BoolVar(&opts.All, "all", false, "cover every project: the search default already, and the widener for bare browse and --stats")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
 	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
-	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|antigravity|goose); default searches all")
+	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|antigravity|goose); default searches all (goose discovery is opt-in: pass --source goose or set RAWCLAW_GOOSE=1)")
 	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
 	f.BoolVar(&opts.IncludeTools, "include-tools", false, "also match/show tool calls + tool-only hits")
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
@@ -922,7 +922,7 @@ func runResume(w io.Writer, o *Options) error {
 	}{
 		{"codex", scopes.Codex(false)},
 		{"antigravity", scopes.Antigravity(false)},
-		{"goose", scopes.Goose(false)},
+		{"goose", gooseResumeScopes()},
 	} {
 		for _, h := range scopeResumeHits(entry.scopes, o.Resume) {
 			matches = append(matches, resumeCandidate{hit: h, src: entry.src})
@@ -1071,6 +1071,17 @@ func archiveResumeHits(prefix string) []foreignHit {
 // scopeResumeHits resolves a session-id prefix against a slice of scope dbs.
 // A session's cwd is its scope's cwd. Only top-level sessions are offered
 // (is_subagent=0), matching ResolveSession's Claude behavior.
+
+// gooseResumeScopes lists goose scopes for resume-candidate matching only when
+// goose is opted in — the listing walks discovery, which default-off goose
+// must not pay. Resume itself opts in via --source goose like everything else.
+func gooseResumeScopes() []view.Scope {
+	if !scopes.GooseOptedIn("") {
+		return nil
+	}
+	return scopes.Goose(false)
+}
+
 func scopeResumeHits(scopeList []view.Scope, prefix string) []paths.SessionHit {
 	var out []paths.SessionHit
 	for _, sc := range scopeList {
@@ -1641,7 +1652,7 @@ func refreshThisProject(o *Options) {
 	if o.Source == "" || o.Source == "antigravity" {
 		scopes.RefreshAntigravityCWD(expDir)
 	}
-	if o.Source == "" || o.Source == "goose" {
+	if (o.Source == "" || o.Source == "goose") && scopes.GooseOptedIn(o.Source) {
 		scopes.RefreshGooseCWD(expDir)
 	}
 	if o.Source == "" || o.Source == "codex" {
