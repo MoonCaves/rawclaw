@@ -12,8 +12,6 @@
 package source
 
 import (
-	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -109,22 +107,51 @@ func ResumeArgv(sourceTool, sessionID string) []string {
 	}
 }
 
-// ResumeCommand formats the complete shell command line string to resume a session,
-// optionally prefixing a `cd <cwd> &&` if cwd is non-empty.
-func ResumeCommand(sourceTool, sessionID, cwd string) string {
-	argv := ResumeArgv(sourceTool, sessionID)
-	cmd := ""
-	for i, arg := range argv {
-		if i > 0 {
-			cmd += " "
-		}
-		cmd += arg
+// shellSafe reports whether r can appear unquoted in a POSIX shell word without
+// changing its meaning. This is an ALLOWLIST on purpose: a denylist of "dangerous"
+// metacharacters is a standing invitation to miss one, and missing one here means
+// emitting a command that silently runs somewhere else — or runs something else.
+func shellSafe(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
 	}
-	if cwd != "" {
-		if strings.ContainsAny(cwd, " \t\n\"'\\$`|&;<>*?()[]{}~#") {
-			return fmt.Sprintf("cd %s && %s", strconv.Quote(cwd), cmd)
+	return strings.ContainsRune("/._-+:=,@%", r)
+}
+
+// shellQuote renders s as a single POSIX shell word. Single quotes are the only
+// shell quoting that suppresses EVERY expansion — double quotes still perform
+// parameter expansion ($HOME) and command substitution (`cmd`), so Go's
+// strconv.Quote is the wrong tool here despite looking right: it emits Go string
+// syntax, not shell syntax. A literal single quote cannot be escaped inside single
+// quotes, so it is closed, backslash-escaped, and reopened — the standard four-byte
+// idiom, spelled out in the test table rather than here because gofmt rewrites a
+// doubled apostrophe in a doc comment into a typographic quote. Paths made only of
+// shell-safe bytes are returned bare, keeping the common case copy-pasteable.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	safe := true
+	for _, r := range s {
+		if !shellSafe(r) {
+			safe = false
+			break
 		}
-		return "cd " + cwd + " && " + cmd
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ResumeCommand formats the complete shell command line string to resume a session,
+// optionally prefixing a `cd <cwd> &&` if cwd is non-empty. The cwd is shell-quoted:
+// it comes out of a transcript, so it is untrusted input being pasted into a shell.
+func ResumeCommand(sourceTool, sessionID, cwd string) string {
+	cmd := strings.Join(ResumeArgv(sourceTool, sessionID), " ")
+	if cwd != "" {
+		return "cd " + shellQuote(cwd) + " && " + cmd
 	}
 	return cmd
 }
