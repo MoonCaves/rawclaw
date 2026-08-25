@@ -39,10 +39,17 @@ func Antigravity(reindex bool) []view.Scope {
 	for _, cwd := range cwds {
 		dbp := antigravityDBPath(cwd)
 		liveDBs[dbp] = struct{}{}
-		if _, _, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, antigravity.Registration().ID, ""); ierr != nil {
+		_, istatus, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, antigravity.Registration().ID, "")
+		if ierr != nil {
 			slog.Warn("scopes: antigravity index failed", "cwd", cwd, "err", ierr)
 		}
-		out = append(out, view.Scope{Project: antigravityLabel(cwd), DBP: dbp, CWD: cwd, Source: antigravity.ID})
+		out = append(out, view.Scope{
+			Project: antigravityLabel(cwd),
+			DBP:     dbp,
+			CWD:     cwd,
+			Source:  antigravity.ID,
+			Stale:   istatus == index.IndexStale || ierr != nil,
+		})
 	}
 	out = append(out, orphanAntigravityScopes(liveDBs)...)
 	return out

@@ -1126,3 +1126,69 @@ func trigramProbeCount(t *testing.T, con *sql.DB, probe string) int {
 	}
 	return n
 }
+
+// TestEnsureIndexedTree_WriteLockContention proves that when a concurrent
+// connection holds a write lock on the index db, EnsureIndexedTree fails to
+// reindex the transcript file, logs the failure, and returns IndexStale rather
+// than falsely claiming the result is IndexFresh.
+func TestEnsureIndexedTree_WriteLockContention(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "contention_tree.db")
+	tdir := filepath.Join(dir, "transcripts")
+	if err := os.MkdirAll(tdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(tdir, "sess1.jsonl")
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+	)
+
+	// 1. Initial index
+	n, status, err := EnsureIndexedTree(dbp, tdir, true, "")
+	if err != nil {
+		t.Fatalf("initial indexing failed: %v", err)
+	}
+	if status != IndexFresh {
+		t.Fatalf("initial status = %v, want IndexFresh", status)
+	}
+	if n != 1 {
+		t.Fatalf("initial sessions = %d, want 1", n)
+	}
+
+	// 2. Open a second connection and hold an exclusive write lock
+	con2, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open second connection: %v", err)
+	}
+	defer con2.Close()
+
+	tx2, err := con2.Begin()
+	if err != nil {
+		t.Fatalf("begin con2 tx: %v", err)
+	}
+	defer tx2.Rollback()
+
+	if _, err := tx2.Exec("INSERT INTO meta(key, value) VALUES('lock_probe', 'held')"); err != nil {
+		t.Fatalf("hold write lock: %v", err)
+	}
+
+	// 3. Update transcript file so reindex is triggered
+	time.Sleep(10 * time.Millisecond)
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+		`{"type":"user","uuid":"u2","timestamp":"2026-08-25T00:01:00Z","message":{"role":"user","content":"second version"}}`,
+	)
+
+	// 4. Run EnsureIndexedTree: write lock held by con2 causes reindexFileWithOrigin
+	// to fail with SQLITE_BUSY. EnsureIndexedTree must return IndexStale.
+	_, status2, err := EnsureIndexedTree(dbp, tdir, false, "")
+	if err != nil {
+		t.Fatalf("EnsureIndexedTree returned unexpected error: %v", err)
+	}
+	if status2 == IndexFresh {
+		t.Errorf("status = %v, want not fresh (IndexStale) when write lock is held", status2)
+	}
+	if status2 != IndexStale {
+		t.Errorf("status = %v, want IndexStale", status2)
+	}
+}
