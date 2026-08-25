@@ -1286,7 +1286,7 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 		} else {
 			universe = allScope(ctx, o.Source, o.Reindex)
 		}
-		return runBrowseScoped(w, o, universe)
+		return runBrowseScopedFresh(w, o, universe, true)
 	}
 	sc, td, ok := thisScope(w, o)
 	if !ok {
@@ -1353,6 +1353,10 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 // at --limit. It answers from the consolidated store with a single read connection,
 // falling back to per-project databases only if the consolidated store is unavailable.
 func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
+	return runBrowseScopedFresh(w, o, universe, false)
+}
+
+func runBrowseScopedFresh(w io.Writer, o *Options, universe []view.Scope, reportStaleness bool) error {
 	scope := scopes.FilterByPath(universe, o.IncludePath, o.ExcludePath)
 	if o.pathScoped() && len(scope) == 0 {
 		return browseNoScopeMatch(w, o, len(universe))
@@ -1368,10 +1372,12 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 	if !o.Reindex {
 		if con, _, err := index.OpenConsolidated(); err == nil {
 			defer con.Close()
-			if freshness, fErr := index.CheckIndexFreshness(con); fErr == nil && !freshness.Fresh {
-				indexStale = true
-				staleNote = "sessions not yet ingested — background ingest triggered"
-				maybeSpawnIngest("")
+			if reportStaleness {
+				if freshness, fErr := index.CheckIndexFreshness(con); fErr == nil && !freshness.Fresh {
+					indexStale = true
+					staleNote = "sessions not yet ingested — background ingest triggered"
+					maybeSpawnIngest("")
+				}
 			}
 			var projects []string
 			if o.pathScoped() || o.ThisProject {

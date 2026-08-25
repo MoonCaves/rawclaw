@@ -476,6 +476,80 @@ func TestIncrementalIngest_FallbackOnHeadRewrite(t *testing.T) {
 	}
 }
 
+func TestIncrementalIngest_FallbackOnMalformedCompleteTail(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "malformed.db")
+	f := filepath.Join(dir, "session-malformed.jsonl")
+	msg1 := `{"type":"user","message":{"role":"user","content":"Before malformed"},"uuid":"bad-1","timestamp":"2026-08-20T10:00:00Z"}`
+	msg2 := `{"type":"assistant","message":{"role":"assistant","content":"After malformed"},"uuid":"bad-2","timestamp":"2026-08-20T10:00:05Z"}`
+	initial := msg1 + "\n"
+	if err := os.WriteFile(f, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := source.Container{ID: "session-malformed", Path: f, CWD: "/repo"}
+	msgsFn := func(got source.Container) ([]model.Message, error) {
+		data, err := os.ReadFile(got.Path)
+		if err != nil {
+			return nil, err
+		}
+		var out []model.Message
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var o map[string]any
+			if err := json.Unmarshal([]byte(line), &o); err != nil || !indexable(o) {
+				continue
+			}
+			text := parse.ExtractText(o)
+			if text == "" {
+				continue
+			}
+			iso, _ := o["timestamp"].(string)
+			out = append(out, model.Message{Role: parse.MsgRole(o), Text: text, TS: parse.ISOToEpoch(iso), TSISO: iso, UUID: parse.MsgUUID(o)})
+		}
+		return out, nil
+	}
+
+	ResetIngestCountersForTesting()
+	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, msgsFn, "claude", ""); err != nil {
+		t.Fatal(err)
+	}
+	malformed := `{"type":"user","message":{"role":"user","content":"broken"}` + "\n"
+	if fHandle, err := os.OpenFile(f, os.O_APPEND|os.O_WRONLY, 0o644); err != nil {
+		t.Fatal(err)
+	} else {
+		if _, err := fHandle.WriteString(malformed + msg2 + "\n"); err != nil {
+			t.Fatal(err)
+		}
+		_ = fHandle.Close()
+	}
+
+	if _, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := IncrementalIngestCount.Load(); got != 0 {
+		t.Errorf("IncrementalIngestCount = %d, want 0 after malformed complete tail", got)
+	}
+	if got := FullReindexCount.Load(); got != 2 {
+		t.Errorf("FullReindexCount = %d, want 2 after malformed complete tail", got)
+	}
+
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	var count int
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id=?", c.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Errorf("message count after malformed tail = %d, want 2", count)
+	}
+}
+
 // TestIncrementalIngest_IncompleteTrailingLine verifies that an incomplete line
 // (no trailing newline) is not partially ingested and completes on subsequent growth.
 func TestIncrementalIngest_IncompleteTrailingLine(t *testing.T) {

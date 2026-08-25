@@ -159,14 +159,14 @@ func parseClaudeTail(chunk []byte) ([]model.Message, error) {
 		}
 		var o map[string]any
 		if err := json.Unmarshal([]byte(line), &o); err != nil {
-			continue
+			return nil, fmt.Errorf("malformed claude tail record: %w", err)
 		}
 		if !indexable(o) {
-			continue
+			return nil, fmt.Errorf("unrecognized claude tail record type")
 		}
 		text := parse.ExtractText(o)
 		if text == "" {
-			continue
+			return nil, fmt.Errorf("empty claude tail record")
 		}
 		iso, _ := o["timestamp"].(string)
 		out = append(out, model.Message{
@@ -191,11 +191,14 @@ func parseCodexTail(chunk []byte, sessionID string, startOrdinal int) ([]model.M
 		}
 		var rec map[string]any
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue
+			return nil, fmt.Errorf("malformed codex tail record: %w", err)
 		}
 		role, text, ok := normalizeCodex(rec)
-		if !ok || text == "" {
-			continue
+		if !ok {
+			return nil, fmt.Errorf("unrecognized codex tail record")
+		}
+		if text == "" {
+			return nil, fmt.Errorf("empty codex tail record")
 		}
 		iso, _ := rec["timestamp"].(string)
 		out = append(out, model.Message{
@@ -352,11 +355,14 @@ func parseAntigravityTail(chunk []byte, sessionID string, startOrdinal int) ([]m
 		}
 		var rec map[string]any
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			continue
+			return nil, fmt.Errorf("malformed antigravity tail record: %w", err)
 		}
 		role, text, ok := normalizeAntigravity(rec)
-		if !ok || text == "" {
-			continue
+		if !ok {
+			return nil, fmt.Errorf("unrecognized antigravity tail record")
+		}
+		if text == "" {
+			return nil, fmt.Errorf("empty antigravity tail record")
 		}
 		iso, _ := rec["created_at"].(string)
 
