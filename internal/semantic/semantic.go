@@ -72,7 +72,7 @@ func unpackVec(blob []byte) []float64 {
 // contentHash is the first 16 hex chars of the SHA-1 of the text.
 func contentHash(text string) string {
 	sum := sha1.Sum([]byte(text))
-	return hex.EncodeToString(sum[:])[:16]
+	return hex.EncodeToString(sum[:8])
 }
 
 // curEntry is one current (sid, hash) -> (msg_id, text) row.
