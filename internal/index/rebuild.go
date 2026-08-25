@@ -156,14 +156,22 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 // walk, so a vault-keyed row would read as "source absent" and stamp
 // missing_since on a session that is perfectly alive.
 func restoreSession(con *sql.DB, v durable.Session, rows []reindexRow, started, last float64, fileCWD string) error {
-	if _, err := con.Exec("DELETE FROM messages WHERE session_id=?", v.ID); err != nil {
+	tx, err := con.Begin()
+	if err != nil {
+		return fmt.Errorf("begin restore session %s: %w", v.ID, err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.Exec("DELETE FROM messages WHERE session_id=?", v.ID); err != nil {
 		return fmt.Errorf("clear messages for %s: %w", v.ID, err)
 	}
-	if _, err := con.Exec("DELETE FROM sessions WHERE id=?", v.ID); err != nil {
+	if _, err := tx.Exec("DELETE FROM sessions WHERE id=?", v.ID); err != nil {
 		return fmt.Errorf("clear session %s: %w", v.ID, err)
 	}
 	for _, r := range rows {
-		if _, err := con.Exec(
+		if _, err := tx.Exec(
 			"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
 			v.ID, r.role, r.content, r.ts, r.tsISO, r.uuid,
 		); err != nil {
@@ -193,21 +201,23 @@ func restoreSession(con *sql.DB, v durable.Session, rows []reindexRow, started, 
 	if v.SourcePath != "" {
 		sourcePathArg = v.SourcePath
 	}
-	if _, err := con.Exec(
+	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
 		v.ID, started, last, len(rows), b2i(v.IsSubagent), parentArg, originOr(v.Origin), source, sourcePathArg, missingArg, projectArg, cwdArg,
 	); err != nil {
 		return fmt.Errorf("restore session %s: %w", v.ID, err)
 	}
 
-	if v.SourcePath == "" {
-		return nil // nothing to watermark against
+	if v.SourcePath != "" {
+		if _, err := tx.Exec(
+			"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
+			v.SourcePath, v.SourceMTime, v.SourceSize, v.SourceFP, v.ID,
+		); err != nil {
+			return fmt.Errorf("restore file_index for %s: %w", v.ID, err)
+		}
 	}
-	if _, err := con.Exec(
-		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-		v.SourcePath, v.SourceMTime, v.SourceSize, v.SourceFP, v.ID,
-	); err != nil {
-		return fmt.Errorf("restore file_index for %s: %w", v.ID, err)
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit restore session %s: %w", v.ID, err)
 	}
 	return nil
 }
