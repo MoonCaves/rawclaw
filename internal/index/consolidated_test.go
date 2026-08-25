@@ -1086,6 +1086,46 @@ func TestConsolidate_SingleSourcePurgePropagatesMissing(t *testing.T) {
 	con.Close()
 }
 
+// TestConsolidate_DeletesSessionRemovedFromSource proves that a physical
+// source deletion does not leave a ghost session or orphaned messages in the
+// consolidated store.
+func TestConsolidate_DeletesSessionRemovedFromSource(t *testing.T) {
+	isolateCache(t)
+	const id = "deleted-source-session"
+	db := seedSessionDB(t, "deleted.db", sessionRow{
+		id: id, project: "ledger", cwd: "/w/ledger", missing: 0,
+		msgs: []msgRow{{"u-1", "user", "remove this session", 100}},
+	})
+
+	if err := SyncConsolidatedFrom(db); err != nil {
+		t.Fatalf("SyncConsolidatedFrom (initial): %v", err)
+	}
+
+	src, err := store.ConnectRW(db)
+	if err != nil {
+		t.Fatalf("open source db: %v", err)
+	}
+	if _, err := src.Exec("DELETE FROM messages WHERE session_id=?", id); err != nil {
+		t.Fatalf("delete source messages: %v", err)
+	}
+	if _, err := src.Exec("DELETE FROM sessions WHERE id=?", id); err != nil {
+		t.Fatalf("delete source session: %v", err)
+	}
+	src.Close()
+
+	if err := SyncConsolidatedFrom(db); err != nil {
+		t.Fatalf("SyncConsolidatedFrom (deleted): %v", err)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id=?", id); got != "0" {
+		t.Errorf("deleted source session count = %s, want 0", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM messages WHERE session_id=?", id); got != "0" {
+		t.Errorf("deleted source message count = %s, want 0", got)
+	}
+}
+
 // TestConsolidate_MergedSessionHonestPerContributionSemantics tests ticket #181:
 //   - A session merged from 3 sources where 1 or 2 are purged remains LIVE (missing_since = NULL).
 //   - When ALL 3 contributing sources are purged, the merged row learns of it and stamps
