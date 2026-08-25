@@ -1077,7 +1077,7 @@ func archiveResumeHits(prefix string) []foreignHit {
 // must not pay. Resume itself opts in via --source goose like everything else.
 func gooseResumeScopes() []view.Scope {
 	if !scopes.GooseOptedIn("") {
-		return nil
+		return scopes.GooseOrphanScopes()
 	}
 	return scopes.Goose(false)
 }
