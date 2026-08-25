@@ -3,6 +3,7 @@ package cli
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,8 +14,41 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
+
+func TestDiscoverAllIngestSources_ReportsAdapterErrors(t *testing.T) {
+	broken := &tagTestSource{discoverErr: errors.New("broken adapter")}
+	working := &tagTestSource{containers: []source.Container{{ID: "working-session", Path: "/tmp/working.jsonl"}}}
+
+	matches, err := discoverAllIngestSources([]source.Registration{
+		tagTestRegistration("broken", broken),
+		tagTestRegistration("working", working),
+	})
+	if err == nil || !strings.Contains(err.Error(), "broken adapter") {
+		t.Fatalf("discoverAllIngestSources error = %v, want broken adapter error", err)
+	}
+	if len(matches) != 1 || matches[0].container.ID != "working-session" {
+		t.Fatalf("discoverAllIngestSources matches = %+v, want working session", matches)
+	}
+}
+
+func TestResolveIngestMatches_ReportsPartialDiscoveryError(t *testing.T) {
+	broken := &tagTestSource{discoverErr: errors.New("broken adapter")}
+	working := &tagTestSource{containers: []source.Container{{ID: "target-session", Path: "/tmp/target.jsonl"}}}
+
+	matches, err := resolveIngestMatches("target-session", []source.Registration{
+		tagTestRegistration("broken", broken),
+		tagTestRegistration("working", working),
+	})
+	if err == nil || !strings.Contains(err.Error(), "broken adapter") {
+		t.Fatalf("resolveIngestMatches error = %v, want broken adapter error", err)
+	}
+	if len(matches) != 1 || matches[0].container.ID != "target-session" {
+		t.Fatalf("resolveIngestMatches matches = %+v, want target session", matches)
+	}
+}
 
 // TestPrimeScripts_EmitDetachedIngest verifies that both Claude and Codex prime
 // scripts contain the detached background ingest invocation.
