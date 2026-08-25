@@ -318,9 +318,25 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 func sortCandidates(cands []retrieve.Anchor, mode string) {
 	switch mode {
 	case "newest":
-		sort.SliceStable(cands, func(i, j int) bool { return cands[i].ISO > cands[j].ISO })
+		sort.SliceStable(cands, func(i, j int) bool {
+			if cands[i].ISO != cands[j].ISO {
+				return cands[i].ISO > cands[j].ISO
+			}
+			if cands[i].Routine != cands[j].Routine {
+				return !cands[i].Routine && cands[j].Routine
+			}
+			return false
+		})
 	case "oldest":
-		sort.SliceStable(cands, func(i, j int) bool { return cands[i].ISO < cands[j].ISO })
+		sort.SliceStable(cands, func(i, j int) bool {
+			if cands[i].ISO != cands[j].ISO {
+				return cands[i].ISO < cands[j].ISO
+			}
+			if cands[i].Routine != cands[j].Routine {
+				return !cands[i].Routine && cands[j].Routine
+			}
+			return false
+		})
 	default:
 		sort.SliceStable(cands, func(i, j int) bool {
 			a, b := cands[i], cands[j]
@@ -329,6 +345,9 @@ func sortCandidates(cands []retrieve.Anchor, mode string) {
 			}
 			if a.Cov != b.Cov {
 				return a.Cov > b.Cov
+			}
+			if a.Routine != b.Routine {
+				return !a.Routine && b.Routine
 			}
 			return a.Rank < b.Rank
 		})
