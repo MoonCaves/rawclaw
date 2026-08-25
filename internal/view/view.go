@@ -9,12 +9,10 @@ package view
 import (
 	"database/sql"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
-	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -291,52 +289,6 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 		BookendEnd:     bookendEnd,
 		MessagesBefore: messagesBefore,
 		MessagesAfter:  len(after),
-	}
-}
-
-// sortCandidates orders discovery candidates per the requested sort mode.
-//
-//	newest: by iso desc (empty iso sinks)
-//	oldest: by iso asc  (empty iso floats)
-//	"":     relevance — fused desc, then cov desc, then rank asc
-//
-// sort.SliceStable keeps the ordering stable for equal keys.
-func sortCandidates(cands []retrieve.Anchor, mode string) {
-	switch mode {
-	case "newest":
-		sort.SliceStable(cands, func(i, j int) bool {
-			if cands[i].ISO != cands[j].ISO {
-				return cands[i].ISO > cands[j].ISO
-			}
-			if cands[i].Routine != cands[j].Routine {
-				return !cands[i].Routine && cands[j].Routine
-			}
-			return false
-		})
-	case "oldest":
-		sort.SliceStable(cands, func(i, j int) bool {
-			if cands[i].ISO != cands[j].ISO {
-				return cands[i].ISO < cands[j].ISO
-			}
-			if cands[i].Routine != cands[j].Routine {
-				return !cands[i].Routine && cands[j].Routine
-			}
-			return false
-		})
-	default:
-		sort.SliceStable(cands, func(i, j int) bool {
-			a, b := cands[i], cands[j]
-			if a.Fused != b.Fused {
-				return a.Fused > b.Fused
-			}
-			if a.Cov != b.Cov {
-				return a.Cov > b.Cov
-			}
-			if a.Routine != b.Routine {
-				return !a.Routine && b.Routine
-			}
-			return a.Rank < b.Rank
-		})
 	}
 }
 
