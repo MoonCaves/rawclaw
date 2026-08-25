@@ -306,12 +306,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 		return []string{"newest", "oldest"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = root.RegisterFlagCompletionFunc("source", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		regs := sources.Registered()
-		out := make([]string, 0, len(regs))
-		for _, r := range regs {
-			out = append(out, r.ID)
-		}
-		return out, cobra.ShellCompDirectiveNoFileComp
+		return registeredSourceIDs(), cobra.ShellCompDirectiveNoFileComp
 	})
 	return root
 }
@@ -773,12 +768,7 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	// that means the previous test's value. Set unconditionally, never only in
 	// the true branch, so each invocation starts from its own flag.
 	semantic.SetNoVector(o.NoVector)
-
-	validSources := []string{}
-	for _, reg := range sources.Registered() {
-		validSources = append(validSources, reg.ID)
-	}
-	if err := validateChoice("source", o.Source, validSources...); err != nil {
+	if err := validateChoice("source", o.Source, registeredSourceIDs()...); err != nil {
 		return err
 	}
 	// --source narrows the runtime axis, so it only composes with shapes that
@@ -1915,6 +1905,16 @@ func (e ExitError) Error() string {
 		return e.Msg
 	}
 	return fmt.Sprintf("exit status %d", e.Code)
+}
+
+// registeredSourceIDs returns the IDs of all registered source adapters.
+func registeredSourceIDs() []string {
+	regs := sources.Registered()
+	out := make([]string, len(regs))
+	for i, r := range regs {
+		out[i] = r.ID
+	}
+	return out
 }
 
 // validateChoice enforces an enum flag: empty = unset (allowed), else the value
