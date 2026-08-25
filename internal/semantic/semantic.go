@@ -13,6 +13,7 @@
 package semantic
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha1"
 	"database/sql"
@@ -20,7 +21,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -310,6 +311,9 @@ type ranked struct {
 // knn runs the brute-force cosine scan and returns the top-`k` candidates,
 // nearest first. Vectors whose dim != len(qvec) are skipped.
 func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
+	if k <= 0 {
+		return nil
+	}
 	qn := 0.0
 	for _, x := range qvec {
 		qn += x * x
@@ -320,6 +324,7 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 	}
 
 	out := make([]ranked, 0, len(rows))
+	qLenBytes := len(qvec) * 4
 	for _, r := range rows {
 		// Score straight off the packed blob rather than unpackVec'ing it first.
 		// The scan is brute-force over EVERY stored vector, so a per-row
@@ -333,7 +338,7 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 		// linear in corpus size (~4KB read per vector), which is fine at this
 		// scale and is the thing to revisit if the corpus grows an order of
 		// magnitude — not the allocation.
-		if len(r.Vec) != len(qvec)*4 {
+		if len(r.Vec) != qLenBytes {
 			continue
 		}
 		dot, nn := 0.0, 0.0
@@ -350,18 +355,13 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 	}
 
 	// Descending over (sim, msg_id, sid): sim first, then msg_id, then sid.
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].sim != out[j].sim {
-			return out[i].sim > out[j].sim
-		}
-		if out[i].msgID != out[j].msgID {
-			return out[i].msgID > out[j].msgID
-		}
-		return out[i].sid > out[j].sid
+	slices.SortFunc(out, func(a, b ranked) int {
+		return cmp.Or(
+			cmp.Compare(b.sim, a.sim),
+			cmp.Compare(b.msgID, a.msgID),
+			cmp.Compare(b.sid, a.sid),
+		)
 	})
-	if k < 0 {
-		k = 0
-	}
 	if len(out) > k {
 		out = out[:k]
 	}
@@ -376,15 +376,12 @@ func VecKNN(con *sql.DB, qvec []float64, k int, includeSubagents bool) []VecHit 
 	// error (missing table, read error, late cursor error) reads as "no
 	// vectors", never a partial set.
 	stored, err := store.VecAll(con)
-	if err != nil {
-		return []VecHit{}
-	}
-	if len(stored) == 0 {
+	if err != nil || len(stored) == 0 {
 		return []VecHit{}
 	}
 
 	cand := knn(qvec, stored, k*3)
-	out := []VecHit{}
+	out := make([]VecHit, 0, min(k, len(cand)))
 	for _, c := range cand {
 		iso, parent, isSub, onlyCopy, ok := store.MessageMeta(con, c.msgID)
 		if !ok { // churned / gone row
@@ -445,11 +442,11 @@ func Fuse(con *sql.DB, kwRows []retrieve.Anchor, qvec []float64, knnK int, inclu
 	for id := range score {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		if score[ids[i]] != score[ids[j]] {
-			return score[ids[i]] > score[ids[j]]
-		}
-		return ids[i] < ids[j]
+	slices.SortFunc(ids, func(a, b int) int {
+		return cmp.Or(
+			cmp.Compare(score[b], score[a]),
+			cmp.Compare(a, b),
+		)
 	})
 
 	merged := make([]retrieve.Anchor, 0, len(ids))
