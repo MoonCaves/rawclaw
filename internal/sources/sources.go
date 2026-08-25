@@ -4,6 +4,8 @@
 package sources
 
 import (
+	"sync"
+
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/claude"
@@ -11,9 +13,13 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/goose"
 )
 
+var mu sync.Mutex
+
 // Registered wires the built-in adapters idempotently and returns every
 // registered source, including any additional adapter registered by a caller.
 func Registered() []source.Registration {
+	mu.Lock()
+	defer mu.Unlock()
 	source.Register(claude.Registration())
 	source.Register(codex.Registration())
 	source.Register(antigravity.Registration())
