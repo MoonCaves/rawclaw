@@ -474,30 +474,11 @@ func ISOToEpoch(s string) float64 {
 	if s == "" {
 		return 0.0
 	}
-	// Normalize a trailing 'Z' (and any other 'Z') to an explicit +00:00 offset.
-	normalized := strings.ReplaceAll(s, "Z", "+00:00")
-
-	// Try offset-bearing layouts first, then naive (defaulted to UTC).
-	withZone := []string{
-		"2006-01-02T15:04:05.999999999-07:00",
-		"2006-01-02T15:04:05-07:00",
-		"2006-01-02 15:04:05.999999999-07:00",
-		"2006-01-02 15:04:05-07:00",
+	normalized := strings.Replace(s, " ", "T", 1)
+	if dt, err := time.Parse(time.RFC3339Nano, normalized); err == nil {
+		return epochSeconds(dt)
 	}
-	for _, layout := range withZone {
-		if dt, err := time.Parse(layout, normalized); err == nil {
-			return epochSeconds(dt)
-		}
-	}
-
-	naive := []string{
-		"2006-01-02T15:04:05.999999999",
-		"2006-01-02T15:04:05",
-		"2006-01-02 15:04:05.999999999",
-		"2006-01-02 15:04:05",
-		"2006-01-02",
-	}
-	for _, layout := range naive {
+	for _, layout := range []string{"2006-01-02T15:04:05.999999999", time.DateOnly} {
 		if dt, err := time.ParseInLocation(layout, normalized, time.UTC); err == nil {
 			return epochSeconds(dt)
 		}
