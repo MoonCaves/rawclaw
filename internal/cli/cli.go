@@ -1290,7 +1290,12 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 		}
 		// Newest-first across projects; each scope contributed at most --limit rows,
 		// so the merge only has to re-sort and cap.
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].LastTS > rows[j].LastTS })
+		sort.SliceStable(rows, func(i, j int) bool {
+			if rows[i].LastTS != rows[j].LastTS {
+				return rows[i].LastTS > rows[j].LastTS
+			}
+			return rows[i].SessionID < rows[j].SessionID
+		})
 		if len(rows) > o.Limit {
 			rows = rows[:o.Limit]
 		}

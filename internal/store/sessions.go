@@ -63,7 +63,7 @@ func BrowseScopedSessions(con *sql.DB, since, before, sourceTool string, project
 		whereSQL += " AND " + w
 	}
 	q := `SELECT s.id, COALESCE(s.project,''), s.last_ts, s.message_count
-	      FROM sessions s WHERE ` + whereSQL + ` ORDER BY s.last_ts DESC LIMIT ?`
+	      FROM sessions s WHERE ` + whereSQL + ` ORDER BY s.last_ts DESC, s.id LIMIT ?`
 
 	rows, err := con.Query(q, args...)
 	if err != nil {
