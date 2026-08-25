@@ -67,6 +67,49 @@ func readTailChunk(path string, fromOffset, toOffset int64) ([]byte, int64, bool
 	return completeChunk, newOffset, true
 }
 
+// checkPrefixFingerprint computes the FileFingerprint of path as it was at offset,
+// reading at most min(offset, 4096) from offset 0, and if offset > 8192, reading 4096 bytes from offset-4096.
+func checkPrefixFingerprint(path string, offset int64) string {
+	if offset <= 0 {
+		return ""
+	}
+	fh, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer fh.Close()
+
+	headLen := 4096
+	if offset < 4096 {
+		headLen = int(offset)
+	}
+	head := make([]byte, headLen)
+	n, err := io.ReadFull(fh, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return ""
+	}
+	head = head[:n]
+
+	var tail []byte
+	if offset > 8192 {
+		if _, err := fh.Seek(offset-4096, io.SeekStart); err != nil {
+			return ""
+		}
+		tail = make([]byte, 4096)
+		m, err := io.ReadFull(fh, tail)
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return ""
+		}
+		tail = tail[:m]
+	}
+
+	h := sha1.New()
+	h.Write(head)
+	h.Write([]byte("|"))
+	h.Write(tail)
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
 // parseTailMessages parses only newly appended transcript messages starting at fromOffset.
 // Returns the parsed messages, the valid newOffset, and whether the tail parse succeeded.
 func parseTailMessages(con *sql.DB, c source.Container, sourceID, rawPath string, fromOffset, toOffset int64) ([]model.Message, int64, bool) {
