@@ -7,18 +7,14 @@ package scopes
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"log/slog"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/archive"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/query"
-	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -127,7 +123,6 @@ func Claude() []view.Scope {
 // "codex-") are left to Codex(), which reindexes them from live discovery.
 func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 	entries, _ := filepath.Glob(filepath.Join(store.CacheDir(), "*.db"))
-	sort.Strings(entries)
 
 	var out []view.Scope
 	for _, dbp := range entries {
@@ -186,135 +181,25 @@ func orphanLabel(dbFileName string) string {
 // see index.EnsureIndexedContainers' complete-set contract), and returns eager
 // scopes carrying that db + cwd — unioned with orphanCodexScopes (D8: the same
 // 30-day-purge store-driven discovery Claude() does via orphanClaudeScopes).
-// Discover erroring or finding zero live containers does NOT skip the orphan
-// scan: a cwd's rollouts can vanish entirely while its retained db still holds
-// searchable history, and that must stay reachable even when Discover comes
-// back empty.
 func Codex(reindex bool) []view.Scope {
-	a := codex.New()
-	containers, err := a.Discover()
-	if err != nil {
-		slog.Warn("scopes: codex discover failed", "err", err)
-		// containers is nil; fall through so the orphan scan below still runs.
-	}
-
-	byCWD := map[string][]source.Container{}
-	for _, c := range containers {
-		byCWD[c.CWD] = append(byCWD[c.CWD], c)
-	}
-	cwds := make([]string, 0, len(byCWD))
-	for k := range byCWD {
-		cwds = append(cwds, k)
-	}
-	sort.Strings(cwds)
-
-	out := make([]view.Scope, 0, len(cwds))
-	liveDBs := make(map[string]struct{}, len(cwds)) // db paths already covered by a live cwd group
-	for _, cwd := range cwds {
-		dbp := codexDBPath(cwd)
-		liveDBs[dbp] = struct{}{}
-		_, istatus, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, codex.Registration().ID, "")
-		if ierr != nil {
-			slog.Warn("scopes: codex index failed", "cwd", cwd, "err", ierr)
-			// The db path may still hold a prior good index; include the scope so
-			// search can open it read-only and degrade gracefully.
-		}
-		out = append(out, view.Scope{
-			Project: codexLabel(cwd),
-			DBP:     dbp,
-			CWD:     cwd,
-			Source:  "codex",
-			Stale:   istatus == index.IndexStale || ierr != nil,
-		})
-	}
-	out = append(out, orphanCodexScopes(liveDBs)...)
-	return out
+	return containerScopes(codex.Registration().ID, codex.New(), codexLabel, reindex)
 }
 
 // RefreshCodexCWD refreshes the Codex index db for a given working dir.
 func RefreshCodexCWD(cwd string) {
-	a := codex.New()
-	containers, err := a.Discover()
-	if err != nil || len(containers) == 0 {
-		return
-	}
-	var matched []source.Container
-	for _, c := range containers {
-		if c.CWD == cwd || (cwd != "" && filepath.Clean(c.CWD) == filepath.Clean(cwd)) {
-			matched = append(matched, c)
-		}
-	}
-	if len(matched) == 0 {
-		return
-	}
-	dbp := codexDBPath(cwd)
-	if _, _, ierr := index.EnsureIndexedContainers(dbp, false, matched, a.Messages, codex.Registration().ID, ""); ierr != nil {
-		slog.Debug("scopes: codex current-cwd refresh failed", "cwd", cwd, "err", ierr)
-	}
+	refreshContainerCWD(codex.Registration().ID, codex.New(), cwd)
 }
 
-// orphanCodexScopes discovers Codex index dbs in the cache dir whose live cwd
-// group has vanished entirely and surfaces each as an eager read-only scope,
-// mirroring orphanClaudeScopes: once every rollout for a cwd is purged, that
-// cwd drops out of Discover()'s byCWD grouping and Codex() would otherwise
-// never open its retained db again (the exact gap D8 closed for Claude).
-//
-// liveDBs is the set of db paths already covered by a live cwd group this
-// call; those are skipped so a cwd is never listed twice. Each candidate is
-// reconciled against an empty live scan (stamping only_copy_since, deleting
-// tombstoned rows) and included only if it still holds >=1 non-tombstoned
-// top-level session — so a db whose only sessions were deleted still reads as
-// deleted.
-func orphanCodexScopes(liveDBs map[string]struct{}) []view.Scope {
-	entries, _ := filepath.Glob(filepath.Join(store.CacheDir(), "codex-*.db"))
-	sort.Strings(entries)
-
-	var out []view.Scope
-	for _, dbp := range entries {
-		if _, covered := liveDBs[dbp]; covered {
-			continue // already a live cwd scope — don't list it twice
-		}
-		n, err := index.EnsureOrphanReconciled(dbp)
-		if err != nil {
-			slog.Warn("scopes: codex orphan reconcile failed", "db", dbp, "err", err)
-			continue
-		}
-		if n <= 0 {
-			continue // only tombstoned/empty sessions — reads as deleted
-		}
-		out = append(out, view.Scope{Project: codexOrphanLabel(filepath.Base(dbp)), DBP: dbp, Source: "codex"})
-	}
-	return out
+func codexDBPath(cwd string) string {
+	return containerDBPath(codex.Registration().ID, cwd)
 }
 
-// codexOrphanLabel derives a friendly label from a Codex db filename when the
-// live cwd (whose codexLabel would read) is gone. The stem is
-// "codex-<encodeCWD(cwd)>-<8-hex-hash>" (see codexDBPath): strip the "codex-"
-// prefix and the trailing injective hash, then reuse orphanLabel's
-// last-non-empty "-" segment logic on what's left — otherwise that logic
-// would return the opaque hash segment instead of a readable cwd fragment.
+func codexLabel(cwd string) string {
+	return defaultContainerLabel(codex.Registration().ID, cwd)
+}
+
 func codexOrphanLabel(dbFileName string) string {
-	enc := strings.TrimSuffix(dbFileName, ".db")
-	enc = strings.TrimPrefix(enc, "codex-")
-	if i := strings.LastIndex(enc, "-"); i >= 0 && isHex8(enc[i+1:]) {
-		enc = enc[:i]
-	}
-	return orphanLabel(enc)
-}
-
-// isHex8 reports whether s is exactly 8 lowercase-hex characters — the shape
-// cwdHash always produces, used to detect and strip codexDBPath's
-// disambiguation suffix from a db filename.
-func isHex8(s string) bool {
-	if len(s) != 8 {
-		return false
-	}
-	for _, r := range s {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
-	}
-	return true
+	return containerOrphanLabel(codex.Registration().ID, dbFileName)
 }
 
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope
@@ -366,43 +251,4 @@ func FilterByPath(scope []view.Scope, include, exclude string) []view.Scope {
 		}
 	}
 	return out
-}
-
-// codexDBPath returns a cache db path for a Codex cwd group, prefixed "codex-"
-// so it never collides with the Claude project db for the same cwd. An empty
-// cwd groups under a stable "unknown" key.
-//
-// The readable slug from encodeCWD is lossy ('/', '.', '-' all fold to '-'), so
-// two distinct cwds can collapse onto one slug. That would put two cwd groups on
-// one db and violate index.EnsureIndexedContainers' complete-set contract — the
-// groups would cross-prune each other. We append a short hash of the FULL cwd so
-// the key stays human-readable but is injective (distinct cwd => distinct db).
-func codexDBPath(cwd string) string {
-	key := "codex-" + encodeCWD(cwd) + "-" + cwdHash(cwd)
-	return index.DBPath(key)
-}
-
-// cwdHash is a short, stable, collision-resistant tag of the full cwd, used to
-// disambiguate cwds that share a lossy encodeCWD slug. Deterministic across runs
-// so a cwd group keeps the same db.
-func cwdHash(cwd string) string {
-	sum := sha1.Sum([]byte(cwd))
-	return hex.EncodeToString(sum[:])[:8]
-}
-
-// codexLabel is a friendly project label for a Codex cwd group.
-func codexLabel(cwd string) string {
-	if cwd == "" {
-		return "codex"
-	}
-	return filepath.Base(strings.TrimRight(cwd, "/"))
-}
-
-// encodeCWD flattens a cwd into a slash-free db-name segment: "/" and "." → "-".
-// "" yields "unknown" so empty-cwd sessions share one stable db.
-func encodeCWD(cwd string) string {
-	if cwd == "" {
-		return "unknown"
-	}
-	return strings.NewReplacer("/", "-", ".", "-").Replace(cwd)
 }
