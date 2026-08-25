@@ -127,7 +127,6 @@ func Claude() []view.Scope {
 // "codex-") are left to Codex(), which reindexes them from live discovery.
 func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 	entries, _ := filepath.Glob(filepath.Join(store.CacheDir(), "*.db"))
-	sort.Strings(entries)
 
 	var out []view.Scope
 	for _, dbp := range entries {
