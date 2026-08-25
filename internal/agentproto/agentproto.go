@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/index"
@@ -435,7 +436,7 @@ func resolveScope(fn ScopeFn) []view.Scope {
 
 // runeLen counts code points in s.
 func runeLen(s string) int {
-	return len([]rune(s))
+	return utf8.RuneCountInString(s)
 }
 
 // runeSlice returns the first n runes (code points) of s, or all of s if it is
@@ -1981,11 +1982,15 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, opts OutlineOpts
 
 	iso, nmsg := sessionMeta(con, fullSID)
 
-	startRows, err := bookendRows(con, fullSID, true)
+	// Over-fetch: the rows nearest either end of a session are the likeliest in
+	// the corpus to be injected handbooks, command echoes and bare [THINKING]
+	// markers, and those get dropped before rendering (view.IsDisplayable).
+	// Reading only OutlineBookend rows would return a bookend of leftovers.
+	startRows, err := store.BookendMessages(con, fullSID, 0, false, true, outlineBookendScan)
 	if err != nil {
 		return nil, fmt.Errorf("outline start rows: %w", err)
 	}
-	endRows, err := bookendRows(con, fullSID, false)
+	endRows, err := store.BookendMessages(con, fullSID, 0, false, false, outlineBookendScan)
 	if err != nil {
 		return nil, fmt.Errorf("outline end rows: %w", err)
 	}
@@ -2085,14 +2090,6 @@ func sessionMeta(con *sql.DB, fullSID string) (iso string, nmsg int) {
 
 // bookendRows reads up to OutlineBookend user/assistant messages with non-empty
 // content, ordered by id ascending (asc=true) or descending.
-func bookendRows(con *sql.DB, fullSID string, asc bool) ([]store.Msg, error) {
-	// Over-fetch: the rows nearest either end of a session are the likeliest in
-	// the corpus to be injected handbooks, command echoes and bare [THINKING]
-	// markers, and those get dropped before rendering (view.IsDisplayable).
-	// Reading only OutlineBookend rows would return a bookend of leftovers.
-	return store.BookendMessages(con, fullSID, 0, false, asc, outlineBookendScan)
-}
-
 // ── text renderers ───────────────────────────────────────────────────────────
 
 // renderSearch prints the human-readable search output. When the envelope is
@@ -2113,7 +2110,7 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 			return
 		}
 		fmt.Fprintln(w, "No matches · answers from local store; refreshes in background. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.")
-		renderWarnings(w, env.Warnings)
+		renderWarnings(w, env.Warnings, "")
 		return
 	}
 	fmt.Fprintf(w, "%d conversation(s) matching '%s' %s · answers from local store; refreshes in background:\n\n", len(env.Results), query, scopeLabel)
@@ -2163,7 +2160,7 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 	// Every footer line comes from the warnings the envelope already carries, in
 	// the order it carries them. The renderer holds no conditions of its own —
 	// that is what keeps the text and --json surfaces from drifting.
-	renderWarnings(w, env.Warnings)
+	renderWarnings(w, env.Warnings, "")
 }
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\].*?\x07|\x1b[@-Z\\-_]`)
@@ -2199,13 +2196,9 @@ func RenderSearchOneline(w io.Writer, env SearchEnvelope) {
 // suppress. Suppression exists for the empty-result path, where a warning has
 // already been stated in full as the primary message and repeating it as a
 // footnote would read as two separate findings.
-func renderWarnings(w io.Writer, ws []Warning, suppress ...string) {
-	skip := make(map[string]struct{}, len(suppress))
-	for _, c := range suppress {
-		skip[c] = struct{}{}
-	}
+func renderWarnings(w io.Writer, ws []Warning, suppress string) {
 	for _, warn := range ws {
-		if _, dup := skip[warn.Code]; dup {
+		if suppress != "" && warn.Code == suppress {
 			continue
 		}
 		fmt.Fprintf(w, "note: %s\n", warn.Message)
@@ -2374,18 +2367,6 @@ type TopicsResult struct {
 	Note  string     `json:"note,omitempty"`
 }
 
-// topicFetch is how many topic rows to pull from each project's database for a
-// requested result limit. The surplus is what collapsing repeats consumes; it
-// mirrors the keyword search fetch window (8x, floor 30) rather than inventing
-// a second rule.
-func topicFetch(limit int) int {
-	f := limit * 8
-	if f < 30 {
-		f = 30
-	}
-	return f
-}
-
 // topicsEmptyNote is the empty-state hint printed/emitted when no topic rows
 // exist anywhere in scope — tells the agent how topics get tagged.
 const topicsEmptyNote = "no topics tagged yet — a session is tagged via the rawclaw-topic-tagger subagent"
@@ -2528,7 +2509,11 @@ func topicsByFanOut(query string, scope []view.Scope, limit int, opts TopicsOpts
 		//
 		// The projects filter is nil here: this is the fan-out, where one database
 		// IS one project, so narrowing by column would be redundant.
-		thits, _ := store.MatchTopics(con, query, topicFetch(limit), nil)
+		// How many topic rows to pull from each project's database: the surplus
+		// is what collapsing repeats consumes. Mirrors the keyword search fetch
+		// window (8x, floor 30) rather than inventing a second rule.
+		topicLimit := max(limit*8, 30)
+		thits, _ := store.MatchTopics(con, query, topicLimit, nil)
 
 		// Collapse repeats BEFORE this project's cap, so duplicates cannot eat
 		// its result slots — the same ordering search uses (build every distinct
