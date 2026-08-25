@@ -31,28 +31,32 @@ func TestCLIJourney_GooseEndToEnd(t *testing.T) {
 	defer dbConn.Close()
 
 	_, err = dbConn.Exec(`
+		PRAGMA journal_mode = WAL;
+
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
-			working_dir TEXT,
-			parent_id TEXT,
-			is_subagent INTEGER
+			working_dir TEXT NOT NULL,
+			name TEXT NOT NULL,
+			user_set_name INTEGER DEFAULT 0,
+			session_type TEXT DEFAULT 'user',
+			created_at TIMESTAMP
 		);
 		CREATE TABLE messages (
 			id TEXT PRIMARY KEY,
-			session_id TEXT,
-			role TEXT,
-			content TEXT,
-			created_at TEXT
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);
 		INSERT INTO sessions VALUES
-			('goose-session-alpha', '/workspace/goose-app', '', 0),
-			('goose-session-beta', '/workspace/goose-app', '', 0);
+			('goose-session-alpha', '/workspace/goose-app', 'deploy-orchestrator', 1, 'user', '2026-08-21 10:00:00'),
+			('goose-session-beta', '/workspace/goose-app', 'db-migration', 0, 'user', '2026-08-21 10:05:00');
 
 		INSERT INTO messages VALUES
-			('m1', 'goose-session-alpha', 'user', 'Deploying Goose pipeline orchestrator', '2026-08-21T10:00:00Z'),
-			('m2', 'goose-session-alpha', 'assistant', 'Pipeline deployment succeeded with zero warnings.', '2026-08-21T10:00:05Z'),
-			('m3', 'goose-session-beta', 'user', 'Check database migration status', '2026-08-21T10:05:00Z'),
-			('m4', 'goose-session-beta', 'assistant', 'Migration completed.', '2026-08-21T10:05:10Z');
+			('m1', 'goose-session-alpha', 'user', '[{"type":"text","text":"Deploying Goose pipeline orchestrator"}]', '2026-08-21 10:00:00'),
+			('m2', 'goose-session-alpha', 'assistant', '[{"type":"text","text":"Pipeline deployment succeeded with zero warnings."}]', '2026-08-21 10:00:05'),
+			('m3', 'goose-session-beta', 'user', '[{"type":"text","text":"Check database migration status"}]', '2026-08-21 10:05:00'),
+			('m4', 'goose-session-beta', 'assistant', '[{"type":"text","text":"Migration completed."}]', '2026-08-21 10:05:10');
 	`)
 	if err != nil {
 		t.Fatalf("setup goose db: %v", err)
