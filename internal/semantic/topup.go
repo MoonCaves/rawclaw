@@ -1,13 +1,14 @@
 package semantic
 
 import (
-	"github.com/MoonCaves/rawclaw/internal/index"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/adapters"
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/gofrs/flock"
 )
@@ -80,23 +81,16 @@ func TryAcquireTopupLock(dbp string) (release func(), ok bool) {
 	return func() { _ = fl.Unlock() }, true
 }
 
-var (
-	noVectorMu sync.RWMutex
-	noVector   bool
-)
+var noVector atomic.Bool
 
 // SetNoVector records whether --no-vector is active for the current process/invocation.
 func SetNoVector(v bool) {
-	noVectorMu.Lock()
-	noVector = v
-	noVectorMu.Unlock()
+	noVector.Store(v)
 }
 
 // IsNoVector reports whether --no-vector is active.
 func IsNoVector() bool {
-	noVectorMu.RLock()
-	defer noVectorMu.RUnlock()
-	return noVector
+	return noVector.Load()
 }
 
 var (
