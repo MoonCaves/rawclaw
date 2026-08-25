@@ -430,35 +430,103 @@ func TestExtractCWDFromTranscript(t *testing.T) {
 	}
 }
 
-// TestInspectSessionHeaderCWDPrecedence verifies that tool_calls Cwd takes precedence
-// over <user_information> CWD when both appear in the same record or session.
+// TestInspectSessionHeaderCWDPrecedence verifies CWD extraction precedence:
+//  1. Within a single record: tool_calls Cwd takes precedence over <user_information>.
+//  2. Across separate records: the first valid CWD encountered in sequential scan order wins,
+//     matching the reference implementation (commit 5885051).
 func TestInspectSessionHeaderCWDPrecedence(t *testing.T) {
 	t.Parallel()
-	tmp := t.TempDir()
 
-	sessID := "sess-precedence"
-	tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
+	t.Run("same record tool_calls takes precedence over user_information", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
 
-	// Single record containing BOTH tool_calls Cwd and <user_information> block with different paths.
-	dualRecord := `{"step_index":0,"source":"PLANNER_RESPONSE","type":"PLANNER_RESPONSE","created_at":"2026-08-14T10:00:00Z","content":"<user_information>\n/Users/test/workspace/user-info-repo -> repo\n</user_information>","tool_calls":[{"name":"run_command","args":{"Cwd":"/Users/test/workspace/tool-call-repo","CommandLine":"git status"}}]}`
-	writeJSONL(t, tPath, dualRecord)
+		sessID := "sess-precedence-same"
+		tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
 
-	hdr, _ := inspectSessionHeaderAndSubagents(tPath)
-	if hdr.cwd != "/Users/test/workspace/tool-call-repo" {
-		t.Errorf("hdr.cwd = %q, want /Users/test/workspace/tool-call-repo (tool_calls Cwd must take precedence over user_information)", hdr.cwd)
-	}
+		// Single record containing BOTH tool_calls Cwd and <user_information> block with different paths.
+		dualRecord := `{"step_index":0,"source":"PLANNER_RESPONSE","type":"PLANNER_RESPONSE","created_at":"2026-08-14T10:00:00Z","content":"<user_information>\n/Users/test/workspace/user-info-repo -> repo\n</user_information>","tool_calls":[{"name":"run_command","args":{"Cwd":"/Users/test/workspace/tool-call-repo","CommandLine":"git status"}}]}`
+		writeJSONL(t, tPath, dualRecord)
 
-	ad := NewRoot(tmp)
-	containers, err := ad.Discover()
-	if err != nil {
-		t.Fatalf("Discover() error: %v", err)
-	}
-	if len(containers) != 1 {
-		t.Fatalf("Discover() returned %d containers, want 1", len(containers))
-	}
-	if containers[0].CWD != "/Users/test/workspace/tool-call-repo" {
-		t.Errorf("containers[0].CWD = %q, want /Users/test/workspace/tool-call-repo", containers[0].CWD)
-	}
+		hdr, _ := inspectSessionHeaderAndSubagents(tPath)
+		if hdr.cwd != "/Users/test/workspace/tool-call-repo" {
+			t.Errorf("hdr.cwd = %q, want /Users/test/workspace/tool-call-repo (tool_calls Cwd must take precedence over user_information in same record)", hdr.cwd)
+		}
+
+		ad := NewRoot(tmp)
+		containers, err := ad.Discover()
+		if err != nil {
+			t.Fatalf("Discover() error: %v", err)
+		}
+		if len(containers) != 1 {
+			t.Fatalf("Discover() returned %d containers, want 1", len(containers))
+		}
+		if containers[0].CWD != "/Users/test/workspace/tool-call-repo" {
+			t.Errorf("containers[0].CWD = %q, want /Users/test/workspace/tool-call-repo", containers[0].CWD)
+		}
+	})
+
+	t.Run("separate records user_information first wins over subsequent tool_calls", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+
+		sessID := "sess-precedence-user-first"
+		tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
+
+		// Record 1: user_information with path A
+		rec1 := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-14T10:00:00Z","content":"<user_information>\n/Users/test/workspace/user-info-repo -> repo\n</user_information>\n<USER_REQUEST>run task</USER_REQUEST>"}`
+		// Record 2: tool_calls Cwd with path B
+		rec2 := `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-14T10:00:01Z","content":"running cmd","tool_calls":[{"name":"run_command","args":{"Cwd":"/Users/test/workspace/tool-call-repo","CommandLine":"git status"}}]}`
+		writeJSONL(t, tPath, rec1, rec2)
+
+		hdr, _ := inspectSessionHeaderAndSubagents(tPath)
+		if hdr.cwd != "/Users/test/workspace/user-info-repo" {
+			t.Errorf("hdr.cwd = %q, want /Users/test/workspace/user-info-repo (first valid CWD found across records must win)", hdr.cwd)
+		}
+
+		ad := NewRoot(tmp)
+		containers, err := ad.Discover()
+		if err != nil {
+			t.Fatalf("Discover() error: %v", err)
+		}
+		if len(containers) != 1 {
+			t.Fatalf("Discover() returned %d containers, want 1", len(containers))
+		}
+		if containers[0].CWD != "/Users/test/workspace/user-info-repo" {
+			t.Errorf("containers[0].CWD = %q, want /Users/test/workspace/user-info-repo", containers[0].CWD)
+		}
+	})
+
+	t.Run("separate records tool_calls first wins over subsequent user_information", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+
+		sessID := "sess-precedence-tool-first"
+		tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
+
+		// Record 1: tool_calls Cwd with path B
+		rec1 := `{"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-14T10:00:00Z","content":"running cmd","tool_calls":[{"name":"run_command","args":{"Cwd":"/Users/test/workspace/tool-call-repo","CommandLine":"git status"}}]}`
+		// Record 2: user_information with path A
+		rec2 := `{"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-14T10:00:01Z","content":"<user_information>\n/Users/test/workspace/user-info-repo -> repo\n</user_information>\n<USER_REQUEST>run task</USER_REQUEST>"}`
+		writeJSONL(t, tPath, rec1, rec2)
+
+		hdr, _ := inspectSessionHeaderAndSubagents(tPath)
+		if hdr.cwd != "/Users/test/workspace/tool-call-repo" {
+			t.Errorf("hdr.cwd = %q, want /Users/test/workspace/tool-call-repo (first valid CWD found across records must win)", hdr.cwd)
+		}
+
+		ad := NewRoot(tmp)
+		containers, err := ad.Discover()
+		if err != nil {
+			t.Fatalf("Discover() error: %v", err)
+		}
+		if len(containers) != 1 {
+			t.Fatalf("Discover() returned %d containers, want 1", len(containers))
+		}
+		if containers[0].CWD != "/Users/test/workspace/tool-call-repo" {
+			t.Errorf("containers[0].CWD = %q, want /Users/test/workspace/tool-call-repo", containers[0].CWD)
+		}
+	})
 }
 
 // TestScanTranscriptScannerError verifies that when a transcript contains a line
