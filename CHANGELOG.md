@@ -16,8 +16,9 @@ All notable changes to RawClaw are documented in this file.
   detached background ingestion (`rawclaw ingest <session_id>`) at session birth, keeping the
   consolidated search store continuously fresh so subsequent searches and reads execute against an
   already-indexed store. `rawclaw ingest [session]` is available as a top-level command for targeted
-  or bulk session indexing. File-lock-based serialization (`flock` on `consolidated.lock`) with
-  exponential backoff and jitter eliminates SQLite write contention when concurrent hooks fire.
+  or bulk session indexing. A single shared file lock (`flock` on `consolidated.lock`) serializes
+  every write to the consolidated store — indexing, rebuilds, and tag writes alike — so concurrent
+  hooks and commands can never race each other or the store's own rebuild-and-swap.
 - **Routine verdict tagging and search partition.** `rawclaw tag-write --routine` records a `routine`
   verdict for standard maintenance sessions. Search results and `topics` badge routine sessions with
   a visible `· routine` marker and partition them into a lower ranking tier, allowing non-routine
@@ -80,6 +81,41 @@ All notable changes to RawClaw are documented in this file.
   declared Go floor (`1.24.0`) and `stable` with a `CGO_ENABLED=0` build check. Synchronized the
   global source adapter registry with a `sync.RWMutex` to eliminate an intermittent data race during
   concurrent test execution.
+- **`consolidate --rebuild` no longer drops history it cannot re-derive.** A rebuild refilled the
+  store solely from surviving per-project indexes, so any session with no remaining source — exactly
+  the purged-transcript history the store exists to keep — was silently dropped. Sessions unique to
+  the store are now carried forward automatically, with the carried count reported in the command's
+  output and a hard refusal if the carry-forward cannot be verified complete.
+- **Merged session metadata no longer prefers stale identity.** When a session's contributions tie
+  on presence, message count, and last-activity time, the merge now prefers the current absolute-path
+  source identity over a legacy bare-filename one, so a stale project or working directory can no
+  longer win the tie-break and stick indefinitely.
+- **Consolidated store writes are now serialized against rebuilds and each other.** Indexing,
+  `consolidate --rebuild`, `rebuild --from-transcripts`, and direct tag writes (`tag-write`,
+  `tag-write --routine`, `tag-write --source floor`) now share one file lock, closing a window where
+  a rebuild's snapshot-and-swap could silently discard a tag or verdict committed at the same moment.
+  A background wait past 2 seconds logs which process is holding the store.
+- **Per-project freshness watermarks are now stamped for every source, not just Claude.** Codex,
+  Antigravity, and Goose indexes previously never recorded a freshness watermark, so search and
+  browse against them could report "freshness unknown" indefinitely and keep nudging a background
+  ingest that could never resolve the state. All indexed sources now stamp the same watermark Claude
+  already did.
+- **Deleting a session now removes its topic tags and verdict too.** A user delete previously left
+  `topic_segment` and `session_verdict` rows behind — a summary of the deleted conversation surviving
+  the delete meant to remove it.
+
+### Changed
+
+- **Goose discovery is now opt-in.** Goose is the only source whose discovery walks the filesystem
+  and opens every candidate SQLite database it finds — expensive on a real machine, and unwanted work
+  for the far larger number of users who have never run Goose. Discovery and per-directory refresh now
+  run only on explicit request: pass `--source goose`, or set `RAWCLAW_GOOSE=1` to enable it every
+  run. Sessions already indexed from an earlier opted-in run keep being served either way — opting out
+  never hides history the store already holds.
+- **Tests can no longer write to your real session store.** The Goose and Codex test suites picked up
+  the machine's actual `HOME`, so a full test run could open and hold a lock on the real, multi-
+  gigabyte consolidated store for the length of the suite — occasionally blocking a live `rawclaw`
+  command with a lock-contention error. Both suites are now fully isolated to a temporary directory.
 
 
 ## [0.9.0] — 2026-08-24
