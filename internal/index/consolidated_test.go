@@ -1184,3 +1184,215 @@ func TestConsolidate_MergedSessionHonestPerContributionSemantics(t *testing.T) {
 	}
 	con.Close()
 }
+
+// TestConsolidate_LegacyStoreSessionSourcesBackfill exercises the upgrade path:
+// an existing store populated before table session_sources was introduced.
+// It verifies that:
+//   - An unscanned session's message_count, missing_since, project, and cwd remain UNCHANGED.
+//   - session_sources is backfilled with a legacy contribution for unscanned sessions.
+//   - A multi-source session previously merged does not get falsely marked missing or have its
+//     scope clobbered when an incremental pass scans a partial/purged source copy.
+func TestConsolidate_LegacyStoreSessionSourcesBackfill(t *testing.T) {
+	isolateCache(t)
+	conPath := ConsolidatedPath()
+	con, err := store.ConnectRW(conPath)
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	// Simulate pre-bd6cda9 store by dropping session_sources
+	if _, err := con.Exec("DROP TABLE IF EXISTS session_sources"); err != nil {
+		t.Fatalf("drop session_sources: %v", err)
+	}
+
+	const unscannedID = "sess-unscanned"
+	if _, err := con.Exec(`
+		INSERT INTO sessions (
+			id, started_at, last_ts, message_count, is_subagent, parent_id,
+			origin_machine, source_tool, source_path, missing_since, project, cwd
+		) VALUES (?, 100, 200, 5, 0, NULL, 'mach-1', 'claude', '/w/unscanned/a.jsonl', NULL, 'unscanned-proj', '/w/unscanned')
+	`, unscannedID); err != nil {
+		t.Fatalf("seed unscanned session: %v", err)
+	}
+	for i := 1; i <= 5; i++ {
+		if _, err := con.Exec("INSERT INTO messages (session_id, role, content, ts, ts_iso, uuid) VALUES (?, 'user', 'msg', ?, '', ?)",
+			unscannedID, float64(100+i), "u-"+strconv.Itoa(i)); err != nil {
+			t.Fatalf("seed message: %v", err)
+		}
+	}
+
+	const multiID = "sess-multi"
+	if _, err := con.Exec(`
+		INSERT INTO sessions (
+			id, started_at, last_ts, message_count, is_subagent, parent_id,
+			origin_machine, source_tool, source_path, missing_since, project, cwd
+		) VALUES (?, 100, 400, 8, 0, NULL, 'mach-1', 'claude', '/w/multi/b.jsonl', NULL, 'multi-proj', '/w/multi')
+	`, multiID); err != nil {
+		t.Fatalf("seed multi session: %v", err)
+	}
+	for i := 1; i <= 8; i++ {
+		if _, err := con.Exec("INSERT INTO messages (session_id, role, content, ts, ts_iso, uuid) VALUES (?, 'user', 'msg', ?, '', ?)",
+			multiID, float64(100+i), "m-"+strconv.Itoa(i)); err != nil {
+			t.Fatalf("seed multi message: %v", err)
+		}
+	}
+	con.Close()
+
+	// Create a new source DB containing sess-multi (purged in this source at t=9999, 2 msgs)
+	// and a new session sess-new. unscannedID is NOT in this source DB.
+	srcDB := seedSessionDB(t, "new-pass.db",
+		sessionRow{
+			id: multiID, project: "sub-proj", cwd: "/w/sub-proj", missing: 9999.0,
+			msgs: []msgRow{{"m-1", "user", "msg", 101}, {"m-2", "user", "msg", 102}},
+		},
+		sessionRow{
+			id: "sess-new", project: "new-proj", cwd: "/w/new", missing: 0,
+			msgs: []msgRow{{"n-1", "user", "hello", 600}},
+		},
+	)
+
+	// Run the new merge
+	if err := SyncConsolidatedFrom(srcDB); err != nil {
+		t.Fatalf("SyncConsolidatedFrom: %v", err)
+	}
+
+	conRO := openConsolidated(t)
+
+	// Assert unscanned session is completely UNCHANGED:
+	var msgCount int
+	var missingSince sql.NullFloat64
+	var project, cwd string
+	err = conRO.QueryRow("SELECT message_count, missing_since, project, cwd FROM sessions WHERE id=?", unscannedID).
+		Scan(&msgCount, &missingSince, &project, &cwd)
+	if err != nil {
+		t.Fatalf("query unscanned session: %v", err)
+	}
+	if msgCount != 5 {
+		t.Errorf("unscanned message_count = %d, want 5", msgCount)
+	}
+	if missingSince.Valid {
+		t.Errorf("unscanned missing_since = %v, want NULL", missingSince.Float64)
+	}
+	if project != "unscanned-proj" {
+		t.Errorf("unscanned project = %q, want 'unscanned-proj'", project)
+	}
+	if cwd != "/w/unscanned" {
+		t.Errorf("unscanned cwd = %q, want '/w/unscanned'", cwd)
+	}
+
+	// Assert session_sources has a backfilled entry for unscannedID
+	var srcCount int
+	if err := conRO.QueryRow("SELECT COUNT(*) FROM session_sources WHERE session_id=?", unscannedID).Scan(&srcCount); err != nil {
+		t.Fatalf("count unscanned session_sources: %v", err)
+	}
+	if srcCount != 1 {
+		t.Errorf("unscanned session_sources count = %d, want 1 (backfilled)", srcCount)
+	}
+
+	// Assert multi-source session preserved its live state and scope despite partial purged scan:
+	err = conRO.QueryRow("SELECT message_count, missing_since, project, cwd FROM sessions WHERE id=?", multiID).
+		Scan(&msgCount, &missingSince, &project, &cwd)
+	if err != nil {
+		t.Fatalf("query multi session: %v", err)
+	}
+	if msgCount != 8 {
+		t.Errorf("multi message_count = %d, want 8", msgCount)
+	}
+	if missingSince.Valid {
+		t.Errorf("multi missing_since = %v, want NULL (legacy contribution was live)", missingSince.Float64)
+	}
+	if project != "multi-proj" {
+		t.Errorf("multi project = %q, want 'multi-proj' (legacy richer contribution)", project)
+	}
+	if cwd != "/w/multi" {
+		t.Errorf("multi cwd = %q, want '/w/multi'", cwd)
+	}
+
+	// Assert session_sources for multiID has both the legacy backfill and the new pass source
+	if err := conRO.QueryRow("SELECT COUNT(*) FROM session_sources WHERE session_id=?", multiID).Scan(&srcCount); err != nil {
+		t.Fatalf("count multi session_sources: %v", err)
+	}
+	if srcCount != 2 {
+		t.Errorf("multi session_sources count = %d, want 2", srcCount)
+	}
+	conRO.Close()
+}
+
+// TestConsolidate_PartialSessionSourcesBackfill tests backfilling an existing store
+// where some sessions already have session_sources records (e.g. from post-bd6cda9 syncs)
+// and other sessions do not.
+func TestConsolidate_PartialSessionSourcesBackfill(t *testing.T) {
+	isolateCache(t)
+	conPath := ConsolidatedPath()
+	con, err := store.ConnectRW(conPath)
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	// Seed 3 sessions in sessions table
+	for _, id := range []string{"s1", "s2", "s3"} {
+		if _, err := con.Exec(`
+			INSERT INTO sessions (
+				id, started_at, last_ts, message_count, is_subagent, parent_id,
+				origin_machine, source_tool, source_path, missing_since, project, cwd
+			) VALUES (?, 100, 200, 3, 0, NULL, 'mach-1', 'claude', '/w/p/s.jsonl', NULL, 'proj', '/w/p')
+		`, id); err != nil {
+			t.Fatalf("seed session %s: %v", id, err)
+		}
+	}
+
+	// Pre-populate session_sources ONLY for s1 (e.g. from an incremental sync)
+	if _, err := con.Exec(`
+		INSERT INTO session_sources (
+			session_id, source_db, started_at, last_ts, message_count, is_subagent, parent_id,
+			origin_machine, source_tool, source_path, missing_since, project, cwd
+		) VALUES ('s1', 'existing.db', 100, 200, 3, 0, NULL, 'mach-1', 'claude', '/w/p/s.jsonl', NULL, 'proj', '/w/p')
+	`); err != nil {
+		t.Fatalf("seed session_sources for s1: %v", err)
+	}
+
+	// Run migration
+	if err := migrateSessionSources(con); err != nil {
+		t.Fatalf("migrateSessionSources: %v", err)
+	}
+
+	// s1 should only have 1 source ('existing.db'), not duplicated with empty source_db
+	var s1Sources int
+	if err := con.QueryRow("SELECT COUNT(*) FROM session_sources WHERE session_id='s1'").Scan(&s1Sources); err != nil {
+		t.Fatalf("count s1 sources: %v", err)
+	}
+	if s1Sources != 1 {
+		t.Errorf("s1 session_sources count = %d, want 1", s1Sources)
+	}
+	var s1DB string
+	if err := con.QueryRow("SELECT source_db FROM session_sources WHERE session_id='s1'").Scan(&s1DB); err != nil {
+		t.Fatalf("query s1 source_db: %v", err)
+	}
+	if s1DB != "existing.db" {
+		t.Errorf("s1 source_db = %q, want 'existing.db'", s1DB)
+	}
+
+	// s2 and s3 should each have 1 source (with source_db = '')
+	for _, id := range []string{"s2", "s3"} {
+		var cnt int
+		if err := con.QueryRow("SELECT COUNT(*) FROM session_sources WHERE session_id=?", id).Scan(&cnt); err != nil {
+			t.Fatalf("count %s sources: %v", id, err)
+		}
+		if cnt != 1 {
+			t.Errorf("%s session_sources count = %d, want 1", id, cnt)
+		}
+		var db string
+		if err := con.QueryRow("SELECT source_db FROM session_sources WHERE session_id=?", id).Scan(&db); err != nil {
+			t.Fatalf("query %s source_db: %v", id, err)
+		}
+		if db != "" {
+			t.Errorf("%s source_db = %q, want ''", id, db)
+		}
+	}
+}
