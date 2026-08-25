@@ -379,7 +379,7 @@ func TestRenderSearch(t *testing.T) {
 	t.Run("no matches", func(t *testing.T) {
 		var buf bytes.Buffer
 		renderSearch(&buf, SearchEnvelope{Results: []SearchRef{}, Complete: true}, "q", "across all projects")
-		want := "No matches · live-indexed on invoke. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.\n"
+		want := "No matches · answers from local store; refreshes in background. Lead with a single distinctive term that appears in the text (a filename, flag, or error string), not a topic word — or rephrase.\n"
 		if buf.String() != want {
 			t.Fatalf("got %q, want %q", buf.String(), want)
 		}
@@ -391,7 +391,7 @@ func TestRenderSearch(t *testing.T) {
 			{Project: "proj2", SessionID: "ffff", ISO: "", Snippet: "s2", ReadRef: "ffff:1a2b"},
 		}}, "kw", "on this project")
 		out := buf.String()
-		if !strings.HasPrefix(out, "2 conversation(s) matching 'kw' on this project · live-indexed on invoke:\n\n") {
+		if !strings.HasPrefix(out, "2 conversation(s) matching 'kw' on this project · answers from local store; refreshes in background:\n\n") {
 			t.Fatalf("header wrong: %q", out)
 		}
 		if !strings.Contains(out, "  ━━ 2026-06-18 · a1b2c3d4 · proj\n") {
