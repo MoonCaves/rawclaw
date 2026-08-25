@@ -321,3 +321,23 @@ func TestLoadTombstones_AlwaysNonNil(t *testing.T) {
 		t.Fatal("empty set reported a membership")
 	}
 }
+
+func TestLoadTombstones_OversizedLineRejected(t *testing.T) {
+	cache := t.TempDir()
+	path := TombstonePath(cache)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Write a single line exceeding the 1MiB scanner buffer limit.
+	oversized := strings.Repeat("x", 1024*1024+1) + "\n"
+	if err := os.WriteFile(path, []byte(oversized), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := LoadTombstones(cache)
+	if err == nil {
+		t.Fatal("expected error for oversized tombstone line, got nil")
+	}
+	if !strings.Contains(err.Error(), "read tombstone") {
+		t.Fatalf("expected 'read tombstone' error, got %v", err)
+	}
+}
