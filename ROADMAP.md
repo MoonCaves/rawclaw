@@ -171,8 +171,8 @@ All additive; the existing verbs and their JSON shapes don't change. **(explorin
 
 ### Indexing & freshness
 
-- **Watch mode** (`rawclaw --watch`): keep the index warm as transcripts grow, instead of the
-  incremental refresh-on-run we do today. Useful for long-lived agent processes. **(exploring)**
+- **Watch mode** (`rawclaw --watch`): continuous active transcript watcher and live store
+  updater for long-lived agent processes, complementing hook-driven ingest and answer-first queries. **(exploring)**
 - **Export / import the index**: move a built index between machines without re-reading every
   transcript — handy for CI caches and constrained hosts. **(speculative)**
 
