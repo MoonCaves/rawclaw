@@ -84,7 +84,8 @@ type CatalogEntry struct {
 	Source         string `json:"source,omitempty"`
 }
 
-// ReadCatalogEntry reads and parses a catalog entry from disk.
+// ReadCatalogEntry reads and parses a catalog entry from disk. Readers must
+// tolerate unparseable entries (which serve as pure dedup markers).
 func ReadCatalogEntry(path string) (CatalogEntry, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
