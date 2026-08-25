@@ -236,12 +236,6 @@ func discoverAllIngestSources(regs []source.Registration) ([]tagSourceMatch, err
 	return matches, errors.Join(errs...)
 }
 
-// Contention safety choice:
-// We use a single-flight exclusive file lock (flock) keyed to the consolidated
-// store (consolidated.lock) with a 10s timeout, combined with SQLite WAL mode
-// and bounded retry with backoff and jitter.
-// This guarantees that N concurrent hooks collapse safely into serialized runs,
-// preventing store creation races, corruptions, and SQLite write contention.
 // ingestContainerWithRetry no longer takes its own consolidated-store lock.
 // It used to (a separate flock.New on consolidated.lock), but that nested
 // under EnsureFreshContainer's own SyncConsolidatedFrom call, which now
@@ -255,7 +249,6 @@ func discoverAllIngestSources(regs []source.Registration) ([]tagSourceMatch, err
 // loop; only the consolidated-store write needs the fence, and
 // EnsureFreshContainer already provides it.
 func ingestContainerWithRetry(match tagSourceMatch) (int, error) {
-
 	dbp := index.RefreshDBPath(
 		match.registration.ID,
 		match.container.ID,
