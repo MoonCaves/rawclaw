@@ -284,3 +284,59 @@ func TestBrowseConsolidated_JSONStructure(t *testing.T) {
 		}
 	}
 }
+
+// TestBrowseConsolidated_TiedTimestampsByteIdentical verifies that when multiple
+// sessions share the exact same timestamp across projects, the deterministic
+// tiebreaker (SessionID asc) ensures consolidated browse and fallback produce
+// identical ordering.
+func TestBrowseConsolidated_TiedTimestampsByteIdentical(t *testing.T) {
+	root := newCfgRoot(t)
+
+	projA := filepath.Join(root, "-home-u-proj-a")
+	projB := filepath.Join(root, "-home-u-proj-b")
+
+	// Two sessions in different projects with the exact same timestamp
+	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa2222-0000-0000-0000-000000000002",
+		"2026-06-01T10:00:00Z", "tied timestamp session 2")
+	writeIndexedSession(t, root, "-home-u-proj-b", "aaaa1111-0000-0000-0000-000000000001",
+		"2026-06-01T10:00:00Z", "tied timestamp session 1")
+
+	for _, p := range []string{projA, projB} {
+		if _, _, _, err := index.EnsureIndexed(p, false); err != nil {
+			t.Fatalf("EnsureIndexed(%s): %v", p, err)
+		}
+	}
+
+	scopeList := []view.Scope{
+		{Project: paths.ProjectLabel(projA), TDir: projA, Source: "claude"},
+		{Project: paths.ProjectLabel(projB), TDir: projB, Source: "claude"},
+	}
+
+	opts := Options{All: true, Limit: 10}
+
+	var storeOut bytes.Buffer
+	if err := runBrowseScoped(&storeOut, &opts, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped (consolidated): %v", err)
+	}
+
+	consPath := index.ConsolidatedPath()
+	consBackup := consPath + ".bak"
+	if err := os.Rename(consPath, consBackup); err != nil {
+		t.Fatalf("rename consolidated store: %v", err)
+	}
+	defer func() {
+		if _, err := os.Stat(consBackup); err == nil {
+			_ = os.Rename(consBackup, consPath)
+		}
+	}()
+
+	var fallbackOut bytes.Buffer
+	if err := runBrowseScoped(&fallbackOut, &opts, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped (fallback): %v", err)
+	}
+
+	if storeOut.String() != fallbackOut.String() {
+		t.Errorf("mismatch between consolidated and fallback with tied timestamps:\n--- Consolidated ---\n%s\n--- Fallback ---\n%s",
+			storeOut.String(), fallbackOut.String())
+	}
+}

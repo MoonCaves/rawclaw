@@ -174,6 +174,27 @@ func TestBrowseScopedSessions_NullProjectAppearsUnderFilter(t *testing.T) {
 	}
 }
 
+func TestBrowseScopedSessions_DeterministicTieBreak(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	base := 1750000000.0
+
+	// Insert three sessions with identical last_ts but different IDs.
+	storetest.InsertSession(t, con, storetest.Session{ID: "sess-c", LastTS: base, MessageCount: 1})
+	storetest.InsertSession(t, con, storetest.Session{ID: "sess-a", LastTS: base, MessageCount: 1})
+	storetest.InsertSession(t, con, storetest.Session{ID: "sess-b", LastTS: base, MessageCount: 1})
+
+	rows, err := store.BrowseScopedSessions(con, "", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("BrowseScopedSessions: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+	if rows[0].SessionID != "sess-a" || rows[1].SessionID != "sess-b" || rows[2].SessionID != "sess-c" {
+		t.Errorf("rows = [%s %s %s], want [sess-a sess-b sess-c]", rows[0].SessionID, rows[1].SessionID, rows[2].SessionID)
+	}
+}
+
 func TestSessionsByPrefix(t *testing.T) {
 	con, _ := storetest.NewDB(t)
 	storetest.InsertSession(t, con, storetest.Session{ID: "run-a"})
