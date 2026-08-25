@@ -912,7 +912,7 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 		}
 
 		if found && prev.size > 0 && size > prev.size {
-			headFP := provenance.FileFingerprint(f, prev.size)
+			headFP := checkPrefixFingerprint(f, prev.size)
 			if headFP != "" && headFP == prev.fp {
 				sid, isSub, parent := provenance.SessionIDFor(f, transcriptDir)
 				c := source.Container{

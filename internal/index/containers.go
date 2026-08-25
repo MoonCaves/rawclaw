@@ -266,7 +266,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 
 		// Fast path: incremental tail ingest if file grew append-only.
 		if found && prev.size > 0 && size > prev.size {
-			headFP := provenance.FileFingerprint(rawPath, prev.size)
+			headFP := checkPrefixFingerprint(rawPath, prev.size)
 			if headFP != "" && headFP == prev.fp {
 				tailMs, newOffset, ok := parseTailMessages(con, c, sourceID, rawPath, prev.size, size)
 				if ok {
