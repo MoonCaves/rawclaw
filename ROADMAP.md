@@ -38,7 +38,7 @@ single keyword binary:
   **without dropping the session**.
 - **`--resume <session8>`** prints the paste-ready resume command (`claude --resume`, `codex resume`, `agy --conversation`) with `cd` to the recorded working directory.
 - **`--stats`** corpus overview (per-project, or `--all` for everything).
-- **Pluggable Source port & Multi-Agent Ingestion** — unified, source-agnostic indexing across **Claude Code**, **Codex**, and **Google Antigravity (`agy`)** transcripts with deterministic message UUIDs, subagent lineage tracking, and live write-through consolidation.
+- **Pluggable Source port & Multi-Agent Ingestion** — unified, source-agnostic indexing across **Claude Code**, **Codex**, **Google Antigravity (`agy`)**, and **Goose** transcripts with deterministic message UUIDs, subagent lineage tracking, and live write-through consolidation.
 - **Optional RRF-fused semantic tier** — bring-your-own-embedder, pure-Go cosine over BLOB vectors
   (no numpy, no GPU), `--no-vector` for byte-identical keyword-only. See below for the tuning still ahead.
 
@@ -74,9 +74,10 @@ histories, or scope to one tool. **(planned)**
 
 Read-only recall is the core, but lightweight scriptable session management belongs here too, no TUI required:
 
-- **`archive` / `delete`** — **built; cli wiring landing.** User-driven, never an auto-heuristic. Archive is a
-  filesystem move (default `~/.claude/archive/`); delete is filter-gated and dry-run-first (refuses to delete
-  everything) with a tombstone file so re-index won't resurrect a deleted session.
+- **`archive` / `delete`** — **shipped.** User-driven, never an auto-heuristic. Archive is a
+  git-remote-backed multi-machine sync and backup mechanism; delete is filter-gated and dry-run-first
+  (refuses to delete everything) with a tombstone file and vault removal so re-index won't resurrect a
+  deleted session.
 - **`fork` (`--fork-session`) + `here` (`--here`)** — pass-throughs to `claude` (fork a session; or copy its
   JSONL into the CWD's project and resume there). **(planned — WANTED:** powers the session-start
   resume/fork *offer* — "continue from here, or fork from the decision / *before* it for clean,
@@ -113,12 +114,11 @@ topic-section markers). rawclaw owns the per-session recap (its domain = transcr
 
 The read protocol (source-stable uuid refs, git-style ambiguity guards, whole-by-default reads with an opt-in
 `--budget` ceiling, `--more` / `--around` expand-in-place, never-silent trims, and incompleteness-as-data)
-**shipped** — see *Already shipped*. Likewise the LLM-free **titles + low-signal filtering**. Remaining
-refinements, **(planned)**: the orthogonal **`--with tools|thinking|subagents`** richness axis (layer detail
+**shipped** — see *Already shipped*. Likewise the LLM-free **titles + low-signal filtering**, and the
+**`--debug-search`** scoring explainer (honest about bm25 / coverage / sort-overlay and routine sort-tier
+regimes). Remaining refinements, **(planned)**: the orthogonal **`--with tools|thinking|subagents`** richness axis (layer detail
 onto the *same* window, distinct from `--more` widening it), and **content-hash refs** as a second-phase
-hardening for very large corpora (the `uuid8` prefix is already collision-guarded). The **`--debug-search`**
-scoring explainer — honest about RawClaw's actual bm25 / bm25+coverage / sort-overlay regimes (there is no
-composite score to fake) — is **built; cli wiring landing.**
+hardening for very large corpora (the `uuid8` prefix is already collision-guarded).
 
 ### Smaller polish
 
@@ -126,34 +126,18 @@ composite score to fake) — is **built; cli wiring landing.**
 
 ### Output ergonomics — grep-composability + mode discoverability
 
-Live signal (2026-06-20): an agent piped the default discovery output through `grep`, requiring the date and a
-content keyword on the *same* line — but the default view puts the date on the `━━` header and the content on
-separate `▶`/role lines, so they never co-occur, and the filter silently dropped real hits. The multi-line view
-is right for *reading* a result; it's hostile to *line-filtering across* results — and agents reach for `grep`
-by default. `--json` already composes with `jq`; a self-contained one-line hit mode
-(`iso · session8 · role · snippet`) for `grep` is still wanted. The gap is **discoverability** (agents
-don't reach for it) as much as the mode itself.
+Line-oriented grep output is **shipped** via `--oneline` / `--format text|oneline|line|json`
+(`<read_ref>\t<started_iso>\t<project>\t<snippet>`), alongside `--json` for `jq` composition.
 
-**Governing tenet — self-evident like Google, no guide needed.** Order of preference for closing *any* agent-usage
-gap, worst → best: (1) ship a **skill** (knowledge in the agent's head — it must read a guide first); (2) compress
-that into the **tool's own menu / `--help`** (knowledge on the surface, shown on use, not a separate file);
-(3) **make the tool absorb the native behavior itself** so nothing has to be read at all — like Google handling
-any query. Skills and menu-hints are scaffolding for where the tool isn't self-evident *yet*; treat their contents
-as a punch-list of self-evidence gaps to retire.
+Remaining discoverability refinements, **(planned)**: **auto-detect non-tty (piped) output and emit grep-friendly lines**
+(the agent greps, it just works — zero knowledge required); failing that, a one-line stderr hint at the moment of grepping;
+pair with **forgiving input parsing** (single-dash long flags, case-folding, typo-correction, `find`/`grep`→`search` aliases)
+so an agent's natural attempt succeeds without knowing the exact syntax.
 
-Applied here, best → worst: **auto-detect non-tty (piped) output and emit grep-friendly lines** (the agent greps,
-it just works — zero knowledge required); failing that, a one-line stderr hint at the moment of grepping; failing
-that, the README documents `--json` (and a one-line hit mode, once it lands). Pair with **forgiving input parsing**
-(single-dash long flags, case-folding, typo-correction, `find`/`grep`→`search` aliases) so an agent's
-natural attempt succeeds without knowing the exact syntax. **(planned)**
+### Shell completion — shipped
 
-### Shell completion
-
-`spf13/cobra` ships completion generation; we just haven't wired the command yet. Plan: a
-`rawclaw completion bash|zsh|fish|powershell` subcommand, plus dynamic completion for the arguments
-that benefit most — session-id prefixes (for `read` / `outline` / `--resume`), known project
-paths (for `--include-path` / `--exclude-path`), and tool names (for `--include-tools`). The session-id
-and project completers read straight from the existing index, so they cost nothing extra to maintain. **(planned)**
+A `rawclaw completion bash|zsh|fish|powershell` subcommand is **shipped** via `spf13/cobra`.
+Dynamic completion for session-id prefixes and project paths remains an area for future exploration.
 
 ### Semantic scoring tuning
 
