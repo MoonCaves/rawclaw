@@ -22,8 +22,8 @@ func TestExplain(t *testing.T) {
 			covs: []int{1, 1},
 			in:   ExplainInputs{Terms: []string{"kubernetes"}, Multi: false, Sort: ""},
 			want: []ScoreExplain{
-				{BM25Rank: 0, Coverage: 1, Recency: 0, Final: 0, Method: MethodBM25, Terms: []string{"kubernetes"}},
-				{BM25Rank: 1, Coverage: 1, Recency: 0, Final: 1, Method: MethodBM25, Terms: []string{"kubernetes"}},
+				{BM25Rank: 0, Coverage: 1, Recency: 0, Final: 0, Method: MethodBM25, Terms: []string{"kubernetes"}, Tier: "normal"},
+				{BM25Rank: 1, Coverage: 1, Recency: 0, Final: 1, Method: MethodBM25, Terms: []string{"kubernetes"}, Tier: "normal"},
 			},
 		},
 		{
@@ -31,8 +31,8 @@ func TestExplain(t *testing.T) {
 			covs: []int{2, 1},
 			in:   ExplainInputs{Terms: []string{"kubernetes", "redis"}, Multi: true, Sort: ""},
 			want: []ScoreExplain{
-				{BM25Rank: -1, Coverage: 2, Recency: 0, Final: 0, Method: MethodBM25Coverage, Terms: []string{"kubernetes", "redis"}},
-				{BM25Rank: -1, Coverage: 1, Recency: 0, Final: 1, Method: MethodBM25Coverage, Terms: []string{"kubernetes", "redis"}},
+				{BM25Rank: -1, Coverage: 2, Recency: 0, Final: 0, Method: MethodBM25Coverage, Terms: []string{"kubernetes", "redis"}, Tier: "normal"},
+				{BM25Rank: -1, Coverage: 1, Recency: 0, Final: 1, Method: MethodBM25Coverage, Terms: []string{"kubernetes", "redis"}, Tier: "normal"},
 			},
 		},
 		{
@@ -40,8 +40,17 @@ func TestExplain(t *testing.T) {
 			covs: []int{2, 1},
 			in:   ExplainInputs{Terms: []string{"kubernetes", "redis"}, Multi: true, Sort: "newest"},
 			want: []ScoreExplain{
-				{BM25Rank: -1, Coverage: 2, Recency: 1, Final: 0, Method: MethodSortOverlay, Terms: []string{"kubernetes", "redis"}},
-				{BM25Rank: -1, Coverage: 1, Recency: 1, Final: 1, Method: MethodSortOverlay, Terms: []string{"kubernetes", "redis"}},
+				{BM25Rank: -1, Coverage: 2, Recency: 1, Final: 0, Method: MethodSortOverlay, Terms: []string{"kubernetes", "redis"}, Tier: "normal"},
+				{BM25Rank: -1, Coverage: 1, Recency: 1, Final: 1, Method: MethodSortOverlay, Terms: []string{"kubernetes", "redis"}, Tier: "normal"},
+			},
+		},
+		{
+			name: "routine flag surfaces routine tier in explain",
+			covs: []int{2, 1},
+			in:   ExplainInputs{Terms: []string{"kubernetes", "redis"}, Multi: true, Sort: "", Routines: []bool{false, true}},
+			want: []ScoreExplain{
+				{BM25Rank: -1, Coverage: 2, Recency: 0, Final: 0, Method: MethodBM25Coverage, Terms: []string{"kubernetes", "redis"}, Tier: "normal"},
+				{BM25Rank: -1, Coverage: 1, Recency: 0, Final: 1, Method: MethodBM25Coverage, Terms: []string{"kubernetes", "redis"}, Tier: "routine"},
 			},
 		},
 		{

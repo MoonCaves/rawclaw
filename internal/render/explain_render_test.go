@@ -20,28 +20,30 @@ func TestFmtScoreExplain(t *testing.T) {
 		want []string // substrings that MUST appear
 	}{
 		{
-			name: "bm25-only shows ordinal and single term",
+			name: "bm25-only shows ordinal and single term with tier",
 			e: retrieve.ScoreExplain{
 				BM25Rank: 0, Coverage: 1, Recency: 0, Final: 0,
 				Method: retrieve.MethodBM25, Terms: []string{"kubernetes"},
+				Tier: "normal",
 			},
-			want: []string{"rank 0", retrieve.MethodBM25, "bm25-order=#0", "coverage=1/1 term(s)", "recency-overlay=no"},
+			want: []string{"rank 0", retrieve.MethodBM25, "bm25-order=#0", "coverage=1/1 term(s)", "recency-overlay=no", "tier=normal"},
 		},
 		{
-			name: "coverage re-rank shows n/a bm25 and the real coverage fraction",
+			name: "coverage re-rank shows n/a bm25, real coverage fraction, and routine tier",
 			e: retrieve.ScoreExplain{
 				BM25Rank: -1, Coverage: 2, Recency: 0, Final: 0,
 				Method: retrieve.MethodBM25Coverage, Terms: []string{"kubernetes", "redis"},
+				Tier: "routine",
 			},
-			want: []string{"rank 0", retrieve.MethodBM25Coverage, "bm25-order=n/a", "coverage=2/2 term(s)", "recency-overlay=no"},
+			want: []string{"rank 0", retrieve.MethodBM25Coverage, "bm25-order=n/a", "coverage=2/2 term(s)", "recency-overlay=no", "tier=routine"},
 		},
 		{
-			name: "sort overlay flags recency yes and bm25 n/a",
+			name: "sort overlay flags recency yes, bm25 n/a, default tier normal",
 			e: retrieve.ScoreExplain{
 				BM25Rank: -1, Coverage: 1, Recency: 1, Final: 3,
 				Method: retrieve.MethodSortOverlay, Terms: []string{"kubernetes", "redis"},
 			},
-			want: []string{"rank 3", retrieve.MethodSortOverlay, "bm25-order=n/a", "coverage=1/2 term(s)", "recency-overlay=yes"},
+			want: []string{"rank 3", retrieve.MethodSortOverlay, "bm25-order=n/a", "coverage=1/2 term(s)", "recency-overlay=yes", "tier=normal"},
 		},
 	}
 
@@ -66,10 +68,10 @@ func TestPrintDebugSearch(t *testing.T) {
 	hits := []retrieve.Hit{
 		// Full parseable ISO: pins the timefmt-seam normalization to marked UTC.
 		{SessionID: "alphasession", ISO: "2026-06-01T10:00:00.123Z", Role: "user", Snippet: "kube"},
-		{SessionID: "betasession", ISO: "", Role: "user", Snippet: "redis"},
+		{SessionID: "betasession", ISO: "", Role: "user", Snippet: "redis", Routine: true},
 	}
 	explains := []retrieve.ScoreExplain{
-		{BM25Rank: 0, Coverage: 1, Recency: 0, Final: 0, Method: retrieve.MethodBM25, Terms: []string{"kube"}},
+		{BM25Rank: 0, Coverage: 1, Recency: 0, Final: 0, Method: retrieve.MethodBM25, Terms: []string{"kube"}, Tier: "normal"},
 		// deliberately omit the second explain to exercise the short-slice path
 	}
 
@@ -82,8 +84,10 @@ func TestPrintDebugSearch(t *testing.T) {
 		"alphases",             // sid8 truncation of "alphasession"
 		"2026-06-01T10:00:00Z", // stored ISO normalized to marked UTC (timefmt seam)
 		retrieve.MethodBM25,
-		"?",              // empty ISO rendered as "?"
-		"(no breakdown)", // second hit has no matching explain
+		"tier=normal",
+		"betasess · routine", // second hit has routine marker
+		"?",                  // empty ISO rendered as "?"
+		"(no breakdown)",     // second hit has no matching explain
 	} {
 		if !strings.Contains(out, w) {
 			t.Errorf("PrintDebugSearch output missing %q in:\n%s", w, out)
@@ -108,10 +112,10 @@ func TestDebugSearchJSON(t *testing.T) {
 	t.Parallel()
 
 	hits := []retrieve.Hit{
-		{SessionID: "s1", ISO: "2026-06-01", Role: "user", Snippet: "kube redis"},
+		{SessionID: "s1", ISO: "2026-06-01", Role: "user", Snippet: "kube redis", Routine: true},
 	}
 	explains := []retrieve.ScoreExplain{
-		{BM25Rank: -1, Coverage: 2, Recency: 0, Final: 0, Method: retrieve.MethodBM25Coverage, Terms: []string{"kube", "redis"}},
+		{BM25Rank: -1, Coverage: 2, Recency: 0, Final: 0, Method: retrieve.MethodBM25Coverage, Terms: []string{"kube", "redis"}, Tier: "routine"},
 	}
 
 	b, err := DebugSearchJSON(hits, explains)
@@ -136,11 +140,11 @@ func TestDebugSearchJSON(t *testing.T) {
 		t.Errorf("hit fields wrong: %+v", got[0])
 	}
 	sc := got[0].Score
-	if sc.Method != retrieve.MethodBM25Coverage || sc.Coverage != 2 || sc.BM25Rank != -1 || sc.Final != 0 {
+	if sc.Method != retrieve.MethodBM25Coverage || sc.Coverage != 2 || sc.BM25Rank != -1 || sc.Final != 0 || sc.Tier != "routine" {
 		t.Errorf("score round-trip wrong: %+v", sc)
 	}
 	// Confirm the json keys are the snake_case tags the cli/agents expect.
-	for _, key := range []string{`"session_id"`, `"score"`, `"bm25_rank"`, `"coverage"`, `"recency"`, `"final"`, `"method"`, `"terms"`} {
+	for _, key := range []string{`"session_id"`, `"score"`, `"bm25_rank"`, `"coverage"`, `"recency"`, `"final"`, `"method"`, `"terms"`, `"tier"`} {
 		if !strings.Contains(string(b), key) {
 			t.Errorf("json missing key %s in:\n%s", key, b)
 		}
