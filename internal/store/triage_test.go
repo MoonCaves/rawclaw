@@ -204,6 +204,78 @@ func TestIsEffectivelyRoutine_RealTagDemotesRoutine(t *testing.T) {
 	}
 }
 
+func TestRoutineSet_MatchesIsEffectivelyRoutineErrorPolicy(t *testing.T) {
+	t.Run("missing topic table is no routine sessions, not an error", func(t *testing.T) {
+		con, _ := storetest.NewDB(t)
+		if _, err := con.Exec(`
+CREATE TABLE session_verdict (
+  session_id TEXT PRIMARY KEY,
+  verdict TEXT NOT NULL,
+  source TEXT NOT NULL,
+  origin_machine TEXT,
+  tagged_at REAL
+);
+INSERT INTO session_verdict(session_id, verdict, source)
+VALUES('s1', 'routine', 'floor');`); err != nil {
+			t.Fatalf("seed verdict-only schema: %v", err)
+		}
+
+		routines, err := store.RoutineSet(con)
+		if err != nil {
+			t.Fatalf("RoutineSet: %v", err)
+		}
+		if len(routines) != 0 {
+			t.Fatalf("RoutineSet = %v, want empty set", routines)
+		}
+
+		effective, err := store.IsEffectivelyRoutine(con, "s1")
+		if err != nil {
+			t.Fatalf("IsEffectivelyRoutine: %v", err)
+		}
+		if !effective {
+			t.Fatal("IsEffectivelyRoutine = false, want true")
+		}
+	})
+
+	t.Run("database failure is propagated", func(t *testing.T) {
+		con, _ := storetest.NewDB(t)
+		con.Close()
+
+		_, err := store.RoutineSet(con)
+		if err == nil {
+			t.Fatal("RoutineSet returned nil error for a closed database")
+		}
+	})
+}
+
+func TestRoutineSet_ExcludesSessionsWithRealSegments(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	mustTopic(t, con)
+
+	if err := store.UpsertVerdict(con, store.Verdict{
+		SessionID: "routine", Verdict: store.VerdictRoutine, Source: store.VerdictSourceFloor,
+	}); err != nil {
+		t.Fatalf("UpsertVerdict routine: %v", err)
+	}
+	if err := store.UpsertVerdict(con, store.Verdict{
+		SessionID: "tagged", Verdict: store.VerdictRoutine, Source: store.VerdictSourceFloor,
+	}); err != nil {
+		t.Fatalf("UpsertVerdict tagged: %v", err)
+	}
+	mustUpsertSeg(t, con, "tagged", "u1", "real topic", "box-a")
+
+	routines, err := store.RoutineSet(con)
+	if err != nil {
+		t.Fatalf("RoutineSet: %v", err)
+	}
+	if !routines["routine"] {
+		t.Errorf("RoutineSet = %v, missing routine session", routines)
+	}
+	if routines["tagged"] {
+		t.Errorf("RoutineSet = %v, real-tagged session must not be routine", routines)
+	}
+}
+
 // --- verdict LWW (tie = latest tagged_at) ---
 
 func TestMergeVerdict_LWW(t *testing.T) {
