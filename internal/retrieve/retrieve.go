@@ -439,22 +439,9 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 	lterms := lowerSet(terms)
 	scored := make([]scoredHit, 0, len(hits))
 	for _, h := range hits {
-		var disp string
-		if p.IncludeTools {
-			disp = strings.TrimSpace(reWhitespace.ReplaceAllString(h.Snippet, " "))
-		} else {
-			// Rebuild the snippet from content with everything the runtime
-			// generated removed — tool runs AND injected envelopes
-			// (<task-notification>, <system-reminder>, slash-command plumbing,
-			// captured shell IO). A record made only of that has nothing left to
-			// match and drops out, the same rule that already excluded tool-only
-			// hits. Nothing is deleted: --include-tools puts it back.
-			haystack := parse.StripGenerated(h.Content)
-			s, present := query.MakeSnippet(haystack, terms)
-			if !present {
-				continue
-			}
-			disp = s
+		disp, ok := resolveSnippet(h.Snippet, h.Content, terms, p.IncludeTools)
+		if !ok {
+			continue
 		}
 		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, h.Content)), multi)
 		scored = append(scored, scoredHit{
@@ -497,6 +484,16 @@ func haystackFor(includeTools bool, content string) string {
 		return content
 	}
 	return parse.StripGenerated(content)
+}
+
+// resolveSnippet returns the display snippet and whether the record matched.
+// With includeTools, it normalizes whitespace; otherwise, it removes generated
+// material (tool runs and envelopes) and builds a highlighted snippet.
+func resolveSnippet(snippet, content string, terms []string, includeTools bool) (string, bool) {
+	if includeTools {
+		return strings.TrimSpace(reWhitespace.ReplaceAllString(snippet, " ")), true
+	}
+	return query.MakeSnippet(parse.StripGenerated(content), terms)
 }
 
 // LinearFallback is the FTS5-absent linear scan over a project's JSONL, honoring
@@ -698,16 +695,9 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 	lterms := lowerSet(terms)
 	out := []Anchor{}
 	for _, a := range anchors {
-		var disp string
-		if p.IncludeTools {
-			disp = strings.TrimSpace(reWhitespace.ReplaceAllString(a.Snippet, " "))
-		} else {
-			haystack := parse.StripGenerated(a.Content)
-			s, present := query.MakeSnippet(haystack, terms)
-			if !present {
-				continue
-			}
-			disp = s
+		disp, ok := resolveSnippet(a.Snippet, a.Content, terms, p.IncludeTools)
+		if !ok {
+			continue
 		}
 		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, a.Content)), multi)
 		out = append(out, Anchor{
