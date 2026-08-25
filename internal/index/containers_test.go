@@ -2,7 +2,9 @@ package index
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -162,16 +164,39 @@ func TestReindexContainer_RollbackOnFailure(t *testing.T) {
 	}
 }
 
-// TestEnsureIndexedContainers_SQLiteWALTrigger verifies that writes committed to a -wal file
-// trigger an incremental re-index even when the main .db file mtime and size are unchanged.
+// TestEnsureIndexedContainers_SQLiteWALTrigger verifies that writes committed to a real SQLite WAL
+// trigger incremental re-indexing, verifies the WAL magic header and nonzero size, covers
+// checkpointing away the WAL mid-run, and verifies correct behavior when a -shm file exists alongside.
 func TestEnsureIndexedContainers_SQLiteWALTrigger(t *testing.T) {
 	td := t.TempDir()
 	mainDB := filepath.Join(td, "sessions.db")
 	walFile := mainDB + "-wal"
+	shmFile := mainDB + "-shm"
 	cacheDB := filepath.Join(td, "cache.db")
 
-	if err := os.WriteFile(mainDB, []byte("main db data"), 0o644); err != nil {
+	// Open a genuine SQLite database and set journal_mode=WAL.
+	db, err := sql.Open("sqlite", "file:"+mainDB+"?_pragma=busy_timeout(10000)")
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+		t.Fatalf("set journal_mode=WAL: %v", err)
+	}
+	if _, err := db.Exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, content TEXT);"); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO sessions (id, content) VALUES ('sess-wal-1', 'initial transcript data');"); err != nil {
+		t.Fatalf("insert initial session: %v", err)
+	}
+
+	// Verify the -wal file is real: exists, nonzero size, and valid WAL magic header.
+	assertRealWAL(t, walFile)
+
+	// Verify -shm file exists alongside in WAL mode.
+	if _, err := os.Stat(shmFile); err != nil {
+		t.Fatalf("expected -shm file to exist alongside WAL: %v", err)
 	}
 
 	c := source.Container{
@@ -188,8 +213,8 @@ func TestEnsureIndexedContainers_SQLiteWALTrigger(t *testing.T) {
 		}, nil
 	}
 
-	// 1. Initial index
-	_, _, err := EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
+	// 1. Initial index pass
+	_, _, err = EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
 	if err != nil {
 		t.Fatalf("initial index failed: %v", err)
 	}
@@ -206,18 +231,99 @@ func TestEnsureIndexedContainers_SQLiteWALTrigger(t *testing.T) {
 		t.Fatalf("expected no reindex on unchanged file, got call count %d", msgCallCount)
 	}
 
-	// 3. Write to WAL file while keeping mainDB untouched
-	time.Sleep(10 * time.Millisecond)
-	if err := os.WriteFile(walFile, []byte("new transaction committed to wal"), 0o644); err != nil {
-		t.Fatal(err)
+	// 3. Perform a read query to ensure reading/touching -shm does not trigger false reindex.
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&count); err != nil {
+		t.Fatalf("read query: %v", err)
+	}
+	_, _, err = EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
+	if err != nil {
+		t.Fatalf("read query pass failed: %v", err)
+	}
+	if msgCallCount != 1 {
+		t.Fatalf("expected read query / -shm interaction to not trigger reindex, got call count %d", msgCallCount)
 	}
 
-	// 4. Third index pass -> MUST trigger reindex due to WAL change
+	// 4. Commit a new transaction into the real SQLite DB in WAL mode.
+	time.Sleep(10 * time.Millisecond)
+	if _, err := db.Exec("INSERT INTO sessions (id, content) VALUES ('sess-wal-2', 'second transaction committed to real wal');"); err != nil {
+		t.Fatalf("insert second session: %v", err)
+	}
+
+	// Verify WAL file is still real with valid magic and nonzero size.
+	assertRealWAL(t, walFile)
+
+	// 5. Third index pass -> MUST trigger reindex due to real WAL update
 	_, _, err = EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
 	if err != nil {
 		t.Fatalf("third index failed: %v", err)
 	}
 	if msgCallCount != 2 {
 		t.Fatalf("expected reindex triggered by WAL update, got call count %d", msgCallCount)
+	}
+
+	// 6. Fourth index pass with NO changes -> must skip
+	_, _, err = EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
+	if err != nil {
+		t.Fatalf("fourth index failed: %v", err)
+	}
+	if msgCallCount != 2 {
+		t.Fatalf("expected no reindex on unchanged WAL, got call count %d", msgCallCount)
+	}
+
+	// 7. Checkpoint the WAL into the main database with TRUNCATE.
+	// This flushes all WAL pages into mainDB and truncates -wal to 0 bytes.
+	time.Sleep(10 * time.Millisecond)
+	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE);"); err != nil {
+		t.Fatalf("wal_checkpoint(TRUNCATE) failed: %v", err)
+	}
+
+	// Verify -wal file is now truncated (size 0) or removed.
+	if st, err := os.Stat(walFile); err == nil && st.Size() > 0 {
+		t.Fatalf("expected -wal file to be truncated to 0 bytes after TRUNCATE checkpoint, got size %d", st.Size())
+	}
+
+	// 8. Fifth index pass -> MUST reindex because the backing file state transitioned
+	// from (mainDB + wal) to (mainDB checkpointed, wal truncated), updating the watermark.
+	_, _, err = EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
+	if err != nil {
+		t.Fatalf("fifth index failed: %v", err)
+	}
+	if msgCallCount != 3 {
+		t.Fatalf("expected reindex triggered by checkpointed state transition, got call count %d", msgCallCount)
+	}
+
+	// 9. Sixth index pass with NO changes after checkpoint -> must skip
+	_, _, err = EnsureIndexedContainers(cacheDB, false, []source.Container{c}, msgsFn, "goose", "")
+	if err != nil {
+		t.Fatalf("sixth index failed: %v", err)
+	}
+	if msgCallCount != 3 {
+		t.Fatalf("expected no reindex on unchanged checkpointed state, got call count %d", msgCallCount)
+	}
+}
+
+func assertRealWAL(t *testing.T, walPath string) {
+	t.Helper()
+	st, err := os.Stat(walPath)
+	if err != nil {
+		t.Fatalf("expected WAL file %s to exist: %v", walPath, err)
+	}
+	if st.Size() < 32 {
+		t.Fatalf("expected WAL file %s size >= 32 bytes (WAL header), got %d", walPath, st.Size())
+	}
+	f, err := os.Open(walPath)
+	if err != nil {
+		t.Fatalf("open WAL file %s: %v", walPath, err)
+	}
+	defer f.Close()
+
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(f, header); err != nil {
+		t.Fatalf("read WAL header magic from %s: %v", walPath, err)
+	}
+	magic := binary.BigEndian.Uint32(header)
+	if magic != 0x377f0682 && magic != 0x377f0683 {
+		t.Fatalf("expected valid WAL magic header 0x377f0682 or 0x377f0683, got 0x%08x", magic)
 	}
 }
