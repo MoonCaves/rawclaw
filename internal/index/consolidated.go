@@ -381,6 +381,9 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 			return st, fmt.Errorf("restore consolidated tags: %w", err)
 		}
 	}
+	if err := migrateSessionSources(con); err != nil {
+		return st, fmt.Errorf("migrate session sources: %w", err)
+	}
 
 	for _, src := range srcPaths {
 		n, _, skipped, err := consolidateOne(con, src)
@@ -435,6 +438,9 @@ func SyncConsolidatedFrom(srcPath string) error {
 	}
 	if err := store.EnsureTopicSchema(con); err != nil {
 		return fmt.Errorf("ensure consolidated topic schema: %w", err)
+	}
+	if err := migrateSessionSources(con); err != nil {
+		return fmt.Errorf("migrate session sources: %w", err)
 	}
 	_, changed, skipped, err := consolidateOne(con, srcPath)
 	if err != nil {
@@ -581,6 +587,9 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	}
 
 	srcBase := filepath.Base(src)
+	if err := migrateSessionSources(con); err != nil {
+		return 0, false, true, fmt.Errorf("migrate session sources: %w", err)
+	}
 	if _, err := con.Exec(recordSessionSourcesSQL, srcBase); err != nil {
 		return 0, false, true, fmt.Errorf("record session sources: %w", err)
 	}
@@ -763,6 +772,59 @@ func pruneTombstoned(con *sql.DB) error {
 		if _, err := con.Exec("DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ?", id, like); err != nil {
 			return fmt.Errorf("prune tombstoned file_index: %w", err)
 		}
+	}
+	return nil
+}
+
+// migrateSessionSources backfills session_sources from existing sessions rows in
+// main.sessions before an aggregate merge runs.
+//
+// On an existing store predating session_sources, sessions rows represent the
+// pre-migration consolidated baseline (potentially merged from multiple sources).
+// Backfilling them with an empty source_db ("") records this legacy contribution
+// so incremental syncs of individual source dbs do not clobber multi-source metadata
+// (message_count, missing_since, scope/provenance) from an incomplete contribution set.
+func migrateSessionSources(con *sql.DB) error {
+	const ddl = `
+CREATE TABLE IF NOT EXISTS session_sources (
+    session_id TEXT NOT NULL, source_db TEXT NOT NULL,
+    started_at REAL, last_ts REAL, message_count INTEGER DEFAULT 0,
+    is_subagent INTEGER DEFAULT 0, parent_id TEXT,
+    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL,
+    project TEXT, cwd TEXT,
+    PRIMARY KEY (session_id, source_db)
+);
+CREATE INDEX IF NOT EXISTS idx_session_sources_session ON session_sources(session_id);
+`
+	if _, err := con.Exec(ddl); err != nil {
+		return fmt.Errorf("ensure session_sources schema: %w", err)
+	}
+
+	var hasSessions int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'").Scan(&hasSessions); err != nil {
+		return fmt.Errorf("check sessions table: %w", err)
+	}
+	if hasSessions == 0 {
+		return nil
+	}
+
+	const backfillSQL = `
+INSERT OR IGNORE INTO main.session_sources (
+  session_id, source_db, started_at, last_ts, message_count,
+  is_subagent, parent_id, origin_machine, source_tool, source_path,
+  missing_since, project, cwd
+)
+SELECT
+  id, '', started_at, last_ts, message_count,
+  is_subagent, parent_id, origin_machine, source_tool, source_path,
+  missing_since, project, cwd
+FROM main.sessions
+WHERE NOT EXISTS (
+  SELECT 1 FROM main.session_sources WHERE main.session_sources.session_id = main.sessions.id
+)
+`
+	if _, err := con.Exec(backfillSQL); err != nil {
+		return fmt.Errorf("backfill session_sources: %w", err)
 	}
 	return nil
 }
