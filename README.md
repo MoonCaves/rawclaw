@@ -34,7 +34,7 @@ Want RawClaw to track your Claude Code retention setting instead? Set `RAWCLAW_R
 ## Setup: let your agents discover it
 
 Installing the binary gives *you* the tool; `rawclaw setup` tells your **agents** about it. One
-command wires a short session-start note into Claude Code (and Codex, when installed) so every
+command wires a short session-start note into Claude Code, Codex, and Google Antigravity (when installed) so every
 new session knows rawclaw exists and how to search with it — no hand-editing config files.
 
 ```bash
@@ -48,7 +48,7 @@ never duplicates. `rawclaw setup --eject` removes exactly what setup installed �
 
 ## What it does
 
-Your coding agents quietly save conversations as JSONL transcripts on disk (**Claude Code** in `~/.claude/projects`, **Codex** in `~/.codex/sessions`, and **Google Antigravity** in `~/.gemini/antigravity-cli/brain`). RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type. **Goose** (SQLite sessions under `~/.local/share/goose/sessions`) is read too, but that adapter is **experimental** — it has not been verified against a real Goose install yet.
+Your coding agents quietly save conversations as JSONL transcripts on disk (**Claude Code** in `~/.claude/projects`, **Codex** in `~/.codex/sessions`, and **Google Antigravity** in `~/.gemini/antigravity-cli/brain`). RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type. **Goose** (SQLite sessions under `~/.local/share/goose/sessions/sessions.db`, Goose v1.10.0+) is read too.
 
 - **Goal → match → resolution.** Every hit returns the session's opening (what it set out to do), the matched message in context, and the closing (what was decided) — so one result usually answers the question without opening a file.
 - **All your projects and runtimes by default.** One query spans every coding session across runtimes and folders (`--this-project` and `--source` to narrow).
@@ -149,11 +149,13 @@ rawclaw "monthly billing for the paid tier"   # now lexical + semantic, fused
 
 Vectors live as BLOBs in the same single on-disk store a search reads, alongside the keyword index; cosine scoring and fusion run in pure Go — no LLM, no extra service, no numpy, no GPU. Unset the env (or pass `--no-vector`) and you're back to byte-identical keyword search.
 
-### Topic tags — where the conversation pivoted
+### Topic tags and routine verdicts — where the conversation pivoted
 
 Every session gets tagged at its topic-change points with concept keywords, so an agent can always find the moment a conversation pivoted — `rawclaw topics "<concept>"` drops it right there.
 
 `rawclaw tag-prep <session-id>` refreshes that exact live session through the registered transcript-source adapters before it prints. The caller does not choose Claude, Codex, Antigravity, a project, or a working directory; a newly registered source gets the same path automatically. Unchanged transcripts reuse their file watermark, while a refresh RawClaw cannot verify fails instead of returning a known-stale partial dump.
+
+`rawclaw tag-write <session-id>` writes a subagent's structured topic segments or `--routine` verdict directly into the index. A session marked with a routine verdict sorts below equal-relevance normal hits via a shared partition at result assembly; it is never hidden, renders a visible `routine` marker, and is detailed in `--debug-search`.
 
 ### Optional transcript archive — a git remote as durable, multi-machine storage
 
