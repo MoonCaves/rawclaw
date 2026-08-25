@@ -324,7 +324,7 @@ func rankMethod(in ExplainInputs) string {
 // reported as -1 (honest: we cannot recover the pre-resort bm25 ordinal here).
 func Explain(covs []int, in ExplainInputs) []ScoreExplain {
 	method := rankMethod(in)
-	terms := slices.Clone(in.Terms) // defensive copy; never alias the caller's slice
+	terms := append([]string(nil), in.Terms...) // defensive copy; never alias the caller's slice
 	out := make([]ScoreExplain, 0, len(covs))
 	for i, cov := range covs {
 		tier := "normal"
@@ -335,7 +335,7 @@ func Explain(covs []int, in ExplainInputs) []ScoreExplain {
 			Coverage: cov,
 			Final:    i,
 			Method:   method,
-			Terms:    slices.Clone(terms), // each hit owns its own copy
+			Terms:    append([]string(nil), terms...), // each hit owns its own copy
 			Tier:     tier,
 		}
 		switch method {
@@ -359,7 +359,7 @@ func Search(dbp, q string, limit int, p SearchParams) []Hit {
 	scored, _ := searchScored(dbp, q, limit, p)
 	n := min(len(scored), max(0, limit))
 	out := make([]Hit, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, scored[i].Hit)
 	}
 	return out
