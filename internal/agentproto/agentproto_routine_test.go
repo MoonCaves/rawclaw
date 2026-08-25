@@ -1,6 +1,7 @@
 package agentproto
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ type fakeEmbedder struct {
 	vecs map[string][]float64
 }
 
-func (f *fakeEmbedder) Embed(text string) []float64 {
+func (f *fakeEmbedder) Embed(_ context.Context, text string) []float64 {
 	for k, v := range f.vecs {
 		if strings.Contains(text, k) {
 			return v

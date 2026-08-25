@@ -16,12 +16,12 @@ import (
 // (keyword-only) and must satisfy the port contract.
 type nullEmbedder struct{}
 
-func (nullEmbedder) Embed(string) []float64 { return nil }
+func (nullEmbedder) Embed(context.Context, string) []float64 { return nil }
 
 // fakeEmbedder returns a fixed 3-dim vector.
 type fakeEmbedder struct{}
 
-func (fakeEmbedder) Embed(string) []float64 { return []float64{0.1, 0.2, 0.3} }
+func (fakeEmbedder) Embed(context.Context, string) []float64 { return []float64{0.1, 0.2, 0.3} }
 
 var (
 	_ embed.Embedder = nullEmbedder{}
@@ -54,7 +54,7 @@ func TestEmbedderPortContract(t *testing.T) {
 		for _, in := range inputs {
 			t.Run(em.name+"/"+in.name, func(t *testing.T) {
 				t.Parallel()
-				out := em.e.Embed(in.text)
+				out := em.e.Embed(context.Background(), in.text)
 				// Contract: nil OR non-empty []float64. Go has no per-element
 				// float type-check (the slice is statically []float64).
 				if out != nil && len(out) == 0 {
@@ -82,8 +82,8 @@ func TestEmbedderDeterminism(t *testing.T) {
 	for _, em := range embedders {
 		t.Run(em.name, func(t *testing.T) {
 			t.Parallel()
-			out1 := em.e.Embed(text)
-			out2 := em.e.Embed(text)
+			out1 := em.e.Embed(context.Background(), text)
+			out2 := em.e.Embed(context.Background(), text)
 
 			if (out1 == nil) != (out2 == nil) {
 				t.Fatalf("routing decision unstable: first nil=%v, second nil=%v", out1 == nil, out2 == nil)
@@ -183,7 +183,7 @@ func TestHTTPEmbedder_WireFormats(t *testing.T) {
 			defer srv.Close()
 
 			e := newTestEmbedder(srv.URL, tt.wire, tt.apiKey, tt.inputType, 0)
-			got := e.Embed("hi")
+			got := e.Embed(context.Background(), "hi")
 
 			if !floatsEqual(got, tt.wantVec) {
 				t.Fatalf("vector = %v, want %v", got, tt.wantVec)
@@ -227,7 +227,7 @@ func TestHTTPEmbedder_FailuresReturnNil(t *testing.T) {
 			defer srv.Close()
 
 			e := newTestEmbedder(srv.URL, wireOllama, "", "", tt.dim)
-			if got := e.Embed("hi"); got != nil {
+			if got := e.Embed(context.Background(), "hi"); got != nil {
 				t.Fatalf("Embed = %v, want nil (failure should be the keyword-only signal)", got)
 			}
 		})
@@ -243,7 +243,7 @@ func TestHTTPEmbedder_DimMatchKeepsVector(t *testing.T) {
 	defer srv.Close()
 
 	e := newTestEmbedder(srv.URL, wireOllama, "", "", 3)
-	got := e.Embed("hi")
+	got := e.Embed(context.Background(), "hi")
 	if !floatsEqual(got, []float64{1, 2, 3}) {
 		t.Fatalf("matching dim should keep vector, got %v", got)
 	}
@@ -258,7 +258,7 @@ func TestHTTPEmbedder_UnreachableReturnsNil(t *testing.T) {
 	srv.Close() // now unreachable
 
 	e := newTestEmbedder(url, wireOllama, "", "", 0)
-	if got := e.Embed("hi"); got != nil {
+	if got := e.Embed(context.Background(), "hi"); got != nil {
 		t.Fatalf("unreachable endpoint should return nil, got %v", got)
 	}
 }
@@ -465,7 +465,7 @@ func TestHTTPEmbedder_EmbedBatch_Ordering(t *testing.T) {
 	defer srv.Close()
 
 	e := newTestEmbedder(srv.URL, wireOpenAI, "", "", 0)
-	got := e.EmbedBatch([]string{"first", "second"})
+	got := e.EmbedBatch(context.Background(), []string{"first", "second"})
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
@@ -489,7 +489,7 @@ func TestHTTPEmbedder_EmbedBatch_DimMismatch(t *testing.T) {
 	defer srv.Close()
 
 	e := newTestEmbedder(srv.URL, wireOpenAI, "", "", 3)
-	got := e.EmbedBatch([]string{"first", "second"})
+	got := e.EmbedBatch(context.Background(), []string{"first", "second"})
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
@@ -528,14 +528,14 @@ func TestHTTPEmbedder_EmbedBatch_FailuresReturnNil(t *testing.T) {
 			defer srv.Close()
 
 			e := newTestEmbedder(srv.URL, tt.wire, "", "", 0)
-			if got := e.EmbedBatch([]string{"text1", "text2"}); got != nil {
+			if got := e.EmbedBatch(context.Background(), []string{"text1", "text2"}); got != nil {
 				t.Fatalf("EmbedBatch = %v, want nil for whole-batch failure", got)
 			}
 		})
 	}
 }
 
-// TestHTTPEmbedder_ContextCancellation verifies that in-flight EmbedWithContext
+// TestHTTPEmbedder_ContextCancellation verifies that an in-flight Embed
 // cancels promptly when the caller context is cancelled, without waiting for the full HTTP timeout.
 func TestHTTPEmbedder_ContextCancellation(t *testing.T) {
 	t.Parallel()
@@ -543,19 +543,13 @@ func TestHTTPEmbedder_ContextCancellation(t *testing.T) {
 	reqStarted := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(reqStarted)
-		// Bounded escape: on some platforms a cancelled client request does not
-		// promptly close the TCP conn, so a handler parked only on r.Context()
-		// can outlive the test and deadlock srv.Close(), which waits for active
-		// conns. The timer guarantees the handler always returns.
-		select {
-		case <-r.Context().Done():
-		case <-time.After(3 * time.Second):
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
 		}
+		<-r.Context().Done()
 	}))
-	defer func() {
-		srv.CloseClientConnections()
-		srv.Close()
-	}()
+	defer srv.Close()
 
 	e := newTestEmbedder(srv.URL, wireOllama, "", "", 0)
 	e.Timeout = 10 * time.Second
@@ -567,18 +561,18 @@ func TestHTTPEmbedder_ContextCancellation(t *testing.T) {
 	}()
 
 	start := time.Now()
-	got := e.EmbedWithContext(ctx, "hello")
+	got := e.Embed(ctx, "hello")
 	elapsed := time.Since(start)
 
 	if got != nil {
-		t.Fatalf("EmbedWithContext = %v, want nil on cancellation", got)
+		t.Fatalf("Embed = %v, want nil on cancellation", got)
 	}
 	if elapsed > 2*time.Second {
-		t.Fatalf("EmbedWithContext took %v, want prompt cancellation < 2s", elapsed)
+		t.Fatalf("Embed took %v, want prompt cancellation < 2s", elapsed)
 	}
 }
 
-// TestHTTPEmbedder_EmbedBatch_ContextCancellation verifies that in-flight EmbedBatchWithContext
+// TestHTTPEmbedder_EmbedBatch_ContextCancellation verifies that an in-flight EmbedBatch
 // cancels promptly when the caller context is cancelled.
 func TestHTTPEmbedder_EmbedBatch_ContextCancellation(t *testing.T) {
 	t.Parallel()
@@ -586,19 +580,13 @@ func TestHTTPEmbedder_EmbedBatch_ContextCancellation(t *testing.T) {
 	reqStarted := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(reqStarted)
-		// Bounded escape: on some platforms a cancelled client request does not
-		// promptly close the TCP conn, so a handler parked only on r.Context()
-		// can outlive the test and deadlock srv.Close(), which waits for active
-		// conns. The timer guarantees the handler always returns.
-		select {
-		case <-r.Context().Done():
-		case <-time.After(3 * time.Second):
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
 		}
+		<-r.Context().Done()
 	}))
-	defer func() {
-		srv.CloseClientConnections()
-		srv.Close()
-	}()
+	defer srv.Close()
 
 	e := newTestEmbedder(srv.URL, wireOpenAI, "", "", 0)
 	e.Timeout = 10 * time.Second
@@ -610,19 +598,19 @@ func TestHTTPEmbedder_EmbedBatch_ContextCancellation(t *testing.T) {
 	}()
 
 	start := time.Now()
-	got := e.EmbedBatchWithContext(ctx, []string{"first", "second"})
+	got := e.EmbedBatch(ctx, []string{"first", "second"})
 	elapsed := time.Since(start)
 
 	if got != nil {
-		t.Fatalf("EmbedBatchWithContext = %v, want nil on cancellation", got)
+		t.Fatalf("EmbedBatch = %v, want nil on cancellation", got)
 	}
 	if elapsed > 2*time.Second {
-		t.Fatalf("EmbedBatchWithContext took %v, want prompt cancellation < 2s", elapsed)
+		t.Fatalf("EmbedBatch took %v, want prompt cancellation < 2s", elapsed)
 	}
 }
 
-// TestHTTPEmbedder_ContextPreCanceled verifies that calling EmbedWithContext or
-// EmbedBatchWithContext with an already-canceled context returns nil immediately.
+// TestHTTPEmbedder_ContextPreCanceled verifies that calling Embed or EmbedBatch
+// with an already-canceled context returns nil immediately.
 func TestHTTPEmbedder_ContextPreCanceled(t *testing.T) {
 	t.Parallel()
 
@@ -638,11 +626,11 @@ func TestHTTPEmbedder_ContextPreCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
 
-	if got := e.EmbedWithContext(ctx, "test"); got != nil {
-		t.Fatalf("EmbedWithContext with pre-canceled context = %v, want nil", got)
+	if got := e.Embed(ctx, "test"); got != nil {
+		t.Fatalf("Embed with pre-canceled context = %v, want nil", got)
 	}
-	if got := e.EmbedBatchWithContext(ctx, []string{"test"}); got != nil {
-		t.Fatalf("EmbedBatchWithContext with pre-canceled context = %v, want nil", got)
+	if got := e.EmbedBatch(ctx, []string{"test"}); got != nil {
+		t.Fatalf("EmbedBatch with pre-canceled context = %v, want nil", got)
 	}
 	if called {
 		t.Fatal("pre-canceled context should not have dispatched HTTP request to server")
