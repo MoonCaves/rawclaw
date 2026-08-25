@@ -177,7 +177,7 @@ func TestIncrementalTagging_RerunMarker(t *testing.T) {
 		t.Fatalf("pass 1 runTagPrep: %v", err)
 	}
 	out1 := p1.String()
-	if !strings.Contains(out1, "rerun 'rawclaw tag sess-rer") {
+	if !strings.Contains(out1, "rerun 'rawclaw tag-prep sess-rer") {
 		t.Errorf("pass 1 missing rerun marker; got:\n%s", out1)
 	}
 	if !strings.Contains(out1, "11111111") || !strings.Contains(out1, "22222222") {
@@ -199,7 +199,7 @@ func TestIncrementalTagging_RerunMarker(t *testing.T) {
 		t.Fatalf("pass 2 runTagPrep: %v", err)
 	}
 	out2 := p2.String()
-	if strings.Contains(out2, "rerun 'rawclaw tag") {
+	if strings.Contains(out2, "rerun 'rawclaw tag-prep") {
 		t.Errorf("pass 2 should not have rerun marker; got:\n%s", out2)
 	}
 	if !strings.Contains(out2, "33333333") || !strings.Contains(out2, "44444444") {
@@ -224,7 +224,7 @@ func TestIncrementalTagging_RerunMarker(t *testing.T) {
 	if !strings.Contains(out3, "already fully tagged") {
 		t.Errorf("pass 3 missing fully-tagged notice; got:\n%s", out3)
 	}
-	if strings.Contains(out3, "rerun 'rawclaw tag") {
+	if strings.Contains(out3, "rerun 'rawclaw tag-prep") {
 		t.Errorf("pass 3 should not have rerun marker; got:\n%s", out3)
 	}
 }

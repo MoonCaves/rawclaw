@@ -137,7 +137,7 @@ func runTagPrep(w io.Writer, con *sql.DB, fullSID string) error {
 	}
 
 	if chunk.moreUntagged {
-		fmt.Fprintf(w, "# untagged content remains beyond budget; rerun 'rawclaw tag %s' after writing\n",
+		fmt.Fprintf(w, "# untagged content remains beyond budget; rerun 'rawclaw tag-prep %s' after writing\n",
 			lastSlice8(fullSID))
 	}
 	return nil
