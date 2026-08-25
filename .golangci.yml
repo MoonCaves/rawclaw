@@ -8,7 +8,13 @@ version: "2"
 # changing behavior.
 linters:
   default: standard
+  enable:
+    - dupl
+    - gocritic
+    - modernize
   settings:
+    dupl:
+      threshold: 75
     errcheck:
       exclude-functions:
         # print-style writes to os.Stdout / buffers:
