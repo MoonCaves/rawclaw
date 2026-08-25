@@ -163,40 +163,46 @@ func visibleMessages(msgs []store.SessionMessage) visibleSet {
 // ── verb: tag-write ────────────────────────────────────────────────────────────
 
 // newTagWriteCmd wires `rawclaw tag-write <session8>`: read a JSON array of
-// topic segments from STDIN (as decided by a tagging subagent) and upsert them
-// into the topic_segment index. rawclaw calls no LLM — this is the dumb write-back
-// half of the prep/write pair.
+// topic segments from STDIN (as decided by a tagging subagent) or mark the
+// session routine via --routine, and upsert them into the index. rawclaw calls
+// no LLM — this is the dumb write-back half of the prep/write pair.
 func newTagWriteCmd() *cobra.Command {
 	var (
 		thisProject bool
 		dir         string
+		routine     bool
+		source      string
 	)
 	cmd := &cobra.Command{
 		Use:   "tag-write <session8>",
-		Short: "Write a tagging subagent's topic segments (JSON on STDIN) to the index",
+		Short: "Write a tagging subagent's topic segments (JSON on STDIN) or routine verdict to the index",
 		Long: "Read a JSON array of topic segments from STDIN and store them in the topic index used by " +
 			"search/outline. Each segment: {\"start_uuid\":\"<uuid8 prefix>\",\"topic\":\"...\",\"summary\":\"...\"}, " +
 			"in session order. start_uuid is prefix-resolved against the session's message uuids; each segment's " +
-			"end is the message just before the next segment's start (the last message for the final segment). " +
-			"rawclaw calls NO LLM — a tagging subagent decides the segments (see `tag-prep`) and pipes them here.",
+			"end is the message just before the next segment's start (the last message for the final segment).\n\n" +
+			"Pass --routine to mark the session with a routine verdict (trivial / low-signal; sorts down, never hidden). " +
+			"rawclaw calls NO LLM — a tagging subagent decides the segments or routine verdict and pipes/flags them here.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
-			return runTagWriteCmd(cmd.OutOrStdout(), cmd.InOrStdin(), args[0], scope, more)
+			return runTagWriteCmd(cmd.OutOrStdout(), cmd.InOrStdin(), args[0], scope, more, routine, source)
 		},
 	}
 	f := cmd.Flags()
 	f.BoolVar(&thisProject, "this-project", false, "limit to this project (default: all projects)")
 	f.StringVar(&dir, "dir", cwd(), "project working dir for --this-project")
+	f.BoolVar(&routine, "routine", false, "mark the session with a routine verdict (trivial / low-signal; sorts down)")
+	f.StringVar(&source, "source", store.VerdictSourceAgent, "verdict source (agent|floor)")
 	return cmd
 }
 
 // runTagWriteCmd resolves session8 → db + full id, opens the db read-write,
-// ensures the topic schema, and runs the populate pass reading JSON from r with a
-// now() timestamp. Thin wrapper around the testable runTagWrite core.
-func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scope, more agentproto.ScopeFn) error {
+// ensures the topic schema, and runs the populate pass reading JSON from r (or
+// writing the routine verdict) with a now() timestamp. Thin wrapper around the
+// testable runTagWrite / runTagWriteRoutine core.
+func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scope, more agentproto.ScopeFn, routine bool, source string) error {
 	dbp, fullSID, err := agentproto.LocateSession(session8, scope, more)
 	if err != nil {
 		return err
@@ -207,10 +213,16 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 		return fmt.Errorf("open %q read-write: %w", dbp, err)
 	}
 
-	n, err := runTagWrite(con, fullSID, r, nowUnix())
+	var writeErr error
+	var n int
+	if routine {
+		writeErr = runTagWriteRoutine(con, fullSID, source, nowUnix())
+	} else {
+		n, writeErr = runTagWrite(con, fullSID, r, nowUnix())
+	}
 	_ = con.Close() // close before folding in: the fold attaches this db read-only
-	if err != nil {
-		return err
+	if writeErr != nil {
+		return writeErr
 	}
 
 	// Fold the new topic rows into the consolidated store, the same write-through
@@ -222,8 +234,36 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 		slog.Debug("tag-write: consolidated write-through failed", "db", filepath.Base(dbp), "err", err)
 	}
 
-	fmt.Fprintf(w, "wrote %d topic segments for %s\n", n, lastSlice8(fullSID))
+	if routine {
+		if source == "" {
+			source = store.VerdictSourceAgent
+		}
+		fmt.Fprintf(w, "marked %s as routine (source: %s)\n", lastSlice8(fullSID), source)
+	} else {
+		fmt.Fprintf(w, "wrote %d topic segments for %s\n", n, lastSlice8(fullSID))
+	}
 	return nil
+}
+
+// runTagWriteRoutine writes a session's routine verdict with the given source
+// and taggedAt timestamp, clearing any prior topic segments so the session is
+// effectively routine (a real topic segment demotes routine at read time).
+func runTagWriteRoutine(con *sql.DB, fullSID, source string, taggedAt float64) error {
+	if err := store.EnsureTopicSchema(con); err != nil {
+		return fmt.Errorf("ensure topic schema: %w", err)
+	}
+	if source == "" {
+		source = store.VerdictSourceAgent
+	}
+	if err := store.UpsertVerdict(con, store.Verdict{
+		SessionID: fullSID,
+		Verdict:   store.VerdictRoutine,
+		Source:    source,
+		TaggedAt:  taggedAt,
+	}); err != nil {
+		return err
+	}
+	return store.ReplaceSessionSegments(con, fullSID, nil)
 }
 
 // runTagWrite is the testable core: decode the segment array from r, resolve each
