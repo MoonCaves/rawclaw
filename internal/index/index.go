@@ -1075,8 +1075,6 @@ const (
 	// IndexStale: a busy/lock collision forced a fall-back to the EXISTING
 	// (possibly out-of-date) cached index — the result may be incomplete.
 	IndexStale
-	// IndexStatusUnknown: an error prevented completing the index operation.
-	IndexStatusUnknown
 )
 
 // EnsureIndexed builds/updates one project's FTS index and returns
