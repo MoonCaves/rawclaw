@@ -45,7 +45,7 @@ func All(ctx context.Context, sourceFilter string, reindex bool) []view.Scope {
 	if sourceFilter == "" || sourceFilter == "antigravity" {
 		out = append(out, Antigravity(reindex)...)
 	}
-	if sourceFilter == "" || sourceFilter == "goose" {
+	if (sourceFilter == "" || sourceFilter == "goose") && GooseOptedIn(sourceFilter) {
 		out = append(out, Goose(reindex)...)
 	}
 	for _, sc := range Archive(ctx, reindex) {
