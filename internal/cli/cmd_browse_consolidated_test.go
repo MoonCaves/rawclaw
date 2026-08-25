@@ -293,6 +293,9 @@ func TestBrowseConsolidated_JSONStructure(t *testing.T) {
 // tiebreaker (SessionID asc) ensures consolidated browse and fallback produce
 // identical ordering.
 func TestBrowseConsolidated_TiedTimestampsByteIdentical(t *testing.T) {
+	// Keep the comparison about ordering and rendering, not the one-shot side
+	// effect of spawning background ingest on the first stale read.
+	t.Setenv("RAWCLAW_BACKGROUND_INGEST", "off")
 	root := newCfgRoot(t)
 
 	projA := filepath.Join(root, "-home-u-proj-a")
