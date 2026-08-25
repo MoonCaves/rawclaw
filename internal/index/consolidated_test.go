@@ -260,6 +260,47 @@ func TestConsolidate_HonorsTombstones(t *testing.T) {
 	}
 }
 
+// TestConsolidate_PrunesTombstonesWhenSourceUnchanged verifies that tombstones
+// are pruned even when no source database has changed since its last fold-in
+// (tracker #217: pruning must be independent of source-change detection).
+func TestConsolidate_PrunesTombstonesWhenSourceUnchanged(t *testing.T) {
+	isolateCache(t)
+	src := seedSessionDB(t, "p.db",
+		sessionRow{id: "sess-1", project: "ledger", cwd: "/w/ledger", msgs: []msgRow{{"u-1", "user", "secret plans", 100}}},
+	)
+
+	// First pass: fold the source DB in
+	st, err := ConsolidateFrom([]string{src}, false)
+	if err != nil {
+		t.Fatalf("first ConsolidateFrom: %v", err)
+	}
+	if st.Sessions != 1 {
+		t.Fatalf("pass 1 consolidated %d sessions, want 1", st.Sessions)
+	}
+
+	// Add tombstone without modifying the source DB at all
+	if err := lifecycle.TombstoneIDs("", []string{"sess-1"}); err != nil {
+		t.Fatalf("write tombstone: %v", err)
+	}
+
+	// Second pass: re-run consolidation without --rebuild
+	st2, err := ConsolidateFrom([]string{src}, false)
+	if err != nil {
+		t.Fatalf("second ConsolidateFrom: %v", err)
+	}
+	if st2.Sessions != 0 {
+		t.Errorf("pass 2 consolidated %d sessions, want 0 after tombstone", st2.Sessions)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id='sess-1'"); got != "0" {
+		t.Errorf("%s deleted session rows survived in consolidated store", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'secret'"); got != "0" {
+		t.Error("a deleted session's text is still searchable in messages_fts after no-op source pass")
+	}
+}
+
 // TestConsolidate_MigratesAPreScopeSource is the case the whole real corpus was
 // in: every cache db predated the scope migration, so none carried project/cwd.
 // Consolidation has to migrate a source it can migrate — stepping over them
