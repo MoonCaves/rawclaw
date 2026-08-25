@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -76,6 +77,9 @@ func runIngest(w io.Writer, sessionArg string, jsonOut bool) error {
 
 	var results []IngestResult
 	var errs []string
+	if err != nil {
+		errs = append(errs, err.Error())
+	}
 
 	for _, match := range matches {
 		rawPath := backingPath(match.container.Path)
@@ -130,10 +134,18 @@ func runIngest(w io.Writer, sessionArg string, jsonOut bool) error {
 	}
 
 	if len(results) == 1 {
+		if len(errs) > 0 {
+			fmt.Fprintf(w, "Ingested session %s (%d messages) with errors: %s\n", trunc8(results[0].SessionID), results[0].Messages, strings.Join(errs, "; "))
+			return fmt.Errorf("ingest partially failed: %s", strings.Join(errs, "; "))
+		}
 		fmt.Fprintf(w, "Ingested session %s (%d messages)\n", trunc8(results[0].SessionID), results[0].Messages)
 		return nil
 	}
 
+	if len(errs) > 0 {
+		fmt.Fprintf(w, "Ingested %d session(s) with errors: %s\n", len(results), strings.Join(errs, "; "))
+		return fmt.Errorf("ingest partially failed: %s", strings.Join(errs, "; "))
+	}
 	fmt.Fprintf(w, "Ingested %d session(s)\n", len(results))
 	return nil
 }
@@ -158,7 +170,7 @@ func resolveIngestMatches(sessionArg string, regs []source.Registration) ([]tagS
 
 	// 3. Check registered source adapters discovery.
 	if discovered, err := discoverTagSources(prefix, regs); len(discovered) > 0 {
-		return discovered, nil
+		return discovered, err
 	} else if err != nil {
 		return nil, err
 	}
@@ -201,6 +213,7 @@ func catalogIngestSource(sessionID string, regs []source.Registration) (tagSourc
 // discoverAllIngestSources discovers all containers across all registered adapters.
 func discoverAllIngestSources(regs []source.Registration) ([]tagSourceMatch, error) {
 	var matches []tagSourceMatch
+	var errs []error
 	for _, reg := range regs {
 		if reg.New == nil {
 			continue
@@ -211,6 +224,7 @@ func discoverAllIngestSources(regs []source.Registration) ([]tagSourceMatch, err
 		}
 		containers, err := adapter.Discover()
 		if err != nil {
+			errs = append(errs, fmt.Errorf("discover %s sessions: %w", reg.ID, err))
 			continue
 		}
 		for _, c := range containers {
@@ -221,7 +235,7 @@ func discoverAllIngestSources(regs []source.Registration) ([]tagSourceMatch, err
 			})
 		}
 	}
-	return matches, nil
+	return matches, errors.Join(errs...)
 }
 
 // Contention safety choice:
