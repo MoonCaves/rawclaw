@@ -39,10 +39,17 @@ func Goose(reindex bool) []view.Scope {
 	for _, cwd := range cwds {
 		dbp := gooseDBPath(cwd)
 		liveDBs[dbp] = struct{}{}
-		if _, _, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, goose.Registration().ID, ""); ierr != nil {
+		_, istatus, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, goose.Registration().ID, "")
+		if ierr != nil {
 			slog.Warn("scopes: goose index failed", "cwd", cwd, "err", ierr)
 		}
-		out = append(out, view.Scope{Project: gooseLabel(cwd), DBP: dbp, CWD: cwd, Source: goose.ID})
+		out = append(out, view.Scope{
+			Project: gooseLabel(cwd),
+			DBP:     dbp,
+			CWD:     cwd,
+			Source:  goose.ID,
+			Stale:   istatus == index.IndexStale || ierr != nil,
+		})
 	}
 	out = append(out, orphanGooseScopes(liveDBs)...)
 	return out
