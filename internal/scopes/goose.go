@@ -16,6 +16,16 @@ func Goose(reindex bool) []view.Scope {
 	return containerScopes(goose.ID, goose.New(), gooseLabel, reindex)
 }
 
+// GooseOrphanScopes surfaces already-indexed goose-*.db files without
+// touching goose's filesystem discovery — a pure glob + read of local index
+// state, no adapter.Discover() walk. This is what backs the opt-in doc
+// promise below: an opted-out Goose() call skips the eager half, but this
+// half always runs, so previously indexed history is never hidden by opting
+// out later.
+func GooseOrphanScopes() []view.Scope {
+	return orphanContainerScopes(goose.ID, nil)
+}
+
 // GooseOptedIn reports whether goose discovery should run at all. Goose is the
 // one source whose discovery WALKS the filesystem and opens every candidate
 // SQLite file it finds — expensive on a real machine and pure waste for the

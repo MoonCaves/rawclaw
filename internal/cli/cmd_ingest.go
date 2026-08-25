@@ -13,6 +13,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
@@ -208,12 +209,21 @@ func catalogIngestSource(sessionID string, regs []source.Registration) (tagSourc
 	}, true
 }
 
-// discoverAllIngestSources discovers all containers across all registered adapters.
+// discoverAllIngestSources discovers all containers across all registered
+// adapters. Goose is the one adapter whose Discover() walks the filesystem
+// and opens every candidate database it finds — expensive, and exactly the
+// unrequested background work goose opt-in exists to prevent (a freshness-
+// triggered detached ingest calls this with no session id, so a user who
+// never touched --source goose or RAWCLAW_GOOSE would otherwise get a
+// surprise goose scan on every stale-index background nudge).
 func discoverAllIngestSources(regs []source.Registration) ([]tagSourceMatch, error) {
 	var matches []tagSourceMatch
 	var errs []error
 	for _, reg := range regs {
 		if reg.New == nil {
+			continue
+		}
+		if reg.ID == "goose" && !scopes.GooseOptedIn("") {
 			continue
 		}
 		adapter := reg.New()

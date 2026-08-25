@@ -45,8 +45,15 @@ func All(ctx context.Context, sourceFilter string, reindex bool) []view.Scope {
 	if sourceFilter == "" || sourceFilter == "antigravity" {
 		out = append(out, Antigravity(reindex)...)
 	}
-	if (sourceFilter == "" || sourceFilter == "goose") && GooseOptedIn(sourceFilter) {
-		out = append(out, Goose(reindex)...)
+	if sourceFilter == "" || sourceFilter == "goose" {
+		if GooseOptedIn(sourceFilter) {
+			out = append(out, Goose(reindex)...)
+		} else {
+			// Opted out skips the eager filesystem walk, but already-indexed
+			// history must still surface — an archive never hides what it
+			// already holds, opt-in or not.
+			out = append(out, GooseOrphanScopes()...)
+		}
 	}
 	for _, sc := range Archive(ctx, reindex) {
 		if sourceFilter == "" || sc.Source == sourceFilter {
