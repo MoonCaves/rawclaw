@@ -14,8 +14,8 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -125,7 +125,6 @@ func (a *Adapter) DiscoverRoots(roots []string) ([]source.Container, error) {
 
 	var out []source.Container
 	seenPaths := make(map[string]bool)
-	var bad int
 
 	for _, root := range roots {
 		if root == "" {
@@ -135,9 +134,9 @@ func (a *Adapter) DiscoverRoots(roots []string) ([]source.Container, error) {
 			continue
 		}
 
-		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil // skip unreadable entries
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
 			}
 			if d.IsDir() {
 				return nil
@@ -157,21 +156,16 @@ func (a *Adapter) DiscoverRoots(roots []string) ([]source.Container, error) {
 			}
 			seenPaths[cleanPath] = true
 
-			containers, ok := discoverDatabaseContainers(cleanPath)
-			if !ok {
-				bad++
-				return nil
+			containers, err := discoverDatabaseContainers(cleanPath)
+			if err != nil {
+				return fmt.Errorf("read database %s: %w", cleanPath, err)
 			}
 			out = append(out, containers...)
 			return nil
 		})
 		if err != nil {
-			slog.Warn("goose: walk failed", "root", root, "err", err)
+			return nil, fmt.Errorf("goose: discover %s: %w", root, err)
 		}
-	}
-
-	if bad > 0 {
-		slog.Warn("goose: skipped unreadable session databases", "count", bad)
 	}
 
 	return out, nil
@@ -180,18 +174,24 @@ func (a *Adapter) DiscoverRoots(roots []string) ([]source.Container, error) {
 // discoverDatabaseContainers inspects a SQLite database file. If a sessions table
 // is found, it yields one container per session (keyed with path#id). Otherwise,
 // it treats the entire file as a standalone single-session database.
-func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
+func discoverDatabaseContainers(dbPath string) ([]source.Container, error) {
 	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(1000)&_pragma=mmap_size(%d)", dbPath, store.ROMmapSize))
 	if err != nil {
-		return nil, false
+		return nil, fmt.Errorf("open database: %w", err)
 	}
 	defer db.Close()
 
 	var sessionsTableExists int
-	_ = db.QueryRow("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions' LIMIT 1").Scan(&sessionsTableExists)
+	err = db.QueryRow("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name='sessions' LIMIT 1").Scan(&sessionsTableExists)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("check sessions table: %w", err)
+	}
 
 	if sessionsTableExists == 1 {
-		cols := tableColumns(db, "sessions")
+		cols, err := tableColumns(db, "sessions")
+		if err != nil {
+			return nil, fmt.Errorf("inspect sessions table: %w", err)
+		}
 		if len(cols) > 0 {
 			idCol := findMatchingCol(cols, "id", "session_id", "name")
 			if idCol != "" && isSafeIdent(idCol) {
@@ -218,14 +218,15 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 
 				query := fmt.Sprintf("SELECT %s FROM sessions", strings.Join(selectCols, ", "))
 				rows, qErr := db.Query(query)
-				if qErr == nil {
-					defer rows.Close()
-					if res, ok, rowsErr := sessionContainersFromRows(rows, dbPath); rowsErr != nil {
-						return nil, false
-					} else if ok {
-						return res, true
-					}
+				if qErr != nil {
+					return nil, fmt.Errorf("query sessions: %w", qErr)
 				}
+				defer rows.Close()
+				res, rowsErr := sessionContainersFromRows(rows, dbPath)
+				if rowsErr != nil {
+					return nil, fmt.Errorf("iterate sessions: %w", rowsErr)
+				}
+				return res, nil
 			}
 		}
 	}
@@ -238,35 +239,49 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 
 	// Check if session_meta exists
 	var sessionMetaExists int
-	_ = db.QueryRow("SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('session_meta', 'metadata') LIMIT 1").Scan(&sessionMetaExists)
+	err = db.QueryRow("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name IN ('session_meta', 'metadata') LIMIT 1").Scan(&sessionMetaExists)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("check session_meta table: %w", err)
+	}
 	if sessionMetaExists == 1 {
-		cols := tableColumns(db, "session_meta")
+		cols, err := tableColumns(db, "session_meta")
+		if err != nil {
+			return nil, fmt.Errorf("inspect session_meta table: %w", err)
+		}
 		if len(cols) == 0 {
-			cols = tableColumns(db, "metadata")
+			cols, err = tableColumns(db, "metadata")
+			if err != nil {
+				return nil, fmt.Errorf("inspect metadata table: %w", err)
+			}
 		}
 		idCol := findMatchingCol(cols, "id", "session_id", "key")
 		valCol := findMatchingCol(cols, "value", "val", "data")
 		if idCol != "" && valCol != "" && isSafeIdent(idCol) && isSafeIdent(valCol) {
-			rows, qErr := db.Query("SELECT " + idCol + ", " + valCol + " FROM session_meta LIMIT 10")
-			if qErr == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var k, v string
-					if rows.Scan(&k, &v) == nil {
-						switch strings.ToLower(k) {
-						case "id", "session_id":
-							if v != "" {
-								defaultID = v
-							}
-						case "cwd", "working_dir", "workdir":
-							cwd = v
-						case "parent_id":
-							parentID = v
-						case "is_subagent":
-							isSub = v == "true" || v == "1"
-						}
-					}
+			rows, qErr := db.Query(fmt.Sprintf("SELECT %s, %s FROM session_meta LIMIT 10", idCol, valCol))
+			if qErr != nil {
+				return nil, fmt.Errorf("query session_meta: %w", qErr)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var k, v string
+				if err := rows.Scan(&k, &v); err != nil {
+					continue
 				}
+				switch strings.ToLower(k) {
+				case "id", "session_id":
+					if v != "" {
+						defaultID = v
+					}
+				case "cwd", "working_dir", "workdir":
+					cwd = v
+				case "parent_id":
+					parentID = v
+				case "is_subagent":
+					isSub = v == "true" || v == "1"
+				}
+			}
+			if err := rows.Err(); err != nil {
+				return nil, fmt.Errorf("iterate session_meta: %w", err)
 			}
 		}
 	}
@@ -278,7 +293,7 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 		IsSubagent: isSub,
 		ParentID:   parentID,
 		ResumeArgv: []string{"goose", "session", "--resume", "--session-id", defaultID},
-	}}, true
+	}}, nil
 }
 
 type rowsIterator interface {
@@ -287,32 +302,33 @@ type rowsIterator interface {
 	Err() error
 }
 
-func sessionContainersFromRows(rows rowsIterator, dbPath string) ([]source.Container, bool, error) {
+func sessionContainersFromRows(rows rowsIterator, dbPath string) ([]source.Container, error) {
 	var res []source.Container
 	for rows.Next() {
 		var (
 			sid, cwd, parent any
 			isSub            any
 		)
-		if scanErr := rows.Scan(&sid, &cwd, &parent, &isSub); scanErr == nil {
-			sID := parseString(sid)
-			if sID != "" {
-				sub := parseBool(isSub)
-				res = append(res, source.Container{
-					ID:         sID,
-					Path:       dbPath + "#" + sID,
-					CWD:        parseString(cwd),
-					IsSubagent: sub,
-					ParentID:   parseString(parent),
-					ResumeArgv: []string{"goose", "session", "--resume", "--session-id", sID},
-				})
-			}
+		if scanErr := rows.Scan(&sid, &cwd, &parent, &isSub); scanErr != nil {
+			return nil, scanErr
+		}
+		sID := parseString(sid)
+		if sID != "" {
+			sub := parseBool(isSub)
+			res = append(res, source.Container{
+				ID:         sID,
+				Path:       dbPath + "#" + sID,
+				CWD:        parseString(cwd),
+				IsSubagent: sub,
+				ParentID:   parseString(parent),
+				ResumeArgv: []string{"goose", "session", "--resume", "--session-id", sID},
+			})
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return res, len(res) > 0, nil
+	return res, nil
 }
 
 // Messages extracts and normalizes all messages for the given session container.
@@ -329,12 +345,18 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 	defer db.Close()
 
 	// Find the message table
-	msgTable := findMessageTable(db)
+	msgTable, err := findMessageTable(db)
+	if err != nil {
+		return nil, fmt.Errorf("goose: find message table %s: %w", backingPath, err)
+	}
 	if msgTable == "" || !isSafeIdent(msgTable) {
 		return nil, nil // empty / unsupported
 	}
 
-	cols := tableColumns(db, msgTable)
+	cols, err := tableColumns(db, msgTable)
+	if err != nil {
+		return nil, fmt.Errorf("goose: inspect columns %s: %w", backingPath, err)
+	}
 	if len(cols) == 0 {
 		return nil, nil
 	}
@@ -429,25 +451,28 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 	return messages, nil
 }
 
-func findMessageTable(db *sql.DB) string {
+func findMessageTable(db *sql.DB) (string, error) {
 	candidates := []string{"messages", "chat", "chat_messages", "events", "conversation_history", "history"}
 	for _, cand := range candidates {
 		var exists int
-		_ = db.QueryRow("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name=? LIMIT 1", cand).Scan(&exists)
-		if exists == 1 {
-			return cand
+		err := db.QueryRow("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name=? LIMIT 1", cand).Scan(&exists)
+		if err == nil && exists == 1 {
+			return cand, nil
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("check message table %s: %w", cand, err)
 		}
 	}
-	return ""
+	return "", nil
 }
 
-func tableColumns(db *sql.DB, tableName string) []string {
+func tableColumns(db *sql.DB, tableName string) ([]string, error) {
 	if !isSafeIdent(tableName) {
-		return nil
+		return nil, nil
 	}
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("query table info: %w", err)
 	}
 	defer rows.Close()
 
@@ -469,9 +494,9 @@ func tableColumns(db *sql.DB, tableName string) []string {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil
+		return nil, fmt.Errorf("iterate table info: %w", err)
 	}
-	return cols
+	return cols, nil
 }
 
 // isSafeIdent reports whether s is a valid and safe unquoted SQL identifier
