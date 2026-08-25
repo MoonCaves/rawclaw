@@ -1367,15 +1367,6 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 			if err != nil {
 				continue // an unresolvable scope can't contribute rows; others still can
 			}
-			if !checkedFreshness {
-				if db, dbErr := store.ConnectRO(dbp); dbErr == nil {
-					if f, fErr := index.CheckIndexFreshness(db); fErr == nil {
-						freshness = &f
-					}
-					_ = db.Close()
-				}
-				checkedFreshness = true
-			}
 			for _, r := range view.BrowseDB(dbp, o.Limit, o.Since, o.Before) {
 				rows = append(rows, view.BrowseAllRow{Project: sc.Project, BrowseRow: r})
 			}
