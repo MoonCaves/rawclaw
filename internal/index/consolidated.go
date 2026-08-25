@@ -149,11 +149,12 @@ func rewriteLegacyWatermark(con *sql.DB, dbp, base string) {
 
 // SyncStats reports what one consolidation pass moved.
 type SyncStats struct {
-	Sources      int // per-project dbs read
-	Skipped      int // of those, dbs too old to read (reported, never silent)
-	SessionsSeen int // session rows offered by those dbs (sum, duplicates included)
-	Sessions     int // distinct sessions in the consolidated store afterwards
-	Messages     int // distinct messages in the consolidated store afterwards
+	Sources        int // per-project dbs read
+	Skipped        int // of those, dbs too old to read (reported, never silent)
+	SessionsSeen   int // session rows offered by those dbs (sum, duplicates included)
+	Sessions       int // distinct sessions in the consolidated store afterwards
+	Messages       int // distinct messages in the consolidated store afterwards
+	CarriedForward int // rebuild only: sessions kept although no source still offers them
 }
 
 // recordSessionSourcesSQL records one attached db's view of each session into
@@ -389,6 +390,7 @@ UPDATE sessions SET message_count =
 // transcripts were already turned into rows once, and this moves those rows.
 func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) {
 	dst := ConsolidatedPath()
+	prevLive := ""
 	var preserved tagState
 	if rebuild {
 		preserved, err = readTagState(dst)
@@ -397,6 +399,7 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 		}
 	}
 	if rebuild {
+		prevLive = dst
 		// Build the replacement BESIDE the live store and swap only once it is
 		// complete. Deleting first meant any later failure — connect, schema,
 		// heal, or a single bad source mid-fold — left the user with no store
@@ -485,6 +488,10 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	}
 
 	if rebuild {
+		st.CarriedForward, err = carryForwardStoreOnly(con, prevLive)
+		if err != nil {
+			return st, fmt.Errorf("carry forward store-only sessions: %w", err)
+		}
 		if _, err := con.Exec(recountSQL); err != nil {
 			return st, fmt.Errorf("recount messages: %w", err)
 		}
@@ -789,6 +796,107 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	}
 	committed = true
 	return offered, true, false, nil
+}
+
+// carryForwardStoreOnly copies every session the previous store holds but no
+// folded source offered into the rebuilt store, as a legacy-baseline
+// contribution (source_db = ”). Without it a rebuild makes membership a vote
+// of the surviving per-project dbs — and the sessions absent from all of them
+// are exactly the purged-transcript history the store exists to keep (#22).
+// The ” pseudo-source is the same shape migrateSessionSources backfills for a
+// contribution whose source set is unknown, and the legacy-prune step keeps it
+// only while no real source claims the session — a source that reappears later
+// takes over cleanly.
+func carryForwardStoreOnly(con *sql.DB, prev string) (carried int, err error) {
+	if prev == "" {
+		return 0, nil
+	}
+	if _, sErr := os.Stat(prev); sErr != nil {
+		return 0, nil // first-ever rebuild: no previous store to carry from
+	}
+	// The previous store may predate the columns this copy reads: it is only
+	// migrated by commands that open it, and this pass opened the replacement
+	// instead. Bring it forward exactly the way a fold brings a source forward;
+	// refuse the rebuild rather than quietly dropping what could not be read.
+	if mErr := migrateSourceScope(prev); mErr != nil {
+		return 0, fmt.Errorf("previous store not readable: %w", mErr)
+	}
+	if _, err := con.Exec("ATTACH DATABASE ? AS prev", "file:"+prev+"?mode=ro"); err != nil {
+		return 0, fmt.Errorf("attach previous store: %w", err)
+	}
+	defer func() {
+		if _, dErr := con.Exec("DETACH DATABASE prev"); dErr != nil && err == nil {
+			err = fmt.Errorf("detach previous store: %w", dErr)
+		}
+	}()
+
+	tx, err := con.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin carry-forward: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rErr := tx.Rollback(); rErr != nil && err == nil {
+				err = fmt.Errorf("rollback carry-forward: %w", rErr)
+			}
+		}
+	}()
+
+	if _, err := tx.Exec(`CREATE TEMP TABLE IF NOT EXISTS carry_forward_ids(id TEXT PRIMARY KEY)`); err != nil {
+		return 0, fmt.Errorf("create carry-forward set: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM temp.carry_forward_ids`); err != nil {
+		return 0, fmt.Errorf("clear carry-forward set: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO temp.carry_forward_ids(id)
+		SELECT id FROM prev.sessions
+		WHERE id NOT IN (SELECT id FROM main.sessions)
+	`); err != nil {
+		return 0, fmt.Errorf("collect store-only sessions: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO main.sessions
+		  (id,started_at,last_ts,message_count,is_subagent,parent_id,
+		   origin_machine,source_tool,source_path,only_copy_since,project,cwd)
+		SELECT id,started_at,last_ts,message_count,is_subagent,parent_id,
+		       origin_machine,source_tool,source_path,only_copy_since,project,cwd
+		FROM prev.sessions
+		WHERE id IN (SELECT id FROM temp.carry_forward_ids)
+	`); err != nil {
+		return 0, fmt.Errorf("carry forward sessions: %w", err)
+	}
+	// Insert without the rowid so the FTS triggers assign a fresh one and index
+	// the text — the same reason mergeMessagesSQL drops it. ORDER BY the source
+	// rowid: it is the reading order (see mergeMessagesSQL).
+	if _, err := tx.Exec(`
+		INSERT INTO main.messages(session_id,role,content,ts,ts_iso,uuid)
+		SELECT session_id,role,content,ts,ts_iso,uuid FROM prev.messages
+		WHERE session_id IN (SELECT id FROM temp.carry_forward_ids)
+		ORDER BY id
+	`); err != nil {
+		return 0, fmt.Errorf("carry forward messages: %w", err)
+	}
+	if _, err := tx.Exec(`
+		INSERT OR IGNORE INTO main.session_sources
+		  (session_id,source_db,started_at,last_ts,message_count,is_subagent,parent_id,
+		   origin_machine,source_tool,source_path,only_copy_since,project,cwd)
+		SELECT id,'',started_at,last_ts,message_count,is_subagent,parent_id,
+		       origin_machine,source_tool,source_path,only_copy_since,project,cwd
+		FROM prev.sessions
+		WHERE id IN (SELECT id FROM temp.carry_forward_ids)
+	`); err != nil {
+		return 0, fmt.Errorf("record carried sessions as legacy baseline: %w", err)
+	}
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM temp.carry_forward_ids`).Scan(&carried); err != nil {
+		return 0, fmt.Errorf("count carried sessions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit carry-forward: %w", err)
+	}
+	committed = true
+	return carried, nil
 }
 
 // migrateSourceScope brings a per-project db up to the scope columns the merge
