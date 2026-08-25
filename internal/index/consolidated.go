@@ -896,6 +896,19 @@ func carryForwardStoreOnly(con *sql.DB, prev string) (carried int, err error) {
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM temp.carry_forward_ids`).Scan(&carried); err != nil {
 		return 0, fmt.Errorf("count carried sessions: %w", err)
 	}
+	// Containment invariant: after the carry, every session the previous store
+	// held must exist in the replacement. This can only fire if the copy above
+	// is broken — and then the rebuild must FAIL (the deferred cleanup keeps
+	// the live store) rather than swap in a store that lost history.
+	var lost int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM (SELECT id FROM prev.sessions EXCEPT SELECT id FROM main.sessions)`,
+	).Scan(&lost); err != nil {
+		return 0, fmt.Errorf("verify carry-forward containment: %w", err)
+	}
+	if lost > 0 {
+		return 0, fmt.Errorf("rebuild would lose %d sessions the store holds — refusing to swap", lost)
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit carry-forward: %w", err)
 	}
