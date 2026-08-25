@@ -50,6 +50,7 @@ never duplicates. `rawclaw setup --eject` removes exactly what setup installed �
 
 Your coding agents quietly save conversations as JSONL transcripts on disk (**Claude Code** in `~/.claude/projects`, **Codex** in `~/.codex/sessions`, and **Google Antigravity** in `~/.gemini/antigravity-cli/brain`). RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type. **Goose** (SQLite sessions under `~/.local/share/goose/sessions/sessions.db`, Goose v1.10.0+) is read too.
 
+- **Answer-first search.** Search answers immediately from the consolidated store without blocking on synchronous directory scans or reindexing. When uningested sessions or stale scopes exist, search returns what it has with an honest staleness note and nudges a background refresh; explicit flags (`--reindex`, `--dir`, `--this-project`) refresh synchronously.
 - **Goal → match → resolution.** Every hit returns the session's opening (what it set out to do), the matched message in context, and the closing (what was decided) — so one result usually answers the question without opening a file.
 - **All your projects and runtimes by default.** One query spans every coding session across runtimes and folders (`--this-project` and `--source` to narrow).
 - **Natural phrasing works.** Multi-word queries OR their terms and rank by how many match — you don't need the exact wording.
@@ -110,6 +111,10 @@ rawclaw version                             # print the version + build stamp
 rawclaw --timeout 2m "query"                # raise the self-terminating deadline (0 disables it)
 ```
 
+Search defaults to **answer-first**: queries answer instantly from the consolidated search store instead of waiting on a synchronous disk crawl or reindex. If recent sessions are not yet ingested (or the store is behind), search returns available hits immediately with an honest staleness note (`note: sessions not yet ingested — background ingest triggered` or `note: sessions not yet ingested — run 'rawclaw ingest' to refresh`; in `--json`, `stale: true` and an `index_stale` structured warning) and triggers a background ingest pass. When you need guaranteed synchronous freshness before searching, passing `--reindex`, `--dir`, or `--this-project` refreshes the targeted scope before answering.
+
+Bare browse (`rawclaw`) follows the same answer-first pattern from the consolidated store; use `--reindex` to bypass the consolidated store and refresh source indexes before browsing.
+
 `rawclaw ingest [session8]` refreshes one session (full id or prefix) into the consolidated search store; without an argument it refreshes all discoverable active sessions. `rawclaw setup` starts the targeted form in the background at SessionStart, so normal reads and searches usually query an already-indexed store. Repeated or concurrent ingests are safe: unchanged sessions are skipped and the consolidated-store write is serialized with bounded retry.
 
 **A search that finds nothing exits `0`** — an empty result set is a valid answer, not an error (scripts should branch on output, and reserve non-zero for real failures).
@@ -134,7 +139,13 @@ rawclaw outline <session8>             # the goal → resolution arc, to pick wh
 
 ## How it works
 
-A small SQLite **FTS5** index over your transcripts, refreshed incrementally on each run — only changed sessions re-index, so it stays fast even on a large history. Within a session, messages are ordered by insertion id (not timestamp, which can be non-monotonic), and shaped into the goal → match → resolution view.
+A consolidated SQLite **FTS5** store over your transcripts that serves keyword search and browse queries. Default searches and bare browse operate answer-first: they query the consolidated store directly — executing in 0.01s store reads and ~0.3s quiet-machine search without blocking on synchronous directory scans or inline transcript parsing.
+
+When newly written transcripts are not yet in the store, search answers immediately with existing data and appends an honest staleness note (in `--json`, `stale: true` and an `index_stale` structured warning), while triggering a detached, rate-limited background ingest (`rawclaw ingest`) to update the store out of band. Passing `--reindex`, `--dir`, or `--this-project` overrides the answer-first behavior and forces a synchronous refresh before answering.
+
+Within a session, messages are ordered by insertion id (not timestamp, which can be non-monotonic), and shaped into the goal → match → resolution view.
+
+For concurrency behavior and search latency under concurrent background writers, see [docs/design/bench-concurrency.md](docs/design/bench-concurrency.md), which records a harness smoke-proof measuring search latency while writers ingest transcripts concurrently.
 
 ### Optional semantic search — bring your own embedder
 
