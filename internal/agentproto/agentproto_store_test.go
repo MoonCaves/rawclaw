@@ -213,9 +213,15 @@ func TestSearchFallsBackWhenTheStoreIsAbsent(t *testing.T) {
 }
 
 // TestSearchFallsBackWhenTheStoreHasNotHeardOfTheProject covers the other
-// degradation. The store is present and non-empty, but was rebuilt from a
+// degradation. The store is present and non-empty, but was built from a
 // narrower set of sources, so the requested project is genuinely outside it.
 // Answering empty would hide a corpus that is sitting on disk.
+//
+// The state is constructed by building a FRESH store from one project while
+// the other project's database sits unfolded on disk. It used to be built with
+// a --rebuild from a narrower source set, but a rebuild no longer manufactures
+// a never-held project: sessions the store already holds are carried forward
+// (#22), which is the guarantee, not a regression.
 func TestSearchFallsBackWhenTheStoreHasNotHeardOfTheProject(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -230,9 +236,13 @@ func TestSearchFallsBackWhenTheStoreHasNotHeardOfTheProject(t *testing.T) {
 	if _, _, _, err := index.EnsureIndexed(dropped, false); err != nil {
 		t.Fatalf("EnsureIndexed(dropped): %v", err)
 	}
-	// Rebuild the store from the kept project alone, so the other project is
-	// absent from it while its own database still holds the answer.
-	if _, err := index.ConsolidateFrom([]string{keptDB}, true); err != nil {
+	// Discard the store the write-throughs built and refill it from the kept
+	// project alone, so the other project was never folded in while its own
+	// database still holds the answer.
+	for _, sfx := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(index.ConsolidatedPath() + sfx)
+	}
+	if _, err := index.ConsolidateFrom([]string{keptDB}, false); err != nil {
 		t.Fatalf("ConsolidateFrom: %v", err)
 	}
 
