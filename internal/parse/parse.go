@@ -84,13 +84,21 @@ func ExtractText(obj map[string]any) string {
 		return ""
 	}
 
-	var parts []string
+	parts := make([]string, 0, len(blocks))
 	for _, raw := range blocks {
 		if b, ok := raw.(map[string]any); ok {
 			parts = appendBlock(parts, b)
 		}
 	}
-	return strings.Join(parts, " ")
+
+	// Drop empty parts, then join the rest on a single space.
+	nonEmpty := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			nonEmpty = append(nonEmpty, p)
+		}
+	}
+	return strings.Join(nonEmpty, " ")
 }
 
 // appendBlock appends the flattened text for one content block, dispatching on
@@ -99,11 +107,11 @@ func appendBlock(parts []string, b map[string]any) []string {
 	bt, _ := b["type"].(string)
 	switch bt {
 	case "text":
-		if s, ok := b["text"].(string); ok && s != "" {
+		if s, ok := b["text"].(string); ok {
 			parts = append(parts, capRunes(s, BlockCap))
 		}
 	case "thinking":
-		if s, ok := b["thinking"].(string); ok && s != "" {
+		if s, ok := b["thinking"].(string); ok {
 			parts = append(parts, "[THINKING] "+capRunes(s, BlockCap))
 		}
 	case "tool_use":
@@ -126,7 +134,7 @@ func appendBlock(parts []string, b map[string]any) []string {
 // directly; a list yields one tagged part per object block that carries a text
 // string.
 func appendToolResult(parts []string, content any) []string {
-	if s, ok := content.(string); ok && s != "" {
+	if s, ok := content.(string); ok {
 		return append(parts, "[TOOL_RESULT] "+capRunes(s, ToolResCap))
 	}
 	list, ok := content.([]any)
@@ -135,7 +143,7 @@ func appendToolResult(parts []string, content any) []string {
 	}
 	for _, raw := range list {
 		if x, ok := raw.(map[string]any); ok {
-			if s, ok := x["text"].(string); ok && s != "" {
+			if s, ok := x["text"].(string); ok {
 				parts = append(parts, "[TOOL_RESULT] "+capRunes(s, ToolResCap))
 			}
 		}
