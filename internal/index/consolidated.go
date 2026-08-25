@@ -367,7 +367,8 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 		return st, fmt.Errorf("ensure consolidated schema: %w", err)
 	}
 	if err := healUpgradedConsolidatedStore(con); err != nil {
-		slog.Debug("heal upgraded store failed", "err", err)
+		// Healing MUST precede backfill: do not populate session_sources if healing did not succeed.
+		return st, fmt.Errorf("heal upgraded store: %w", err)
 	}
 	// The topic layer is gated separately from the keyword schema, so it has to
 	// be asked for explicitly. Creating it unconditionally means a topic query
@@ -445,7 +446,8 @@ func SyncConsolidatedFrom(srcPath string) error {
 		return fmt.Errorf("ensure consolidated schema: %w", err)
 	}
 	if err := healUpgradedConsolidatedStore(con); err != nil {
-		slog.Debug("heal upgraded store failed", "err", err)
+		// Healing MUST precede backfill: do not populate session_sources if healing did not succeed.
+		return fmt.Errorf("heal upgraded store: %w", err)
 	}
 	if err := store.EnsureTopicSchema(con); err != nil {
 		return fmt.Errorf("ensure consolidated topic schema: %w", err)
