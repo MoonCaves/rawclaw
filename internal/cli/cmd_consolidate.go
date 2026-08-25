@@ -66,6 +66,13 @@ func newConsolidateCmd() *cobra.Command {
 				fmt.Fprintf(out, "  %d of %d indexes skipped — too old to read; they are rebuilt the next time their project is searched\n",
 					st.Skipped, st.Sources)
 			}
+			// A carried-forward session is one no index offered: history whose
+			// original transcript AND per-project index are both gone. Say so
+			// out loud — these are the rows a rebuild used to drop silently.
+			if st.CarriedForward > 0 {
+				fmt.Fprintf(out, "  %d sessions carried forward from the previous store — no index still lists them; the store is their only copy\n",
+					st.CarriedForward)
+			}
 			// Only worth saying when it happened: it is the merge doing its job,
 			// and the plain counts alone would look like rows went missing.
 			if merged := st.SessionsSeen - st.Sessions; merged > 0 {
