@@ -366,3 +366,64 @@ func TestScanSpawnedSubagentsLargeLine(t *testing.T) {
 		t.Errorf("%s ParentID = %q, want %q", childID, child.ParentID, parentID)
 	}
 }
+
+// TestExtractCWDFromTranscript verifies Bug 3 fix:
+// 1. Decodes JSON content so that escaped newlines within <user_information> blocks parse correctly.
+// 2. Scans up to 50 records into the transcript so that CWD appearing beyond the 10th line is discovered.
+// 3. Handles tool call Cwd arguments at depth.
+func TestExtractCWDFromTranscript(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+
+	// Session 1: CWD is in <user_information> on record 25 (beyond line 10), with escaped newlines and mapping format.
+	sess1Lines := make([]string, 0, 30)
+	for i := 0; i < 24; i++ {
+		sess1Lines = append(sess1Lines, fmt.Sprintf(`{"step_index":%d,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-14T10:00:00Z","content":"step %d"}`, i, i))
+	}
+	// Record 24 (the 25th record) contains user_information with escaped newlines
+	sess1Lines = append(sess1Lines, `{"step_index":24,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-14T10:01:00Z","content":"<user_information>\n/Users/test/workspace/deep-repo -> my-repo\n</user_information>\n<USER_REQUEST>fix issue</USER_REQUEST>"}`)
+
+	t1 := filepath.Join(tmp, "brain", "sess-deep-cwd", ".system_generated", "logs", "transcript.jsonl")
+	writeJSONL(t, t1, sess1Lines...)
+
+	// Session 2: CWD is in tool_calls args Cwd on record 20 (beyond line 10).
+	sess2Lines := make([]string, 0, 25)
+	for i := 0; i < 19; i++ {
+		sess2Lines = append(sess2Lines, fmt.Sprintf(`{"step_index":%d,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-14T10:00:00Z","content":"step %d"}`, i, i))
+	}
+	sess2Lines = append(sess2Lines, `{"step_index":19,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-14T10:01:00Z","content":"running cmd","tool_calls":[{"name":"run_command","args":{"Cwd":"/Users/test/workspace/tool-repo","CommandLine":"git status"}}]}`)
+
+	t2 := filepath.Join(tmp, "brain", "sess-tool-cwd", ".system_generated", "logs", "transcript.jsonl")
+	writeJSONL(t, t2, sess2Lines...)
+
+	// Neither session is in history.jsonl
+	ad := NewRoot(tmp)
+	containers, err := ad.Discover()
+	if err != nil {
+		t.Fatalf("Discover() error: %v", err)
+	}
+	if len(containers) != 2 {
+		t.Fatalf("Discover() returned %d containers, want 2", len(containers))
+	}
+
+	byID := map[string]source.Container{}
+	for _, c := range containers {
+		byID[c.ID] = c
+	}
+
+	c1, ok := byID["sess-deep-cwd"]
+	if !ok {
+		t.Fatal("sess-deep-cwd not found")
+	}
+	if c1.CWD != "/Users/test/workspace/deep-repo" {
+		t.Errorf("sess-deep-cwd CWD = %q, want /Users/test/workspace/deep-repo", c1.CWD)
+	}
+
+	c2, ok := byID["sess-tool-cwd"]
+	if !ok {
+		t.Fatal("sess-tool-cwd not found")
+	}
+	if c2.CWD != "/Users/test/workspace/tool-repo" {
+		t.Errorf("sess-tool-cwd CWD = %q, want /Users/test/workspace/tool-repo", c2.CWD)
+	}
+}
