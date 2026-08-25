@@ -45,6 +45,20 @@ func TestConnectRO_ConcurrentWriteSafety(t *testing.T) {
 	stopWriters := make(chan struct{})
 	var wg sync.WaitGroup
 
+	var (
+		writerErrMu sync.Mutex
+		writerErr   error
+	)
+	setWriterErr := func(err error) {
+		if err != nil {
+			writerErrMu.Lock()
+			if writerErr == nil {
+				writerErr = err
+			}
+			writerErrMu.Unlock()
+		}
+	}
+
 	// Background writer
 	wg.Add(1)
 	go func() {
@@ -57,22 +71,21 @@ func TestConnectRO_ConcurrentWriteSafety(t *testing.T) {
 			default:
 				i++
 				sid := fmt.Sprintf("concurrent-sess-%d", i)
-				storetest.InsertSession(t, conRW, storetest.Session{
-					ID:           sid,
-					StartedAt:    float64(1700000000 + i),
-					LastTS:       float64(1700000000 + i),
-					MessageCount: 1,
-					Project:      "concurrent",
-					CWD:          "/workspace/concurrent",
-				})
-				storetest.InsertMessage(t, conRW, storetest.Message{
-					SessionID: sid,
-					Role:      "user",
-					Content:   fmt.Sprintf("concurrent message payload %d for testing read-write safety", i),
-					TS:        float64(1700000000 + i),
-					ISO:       "2026-08-25T10:00:00Z",
-					UUID:      fmt.Sprintf("uuid-%d", i),
-				})
+				if _, err := conRW.Exec(
+					"INSERT OR IGNORE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,project,cwd,source_tool) VALUES(?,?,?,?,?,?,?,?,?)",
+					sid, float64(1700000000+i), float64(1700000000+i), 1, 0, nil, "concurrent", "/workspace/concurrent", nil,
+				); err != nil {
+					setWriterErr(fmt.Errorf("insert session %q: %w", sid, err))
+					return
+				}
+				if _, err := conRW.Exec(
+					"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
+					sid, "user", fmt.Sprintf("concurrent message payload %d for testing read-write safety", i),
+					float64(1700000000+i), "2026-08-25T10:00:00Z", fmt.Sprintf("uuid-%d", i),
+				); err != nil {
+					setWriterErr(fmt.Errorf("insert message: %w", err))
+					return
+				}
 				time.Sleep(1 * time.Millisecond)
 			}
 		}
@@ -112,4 +125,8 @@ func TestConnectRO_ConcurrentWriteSafety(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	close(stopWriters)
 	wg.Wait()
+
+	if writerErr != nil {
+		t.Errorf("writer error: %v", writerErr)
+	}
 }
