@@ -48,7 +48,7 @@ never duplicates. `rawclaw setup --eject` removes exactly what setup installed �
 
 ## What it does
 
-Your coding agents quietly save conversations as JSONL transcripts on disk (**Claude Code** in `~/.claude/projects`, **Codex** in `~/.codex/sessions`, and **Google Antigravity** in `~/.gemini/antigravity-cli/brain`). RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type.
+Your coding agents quietly save conversations as JSONL transcripts on disk (**Claude Code** in `~/.claude/projects`, **Codex** in `~/.codex/sessions`, and **Google Antigravity** in `~/.gemini/antigravity-cli/brain`). RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type. **Goose** (SQLite sessions under `~/.local/share/goose/sessions`) is read too, but that adapter is **experimental** — it has not been verified against a real Goose install yet.
 
 - **Goal → match → resolution.** Every hit returns the session's opening (what it set out to do), the matched message in context, and the closing (what was decided) — so one result usually answers the question without opening a file.
 - **All your projects and runtimes by default.** One query spans every coding session across runtimes and folders (`--this-project` and `--source` to narrow).
