@@ -86,48 +86,78 @@ func runTagPrep(w io.Writer, con *sql.DB, fullSID string) error {
 		return fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
 	}
 
-	shown, truncatedAt := visibleMessages(msgs)
+	vis := visibleMessages(msgs)
 
 	fmt.Fprintf(w, "# condensed session %s — one line per message: <uuid8> [<role>] <text>\n",
 		lastSlice8(fullSID))
 	fmt.Fprintf(w, "# split into contiguous TOPIC segments; feed back via: rawclaw tag-write %s\n",
 		lastSlice8(fullSID))
-	for _, m := range shown {
+	for i, m := range vis.msgs {
+		if i == vis.gapAt {
+			fmt.Fprintf(w, "# ⋯ middle of session omitted (dump exceeds %dKB) — a topic segment may NOT "+
+				"span this gap; start a new segment for what follows\n", dumpByteCap/1000)
+		}
 		fmt.Fprintln(w, condensedLine(m))
-	}
-	if truncatedAt >= 0 {
-		fmt.Fprintf(w, "# TRUNCATED: %d of %d messages omitted (dump exceeds %dKB) — tag-write will cap "+
-			"coverage at the last message shown above, not the session's true end\n",
-			len(msgs)-truncatedAt, len(msgs), dumpByteCap/1000)
 	}
 	return nil
 }
 
+// visibleSet is what a tag-prep dump actually shows: the messages themselves,
+// plus the bookend gap boundary (gapAt = -1 if the whole session fit). The two
+// always travel together — every consumer needs both to resolve or clamp
+// segments correctly, so they're one value rather than two parameters that
+// could drift out of sync.
+type visibleSet struct {
+	msgs  []store.SessionMessage
+	gapAt int
+}
+
 // visibleMessages returns the subset of msgs a tag-prep dump actually shows:
-// non-displayable rows dropped (tool-only, envelope-only, bare [THINKING]),
-// truncated to dumpByteCap. truncatedAt is the index in msgs where the walk
-// stopped, or -1 if nothing was cut.
+// non-displayable rows dropped (tool-only, envelope-only, bare [THINKING]).
+// When what's left still exceeds dumpByteCap, it bookends rather than
+// truncating from the head alone — a session's setup AND its conclusion both
+// matter for topic segmentation — keeping a head prefix and a tail suffix
+// (each up to half the budget) and dropping the middle.
 //
-// writeSegments walks this SAME list (not the raw msgs) to resolve start_uuid
-// and to compute the final segment's end_uuid — so a truncated dump can never
-// cause tag-write to silently stretch a segment over messages the tagging
-// subagent never saw.
-func visibleMessages(msgs []store.SessionMessage) (shown []store.SessionMessage, truncatedAt int) {
-	truncatedAt = -1
-	size := 0
-	for i, m := range msgs {
-		if !view.IsDisplayable(m.Content) {
-			continue
+// writeSegments walks this SAME set (not the raw msgs) to resolve start_uuid
+// and to compute segment end_uuid, clamping at gapAt — so a bookended dump can
+// never cause tag-write to silently stretch a segment over the dropped middle,
+// even if the tagging subagent ignores the gap note above and never splits.
+func visibleMessages(msgs []store.SessionMessage) visibleSet {
+	var displayable []store.SessionMessage
+	for _, m := range msgs {
+		if view.IsDisplayable(m.Content) {
+			displayable = append(displayable, m)
 		}
-		line := condensedLine(m)
-		if size+len(line) > dumpByteCap {
-			truncatedAt = i
-			break
-		}
-		shown = append(shown, m)
-		size += len(line) + 1
 	}
-	return shown, truncatedAt
+
+	lines := make([]string, len(displayable))
+	total := 0
+	for i, m := range displayable {
+		lines[i] = condensedLine(m)
+		total += len(lines[i]) + 1
+	}
+	if total <= dumpByteCap {
+		return visibleSet{msgs: displayable, gapAt: -1}
+	}
+
+	half := dumpByteCap / 2
+	head, size := 0, 0
+	for head < len(displayable) && size+len(lines[head])+1 <= half {
+		size += len(lines[head]) + 1
+		head++
+	}
+	remaining := dumpByteCap - size
+	tail, tailSize := 0, 0
+	for tail < len(displayable)-head && tailSize+len(lines[len(displayable)-1-tail])+1 <= remaining {
+		tailSize += len(lines[len(displayable)-1-tail]) + 1
+		tail++
+	}
+
+	shown := make([]store.SessionMessage, 0, head+tail)
+	shown = append(shown, displayable[:head]...)
+	shown = append(shown, displayable[len(displayable)-tail:]...)
+	return visibleSet{msgs: shown, gapAt: head}
 }
 
 // ── verb: tag-write ────────────────────────────────────────────────────────────
@@ -214,8 +244,8 @@ func runTagWrite(con *sql.DB, fullSID string, r io.Reader, taggedAt float64) (in
 	if len(msgs) == 0 {
 		return 0, fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
 	}
-	shown, _ := visibleMessages(msgs)
-	if len(shown) == 0 {
+	vis := visibleMessages(msgs)
+	if len(vis.msgs) == 0 {
 		return 0, fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
 	}
 
@@ -228,7 +258,7 @@ func runTagWrite(con *sql.DB, fullSID string, r io.Reader, taggedAt float64) (in
 		return 0, fmt.Errorf("tag-write got an empty segment array — nothing to write")
 	}
 
-	return writeSegments(con, fullSID, shown, segs, taggedAt)
+	return writeSegments(con, fullSID, vis, segs, taggedAt)
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────
@@ -268,12 +298,19 @@ func uuid8(u string) string {
 // message for the final segment). A segment missing start_uuid/topic, or whose
 // start_uuid resolves to no/ambiguous message, returns a clear error (and, since
 // the whole set is applied in one transaction, leaves the prior tags untouched).
+//
+// vis.gapAt is visibleMessages' bookend boundary (-1 if none): a segment
+// starting before it never gets an end past it, even if the subagent's
+// segments imply otherwise — a bookended dump's dropped middle can never be
+// silently claimed by whatever topic was open on either side of it.
+//
 // Returns the number of rows written.
-func writeSegments(con *sql.DB, fullSID string, msgs []store.SessionMessage, segs []rawSegment, taggedAt float64) (int, error) {
+func writeSegments(con *sql.DB, fullSID string, vis visibleSet, segs []rawSegment, taggedAt float64) (int, error) {
+	msgs, gapAt := vis.msgs, vis.gapAt
 	if len(msgs) == 0 {
 		return 0, nil
 	}
-	lastUUID := msgs[len(msgs)-1].UUID
+	lastIdx := len(msgs) - 1
 
 	// First pass: validate each row and resolve its start_uuid → message index, so
 	// the end-boundary computation can look at the next segment's resolved index.
@@ -294,23 +331,25 @@ func writeSegments(con *sql.DB, fullSID string, msgs []store.SessionMessage, seg
 
 	out := make([]store.TopicSegment, len(segs))
 	for i, seg := range segs {
-		startUUID := msgs[startIdx[i]].UUID
-
-		// end_uuid = the uuid of the message just before the NEXT segment's start.
-		endUUID := lastUUID
+		// end = the index of the message just before the NEXT segment's start.
+		endIdx := lastIdx
 		if i+1 < len(segs) {
 			nextIdx := startIdx[i+1]
 			if nextIdx > 0 {
-				endUUID = msgs[nextIdx-1].UUID
+				endIdx = nextIdx - 1
 			} else {
-				endUUID = msgs[nextIdx].UUID
+				endIdx = nextIdx
 			}
+		}
+		// Clamp: a segment starting before the gap can't end past it.
+		if gapAt >= 0 && startIdx[i] < gapAt && endIdx >= gapAt {
+			endIdx = gapAt - 1
 		}
 
 		out[i] = store.TopicSegment{
 			SessionID: fullSID,
-			StartUUID: startUUID,
-			EndUUID:   endUUID,
+			StartUUID: msgs[startIdx[i]].UUID,
+			EndUUID:   msgs[endIdx].UUID,
 			Topic:     seg.Topic,
 			Summary:   seg.Summary,
 			TaggedAt:  taggedAt,
