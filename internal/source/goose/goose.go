@@ -220,28 +220,9 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 				rows, qErr := db.Query(query)
 				if qErr == nil {
 					defer rows.Close()
-					var res []source.Container
-					for rows.Next() {
-						var (
-							sid, cwd, parent any
-							isSub            any
-						)
-						if scanErr := rows.Scan(&sid, &cwd, &parent, &isSub); scanErr == nil {
-							sID := parseString(sid)
-							if sID != "" {
-								sub := parseBool(isSub)
-								res = append(res, source.Container{
-									ID:         sID,
-									Path:       dbPath + "#" + sID,
-									CWD:        parseString(cwd),
-									IsSubagent: sub,
-									ParentID:   parseString(parent),
-									ResumeArgv: []string{"goose", "session", "--resume", "--session-id", sID},
-								})
-							}
-						}
-					}
-					if err := rows.Err(); err == nil && len(res) > 0 {
+					if res, ok, rowsErr := sessionContainersFromRows(rows, dbPath); rowsErr != nil {
+						return nil, false
+					} else if ok {
 						return res, true
 					}
 				}
@@ -298,6 +279,40 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 		ParentID:   parentID,
 		ResumeArgv: []string{"goose", "session", "--resume", "--session-id", defaultID},
 	}}, true
+}
+
+type rowsIterator interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+}
+
+func sessionContainersFromRows(rows rowsIterator, dbPath string) ([]source.Container, bool, error) {
+	var res []source.Container
+	for rows.Next() {
+		var (
+			sid, cwd, parent any
+			isSub            any
+		)
+		if scanErr := rows.Scan(&sid, &cwd, &parent, &isSub); scanErr == nil {
+			sID := parseString(sid)
+			if sID != "" {
+				sub := parseBool(isSub)
+				res = append(res, source.Container{
+					ID:         sID,
+					Path:       dbPath + "#" + sID,
+					CWD:        parseString(cwd),
+					IsSubagent: sub,
+					ParentID:   parseString(parent),
+					ResumeArgv: []string{"goose", "session", "--resume", "--session-id", sID},
+				})
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return res, len(res) > 0, nil
 }
 
 // Messages extracts and normalizes all messages for the given session container.
@@ -459,12 +474,16 @@ func tableColumns(db *sql.DB, tableName string) []string {
 	return cols
 }
 
-// isSafeIdent reports whether s is a valid and safe SQL identifier ([a-zA-Z0-9_]+).
+// isSafeIdent reports whether s is a valid and safe unquoted SQL identifier
+// ([a-zA-Z_][a-zA-Z0-9_]*).
 func isSafeIdent(s string) bool {
 	if len(s) == 0 {
 		return false
 	}
-	for _, r := range s {
+	for i, r := range s {
+		if i == 0 && !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_') {
+			return false
+		}
 		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
 			return false
 		}
