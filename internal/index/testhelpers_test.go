@@ -317,7 +317,7 @@ func claudeFullMsgsFn() func(source.Container) ([]model.Message, error) {
 			return nil, err
 		}
 		var out []model.Message
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
