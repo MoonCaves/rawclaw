@@ -95,6 +95,7 @@ rawclaw upgrade --check    # report whether a newer release exists (exit 10 if s
 ```bash
 rawclaw "where did we set up auth"          # search (default): ranked hits + read-refs (all projects)
 rawclaw --this-project "auth"               # narrow to the current project
+rawclaw ingest [session8]                    # refresh one session, or all discoverable active sessions
 rawclaw read <session8>:<uuid8>             # bounded excerpt around a ref (--more/--around/--budget/--focus)
 rawclaw outline <session8>                  # the session's goal → resolution arc
 rawclaw                                      # browse: your most recent sessions
@@ -108,6 +109,8 @@ rawclaw delete --yes --files <session8>     # delete a session non-interactively
 rawclaw version                             # print the version + build stamp
 rawclaw --timeout 2m "query"                # raise the self-terminating deadline (0 disables it)
 ```
+
+`rawclaw ingest [session8]` refreshes one session (full id or prefix) into the consolidated search store; without an argument it refreshes all discoverable active sessions. `rawclaw setup` starts the targeted form in the background at SessionStart, so normal reads and searches usually query an already-indexed store. Repeated or concurrent ingests are safe: unchanged sessions are skipped and the consolidated-store write is serialized with bounded retry.
 
 **A search that finds nothing exits `0`** — an empty result set is a valid answer, not an error (scripts should branch on output, and reserve non-zero for real failures).
 
