@@ -57,7 +57,11 @@ func runTagPrepCmdWithSources(
 		if err := index.SyncConsolidatedFrom(refreshDB); err != nil {
 			if index.IsBusy(err) {
 				fmt.Fprintln(tagPrepStderr, "# fold deferred (store busy); refresh db retained, will fold on next ingest")
-				return nil
+			} else {
+				// The dump above already succeeded and was delivered to stdout, so this
+				// command still exits 0 — but a non-busy fold failure is not the expected
+				// "try again later" case and must not vanish silently.
+				fmt.Fprintf(tagPrepStderr, "# fold failed (%v); refresh db retained, will retry on next ingest\n", err)
 			}
 			return nil
 		}
