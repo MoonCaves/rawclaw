@@ -75,11 +75,11 @@ func TestPrintBrowse(t *testing.T) {
 		{SessionID: "33334444", LastTS: 1700000100, N: 3, Preview: "second"},
 	}
 
-	rowsWant := "2 most-recent sessions on alpha · live-indexed on invoke:\n\n" +
+	rowsWant := "2 most-recent sessions on alpha · answers from local store; refreshes in background:\n\n" +
 		"  · 11112222 · 12 msgs · first session\n" +
 		"  · 33334444 · 3 msgs · second\n"
 
-	emptyWant := "No sessions on alpha · live-indexed on invoke.\n"
+	emptyWant := "No sessions on alpha · answers from local store; refreshes in background.\n"
 
 	tests := []struct {
 		name    string
@@ -111,12 +111,12 @@ func TestPrintBrowseAll(t *testing.T) {
 		{Project: "beta", BrowseRow: view.BrowseRow{SessionID: "33334444bbbb", Last: "", N: 3, Preview: "second session"}},
 	}
 
-	rowsWant := "2 most-recent sessions across all projects · live-indexed on invoke:\n\n" +
+	rowsWant := "2 most-recent sessions across all projects · answers from local store; refreshes in background:\n\n" +
 		"  · 11112222 · alpha · 12 msgs · first session\n" +
 		"      now → done\n" +
 		"  · 33334444 · beta · 3 msgs · second session\n"
 
-	emptyWant := "No sessions across all projects · live-indexed on invoke. Try --list to see the searchable projects.\n"
+	emptyWant := "No sessions across all projects · answers from local store; refreshes in background. Try --list to see the searchable projects.\n"
 
 	tests := []struct {
 		name  string
