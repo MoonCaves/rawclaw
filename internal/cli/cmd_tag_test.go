@@ -410,7 +410,7 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	scope := []view.Scope{{Project: "proj-tag", TDir: dir}}
 	jsonIn := `[{"start_uuid":"11111111","topic":"watermark","summary":"how the watermark is advanced"}]`
 	var out strings.Builder
-	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil); err != nil {
+	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, ""); err != nil {
 		t.Fatalf("runTagWriteCmd: %v\nout: %s", err, out.String())
 	}
 
@@ -428,5 +428,78 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	}
 	if hits[0].Project != "proj-tag" {
 		t.Errorf("hit project = %q, want proj-tag", hits[0].Project)
+	}
+}
+
+// TestRunTagWriteRoutine_MarksRoutineAndFolds verifies that tag-write --routine
+// writes a routine verdict with the specified or default source and folds it
+// into the consolidated store.
+func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
+	root := newCfgRoot(t)
+	sid := "8e2d1c10-aaaa-bbbb-cccc-0000000abcd2"
+	dir := writeTaggableSession(t, root, "proj-routine", sid,
+		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
+
+	scope := []view.Scope{{Project: "proj-routine", TDir: dir}}
+	var out strings.Builder
+	if err := runTagWriteCmd(&out, strings.NewReader(""), sid[:8], scope, nil, true, store.VerdictSourceAgent); err != nil {
+		t.Fatalf("runTagWriteCmd --routine: %v\nout: %s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "marked "+sid[:8]+" as routine (source: agent)") {
+		t.Errorf("output missing expected confirmation: %q", out.String())
+	}
+
+	// Verify in the consolidated store
+	con, err := store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated store: %v", err)
+	}
+	defer con.Close()
+
+	v, ok, err := store.VerdictFor(con, sid)
+	if err != nil || !ok {
+		t.Fatalf("VerdictFor(%s) = (%+v, %v, %v), want ok=true", sid, v, ok, err)
+	}
+	if v.Verdict != store.VerdictRoutine || v.Source != store.VerdictSourceAgent {
+		t.Errorf("verdict = %+v, want verdict=routine, source=agent", v)
+	}
+
+	eff, err := store.IsEffectivelyRoutine(con, sid)
+	if err != nil || !eff {
+		t.Errorf("IsEffectivelyRoutine = %v, %v, want true, nil", eff, err)
+	}
+}
+
+// TestRunTagWriteRoutine_ReTagReverses verifies that tagging real topic segments
+// demotes routine, and re-tagging with --routine re-establishes routine.
+func TestRunTagWriteRoutine_ReTagReverses(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "sess-retag-1"
+	addMsg(t, con, sid, "user", "routine test session", "11111111-aaaa")
+	addMsg(t, con, sid, "assistant", "done", "22222222-bbbb")
+
+	// 1. Mark routine
+	if err := runTagWriteRoutine(con, sid, store.VerdictSourceFloor, 10.0); err != nil {
+		t.Fatalf("runTagWriteRoutine: %v", err)
+	}
+	if eff, _ := store.IsEffectivelyRoutine(con, sid); !eff {
+		t.Error("expected session to be effectively routine after runTagWriteRoutine")
+	}
+
+	// 2. Tag with real topic segments -> demotes routine
+	jsonIn := `[{"start_uuid":"11111111","topic":"real topic","summary":"not routine"}]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 20.0); err != nil {
+		t.Fatalf("runTagWrite with segments: %v", err)
+	}
+	if eff, _ := store.IsEffectivelyRoutine(con, sid); eff {
+		t.Error("expected real topic segments to demote routine (IsEffectivelyRoutine = false)")
+	}
+
+	// 3. Re-tag with routine -> re-establishes routine
+	if err := runTagWriteRoutine(con, sid, store.VerdictSourceAgent, 30.0); err != nil {
+		t.Fatalf("runTagWriteRoutine second time: %v", err)
+	}
+	if eff, _ := store.IsEffectivelyRoutine(con, sid); !eff {
+		t.Error("expected re-tagging with routine to re-establish routine (IsEffectivelyRoutine = true)")
 	}
 }

@@ -54,7 +54,7 @@ func TestTagWriteLandsInTheOneStoreAndReadsBack(t *testing.T) {
 	jsonIn := `[{"start_uuid":"` + firstUUID[:8] + `","topic":"` + topic + `","summary":"the round trip under test"}]`
 
 	var out strings.Builder
-	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil); err != nil {
+	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, ""); err != nil {
 		t.Fatalf("runTagWriteCmd: %v", err)
 	}
 
@@ -112,7 +112,7 @@ func TestLocalTagExportIncludesTheOneStore(t *testing.T) {
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
 	jsonIn := `[{"start_uuid":"` + firstUUID[:8] + `","topic":"archive round trip","summary":"exported or lost"}]`
 	var out strings.Builder
-	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil); err != nil {
+	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, ""); err != nil {
 		t.Fatalf("runTagWriteCmd: %v", err)
 	}
 
