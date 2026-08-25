@@ -1,7 +1,9 @@
 package antigravity
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -456,5 +458,38 @@ func TestInspectSessionHeaderCWDPrecedence(t *testing.T) {
 	}
 	if containers[0].CWD != "/Users/test/workspace/tool-call-repo" {
 		t.Errorf("containers[0].CWD = %q, want /Users/test/workspace/tool-call-repo", containers[0].CWD)
+	}
+}
+
+// TestScanTranscriptScannerError verifies that when a transcript contains a line
+// exceeding the scanner buffer limit (1MB), scanner.Err() is checked and a structured
+// warning is logged with the file path and error details.
+func TestScanTranscriptScannerError(t *testing.T) {
+	tmp := t.TempDir()
+
+	sessID := "sess-oversized-line"
+	tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
+
+	// Create a single line exceeding the 1MB (1024*1024) scanner buffer
+	oversizedLine := fmt.Sprintf(`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-14T10:00:00Z","content":"%s"}`, strings.Repeat("x", 1024*1024+1024))
+	writeJSONL(t, tPath, oversizedLine)
+
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(orig)
+
+	inspectSessionHeaderAndSubagents(tPath)
+
+	out := buf.String()
+	if !strings.Contains(out, "antigravity: scan transcript error") {
+		t.Fatalf("expected warning log missing from output: %s", out)
+	}
+	if !strings.Contains(out, tPath) {
+		t.Errorf("expected warning to contain path %q, got: %s", tPath, out)
+	}
+	if !strings.Contains(out, "token too long") {
+		t.Errorf("expected warning to contain error token too long, got: %s", out)
 	}
 }
