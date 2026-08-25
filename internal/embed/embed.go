@@ -7,6 +7,8 @@
 // Voyage, sqlite-vec, …) plug in later.
 package embed
 
+import "context"
+
 // Embedder turns a text string into a dense float vector.
 //
 // Contract: Embed returns nil to mean "no embedding for this call" — the
@@ -14,9 +16,10 @@ package embed
 // path covers the gap. A non-nil return MUST be a non-empty []float64. An
 // adapter that always returns nil (the null adapter) is conformant; one that
 // sometimes returns nil (backend down) is too. The routing decision must be
-// stable for identical input.
+// stable for identical input. The caller's context controls cancellation and
+// deadlines for any I/O performed by the embedder.
 type Embedder interface {
-	Embed(text string) []float64
+	Embed(ctx context.Context, text string) []float64
 }
 
 // BatchEmbedder is an OPTIONAL capability an Embedder may also implement:
@@ -29,9 +32,9 @@ type Embedder interface {
 // signal as Embed). Returning nil means "batch unavailable or failed" — callers
 // MUST fall back to per-item Embed, so a batch failure never loses vectors.
 // Callers reach this by type assertion; an Embedder that does not implement it
-// is fully conformant.
+// is fully conformant. The caller's context controls cancellation and deadlines.
 type BatchEmbedder interface {
-	EmbedBatch(texts []string) [][]float64
+	EmbedBatch(ctx context.Context, texts []string) [][]float64
 }
 
 // VectorStore stores and retrieves dense float vectors keyed by opaque string
