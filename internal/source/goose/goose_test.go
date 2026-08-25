@@ -14,7 +14,21 @@ import (
 
 // TestGooseSharedDatabase tests the single monolithic sessions.db schema containing
 // multiple sessions in a sessions table and messages with session_id predicates.
+
+// isolateHome points HOME (and the XDG dirs) at a temp dir so nothing in these
+// tests can reach the real user cache. EnsureIndexedContainers write-through
+// opens the REAL consolidated store otherwise — a gate run was caught holding
+// a 2.6GB production store open for the length of the goose suite.
+func isolateHome(t *testing.T) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", home+"/.cache")
+	t.Setenv("XDG_DATA_HOME", home+"/.local/share")
+}
+
 func TestGooseSharedDatabase(t *testing.T) {
+	isolateHome(t)
 	tmpDir := t.TempDir()
 	sessionsDB := filepath.Join(tmpDir, "sessions.db")
 
@@ -122,6 +136,7 @@ func TestGooseSharedDatabase(t *testing.T) {
 
 // TestGooseStandaloneDatabase tests single-session standalone database files.
 func TestGooseStandaloneDatabase(t *testing.T) {
+	isolateHome(t)
 	tmpDir := t.TempDir()
 	sessPath := filepath.Join(tmpDir, "standalone-session-1.db")
 
@@ -179,6 +194,7 @@ func TestGooseStandaloneDatabase(t *testing.T) {
 
 // TestGooseJSONContentExtraction tests parsing structured JSON content payloads.
 func TestGooseJSONContentExtraction(t *testing.T) {
+	isolateHome(t)
 	rawJSON := `[{"text": "Hello world"}, {"text": "How can I help?"}]`
 	extracted := extractContent(rawJSON)
 	want := "Hello world\nHow can I help?"
@@ -194,6 +210,7 @@ func TestGooseJSONContentExtraction(t *testing.T) {
 
 // TestGooseTimestampParsing tests various timestamp format parsings.
 func TestGooseTimestampParsing(t *testing.T) {
+	isolateHome(t)
 	ts, iso := parseTimestamp("2026-08-21T10:00:00Z")
 	if iso != "2026-08-21T10:00:00Z" || ts == 0 {
 		t.Errorf("parseTimestamp RFC3339 failed: ts=%f iso=%s", ts, iso)
@@ -207,6 +224,7 @@ func TestGooseTimestampParsing(t *testing.T) {
 
 // TestGooseEndToEndIndexing tests indexing containers into a RawClaw cache database.
 func TestGooseEndToEndIndexing(t *testing.T) {
+	isolateHome(t)
 	tmpDir := t.TempDir()
 	sessionsDB := filepath.Join(tmpDir, "sessions.db")
 
@@ -242,6 +260,7 @@ func TestGooseEndToEndIndexing(t *testing.T) {
 // messages: id, session_id, role, content JSON array, timestamp) and verifies discovery,
 // message ordering, MCP block text extraction, CWD mapping, subagent defaults, and resume argv.
 func TestGooseRealSchema_DiscoveredAndIndexed(t *testing.T) {
+	isolateHome(t)
 	tmpDir := t.TempDir()
 	sessionsDir := filepath.Join(tmpDir, "sessions")
 	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
@@ -382,6 +401,7 @@ func TestGooseRealSchema_DiscoveredAndIndexed(t *testing.T) {
 // TestGooseSQLInjectionPrevention verifies that dynamic table and column identifiers
 // are validated against SQL injection patterns before formatting into queries.
 func TestGooseSQLInjectionPrevention(t *testing.T) {
+	isolateHome(t)
 	// 1. Validate isSafeIdent behavior
 	unsafeIdents := []string{
 		"messages; DROP TABLE messages; --",
@@ -464,6 +484,7 @@ func TestGooseSQLInjectionPrevention(t *testing.T) {
 // during rows.Next() in Messages() returns an error rather than silently returning
 // a truncated list of messages.
 func TestGooseMessages_RowsErr_TruncationError(t *testing.T) {
+	isolateHome(t)
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "sessions.db")
 
@@ -550,6 +571,7 @@ func (s *gooseRowsStub) Scan(dest ...any) error {
 func (s *gooseRowsStub) Err() error { return s.rowErr }
 
 func TestSessionContainersFromRows_DoesNotFallThroughOnRowsError(t *testing.T) {
+	isolateHome(t)
 	rowsErr := errors.New("simulated sqlite iteration failure")
 	rows := &gooseRowsStub{
 		rows:   [][]any{{"partial-session", "/workspace", "", false}},
@@ -574,6 +596,7 @@ func TestSessionContainersFromRows_DoesNotFallThroughOnRowsError(t *testing.T) {
 // set as success — preventing a caller running --reindex from treating the partial set as
 // authoritative and deleting the omitted database's live sessions.
 func TestGooseDiscovery_RowsErr_DoesNotDeleteOmittedDatabaseSessions(t *testing.T) {
+	isolateHome(t)
 	tmpDir := t.TempDir()
 	sessionsDir := filepath.Join(tmpDir, "sessions")
 	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
