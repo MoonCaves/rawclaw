@@ -194,7 +194,7 @@ func TestBrowseConsolidated_SingleConnection(t *testing.T) {
 // TestBrowseConsolidated_JSONStructure validates the JSON output format and
 // scope reporting.
 func TestBrowseConsolidated_JSONStructure(t *testing.T) {
-	_, scopeList := seedBrowseCorpus(t)
+	root, scopeList := seedBrowseCorpus(t)
 
 	var buf bytes.Buffer
 	opts := Options{All: true, IncludePath: "proj-a", JSON: true, Limit: 10}
@@ -224,9 +224,10 @@ func TestBrowseConsolidated_JSONStructure(t *testing.T) {
 	if len(res.Sessions) != 2 {
 		t.Fatalf("len(Sessions) = %d, want 2", len(res.Sessions))
 	}
+	wantProject := paths.ProjectLabel(filepath.Join(root, "-home-u-proj-a"))
 	for _, s := range res.Sessions {
-		if s.Project != "proj-a" {
-			t.Errorf("session project = %q, want 'proj-a'", s.Project)
+		if s.Project != wantProject {
+			t.Errorf("session project = %q, want %q", s.Project, wantProject)
 		}
 		if s.Preview == "" {
 			t.Errorf("session preview is empty for %s", s.SessionID)
