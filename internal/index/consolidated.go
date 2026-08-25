@@ -1085,8 +1085,24 @@ func pruneTombstonedIDs(con *sql.DB, ids []string) error {
 		if _, err := con.Exec(`DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned file_index: %w", err)
 		}
+		// The tagging sidecars hold summaries OF the conversation — a user
+		// delete that leaves them behind keeps exactly the content the delete
+		// was meant to remove. They are created on demand, so tolerate their
+		// absence rather than requiring the topic schema to exist.
+		if _, err := con.Exec(`DELETE FROM topic_segment WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
+			return fmt.Errorf("prune tombstoned topic segments: %w", err)
+		}
+		if _, err := con.Exec(`DELETE FROM session_verdict WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
+			return fmt.Errorf("prune tombstoned session verdicts: %w", err)
+		}
 	}
 	return nil
+}
+
+// isNoSuchTable matches SQLite's error for a table the on-demand topic layer
+// never created — a store nobody tagged genuinely has no sidecars to prune.
+func isNoSuchTable(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such table")
 }
 
 // migrateSessionSources backfills session_sources from existing sessions rows in

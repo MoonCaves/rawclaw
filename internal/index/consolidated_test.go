@@ -185,6 +185,9 @@ func TestConsolidate_HonorsTombstones(t *testing.T) {
 		sessionRow{id: "drop", project: "ledger", cwd: "/w/ledger", msgs: []msgRow{{"u-2", "user", "delete me", 200}}},
 		sessionRow{id: "drop/agent-1", project: "ledger", cwd: "/w/ledger", msgs: []msgRow{{"u-3", "assistant", "child of the deleted", 300}}},
 	)
+	// Tag the doomed session so the prune has real sidecar rows to take:
+	// mergeTopicsSQL folds the segment in during the same pass that prunes.
+	tagSession(t, src, "drop", "u-2", "secrets", "the deleted conversation's summary", 400)
 	if err := lifecycle.TombstoneIDs("", []string{"drop"}); err != nil {
 		t.Fatalf("write tombstone: %v", err)
 	}
@@ -202,6 +205,14 @@ func TestConsolidate_HonorsTombstones(t *testing.T) {
 	}
 	if got := scalar(t, con, "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'delete'"); got != "0" {
 		t.Error("a deleted session's text is still searchable in the consolidated index")
+	}
+	// The tagging sidecars summarize the conversation's content, so a user
+	// delete must take them too — a surviving topic row IS surviving content.
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment WHERE session_id LIKE 'drop%'"); got != "0" {
+		t.Errorf("%s topic segments of a deleted session survived the prune", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_verdict WHERE session_id LIKE 'drop%'"); got != "0" {
+		t.Errorf("%s verdicts of a deleted session survived the prune", got)
 	}
 }
 
