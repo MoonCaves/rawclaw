@@ -237,7 +237,7 @@ func ingestContainerWithRetry(match tagSourceMatch) (int, error) {
 	}
 
 	fl := flock.New(lockPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	locked, err := fl.TryLockContext(ctx, 10*time.Millisecond)
