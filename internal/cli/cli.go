@@ -623,9 +623,14 @@ func newReadCmd() *cobra.Command {
 				if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil {
 					if sf.Status == index.SessionStale {
 						isStale = true
-						maybeSpawnIngest(sf.SessionID)
+						if maybeSpawnIngest(sf.SessionID) {
+							sfNote = "session may be stale (transcript updated) — background ingest triggered"
+						} else {
+							sfNote = sf.Note
+						}
+					} else {
+						sfNote = sf.Note
 					}
-					sfNote = sf.Note
 				}
 			}
 			if jsonOut {
@@ -709,9 +714,14 @@ func newOutlineCmd() *cobra.Command {
 				if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil {
 					if sf.Status == index.SessionStale {
 						isStale = true
-						maybeSpawnIngest(sf.SessionID)
+						if maybeSpawnIngest(sf.SessionID) {
+							sfNote = "session may be stale (transcript updated) — background ingest triggered"
+						} else {
+							sfNote = sf.Note
+						}
+					} else {
+						sfNote = sf.Note
 					}
-					sfNote = sf.Note
 				}
 			}
 			if jsonOut {
@@ -1304,8 +1314,11 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 			defer con.Close()
 			if freshness, fErr := index.CheckIndexFreshness(con); fErr == nil && !freshness.Fresh {
 				indexStale = true
-				staleNote = "sessions not yet ingested — background ingest triggered"
-				maybeSpawnIngest("")
+				if maybeSpawnIngest("") {
+					staleNote = "sessions not yet ingested — background ingest triggered"
+				} else {
+					staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
+				}
 			}
 			if res, err := view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, []string{paths.ProjectLabel(td)}); err == nil && len(res) > 0 {
 				rows = make([]view.BrowseRow, 0, len(res))
@@ -1370,8 +1383,11 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 			defer con.Close()
 			if freshness, fErr := index.CheckIndexFreshness(con); fErr == nil && !freshness.Fresh {
 				indexStale = true
-				staleNote = "sessions not yet ingested — background ingest triggered"
-				maybeSpawnIngest("")
+				if maybeSpawnIngest("") {
+					staleNote = "sessions not yet ingested — background ingest triggered"
+				} else {
+					staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
+				}
 			}
 			var projects []string
 			if o.pathScoped() || o.ThisProject {
@@ -1603,8 +1619,11 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 			_ = con.Close()
 			if fErr == nil && !freshness.Fresh {
 				indexStale = true
-				staleNote = "sessions not yet ingested — background ingest triggered"
-				maybeSpawnIngest("")
+				if maybeSpawnIngest("") {
+					staleNote = "sessions not yet ingested — background ingest triggered"
+				} else {
+					staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
+				}
 			}
 		}
 	}
