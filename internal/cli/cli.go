@@ -923,14 +923,17 @@ func runResume(w io.Writer, o *Options) error {
 	for _, h := range paths.ResolveSession(o.Resume) {
 		matches = append(matches, resumeCandidate{hit: h, src: "claude"})
 	}
-	for _, h := range codexResumeHits(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "codex"})
-	}
-	for _, h := range antigravityResumeHits(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "antigravity"})
-	}
-	for _, h := range gooseResumeHits(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "goose"})
+	for _, entry := range []struct {
+		src    string
+		scopes []view.Scope
+	}{
+		{"codex", scopes.Codex(false)},
+		{"antigravity", scopes.Antigravity(false)},
+		{"goose", scopes.Goose(false)},
+	} {
+		for _, h := range scopeResumeHits(entry.scopes, o.Resume) {
+			matches = append(matches, resumeCandidate{hit: h, src: entry.src})
+		}
 	}
 
 	if len(matches) == 0 {
@@ -1072,52 +1075,12 @@ func archiveResumeHits(prefix string) []foreignHit {
 	return out
 }
 
-// codexResumeHits resolves a session-id prefix against the Codex scope dbs. A
-// Codex session's cwd is its scope's cwd. Only top-level sessions are offered
+// scopeResumeHits resolves a session-id prefix against a slice of scope dbs.
+// A session's cwd is its scope's cwd. Only top-level sessions are offered
 // (is_subagent=0), matching ResolveSession's Claude behavior.
-func codexResumeHits(prefix string) []paths.SessionHit {
+func scopeResumeHits(scopeList []view.Scope, prefix string) []paths.SessionHit {
 	var out []paths.SessionHit
-	for _, sc := range scopes.Codex(false) {
-		con, err := store.ConnectRO(sc.DBP)
-		if err != nil {
-			continue
-		}
-		ids, qerr := store.SessionsByPrefix(con, prefix, false, 3)
-		_ = con.Close()
-		if qerr != nil {
-			continue
-		}
-		for _, id := range ids {
-			out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
-		}
-	}
-	return out
-}
-
-// antigravityResumeHits resolves a session-id prefix against the Antigravity scope dbs.
-func antigravityResumeHits(prefix string) []paths.SessionHit {
-	var out []paths.SessionHit
-	for _, sc := range scopes.Antigravity(false) {
-		con, err := store.ConnectRO(sc.DBP)
-		if err != nil {
-			continue
-		}
-		ids, qerr := store.SessionsByPrefix(con, prefix, false, 3)
-		_ = con.Close()
-		if qerr != nil {
-			continue
-		}
-		for _, id := range ids {
-			out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
-		}
-	}
-	return out
-}
-
-// gooseResumeHits resolves a session-id prefix against the Goose scope dbs.
-func gooseResumeHits(prefix string) []paths.SessionHit {
-	var out []paths.SessionHit
-	for _, sc := range scopes.Goose(false) {
+	for _, sc := range scopeList {
 		con, err := store.ConnectRO(sc.DBP)
 		if err != nil {
 			continue
