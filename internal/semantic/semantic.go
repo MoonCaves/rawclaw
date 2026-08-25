@@ -187,7 +187,7 @@ func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew 
 			if ctx.Err() != nil {
 				return added, nil // cancelled: keep what landed, the pass resumes
 			}
-			vec := embedder.Embed(item.text)
+			vec := embedder.Embed(ctx, item.text)
 			if len(vec) == 0 {
 				continue
 			}
@@ -258,12 +258,12 @@ func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew 
 					texts[j] = it.text
 				}
 
-				vecs := bEmbedder.EmbedBatch(texts)
+				vecs := bEmbedder.EmbedBatch(ctx, texts)
 				if vecs == nil || len(vecs) != len(batch) {
 					// Fall back to per-item Embed for just this batch if EmbedBatch fails.
 					vecs = make([][]float64, len(batch))
 					for j, it := range batch {
-						vecs[j] = embedder.Embed(it.text)
+						vecs[j] = embedder.Embed(ctx, it.text)
 					}
 				}
 
