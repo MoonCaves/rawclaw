@@ -312,7 +312,7 @@ type ranked struct {
 // nearest first. Vectors whose dim != len(qvec) are skipped.
 func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 	if k <= 0 {
-		return nil
+		return []ranked{}
 	}
 	qn := 0.0
 	for _, x := range qvec {
