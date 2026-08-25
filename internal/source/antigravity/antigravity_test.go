@@ -119,9 +119,9 @@ func TestNormalize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			role, text, ok := normalize(tt.rec)
+			role, text, ok := NormalizeRecord(tt.rec)
 			if ok != tt.wantOK {
-				t.Fatalf("normalize() ok = %v, want %v", ok, tt.wantOK)
+				t.Fatalf("NormalizeRecord() ok = %v, want %v", ok, tt.wantOK)
 			}
 			if !ok {
 				return

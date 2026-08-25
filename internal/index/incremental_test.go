@@ -13,6 +13,8 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
+	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -203,8 +205,8 @@ func TestIncrementalIngest_AppendFastPath_Codex(t *testing.T) {
 	c := source.Container{ID: "session-codex-1", Path: f, CWD: "/workspace"}
 	msgsFn := func(got source.Container) ([]model.Message, error) {
 		return []model.Message{
-			{Role: "user", Text: "Implement Raft consensus", TS: 1, TSISO: "2026-08-20T10:00:00Z", UUID: mintCodexUUID("session-codex-1", 0)},
-			{Role: "assistant", Text: "Raft implementation starting with leader election.", TS: 2, TSISO: "2026-08-20T10:00:05Z", UUID: mintCodexUUID("session-codex-1", 1)},
+			{Role: "user", Text: "Implement Raft consensus", TS: 1, TSISO: "2026-08-20T10:00:00Z", UUID: codex.MintUUID("session-codex-1", 0)},
+			{Role: "assistant", Text: "Raft implementation starting with leader election.", TS: 2, TSISO: "2026-08-20T10:00:05Z", UUID: codex.MintUUID("session-codex-1", 1)},
 		}, nil
 	}
 
@@ -268,7 +270,7 @@ func TestIncrementalIngest_AppendFastPath_Codex(t *testing.T) {
 	}
 
 	for i := 0; i < 4; i++ {
-		want := mintCodexUUID("session-codex-1", i)
+		want := codex.MintUUID("session-codex-1", i)
 		if uuids[i] != want {
 			t.Errorf("message %d uuid = %q, want %q", i, uuids[i], want)
 		}
@@ -291,8 +293,8 @@ func TestIncrementalIngest_AppendFastPath_Antigravity(t *testing.T) {
 	c := source.Container{ID: "session-agy-1", Path: f, CWD: "/workspace"}
 	msgsFn := func(got source.Container) ([]model.Message, error) {
 		return []model.Message{
-			{Role: "user", Text: "Fix memory leak", TS: 1, TSISO: "2026-08-20T10:00:00Z", UUID: mintAntigravityUUID("session-agy-1", 0, 0)},
-			{Role: "assistant", Text: "[THINKING] Profile reveals unclosed channels.\nInvestigating heap profile.", TS: 2, TSISO: "2026-08-20T10:00:05Z", UUID: mintAntigravityUUID("session-agy-1", 1, 1)},
+			{Role: "user", Text: "Fix memory leak", TS: 1, TSISO: "2026-08-20T10:00:00Z", UUID: antigravity.MintUUID("session-agy-1", 0, 0)},
+			{Role: "assistant", Text: "[THINKING] Profile reveals unclosed channels.\nInvestigating heap profile.", TS: 2, TSISO: "2026-08-20T10:00:05Z", UUID: antigravity.MintUUID("session-agy-1", 1, 1)},
 		}, nil
 	}
 

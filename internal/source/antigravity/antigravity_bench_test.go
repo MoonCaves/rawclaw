@@ -1,18 +1,34 @@
-package antigravity
+package antigravity_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 )
+
+func writeJSONL(t *testing.T, path string, lines ...string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := ""
+	for _, l := range lines {
+		content += l + "\n"
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func BenchmarkAntigravityDiscover(b *testing.B) {
 	b.Setenv("HOME", b.TempDir())
 	tmp := b.TempDir()
-	ad := NewRoot(tmp)
+	ad := antigravity.NewRoot(tmp)
 
 	// Seed 50 sessions
 	var histLines []string
@@ -53,7 +69,7 @@ func BenchmarkAntigravityNormalize(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		role, text, ok := normalize(record)
+		role, text, ok := antigravity.NormalizeRecord(record)
 		if !ok || role != "assistant" || !strings.Contains(text, "optimized query plan") {
 			b.Fatalf("normalize failed: %s %s %v", role, text, ok)
 		}
@@ -64,7 +80,7 @@ func BenchmarkAntigravityEnsureIndexed_Incremental(b *testing.B) {
 	b.Setenv("HOME", b.TempDir())
 	tmp := b.TempDir()
 	dbp := filepath.Join(tmp, "bench.db")
-	ad := NewRoot(tmp)
+	ad := antigravity.NewRoot(tmp)
 
 	sessID := "bench-incremental"
 	writeJSONL(&testing.T{}, filepath.Join(tmp, "history.jsonl"),
@@ -78,7 +94,7 @@ func BenchmarkAntigravityEnsureIndexed_Incremental(b *testing.B) {
 
 	cs, _ := ad.Discover()
 	// Warm up initial index
-	_, _, err := index.EnsureIndexedContainers(dbp, true, cs, ad.Messages, ID, "")
+	_, _, err := index.EnsureIndexedContainers(dbp, true, cs, ad.Messages, antigravity.ID, "")
 	if err != nil {
 		b.Fatalf("initial indexing failed: %v", err)
 	}
@@ -86,7 +102,7 @@ func BenchmarkAntigravityEnsureIndexed_Incremental(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		// Run incremental index over unchanged file
-		_, status, err := index.EnsureIndexedContainers(dbp, false, cs, ad.Messages, ID, "")
+		_, status, err := index.EnsureIndexedContainers(dbp, false, cs, ad.Messages, antigravity.ID, "")
 		if err != nil || status != index.IndexFresh {
 			b.Fatalf("incremental indexing failed: %v, status=%v", err, status)
 		}

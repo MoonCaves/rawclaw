@@ -1,10 +1,11 @@
-package antigravity
+package antigravity_test
 
 import (
 	"path/filepath"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -34,7 +35,7 @@ func TestAntigravityRecallJourney(t *testing.T) {
 		`{"step_index":2,"source":"MODEL","type":"RUN_COMMAND","created_at":"2026-08-15T10:00:10Z","content":"Seq Scan on users  (cost=0.00..35.50 rows=2550 width=128)"}`,
 	)
 
-	ad := NewRoot(tmp)
+	ad := antigravity.NewRoot(tmp)
 	containers, err := ad.Discover()
 	if err != nil {
 		t.Fatalf("Discover() failed: %v", err)
@@ -44,7 +45,7 @@ func TestAntigravityRecallJourney(t *testing.T) {
 	}
 
 	// 1. Initial Indexing
-	nSessions, status, err := index.EnsureIndexedContainers(dbp, false, containers, ad.Messages, ID, "")
+	nSessions, status, err := index.EnsureIndexedContainers(dbp, false, containers, ad.Messages, antigravity.ID, "")
 	if err != nil {
 		t.Fatalf("EnsureIndexedContainers failed: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestAntigravityRecallJourney(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover() 2 failed: %v", err)
 	}
-	_, _, err = index.EnsureIndexedContainers(dbp, false, containers2, ad.Messages, ID, "")
+	_, _, err = index.EnsureIndexedContainers(dbp, false, containers2, ad.Messages, antigravity.ID, "")
 	if err != nil {
 		t.Fatalf("EnsureIndexedContainers 2 failed: %v", err)
 	}
