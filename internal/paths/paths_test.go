@@ -522,3 +522,57 @@ func containsResolved(got []string, want string) bool {
 	}
 	return false
 }
+
+func TestCatalogDir(t *testing.T) {
+	t.Run("RAWCLAW_CATALOG_DIR override wins", func(t *testing.T) {
+		custom := filepath.Join(t.TempDir(), "custom-catalog")
+		t.Setenv("RAWCLAW_CATALOG_DIR", custom)
+		if got := CatalogDir(); got != custom {
+			t.Fatalf("CatalogDir() = %q, want %q", got, custom)
+		}
+	})
+
+	t.Run("XDG_DATA_HOME sets catalog dir under rawclaw/catalog", func(t *testing.T) {
+		t.Setenv("RAWCLAW_CATALOG_DIR", "")
+		dataDir := t.TempDir()
+		t.Setenv("XDG_DATA_HOME", dataDir)
+		want := filepath.Join(dataDir, "rawclaw", "catalog")
+		if got := CatalogDir(); got != want {
+			t.Fatalf("CatalogDir() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("unset env falls back to ~/.local/share/rawclaw/catalog", func(t *testing.T) {
+		t.Setenv("RAWCLAW_CATALOG_DIR", "")
+		t.Setenv("XDG_DATA_HOME", "")
+		home, _ := os.UserHomeDir()
+		want := filepath.Join(home, ".local", "share", "rawclaw", "catalog")
+		if got := CatalogDir(); got != want {
+			t.Fatalf("CatalogDir() = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestCatalogEntry_ReadWrite(t *testing.T) {
+	dir := t.TempDir()
+	entry := CatalogEntry{
+		SessionID:      "test-sess-123",
+		TranscriptPath: "/path/to/transcript.jsonl",
+		CWD:            "/path/to/cwd",
+		Source:         "claude",
+	}
+
+	if err := WriteCatalogEntry(dir, entry); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	p := filepath.Join(dir, entry.SessionID)
+	readBack, err := ReadCatalogEntry(p)
+	if err != nil {
+		t.Fatalf("ReadCatalogEntry: %v", err)
+	}
+	if readBack != entry {
+		t.Fatalf("readBack = %+v, want %+v", readBack, entry)
+	}
+}
+
