@@ -95,9 +95,5 @@ func pullDue(now time.Time) bool {
 // its mtime to now. Best-effort: a failed stamp only means the next throttled
 // pull runs again.
 func stampPull() {
-	p := pullStampPath()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(p, nil, 0o644)
+	writeStamp(pullStampPath())
 }

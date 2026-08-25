@@ -3,6 +3,7 @@ package archive
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -112,4 +113,13 @@ func stampTime(path string) time.Time {
 		return time.Time{}
 	}
 	return st.ModTime()
+}
+
+// writeStamp (re)writes a stamp file, updating its mtime to now.
+func writeStamp(path string) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, nil, 0o644)
+	_ = os.Chtimes(path, time.Time{}, time.Now())
 }

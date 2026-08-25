@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
@@ -93,12 +92,7 @@ func tagIngestDue() bool {
 
 // stampTagIngest records a completed tag-ingest pass (mtime = now).
 func stampTagIngest() {
-	p := tagIngestStampPath()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(p, nil, 0o644)
-	_ = os.Chtimes(p, time.Time{}, time.Now())
+	writeStamp(tagIngestStampPath())
 }
 
 // allMachineDirs lists every machine dir name in the clone — this machine plus
