@@ -53,6 +53,9 @@ func seedBrowseCorpus(t *testing.T) (claudeDir string, scopesList []view.Scope) 
 // output (rows, ordering, limits, JSON shape, scope labels, empty-scope envelopes)
 // when answered from the consolidated store is byte-identical to the per-project fallback.
 func TestBrowseConsolidated_ByteIdenticalToFallback(t *testing.T) {
+	// Keep this comparison about store shape, not the one-shot side effect of
+	// spawning background ingest on the first stale read.
+	t.Setenv("RAWCLAW_BACKGROUND_INGEST", "off")
 	_, scopeList := seedBrowseCorpus(t)
 
 	cases := []struct {
@@ -290,6 +293,9 @@ func TestBrowseConsolidated_JSONStructure(t *testing.T) {
 // tiebreaker (SessionID asc) ensures consolidated browse and fallback produce
 // identical ordering.
 func TestBrowseConsolidated_TiedTimestampsByteIdentical(t *testing.T) {
+	// Keep the comparison about ordering and rendering, not the one-shot side
+	// effect of spawning background ingest on the first stale read.
+	t.Setenv("RAWCLAW_BACKGROUND_INGEST", "off")
 	root := newCfgRoot(t)
 
 	projA := filepath.Join(root, "-home-u-proj-a")
