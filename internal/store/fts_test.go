@@ -316,17 +316,17 @@ func TestSearchAnchors(t *testing.T) {
 		if a.ID == 0 || a.UUID == "" || !strings.Contains(a.Snippet, ">>>needle<<<") || a.Content == "" {
 			t.Errorf("anchor %+v missing id/uuid/snippet/content", a)
 		}
-		if a.MissingSince != 0 {
-			t.Errorf("anchor %+v MissingSince = %v, want 0 (present)", a, a.MissingSince)
+		if a.OnlyCopySince != 0 {
+			t.Errorf("anchor %+v OnlyCopySince = %v, want 0 (present)", a, a.OnlyCopySince)
 		}
 	}
 
-	// The session's missing_since watermark (retained-but-missing, D7) surfaces.
-	storetest.SetSessionField(t, con, "alpha", "missing_since", 99.5)
+	// The session's only_copy_since watermark surfaces.
+	storetest.SetSessionField(t, con, "alpha", "only_copy_since", 99.5)
 	anchors, _ = store.SearchAnchors(con, "needle", store.Filter{}, store.SortRelevance, 10)
 	for _, a := range anchors {
-		if a.MissingSince != 99.5 {
-			t.Errorf("anchor MissingSince = %v, want 99.5", a.MissingSince)
+		if a.OnlyCopySince != 99.5 {
+			t.Errorf("anchor OnlyCopySince = %v, want 99.5", a.OnlyCopySince)
 		}
 	}
 

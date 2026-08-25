@@ -252,17 +252,17 @@ func searchHits(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit
 
 // SearchAnchor is one anchor-recall row: a SearchHit shape keyed by message id,
 // plus the source uuid (the stable read-ref handle) and the session's
-// missing_since watermark (>0 = source file gone but row retained, D7 flag).
+// only_copy_since watermark (>0 = source file deleted by CLI, RawClaw is only copy).
 type SearchAnchor struct {
-	ID           int
-	SessionID    string
-	UUID         string
-	Role         string
-	ISO          string
-	Parent       string
-	Content      string
-	MissingSince float64
-	Snippet      string
+	ID            int
+	SessionID     string
+	UUID          string
+	Role          string
+	ISO           string
+	Parent        string
+	Content       string
+	OnlyCopySince float64
+	Snippet       string
 	// Project is the label the session was indexed under. In a per-project
 	// database every row carries the same value and the caller already knows
 	// it; in the one store it is the only thing that says where a hit came
@@ -271,7 +271,7 @@ type SearchAnchor struct {
 }
 
 // SearchAnchors runs the anchor-recall FTS5 query — the same filters and order
-// as SearchHits, returning message ids + uuid + missing_since for the view
+// as SearchHits, returning message ids + uuid + only_copy_since for the view
 // layer to expand into bookend windows. [retrieve.MatchAnchors]
 func SearchAnchors(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
 	return searchAnchors(con, wordTable, match, f, s, limit)
@@ -286,7 +286,7 @@ func SearchAnchorsSubstring(con *sql.DB, match string, f Filter, s Sort, limit i
 // searchAnchors is the shared body for both indexes; see searchHits.
 func searchAnchors(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
 	where, args := ftsWhere(tbl, match, f)
-	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content, s.missing_since,
+	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content, s.only_copy_since,
 	                   COALESCE(s.project,'') AS project,
 	                   snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip
 	            FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
@@ -303,31 +303,31 @@ func searchAnchors(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, li
 	var out []SearchAnchor
 	for rows.Next() {
 		var (
-			mid     int
-			sid     string
-			uuid    sql.NullString
-			role    sql.NullString
-			iso     sql.NullString
-			parent  sql.NullString
-			content sql.NullString
-			missing sql.NullFloat64
-			project string
-			snip    sql.NullString
+			mid      int
+			sid      string
+			uuid     sql.NullString
+			role     sql.NullString
+			iso      sql.NullString
+			parent   sql.NullString
+			content  sql.NullString
+			onlyCopy sql.NullFloat64
+			project  string
+			snip     sql.NullString
 		)
-		if err := rows.Scan(&mid, &sid, &uuid, &role, &iso, &parent, &content, &missing, &project, &snip); err != nil {
+		if err := rows.Scan(&mid, &sid, &uuid, &role, &iso, &parent, &content, &onlyCopy, &project, &snip); err != nil {
 			return nil, err
 		}
 		out = append(out, SearchAnchor{
-			ID:           mid,
-			SessionID:    sid,
-			UUID:         uuid.String,
-			Role:         role.String,
-			ISO:          iso.String,
-			Parent:       parent.String,
-			Content:      content.String,
-			MissingSince: missing.Float64, // 0 when NULL (present)
-			Snippet:      snip.String,
-			Project:      project,
+			ID:            mid,
+			SessionID:     sid,
+			UUID:          uuid.String,
+			Role:          role.String,
+			ISO:           iso.String,
+			Parent:        parent.String,
+			Content:       content.String,
+			OnlyCopySince: onlyCopy.Float64, // 0 when NULL (present)
+			Snippet:       snip.String,
+			Project:       project,
 		})
 	}
 	return out, rows.Err()
