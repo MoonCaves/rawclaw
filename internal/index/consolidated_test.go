@@ -1866,3 +1866,52 @@ func TestConsolidateRebuild_CarriesForwardStoreOnlySessions(t *testing.T) {
 		t.Errorf("FTS matched %s rows for the carried message, want 1", got)
 	}
 }
+
+// TestConsolidate_CurrentIdentityFormWinsMetadataTie is issue #19's test: when
+// a legacy bare-filename contribution and a current absolute-path contribution
+// tie on presence, message count, and last_ts, the current form must win the
+// merge. In ASCII a letter outranks '/' on a bare DESC sort, so without the
+// form-first ordering the legacy row's stale project/cwd is displayed forever.
+func TestConsolidate_CurrentIdentityFormWinsMetadataTie(t *testing.T) {
+	isolateCache(t)
+	src := seedSessionDB(t, "-w-current.db", sessionRow{
+		id: "tied", project: "current-proj", cwd: "/w/current",
+		msgs: []msgRow{{"u-t1", "user", "hello", 100}},
+	})
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inject the legacy contribution by hand: bare-filename identity, stale
+	// scope, and values that tie with the real fold on every rank above the
+	// identity — then clear the watermark so the next pass re-merges.
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec(`
+		INSERT INTO session_sources
+		  (session_id,source_db,started_at,last_ts,message_count,is_subagent,parent_id,
+		   origin_machine,source_tool,source_path,only_copy_since,project,cwd)
+		VALUES('tied','w-current.db',100,100,1,0,NULL,'m',?, '/t/tied.jsonl',NULL,'stale-proj','/w/stale')
+	`, sourceClaude); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("DELETE FROM meta WHERE key LIKE 'sync:%'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatal(err)
+	}
+	ro := openConsolidated(t)
+	if got := scalar(t, ro, "SELECT project FROM sessions WHERE id='tied'"); got != "current-proj" {
+		t.Errorf("merged project = %q, want current-proj — the legacy bare-name contribution won the tie (#19)", got)
+	}
+	if got := scalar(t, ro, "SELECT cwd FROM sessions WHERE id='tied'"); got != "/w/current" {
+		t.Errorf("merged cwd = %q, want /w/current", got)
+	}
+}
