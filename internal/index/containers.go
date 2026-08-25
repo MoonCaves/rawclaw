@@ -265,7 +265,16 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		if mErr != nil {
 			continue // bad container: leave existing rows + watermark untouched
 		}
-		if err := reindexContainer(con, c, ms, sourceID, origin, rp, mtime, size, fp); err != nil {
+		if err := reindexContainer(con, reindexContainerParams{
+			container:   c,
+			messages:    ms,
+			sourceID:    sourceID,
+			origin:      origin,
+			path:        rp,
+			mtime:       mtime,
+			size:        size,
+			fingerprint: fp,
+		}); err != nil {
 			return err
 		}
 	}
@@ -284,6 +293,17 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 	return nil
 }
 
+type reindexContainerParams struct {
+	container   source.Container
+	messages    []model.Message
+	sourceID    string
+	origin      string
+	path        string
+	mtime       float64
+	size        int64
+	fingerprint string
+}
+
 // reindexContainer atomically replaces one container's rows under a single
 // transaction: messages, sessions row, and file_index watermark are written
 // together. If any statement or the durable vault write fails, the transaction
@@ -296,7 +316,16 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 // path) can open the same file concurrently. Deferred is safe because the
 // transaction's first statement is already a write (DELETE), acquiring the
 // write lock immediately without prior reads to risk a lock-upgrade race.
-func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64, fp string) error {
+func reindexContainer(con *sql.DB, params reindexContainerParams) error {
+	c := params.container
+	ms := params.messages
+	sourceID := params.sourceID
+	origin := params.origin
+	rp := params.path
+	mtime := params.mtime
+	size := params.size
+	fp := params.fingerprint
+
 	tx, err := con.Begin()
 	if err != nil {
 		return fmt.Errorf("session %s begin tx: %w", c.ID, err)
