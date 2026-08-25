@@ -10,7 +10,6 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/paths"
-	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
 func countIngestSpawns(t *testing.T) (*int, *[]string) {
@@ -100,33 +99,6 @@ func TestAnswerFirst_StaleIndexSearch_AnswersImmediatelyWithStalenessNoteAndSpaw
 	if len(*staleArgs) > 0 && (*staleArgs)[0] != "" {
 		t.Errorf("global search spawned ingest for specific session %q, want empty (all)", (*staleArgs)[0])
 	}
-
-	// 4. Stale search (--json): structured stale: true, stale_note, and answers from store
-	jsonCalls, _ := countIngestSpawns(t)
-	staleJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "Investigate O1")
-	if err != nil {
-		t.Fatalf("stale json search failed: %v\nout: %s", err, staleJSONOut)
-	}
-	var staleEnv struct {
-		agentproto.SearchEnvelope
-		Stale     bool   `json:"stale"`
-		StaleNote string `json:"stale_note"`
-	}
-	if err := json.Unmarshal([]byte(staleJSONOut), &staleEnv); err != nil {
-		t.Fatalf("unmarshal stale json: %v\nout: %s", err, staleJSONOut)
-	}
-	if !staleEnv.Stale {
-		t.Errorf("stale search json reported stale=false, want true")
-	}
-	if !strings.Contains(staleEnv.StaleNote, "sessions not yet ingested") {
-		t.Errorf("stale search json missing stale_note: %q", staleEnv.StaleNote)
-	}
-	if staleEnv.Count < 1 || len(staleEnv.Results) == 0 || staleEnv.Results[0].SessionID != sessionID {
-		t.Errorf("stale search json missing session results: %+v", staleEnv)
-	}
-	if *jsonCalls != 1 {
-		t.Errorf("stale json search spawned %d ingest child, want 1", *jsonCalls)
-	}
 }
 
 // TestAnswerFirst_StaleSessionRead_AnswersImmediatelyWithStalenessNoteAndSpawnsIngest
@@ -200,33 +172,6 @@ func TestAnswerFirst_StaleSessionRead_AnswersImmediatelyWithStalenessNoteAndSpaw
 	if len(*staleArgs) > 0 && (*staleArgs)[0] != sessionID {
 		t.Errorf("stale read spawned ingest for session %q, want %q", (*staleArgs)[0], sessionID)
 	}
-
-	// 4. Stale read (--json): structured stale: true, stale_note, and answers from store
-	jsonCalls, jsonArgs := countIngestSpawns(t)
-	staleJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "read", ref, "--json")
-	if err != nil {
-		t.Fatalf("stale read json failed: %v\nout: %s", err, staleJSONOut)
-	}
-	var staleRes struct {
-		agentproto.ReadResult
-		Stale     bool   `json:"stale"`
-		StaleNote string `json:"stale_note"`
-	}
-	if err := json.Unmarshal([]byte(staleJSONOut), &staleRes); err != nil {
-		t.Fatalf("unmarshal stale read json: %v\nout: %s", err, staleJSONOut)
-	}
-	if !staleRes.Stale {
-		t.Errorf("stale read json reported stale=false, want true")
-	}
-	if !strings.Contains(staleRes.StaleNote, "session may be stale") {
-		t.Errorf("stale read json missing stale_note: %q", staleRes.StaleNote)
-	}
-	if *jsonCalls != 1 {
-		t.Errorf("stale read json spawned %d ingest child, want 1", *jsonCalls)
-	}
-	if len(*jsonArgs) > 0 && (*jsonArgs)[0] != sessionID {
-		t.Errorf("stale read json spawned ingest for session %q, want %q", (*jsonArgs)[0], sessionID)
-	}
 }
 
 // TestAnswerFirst_StaleSessionOutline_AnswersImmediatelyWithStalenessNoteAndSpawnsIngest
@@ -299,33 +244,6 @@ func TestAnswerFirst_StaleSessionOutline_AnswersImmediatelyWithStalenessNoteAndS
 	if len(*staleArgs) > 0 && (*staleArgs)[0] != sessionID {
 		t.Errorf("stale outline spawned ingest for session %q, want %q", (*staleArgs)[0], sessionID)
 	}
-
-	// 4. Stale outline (--json): structured stale: true, stale_note, and answers from store
-	jsonCalls, jsonArgs := countIngestSpawns(t)
-	staleJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "outline", sessionID[:8], "--json")
-	if err != nil {
-		t.Fatalf("stale outline json failed: %v\nout: %s", err, staleJSONOut)
-	}
-	var staleRes struct {
-		agentproto.OutlineResult
-		Stale     bool   `json:"stale"`
-		StaleNote string `json:"stale_note"`
-	}
-	if err := json.Unmarshal([]byte(staleJSONOut), &staleRes); err != nil {
-		t.Fatalf("unmarshal stale outline json: %v\nout: %s", err, staleJSONOut)
-	}
-	if !staleRes.Stale {
-		t.Errorf("stale outline json reported stale=false, want true")
-	}
-	if !strings.Contains(staleRes.StaleNote, "session may be stale") {
-		t.Errorf("stale outline json missing stale_note: %q", staleRes.StaleNote)
-	}
-	if *jsonCalls != 1 {
-		t.Errorf("stale outline json spawned %d ingest child, want 1", *jsonCalls)
-	}
-	if len(*jsonArgs) > 0 && (*jsonArgs)[0] != sessionID {
-		t.Errorf("stale outline json spawned ingest for session %q, want %q", (*jsonArgs)[0], sessionID)
-	}
 }
 
 // TestAnswerFirst_StaleIndexBrowse_AnswersImmediatelyWithStalenessNoteAndSpawnsIngest
@@ -382,33 +300,254 @@ func TestAnswerFirst_StaleIndexBrowse_AnswersImmediatelyWithStalenessNoteAndSpaw
 	if *staleCalls != 1 {
 		t.Errorf("stale browse spawned %d ingest child, want 1", *staleCalls)
 	}
+}
 
-	// 4. Stale browse (--json): structured stale: true, stale_note, and answers from store
-	jsonCalls, _ := countIngestSpawns(t)
-	staleJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--all", "--json")
+// TestAnswerFirst_SpawnThrottling_RestrainsProcessStorm verifies Fix 1:
+// multiple concurrent/repeated stale reads within the window acquire at most
+// 1 background ingest spawn per session/global, preventing process storms.
+func TestAnswerFirst_SpawnThrottling_RestrainsProcessStorm(t *testing.T) {
+	cfg, _, sessionID, _, _ := setupFreshnessTestEnv(t)
+
+	// Make index stale
+	newSID := "d4e5f6a7-9999-8888-7777-666655554444"
+	newTransPath := filepath.Join(cfg, "throttle-session.jsonl")
+	newContent := `{"type":"user","message":{"role":"user","content":"throttle test"},"uuid":"9f3e1c25-1111-2222-3333-444455556666","timestamp":"2026-08-20T11:00:00Z"}` + "\n"
+	if err := os.WriteFile(newTransPath, []byte(newContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := paths.WriteCatalogEntry(paths.CatalogDir(), paths.CatalogEntry{
+		SessionID:      newSID,
+		TranscriptPath: newTransPath,
+		CWD:            filepath.Join(cfg, "work"),
+		Source:         "claude",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	calls, _ := countIngestSpawns(t)
+
+	// 1st stale search: triggers background ingest spawn
+	out1, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "Investigate O1")
 	if err != nil {
-		t.Fatalf("stale browse json failed: %v\nout: %s", err, staleJSONOut)
+		t.Fatalf("first search failed: %v", err)
 	}
-	var staleBrowse struct {
-		Scope     string              `json:"scope"`
-		Stale     bool                `json:"stale"`
-		StaleNote string              `json:"stale_note"`
-		Sessions  []view.BrowseAllRow `json:"sessions"`
+	if !strings.Contains(out1, "note: sessions not yet ingested — background ingest triggered") {
+		t.Errorf("first search note missing trigger phrase: %s", out1)
 	}
-	if err := json.Unmarshal([]byte(staleJSONOut), &staleBrowse); err != nil {
-		t.Fatalf("unmarshal stale browse json: %v\nout: %s", err, staleJSONOut)
+	if *calls != 1 {
+		t.Fatalf("first search spawn count = %d, want 1", *calls)
 	}
-	if !staleBrowse.Stale {
-		t.Errorf("stale browse json reported stale=false, want true")
+
+	// 2nd stale search immediately after: throttled, zero new spawns, note does not claim trigger
+	out2, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "Investigate O1")
+	if err != nil {
+		t.Fatalf("second search failed: %v", err)
 	}
-	if !strings.Contains(staleBrowse.StaleNote, "sessions not yet ingested") {
-		t.Errorf("stale browse json missing stale_note: %q", staleBrowse.StaleNote)
+	if strings.Contains(out2, "background ingest triggered") {
+		t.Errorf("second search falsely claimed background ingest triggered: %s", out2)
 	}
-	if len(staleBrowse.Sessions) == 0 || staleBrowse.Sessions[0].SessionID != sessionID {
-		t.Errorf("stale browse json missing sessions: %+v", staleBrowse)
+	if !strings.Contains(out2, "note: sessions not yet ingested — run 'rawclaw ingest' to refresh") {
+		t.Errorf("second search missing honest refreshed note: %s", out2)
 	}
-	if *jsonCalls != 1 {
-		t.Errorf("stale browse json spawned %d ingest child, want 1", *jsonCalls)
+	if *calls != 1 {
+		t.Errorf("second search spawn count = %d, want 1 (throttled)", *calls)
+	}
+
+	// 3rd search in --json: throttled, zero new spawns, honest json note
+	jsonOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "Investigate O1")
+	if err != nil {
+		t.Fatalf("third json search failed: %v", err)
+	}
+	var env struct {
+		agentproto.SearchEnvelope
+		Stale     bool   `json:"stale"`
+		StaleNote string `json:"stale_note"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &env); err != nil {
+		t.Fatalf("unmarshal json: %v", err)
+	}
+	if !env.Stale {
+		t.Errorf("json report stale=false, want true")
+	}
+	if strings.Contains(env.StaleNote, "background ingest triggered") {
+		t.Errorf("json stale_note falsely claimed background ingest triggered: %q", env.StaleNote)
+	}
+	if !strings.Contains(env.StaleNote, "sessions not yet ingested") {
+		t.Errorf("json stale_note missing explanation: %q", env.StaleNote)
+	}
+	if *calls != 1 {
+		t.Errorf("third json search spawn count = %d, want 1", *calls)
+	}
+	if env.Count < 1 || env.Results[0].SessionID != sessionID {
+		t.Errorf("json search did not answer with session: %+v", env)
+	}
+}
+
+// TestAnswerFirst_SuppressedSpawn_HonestNote verifies Fix 2:
+// when RAWCLAW_BACKGROUND_INGEST=off suppresses the spawn, the stale note in both
+// text and --json shapes does NOT falsely claim "background ingest triggered".
+func TestAnswerFirst_SuppressedSpawn_HonestNote(t *testing.T) {
+	t.Setenv("RAWCLAW_BACKGROUND_INGEST", "off")
+	cfg, _, sessionID, uuid, transPath := setupFreshnessTestEnv(t)
+
+	// Modify session to make it stale
+	time.Sleep(20 * time.Millisecond)
+	appended := `{"type":"user","message":{"role":"user","content":"New turn appended to transcript"},"uuid":"9f3e1c22-1111-2222-3333-444455556666","timestamp":"2026-08-20T10:00:10Z"}` + "\n"
+	f, err := os.OpenFile(transPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(appended); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// Also make index stale
+	newSID := "e5f6a7b8-9999-8888-7777-666655554444"
+	newTransPath := filepath.Join(cfg, "suppressed-session.jsonl")
+	newContent := `{"type":"user","message":{"role":"user","content":"suppressed test"},"uuid":"9f3e1c26-1111-2222-3333-444455556666","timestamp":"2026-08-20T11:00:00Z"}` + "\n"
+	if err := os.WriteFile(newTransPath, []byte(newContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := paths.WriteCatalogEntry(paths.CatalogDir(), paths.CatalogEntry{
+		SessionID:      newSID,
+		TranscriptPath: newTransPath,
+		CWD:            filepath.Join(cfg, "work"),
+		Source:         "claude",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	calls, _ := countIngestSpawns(t)
+
+	// 1. Browse (text and json)
+	browseText, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--all")
+	if err != nil {
+		t.Fatalf("browse text: %v", err)
+	}
+	if strings.Contains(browseText, "background ingest triggered") {
+		t.Errorf("browse text falsely claimed ingest triggered: %s", browseText)
+	}
+	if !strings.Contains(browseText, "note: sessions not yet ingested — run 'rawclaw ingest' to refresh") {
+		t.Errorf("browse text missing honest note: %s", browseText)
+	}
+
+	browseJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--all", "--json")
+	if err != nil {
+		t.Fatalf("browse json: %v", err)
+	}
+	var bJSON struct {
+		Stale     bool   `json:"stale"`
+		StaleNote string `json:"stale_note"`
+	}
+	if err := json.Unmarshal([]byte(browseJSONOut), &bJSON); err != nil {
+		t.Fatalf("unmarshal browse json: %v", err)
+	}
+	if !bJSON.Stale {
+		t.Errorf("browse json reported stale=false, want true")
+	}
+	if strings.Contains(bJSON.StaleNote, "background ingest triggered") {
+		t.Errorf("browse json falsely claimed ingest triggered: %q", bJSON.StaleNote)
+	}
+	if !strings.Contains(bJSON.StaleNote, "sessions not yet ingested") {
+		t.Errorf("browse json missing honest stale note: %q", bJSON.StaleNote)
+	}
+
+	// 2. Search (text and json)
+	searchText, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "Investigate O1")
+	if err != nil {
+		t.Fatalf("search text: %v", err)
+	}
+	if strings.Contains(searchText, "background ingest triggered") {
+		t.Errorf("search text falsely claimed ingest triggered: %s", searchText)
+	}
+	if !strings.Contains(searchText, "note: sessions not yet ingested — run 'rawclaw ingest' to refresh") {
+		t.Errorf("search text missing honest note: %s", searchText)
+	}
+
+	searchJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "Investigate O1")
+	if err != nil {
+		t.Fatalf("search json: %v", err)
+	}
+	var sJSON struct {
+		Stale     bool   `json:"stale"`
+		StaleNote string `json:"stale_note"`
+	}
+	if err := json.Unmarshal([]byte(searchJSONOut), &sJSON); err != nil {
+		t.Fatalf("unmarshal search json: %v", err)
+	}
+	if !sJSON.Stale {
+		t.Errorf("search json reported stale=false, want true")
+	}
+	if strings.Contains(sJSON.StaleNote, "background ingest triggered") {
+		t.Errorf("search json falsely claimed ingest triggered: %q", sJSON.StaleNote)
+	}
+
+	// 3. Read (text and json)
+	ref := sessionID[:8] + ":" + uuid[:8]
+	readText, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "read", ref)
+	if err != nil {
+		t.Fatalf("read text: %v", err)
+	}
+	if strings.Contains(readText, "background ingest triggered") {
+		t.Errorf("read text falsely claimed ingest triggered: %s", readText)
+	}
+	if !strings.Contains(readText, "note: session may be stale (transcript updated) — run 'rawclaw ingest' to refresh") {
+		t.Errorf("read text missing honest note: %s", readText)
+	}
+
+	readJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "read", ref, "--json")
+	if err != nil {
+		t.Fatalf("read json: %v", err)
+	}
+	var rJSON struct {
+		Stale     bool   `json:"stale"`
+		StaleNote string `json:"stale_note"`
+	}
+	if err := json.Unmarshal([]byte(readJSONOut), &rJSON); err != nil {
+		t.Fatalf("unmarshal read json: %v", err)
+	}
+	if !rJSON.Stale {
+		t.Errorf("read json reported stale=false, want true")
+	}
+	if strings.Contains(rJSON.StaleNote, "background ingest triggered") {
+		t.Errorf("read json falsely claimed ingest triggered: %q", rJSON.StaleNote)
+	}
+
+	// 4. Outline (text and json)
+	outlineText, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "outline", sessionID[:8])
+	if err != nil {
+		t.Fatalf("outline text: %v", err)
+	}
+	if strings.Contains(outlineText, "background ingest triggered") {
+		t.Errorf("outline text falsely claimed ingest triggered: %s", outlineText)
+	}
+	if !strings.Contains(outlineText, "note: session may be stale (transcript updated) — run 'rawclaw ingest' to refresh") {
+		t.Errorf("outline text missing honest note: %s", outlineText)
+	}
+
+	outlineJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "outline", sessionID[:8], "--json")
+	if err != nil {
+		t.Fatalf("outline json: %v", err)
+	}
+	var oJSON struct {
+		Stale     bool   `json:"stale"`
+		StaleNote string `json:"stale_note"`
+	}
+	if err := json.Unmarshal([]byte(outlineJSONOut), &oJSON); err != nil {
+		t.Fatalf("unmarshal outline json: %v", err)
+	}
+	if !oJSON.Stale {
+		t.Errorf("outline json reported stale=false, want true")
+	}
+	if strings.Contains(oJSON.StaleNote, "background ingest triggered") {
+		t.Errorf("outline json falsely claimed ingest triggered: %q", oJSON.StaleNote)
+	}
+
+	// Spawns must be exactly 0
+	if *calls != 0 {
+		t.Errorf("suppressed runs spawned %d ingest child, want 0", *calls)
 	}
 }
 
