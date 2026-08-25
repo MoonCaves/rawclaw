@@ -170,7 +170,7 @@ func TestNormalize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			role, text, ok := normalize(decode(t, tt.json))
+			role, text, ok := NormalizeRecord(decode(t, tt.json))
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
@@ -186,12 +186,12 @@ func TestNormalize(t *testing.T) {
 
 func TestMintUUIDStableAndDistinct(t *testing.T) {
 	t.Parallel()
-	a := mintUUID("sess", 0)
-	if a != mintUUID("sess", 0) {
-		t.Error("mintUUID must be stable for the same (session, ordinal)")
+	a := MintUUID("sess", 0)
+	if a != MintUUID("sess", 0) {
+		t.Error("MintUUID must be stable for the same (session, ordinal)")
 	}
-	if a == mintUUID("sess", 1) {
-		t.Error("mintUUID must differ across ordinals")
+	if a == MintUUID("sess", 1) {
+		t.Error("MintUUID must differ across ordinals")
 	}
 	if len(a) != 16 {
 		t.Errorf("uuid length = %d, want 16", len(a))
@@ -216,7 +216,7 @@ func TestMessagesOrdinalUUIDs(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 indexable messages, got %d: %+v", len(got), got)
 	}
-	if got[0].UUID != mintUUID("s1", 0) || got[1].UUID != mintUUID("s1", 1) {
+	if got[0].UUID != MintUUID("s1", 0) || got[1].UUID != MintUUID("s1", 1) {
 		t.Errorf("uuids not ordinal: %q,%q", got[0].UUID, got[1].UUID)
 	}
 	if got[0].Text != "q1" || got[1].Text != "a1" {
@@ -337,8 +337,8 @@ func TestMessagesEmptyContentDoesNotShiftOrdinals(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 messages, got %d: %+v", len(got), got)
 	}
-	if got[1].Text != "q2" || got[1].UUID != mintUUID("s1", 1) {
-		t.Errorf("q2 should hold ordinal 1, got text=%q uuid=%q (want uuid %q)", got[1].Text, got[1].UUID, mintUUID("s1", 1))
+	if got[1].Text != "q2" || got[1].UUID != MintUUID("s1", 1) {
+		t.Errorf("q2 should hold ordinal 1, got text=%q uuid=%q (want uuid %q)", got[1].Text, got[1].UUID, MintUUID("s1", 1))
 	}
 }
 
