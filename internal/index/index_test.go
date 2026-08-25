@@ -2,12 +2,15 @@ package index
 
 import (
 	"database/sql"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -59,6 +62,151 @@ func TestEnsureSchemaMigratesPreV4DB(t *testing.T) {
 	}
 	if v == "3" {
 		t.Errorf("schema_version still '3' after migration — rebuild did not stamp the new version")
+	}
+}
+
+// TestMigrateDurabilityColumns_FailureReturned proves that a failure during the
+// provenance backfill UPDATE is returned to the caller rather than silently swallowed.
+func TestMigrateDurabilityColumns_FailureReturned(t *testing.T) {
+	dbp := filepath.Join(t.TempDir(), "durability_fail.db")
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("store.ConnectRW: %v", err)
+	}
+	t.Cleanup(func() { con.Close() })
+
+	// Pre-durability schema: sessions without durability columns
+	if _, err := con.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			started_at REAL,
+			last_ts REAL,
+			message_count INTEGER,
+			is_subagent INTEGER,
+			parent_id TEXT
+		);
+		CREATE TABLE file_index (
+			path TEXT PRIMARY KEY,
+			mtime REAL,
+			size INTEGER,
+			fp TEXT,
+			session_id TEXT
+		);
+		INSERT INTO sessions (id, started_at, last_ts, message_count, is_subagent)
+		VALUES ('sess-fail', 1.0, 2.0, 1, 0);
+		INSERT INTO file_index (path, mtime, size, fp, session_id)
+		VALUES ('/repo/sess-fail.jsonl', 100.0, 50, 'fp1', 'sess-fail');
+	`); err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+
+	// Install a trigger that causes UPDATE on sessions to fail
+	if _, err := con.Exec(`
+		CREATE TRIGGER fail_provenance_update
+		BEFORE UPDATE OF origin_machine ON sessions
+		BEGIN
+			SELECT RAISE(ABORT, 'injected backfill failure');
+		END;
+	`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	err = migrateDurabilityColumns(con, "claude")
+	if err == nil {
+		t.Fatal("migrateDurabilityColumns succeeded, want non-nil error when UPDATE fails")
+	}
+	if !strings.Contains(err.Error(), "backfill provenance") || !strings.Contains(err.Error(), "injected backfill failure") {
+		t.Errorf("error = %q, want it to contain 'backfill provenance' and 'injected backfill failure'", err.Error())
+	}
+
+	// Verify the session row's origin_machine is still NULL (backfill did not complete)
+	var origin sql.NullString
+	if err := con.QueryRow("SELECT origin_machine FROM sessions WHERE id='sess-fail'").Scan(&origin); err != nil {
+		t.Fatalf("query origin_machine: %v", err)
+	}
+	if origin.Valid {
+		t.Errorf("origin_machine = %q, want NULL after aborted backfill", origin.String)
+	}
+}
+
+// TestMigrateDurabilityColumns_Idempotent verifies that running migrateDurabilityColumns
+// adds missing columns and backfills provenance, and running it a second time (or on
+// an already-migrated db) is a clean no-op returning nil.
+func TestMigrateDurabilityColumns_Idempotent(t *testing.T) {
+	dbp := filepath.Join(t.TempDir(), "durability_idempotent.db")
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("store.ConnectRW: %v", err)
+	}
+	t.Cleanup(func() { con.Close() })
+
+	// Pre-durability schema with an unbackfilled row
+	if _, err := con.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			started_at REAL,
+			last_ts REAL,
+			message_count INTEGER,
+			is_subagent INTEGER,
+			parent_id TEXT
+		);
+		CREATE TABLE file_index (
+			path TEXT PRIMARY KEY,
+			mtime REAL,
+			size INTEGER,
+			fp TEXT,
+			session_id TEXT
+		);
+		INSERT INTO sessions (id, started_at, last_ts, message_count, is_subagent)
+		VALUES ('sess-idem', 1.0, 2.0, 1, 0);
+		INSERT INTO file_index (path, mtime, size, fp, session_id)
+		VALUES ('/repo/sess-idem.jsonl', 100.0, 50, 'fp1', 'sess-idem');
+	`); err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+
+	// First pass: adds columns and backfills
+	if err := migrateDurabilityColumns(con, "claude"); err != nil {
+		t.Fatalf("first migrateDurabilityColumns: %v", err)
+	}
+
+	var origin, tool, path string
+	var missing sql.NullFloat64
+	if err := con.QueryRow("SELECT origin_machine, source_tool, source_path, missing_since FROM sessions WHERE id='sess-idem'").Scan(&origin, &tool, &path, &missing); err != nil {
+		t.Fatalf("scan backfilled row: %v", err)
+	}
+	if origin != provenance.MachineID() {
+		t.Errorf("origin_machine = %q, want %q", origin, provenance.MachineID())
+	}
+	if tool != "claude" {
+		t.Errorf("source_tool = %q, want claude", tool)
+	}
+	if path != "/repo/sess-idem.jsonl" {
+		t.Errorf("source_path = %q, want /repo/sess-idem.jsonl", path)
+	}
+	if missing.Valid {
+		t.Errorf("missing_since = %v, want NULL", missing.Float64)
+	}
+
+	// Second pass: idempotent clean no-op
+	if err := migrateDurabilityColumns(con, "claude"); err != nil {
+		t.Fatalf("second migrateDurabilityColumns (idempotent): %v", err)
+	}
+
+	var origin2, tool2, path2 string
+	var missing2 sql.NullFloat64
+	if err := con.QueryRow("SELECT origin_machine, source_tool, source_path, missing_since FROM sessions WHERE id='sess-idem'").Scan(&origin2, &tool2, &path2, &missing2); err != nil {
+		t.Fatalf("scan row after second run: %v", err)
+	}
+	if origin2 != origin || tool2 != tool || path2 != path || missing2.Valid != missing.Valid {
+		t.Errorf("row values mutated on second run: got (%q, %q, %q, %v), want (%q, %q, %q, %v)",
+			origin2, tool2, path2, missing2, origin, tool, path, missing)
+	}
+
+	// Also verify on an already fully ensured schema (e.g. EnsureSchema)
+	conFresh, _ := openTestDB(t)
+	if err := migrateDurabilityColumns(conFresh, "codex"); err != nil {
+		t.Fatalf("migrateDurabilityColumns on fresh schema: %v", err)
 	}
 }
 
@@ -978,4 +1126,130 @@ func trigramProbeCount(t *testing.T, con *sql.DB, probe string) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// TestEnsureIndexedTree_WriteLockContention proves that when a concurrent
+// connection holds a write lock on the index db, EnsureIndexedTree fails to
+// reindex the transcript file, logs the failure, and returns IndexStale rather
+// than falsely claiming the result is IndexFresh.
+func TestEnsureIndexedTree_WriteLockContention(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "contention_tree.db")
+	tdir := filepath.Join(dir, "transcripts")
+	if err := os.MkdirAll(tdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(tdir, "sess1.jsonl")
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+	)
+
+	// 1. Initial index
+	n, status, err := EnsureIndexedTree(dbp, tdir, true, "")
+	if err != nil {
+		t.Fatalf("initial indexing failed: %v", err)
+	}
+	if status != IndexFresh {
+		t.Fatalf("initial status = %v, want IndexFresh", status)
+	}
+	if n != 1 {
+		t.Fatalf("initial sessions = %d, want 1", n)
+	}
+
+	// 2. Open a second connection and hold an exclusive write lock
+	con2, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open second connection: %v", err)
+	}
+	defer con2.Close()
+
+	tx2, err := con2.Begin()
+	if err != nil {
+		t.Fatalf("begin con2 tx: %v", err)
+	}
+	defer tx2.Rollback()
+
+	if _, err := tx2.Exec("INSERT INTO meta(key, value) VALUES('lock_probe', 'held')"); err != nil {
+		t.Fatalf("hold write lock: %v", err)
+	}
+
+	// 3. Update transcript file so reindex is triggered
+	time.Sleep(10 * time.Millisecond)
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+		`{"type":"user","uuid":"u2","timestamp":"2026-08-25T00:01:00Z","message":{"role":"user","content":"second version"}}`,
+	)
+
+	// 4. Run EnsureIndexedTree: write lock held by con2 causes reindexFileWithOrigin
+	// to fail with SQLITE_BUSY. EnsureIndexedTree must return IndexStale.
+	_, status2, err := EnsureIndexedTree(dbp, tdir, false, "")
+	if err != nil {
+		t.Fatalf("EnsureIndexedTree returned unexpected error: %v", err)
+	}
+	if status2 == IndexFresh {
+		t.Errorf("status = %v, want not fresh (IndexStale) when write lock is held", status2)
+	}
+	if status2 != IndexStale {
+		t.Errorf("status = %v, want IndexStale", status2)
+	}
+}
+
+// TestEnsureIndexedTree_ReindexFailure_WrapsContextWithoutLogging proves that
+// when an internal reindex statement fails during file indexing, EnsureIndexedTree
+// propagates the error with session context and does NOT log locally, following Go's
+// single-handling rule.
+func TestEnsureIndexedTree_ReindexFailure_WrapsContextWithoutLogging(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "fail_tree.db")
+	tdir := filepath.Join(dir, "transcripts")
+	if err := os.MkdirAll(tdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(tdir, "sess1.jsonl")
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+	)
+
+	// 1. Initial index
+	if _, _, err := EnsureIndexedTree(dbp, tdir, true, ""); err != nil {
+		t.Fatalf("initial indexing failed: %v", err)
+	}
+
+	// 2. Install a trigger on messages to force a non-busy failure during reindex
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := con.Exec("CREATE TRIGGER fail_messages BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, 'forced write failure'); END;"); err != nil {
+		con.Close()
+		t.Fatalf("create trigger: %v", err)
+	}
+	con.Close()
+
+	// 3. Touch transcript file to force reindexFileWithOrigin to run
+	time.Sleep(10 * time.Millisecond)
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+		`{"type":"user","uuid":"u2","timestamp":"2026-08-25T00:01:00Z","message":{"role":"user","content":"second version"}}`,
+	)
+
+	// 4. Capture slog records
+	recorder := &testLogRecorder{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(origLogger)
+
+	// 5. Run EnsureIndexedTree: must fail with non-busy error containing session ID
+	_, _, err = EnsureIndexedTree(dbp, tdir, false, "")
+	if err == nil {
+		t.Fatal("EnsureIndexedTree succeeded, want error when trigger fires")
+	}
+	if !strings.Contains(err.Error(), "sess1") {
+		t.Errorf("error %q does not contain session ID %q", err.Error(), "sess1")
+	}
+
+	// 6. Ensure no slog warnings were emitted inside reindexFileWithOrigin/EnsureIndexedTree
+	if got := len(recorder.Warns()); got != 0 {
+		t.Errorf("got %d slog.Warn calls, want 0 (single handling rule: errors are returned, not logged in index package)", got)
+	}
 }

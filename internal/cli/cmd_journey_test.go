@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
+	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -25,6 +28,9 @@ func TestCLIJourney_AntigravityEndToEnd(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(cfg, ".config"))
+	t.Setenv("GOOSE_HOME", filepath.Join(cfg, ".goose"))
+	t.Setenv("CODEX_HOME", filepath.Join(cfg, ".codex"))
 
 	// Hard-fail if the resolved cache store is not isolated inside cfg
 	cacheDir := store.CacheDir()
@@ -164,6 +170,9 @@ func TestCLIJourney_CrossRuntimeDisambiguation(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(cfg, ".config"))
+	t.Setenv("GOOSE_HOME", filepath.Join(cfg, ".goose"))
+	t.Setenv("CODEX_HOME", filepath.Join(cfg, ".codex"))
 
 	// 1. Seed Claude session
 	claudeProjDir := filepath.Join(cfg, "projects", "backend")
@@ -228,6 +237,9 @@ func TestCLIJourney_AntigravityCurrentSessionExclusion(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(cfg, ".config"))
+	t.Setenv("GOOSE_HOME", filepath.Join(cfg, ".goose"))
+	t.Setenv("CODEX_HOME", filepath.Join(cfg, ".codex"))
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 
 	agRoot := filepath.Join(cfg, ".gemini", "antigravity-cli")
@@ -296,5 +308,258 @@ func TestCLIJourney_AntigravityCurrentSessionExclusion(t *testing.T) {
 	}
 	if len(envOff.Results) < 1 || !strings.Contains(envOff.Results[0].Snippet, "what did we ever decide") {
 		t.Errorf("expected just-typed prompt in results with --current-session off, got: %+v", envOff.Results)
+	}
+}
+
+// TestCLIJourney_AntigravityTranscriptRename tests that when a session's backing
+// transcript file transitions to a different filename (e.g. Antigravity serving
+// transcript.jsonl initially and then transcript_full.jsonl), any stale file_index
+// row under the previous path is deleted before writing the new watermark, so retention
+// does not misidentify the session as purged and the session remains searchable.
+func TestCLIJourney_AntigravityTranscriptRename(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg, ".claude"))
+	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(cfg, ".config"))
+	t.Setenv("GOOSE_HOME", filepath.Join(cfg, ".goose"))
+	t.Setenv("CODEX_HOME", filepath.Join(cfg, ".codex"))
+
+	// Hard-fail if the resolved cache store is not isolated inside cfg
+	cacheDir := store.CacheDir()
+	if !strings.HasPrefix(cacheDir, cfg) {
+		t.Fatalf("CRITICAL: store.CacheDir() = %q is not isolated inside temp dir %q", cacheDir, cfg)
+	}
+
+	agRoot := filepath.Join(cfg, ".gemini", "antigravity-cli")
+	sessID := "77770001-0000-0000-0000-000000000001"
+	workDir := filepath.Join(cfg, "work", "auth-service")
+
+	// Seed history.jsonl
+	histPath := filepath.Join(agRoot, "history.jsonl")
+	if err := os.MkdirAll(filepath.Dir(histPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(histPath, []byte(`{"conversationId":"`+sessID+`","workspace":"`+workDir+`"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Initial indexing under transcript.jsonl
+	logsDir := filepath.Join(agRoot, "brain", sessID, ".system_generated", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transPath := filepath.Join(logsDir, "transcript.jsonl")
+	initialJSONL := strings.Join([]string{
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:00Z","content":"<USER_REQUEST>rotate jwt signing keys</USER_REQUEST>"}`,
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:05Z","thinking":"rotating keys","content":"JWT keys rotated successfully"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(transPath, []byte(initialJSONL), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", workDir, "--json", "rotate jwt")
+	if err != nil {
+		t.Fatalf("initial search failed: %v\nout: %s", err, out)
+	}
+	var env agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("unmarshal search output: %v\nout: %s", err, out)
+	}
+	if env.Count < 1 || len(env.Results) == 0 || env.Results[0].SessionID != sessID {
+		t.Fatalf("expected session %s in initial search, got: %+v; out: %s", sessID, env, out)
+	}
+
+	// 2. Transition backing file to transcript_full.jsonl and remove transcript.jsonl
+	transFullPath := filepath.Join(logsDir, "transcript_full.jsonl")
+	fullJSONL := initialJSONL + `{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:10Z","content":"<USER_REQUEST>validate signature verification</USER_REQUEST>"}` + "\n"
+	if err := os.WriteFile(transFullPath, []byte(fullJSONL), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(transPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Search without --reindex: the database carries forward, incremental index
+	// picks up transcript_full.jsonl, and the session must remain searchable.
+	outAfter, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", workDir, "--json", "rotate jwt")
+	if err != nil {
+		t.Fatalf("search after rename failed: %v\nout: %s", err, outAfter)
+	}
+	var envAfter agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(outAfter), &envAfter); err != nil {
+		t.Fatalf("unmarshal after rename: %v\nout: %s", err, outAfter)
+	}
+	if envAfter.Count < 1 || len(envAfter.Results) == 0 || envAfter.Results[0].SessionID != sessID {
+		t.Fatalf("session %s not found in search after file rename: %+v; out: %s", sessID, envAfter, outAfter)
+	}
+	if envAfter.Results[0].Missing {
+		t.Errorf("session %s flagged as missing after rename (stale watermark not dropped)", sessID)
+	}
+
+	// 4. Verify incremental search finds newly appended turn from transcript_full.jsonl
+	outFull, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", workDir, "--json", "validate signature")
+	if err != nil {
+		t.Fatalf("search full turn failed: %v\nout: %s", err, outFull)
+	}
+	var envFull agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(outFull), &envFull); err != nil {
+		t.Fatalf("unmarshal full turn: %v\nout: %s", err, outFull)
+	}
+	if envFull.Count < 1 || len(envFull.Results) == 0 || envFull.Results[0].SessionID != sessID {
+		t.Fatalf("session %s turn not found in search: %+v; out: %s", sessID, envFull, outFull)
+	}
+	if envFull.Results[0].Missing {
+		t.Errorf("session %s flagged as missing after append (stale watermark not dropped)", sessID)
+	}
+
+	// 5. Verify database dropped the stale transcript.jsonl watermark:
+	// exactly 1 file_index row pointing to transcript_full.jsonl and missing_since is NULL.
+	dbs, err := index.PerProjectDBs()
+	if err != nil {
+		t.Fatalf("list per-project DBs: %v", err)
+	}
+	if len(dbs) == 0 {
+		t.Fatalf("expected per-project DB in cache")
+	}
+	pcon, err := store.ConnectRO(dbs[0])
+	if err != nil {
+		t.Fatalf("open per-project DB %s: %v", dbs[0], err)
+	}
+	defer pcon.Close()
+
+	var fiCount int
+	if err := pcon.QueryRow("SELECT COUNT(*) FROM file_index WHERE session_id=?", sessID).Scan(&fiCount); err != nil {
+		t.Fatalf("query file_index count: %v", err)
+	}
+	if fiCount != 1 {
+		t.Errorf("file_index row count for %s = %d, want 1", sessID, fiCount)
+	}
+
+	var fiPath string
+	if err := pcon.QueryRow("SELECT path FROM file_index WHERE session_id=?", sessID).Scan(&fiPath); err != nil {
+		t.Fatalf("query file_index path: %v", err)
+	}
+	if fiPath != realpathExpand(transFullPath) {
+		t.Errorf("file_index path = %q, want %q", fiPath, realpathExpand(transFullPath))
+	}
+
+	var missing sql.NullFloat64
+	if err := pcon.QueryRow("SELECT missing_since FROM sessions WHERE id=?", sessID).Scan(&missing); err != nil {
+		t.Fatalf("query missing_since: %v", err)
+	}
+	if missing.Valid {
+		t.Errorf("missing_since = %v, want NULL (session is live, not missing)", missing.Float64)
+	}
+}
+
+// TestCLIJourney_ConsolidatePrunesTombstonesWhenSourceUnchanged verifies tracker #217:
+// A session is indexed and consolidated into consolidated.db. A tombstone is then
+// added for that session without touching the source project or its db.
+// Re-running consolidation without --rebuild must prune the tombstoned session so
+// that it is no longer searchable.
+func TestCLIJourney_ConsolidatePrunesTombstonesWhenSourceUnchanged(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg, ".claude"))
+	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("ANTIGRAVITY_CONVERSATION_ID", "")
+
+	cacheDir := store.CacheDir()
+	if !strings.HasPrefix(cacheDir, cfg) {
+		t.Fatalf("CRITICAL: store.CacheDir() = %q is not isolated inside temp dir %q", cacheDir, cfg)
+	}
+
+	// 1. Seed two Claude sessions in the project
+	claudeProjDir := filepath.Join(cfg, ".claude", "projects", "my-project")
+	if err := os.MkdirAll(claudeProjDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keepID := "c2170001-0000-0000-0000-000000000001"
+	dropID := "c2170002-0000-0000-0000-000000000002"
+	keepJSONL := filepath.Join(claudeProjDir, keepID+".jsonl")
+	dropJSONL := filepath.Join(claudeProjDir, dropID+".jsonl")
+	if err := os.WriteFile(keepJSONL, []byte(`{"type":"user","uuid":"u-keep-1","message":{"role":"user","content":"quantum cryptography protocol"}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dropJSONL, []byte(`{"type":"user","uuid":"u-drop-1","message":{"role":"user","content":"quantum teleportation algorithm"}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Initial search with --reindex to build project db, followed by consolidate
+	outSearch1, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--reindex", "--json", "quantum")
+	if err != nil {
+		t.Fatalf("initial search failed: %v\nout: %s", err, outSearch1)
+	}
+	var env1 agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(outSearch1), &env1); err != nil {
+		t.Fatalf("unmarshal initial search: %v\nout: %s", err, outSearch1)
+	}
+	if env1.Count != 2 {
+		t.Fatalf("expected 2 sessions in initial search, got %d: %+v", env1.Count, env1.Results)
+	}
+
+	outConsolidate1, err := runCmd(t, newConsolidateCmd(), "")
+	if err != nil {
+		t.Fatalf("initial consolidate failed: %v\nout: %s", err, outConsolidate1)
+	}
+
+	// Confirm both are searchable via consolidated.db
+	outSearchConsolidated, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "quantum")
+	if err != nil {
+		t.Fatalf("consolidated search failed: %v\nout: %s", err, outSearchConsolidated)
+	}
+	var envConsolidated agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(outSearchConsolidated), &envConsolidated); err != nil {
+		t.Fatalf("unmarshal consolidated search: %v\nout: %s", err, outSearchConsolidated)
+	}
+	if envConsolidated.Count != 2 {
+		t.Fatalf("expected 2 sessions in consolidated search, got %d: %+v", envConsolidated.Count, envConsolidated.Results)
+	}
+
+	// 3. Add tombstone for dropID WITHOUT touching the source project or its per-project db
+	if err := lifecycle.TombstoneIDs("", []string{dropID}); err != nil {
+		t.Fatalf("write tombstone: %v", err)
+	}
+
+	// 4. Re-run consolidation WITHOUT --rebuild
+	outConsolidate2, err := runCmd(t, newConsolidateCmd(), "")
+	if err != nil {
+		t.Fatalf("second consolidate failed: %v\nout: %s", err, outConsolidate2)
+	}
+
+	// 5. Assert the deleted session is no longer searchable in consolidated.db, but keepID is
+	outSearchAfterDrop, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "teleportation")
+	if err != nil {
+		t.Fatalf("search for dropped session failed: %v\nout: %s", err, outSearchAfterDrop)
+	}
+	var envAfterDrop agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(outSearchAfterDrop), &envAfterDrop); err != nil {
+		t.Fatalf("unmarshal search after drop: %v\nout: %s", err, outSearchAfterDrop)
+	}
+	for _, res := range envAfterDrop.Results {
+		if res.SessionID == dropID {
+			t.Fatalf("deleted session %s is still searchable in consolidated store after consolidate without --rebuild: %+v", dropID, res)
+		}
+	}
+	if envAfterDrop.Count != 0 {
+		t.Fatalf("expected 0 results for deleted session, got count %d: %+v", envAfterDrop.Count, envAfterDrop.Results)
+	}
+
+	outSearchAfterKeep, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "cryptography")
+	if err != nil {
+		t.Fatalf("search for kept session failed: %v\nout: %s", err, outSearchAfterKeep)
+	}
+	var envAfterKeep agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(outSearchAfterKeep), &envAfterKeep); err != nil {
+		t.Fatalf("unmarshal search after keep: %v\nout: %s", err, outSearchAfterKeep)
+	}
+	if envAfterKeep.Count != 1 || len(envAfterKeep.Results) == 0 || envAfterKeep.Results[0].SessionID != keepID {
+		t.Fatalf("expected kept session %s in search, got count %d: %+v", keepID, envAfterKeep.Count, envAfterKeep.Results)
 	}
 }

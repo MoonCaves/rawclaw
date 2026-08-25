@@ -4,7 +4,10 @@
 // order), NOT ts — ts can be non-monotonic, so id is the reliable ordering key.
 package store
 
-import "database/sql"
+import (
+	"database/sql"
+	"strings"
+)
 
 // Msg is the (id, role, content) triple read by the window/bookend queries.
 type Msg struct {
@@ -157,6 +160,40 @@ type MessageRow struct {
 // scan), matching the consumer. [semantic.VecIndex]
 func AllMessages(con *sql.DB) ([]MessageRow, error) {
 	rows, err := con.Query("SELECT id, session_id, content FROM messages")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MessageRow
+	for rows.Next() {
+		var (
+			m       MessageRow
+			content sql.NullString
+		)
+		if err := rows.Scan(&m.ID, &m.SessionID, &content); err != nil {
+			return nil, err
+		}
+		m.Content = content.String
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// MessagesForProjects returns (id, session_id, content) for messages in the
+// given project scopes. If projects is empty, it returns AllMessages. Unordered.
+// [semantic.MeasureCoverage]
+func MessagesForProjects(con *sql.DB, projects []string) ([]MessageRow, error) {
+	if len(projects) == 0 {
+		return AllMessages(con)
+	}
+	placeholders := make([]string, len(projects))
+	args := make([]any, len(projects))
+	for i, p := range projects {
+		placeholders[i] = "?"
+		args[i] = p
+	}
+	q := "SELECT m.id, m.session_id, m.content FROM messages m JOIN sessions s ON s.id=m.session_id WHERE s.project IN (" + strings.Join(placeholders, ",") + ")"
+	rows, err := con.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -213,12 +213,19 @@ func Codex(reindex bool) []view.Scope {
 	for _, cwd := range cwds {
 		dbp := codexDBPath(cwd)
 		liveDBs[dbp] = struct{}{}
-		if _, _, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, codex.Registration().ID, ""); ierr != nil {
+		_, istatus, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], a.Messages, codex.Registration().ID, "")
+		if ierr != nil {
 			slog.Warn("scopes: codex index failed", "cwd", cwd, "err", ierr)
 			// The db path may still hold a prior good index; include the scope so
 			// search can open it read-only and degrade gracefully.
 		}
-		out = append(out, view.Scope{Project: codexLabel(cwd), DBP: dbp, CWD: cwd, Source: "codex"})
+		out = append(out, view.Scope{
+			Project: codexLabel(cwd),
+			DBP:     dbp,
+			CWD:     cwd,
+			Source:  "codex",
+			Stale:   istatus == index.IndexStale || ierr != nil,
+		})
 	}
 	out = append(out, orphanCodexScopes(liveDBs)...)
 	return out
@@ -313,9 +320,10 @@ func isHex8(s string) bool {
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope
 // (DBP set, e.g. Codex) is (DBP, IndexFresh, nil); a lazy Claude scope ensures
 // its TDir now, exactly as the old inline index.EnsureIndexed(sc.TDir) did.
-// A scope flagged Stale (a replica lagging its origin machine) resolves to its
-// db with IndexStale, feeding the existing stale-fallback posture: searched,
-// served, and reported as possibly incomplete.
+// A scope flagged Stale (a replica lagging its origin machine, or an index pass
+// that hit lock contention) resolves to its db with IndexStale, feeding the
+// existing stale-fallback posture: searched, served, and reported as possibly
+// incomplete.
 func Resolve(sc view.Scope, reindex bool) (string, index.IndexStatus, error) {
 	if sc.Stale && sc.DBP != "" {
 		return sc.DBP, index.IndexStale, nil
@@ -324,6 +332,9 @@ func Resolve(sc view.Scope, reindex bool) (string, index.IndexStatus, error) {
 		return sc.DBP, index.IndexFresh, nil
 	}
 	dbp, _, status, err := index.EnsureIndexed(sc.TDir, reindex)
+	if sc.Stale && status == index.IndexFresh {
+		status = index.IndexStale
+	}
 	return dbp, status, err
 }
 

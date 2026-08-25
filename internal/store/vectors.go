@@ -99,3 +99,29 @@ func VecRefreshMsgID(con *sql.DB, sid, contentHash string, msgID int) error {
 		msgID, sid, contentHash)
 	return err
 }
+
+// VecKey is the composite primary key (session_id, content_hash) for a vector row.
+type VecKey struct {
+	SessionID   string
+	ContentHash string
+}
+
+// VecKeys returns every (session_id, content_hash) key in chunk_vec without
+// loading the dense vector blobs. The rows are fully drained before returning.
+// [semantic.MeasureCoverage]
+func VecKeys(con *sql.DB) ([]VecKey, error) {
+	rows, err := con.Query("SELECT session_id, content_hash FROM chunk_vec")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []VecKey
+	for rows.Next() {
+		var k VecKey
+		if err := rows.Scan(&k.SessionID, &k.ContentHash); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
