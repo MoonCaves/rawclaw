@@ -494,10 +494,9 @@ func SessionLastActivity(con *sql.DB, sessionID string) string {
 // captions the row.
 func isBareBlockMarker(text string) bool {
 	t := strings.TrimSpace(text)
-	for _, marker := range []string{"[THINKING]", "[SYSTEM]", "[TOOL_RESULT]"} {
-		if t == marker {
-			return true
-		}
+	switch t {
+	case "[THINKING]", "[SYSTEM]", "[TOOL_RESULT]":
+		return true
 	}
 	return strings.HasPrefix(t, "[TOOL:") && strings.HasSuffix(t, "]") &&
 		!strings.Contains(t[1:len(t)-1], "]")
