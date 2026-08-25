@@ -95,6 +95,15 @@ func TestPrintResults(t *testing.T) {
 			nSess:    1,
 			contains: []string{"[x · s · user] …z…"},
 		},
+		{
+			name: "routine hit renders routine marker",
+			res: []retrieve.Hit{
+				{ISO: "2026-06-18", SessionID: "a1b2c3d4", Role: "user", Snippet: "routine task", Routine: true},
+			},
+			nSess: 1,
+			exact: "Top 1 match(es) across 1 of this project's sessions:\n\n" +
+				"[2026-06-18 · a1b2c3d4 · user · routine] …routine task…\n\n",
+		},
 	}
 
 	for _, tc := range tests {
