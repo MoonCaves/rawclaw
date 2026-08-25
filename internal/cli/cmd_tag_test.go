@@ -78,57 +78,115 @@ func TestRunTagPrepNoMessages(t *testing.T) {
 	}
 }
 
-// TestRunTagWriteCapsCoverageAtTruncation locks a real bug: when tag-prep's dump
-// is truncated (dumpByteCap exceeded), tag-write must not stretch the final
-// segment's end_uuid past the last message the subagent actually saw. Before this
-// fix, writeSegments always capped the final segment at the SESSION's true last
-// message, silently mislabeling every message past the truncation point under
-// whatever topic was open when the dump cut off.
-func TestRunTagWriteCapsCoverageAtTruncation(t *testing.T) {
-	// Cap sized to fit exactly the first message's condensed line, not the second.
-	firstLine := condensedLine(store.SessionMessage{UUID: "11111111-aaaa", Role: "user", Content: "how do we blend rankings"})
+// setBookendCap sizes dumpByteCap so a 4-uniform-length-message fixture (see
+// addBookendFixture) bookends to exactly message 1 (head) and message 4
+// (tail), dropping messages 2 and 3 as the gap. Returns a restore func.
+func setBookendCap(t *testing.T) func() {
+	t.Helper()
+	line := condensedLine(store.SessionMessage{UUID: "11111111-aaaa", Role: "user", Content: "alpha"})
+	l := len(line)
 	orig := dumpByteCap
-	dumpByteCap = len(firstLine) + 5
-	defer func() { dumpByteCap = orig }()
+	dumpByteCap = 2*(l+1) + 2 // half = l+2: fits 1 line, not 2, on each side
+	return func() { dumpByteCap = orig }
+}
 
+// addBookendFixture inserts 4 messages with uniform-length condensed lines
+// (same role, same content length) so head/tail budget math is exact.
+func addBookendFixture(t *testing.T, con *sql.DB, sid string) {
+	t.Helper()
+	addMsg(t, con, sid, "user", "alpha", "11111111-aaaa")
+	addMsg(t, con, sid, "user", "bravo", "22222222-bbbb")
+	addMsg(t, con, sid, "user", "charl", "33333333-cccc")
+	addMsg(t, con, sid, "user", "delta", "44444444-dddd")
+}
+
+// TestRunTagPrepBookendsLargeSessions asserts tag-prep keeps a head prefix AND
+// a tail suffix (not just the head) when a dump exceeds dumpByteCap, dropping
+// the middle with a clear gap note — a session's setup and its conclusion both
+// matter for topic segmentation.
+func TestRunTagPrepBookendsLargeSessions(t *testing.T) {
 	con := newTagTestDB(t)
-	sid := "sess-truncated-1"
-	addMsg(t, con, sid, "user", "how do we blend rankings", "11111111-aaaa")
-	addMsg(t, con, sid, "assistant", "reciprocal rank fusion", "22222222-bbbb")
-	addMsg(t, con, sid, "user", "do topics survive a reindex", "33333333-cccc")
+	sid := "sess-bookend-1"
+	addBookendFixture(t, con, sid)
+	defer setBookendCap(t)()
 
-	// Sanity: tag-prep's own dump must actually be truncated under this cap, and
-	// must not show the 3rd message.
 	var dump strings.Builder
 	if err := runTagPrep(&dump, con, sid); err != nil {
 		t.Fatalf("runTagPrep: %v", err)
 	}
-	if !strings.Contains(dump.String(), "TRUNCATED") {
-		t.Fatalf("expected a truncated dump, got:\n%s", dump.String())
-	}
-	if strings.Contains(dump.String(), "33333333") {
-		t.Fatalf("dump should not include the 3rd message past truncation:\n%s", dump.String())
-	}
+	out := dump.String()
 
-	// A tagging subagent only ever saw message 1 — its one segment starts there.
-	jsonIn := `[{"start_uuid":"11111111","topic":"ranking fusion","summary":"only what was shown"}]`
-	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0); err != nil {
-		t.Fatalf("runTagWrite: %v", err)
+	if !strings.Contains(out, "11111111") {
+		t.Errorf("dump missing the head message (11111111):\n%s", out)
 	}
+	if !strings.Contains(out, "44444444") {
+		t.Errorf("dump missing the tail message (44444444):\n%s", out)
+	}
+	if strings.Contains(out, "22222222") || strings.Contains(out, "33333333") {
+		t.Errorf("dump should drop the middle messages (22222222, 33333333):\n%s", out)
+	}
+	if !strings.Contains(out, "may NOT span this gap") {
+		t.Errorf("dump missing the gap note:\n%s", out)
+	}
+}
 
-	segs, err := store.TopicsForSession(con, sid)
-	if err != nil {
-		t.Fatalf("TopicsForSession: %v", err)
-	}
-	if len(segs) != 1 {
-		t.Fatalf("stored %d segments, want 1", len(segs))
-	}
-	// The bug: this used to resolve to "33333333-cccc" (the session's true last
-	// message), silently claiming coverage of a message that was never shown.
-	if segs[0].EndUUID != "11111111-aaaa" {
-		t.Errorf("end_uuid = %q, want 11111111-aaaa (the last message actually shown) — "+
-			"tag-write claimed coverage past the truncation point", segs[0].EndUUID)
-	}
+// TestRunTagWriteRespectsBookendGap locks the write-side half of the same fix:
+// a segment can never silently claim the dropped middle of a bookended dump,
+// whether the tagging subagent splits at the gap (well-behaved) or not (lazy).
+func TestRunTagWriteRespectsBookendGap(t *testing.T) {
+	t.Run("well-behaved: subagent splits at the gap", func(t *testing.T) {
+		con := newTagTestDB(t)
+		sid := "sess-bookend-2"
+		addBookendFixture(t, con, sid)
+		defer setBookendCap(t)()
+
+		jsonIn := `[
+			{"start_uuid":"11111111","topic":"setup","summary":"head"},
+			{"start_uuid":"44444444","topic":"conclusion","summary":"tail"}
+		]`
+		if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0); err != nil {
+			t.Fatalf("runTagWrite: %v", err)
+		}
+		segs, err := store.TopicsForSession(con, sid)
+		if err != nil {
+			t.Fatalf("TopicsForSession: %v", err)
+		}
+		if len(segs) != 2 {
+			t.Fatalf("stored %d segments, want 2", len(segs))
+		}
+		if segs[0].EndUUID != "11111111-aaaa" {
+			t.Errorf("segment 1 end_uuid = %q, want 11111111-aaaa (its own message, not into the gap)", segs[0].EndUUID)
+		}
+		if segs[1].EndUUID != "44444444-dddd" {
+			t.Errorf("segment 2 end_uuid = %q, want 44444444-dddd (the last message shown)", segs[1].EndUUID)
+		}
+	})
+
+	t.Run("lazy: subagent submits one segment for the whole dump", func(t *testing.T) {
+		con := newTagTestDB(t)
+		sid := "sess-bookend-3"
+		addBookendFixture(t, con, sid)
+		defer setBookendCap(t)()
+
+		jsonIn := `[{"start_uuid":"11111111","topic":"whole session","summary":"ignored the gap note"}]`
+		if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1.0); err != nil {
+			t.Fatalf("runTagWrite: %v", err)
+		}
+		segs, err := store.TopicsForSession(con, sid)
+		if err != nil {
+			t.Fatalf("TopicsForSession: %v", err)
+		}
+		if len(segs) != 1 {
+			t.Fatalf("stored %d segments, want 1", len(segs))
+		}
+		// The bug this guards against: without the clamp, this would resolve to
+		// "44444444-dddd" (the last shown message), silently claiming the dropped
+		// middle (and the untouched tail) under one topic the subagent never saw.
+		if segs[0].EndUUID != "11111111-aaaa" {
+			t.Errorf("end_uuid = %q, want 11111111-aaaa (clamped before the gap) — "+
+				"a single segment claimed coverage across the dropped middle", segs[0].EndUUID)
+		}
+	})
 }
 
 // TestRunTagWritePopulatesSegments feeds a JSON array via an io.Reader to
