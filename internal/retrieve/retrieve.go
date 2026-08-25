@@ -743,12 +743,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 
 // isIndexableType reports whether a JSONL record type is one RawClaw indexes.
 func isIndexableType(typ string) bool {
-	for _, t := range parse.IndexableTypes {
-		if t == typ {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(parse.IndexableTypes, typ)
 }
 
 // containsAll reports whether every term is a substring of hay.
