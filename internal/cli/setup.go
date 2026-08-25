@@ -48,7 +48,7 @@ session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:spac
 # Session catalog & once-per-session dedup: write a durable catalog entry under
 # the rawclaw data home at session birth, and exit if this session already ran.
 if [ -n "$session_id" ]; then
-	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/rawclaw/catalog}"
+	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
 	if [ -f "$entry" ]; then
@@ -117,7 +117,7 @@ input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 
 if [ -n "$session_id" ]; then
-	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/rawclaw/catalog}"
+	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
 	if [ -f "$entry" ]; then
