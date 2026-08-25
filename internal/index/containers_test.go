@@ -706,3 +706,52 @@ func TestEnsureFreshContainer_PruneStaleLeftovers(t *testing.T) {
 		t.Errorf("failed-sync refresh db %s does not exist, want kept: %v", dbp2, err)
 	}
 }
+
+func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	t.Setenv("HOME", cfg)
+
+	f := filepath.Join(cfg, "sess1.jsonl")
+	if err := os.WriteFile(f, []byte("msg1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := source.Container{ID: "sess-prepare", Path: f, CWD: "/work"}
+	msgs := func(_ source.Container) ([]model.Message, error) {
+		return []model.Message{
+			{Role: "user", Text: "prepare msg", TS: 1, TSISO: "2026-08-25T00:00:00Z", UUID: "u1"},
+		}, nil
+	}
+	dbp := RefreshDBPath("claude", c.ID, c.Path)
+
+	n, err := PrepareFreshContainer(dbp, c, msgs, "claude")
+	if err != nil {
+		t.Fatalf("PrepareFreshContainer: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("PrepareFreshContainer n = %d, want 1", n)
+	}
+
+	// Refresh DB exists and has the message
+	conRefresh, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("ConnectRO refresh db: %v", err)
+	}
+	defer conRefresh.Close()
+	var count int
+	if err := conRefresh.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id=?", c.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("refresh db message count = %d, want 1 (err: %v)", count, err)
+	}
+
+	// Consolidated store must NOT exist or have this session yet
+	if _, statErr := os.Stat(ConsolidatedPath()); statErr == nil {
+		conConsolidated, err := store.ConnectRO(ConsolidatedPath())
+		if err == nil {
+			defer conConsolidated.Close()
+			var consCount int
+			if err := conConsolidated.QueryRow("SELECT COUNT(*) FROM sessions WHERE id=?", c.ID).Scan(&consCount); err == nil && consCount != 0 {
+				t.Errorf("session already in consolidated store after PrepareFreshContainer: %d", consCount)
+			}
+		}
+	}
+}

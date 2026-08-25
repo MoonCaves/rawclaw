@@ -74,11 +74,10 @@ func pruneStaleRefreshDBs() {
 	}
 }
 
-// EnsureFreshContainer incrementally refreshes one live container, proves its
-// watermark matches the current file, and strictly folds it into the
-// consolidated store. Unlike ordinary advisory indexing, any uncertainty is an
-// error: tag-prep must not print a known-stale partial transcript.
-func EnsureFreshContainer(
+// PrepareFreshContainer incrementally refreshes one live container and proves
+// its watermark matches the current file in the refresh db without folding into
+// the consolidated store.
+func PrepareFreshContainer(
 	dbp string,
 	c source.Container,
 	msgs MessagesFunc,
@@ -113,7 +112,20 @@ func EnsureFreshContainer(
 		return 0, fmt.Errorf("refresh cache %s is locked or stale", dbp)
 	}
 
-	nMessages, err := verifyFreshContainer(dbp, c)
+	return verifyFreshContainer(dbp, c)
+}
+
+// EnsureFreshContainer incrementally refreshes one live container, proves its
+// watermark matches the current file, and strictly folds it into the
+// consolidated store. Unlike ordinary advisory indexing, any uncertainty is an
+// error: tag-prep must not print a known-stale partial transcript.
+func EnsureFreshContainer(
+	dbp string,
+	c source.Container,
+	msgs MessagesFunc,
+	sourceID string,
+) (int, error) {
+	nMessages, err := PrepareFreshContainer(dbp, c, msgs, sourceID)
 	if err != nil {
 		return 0, err
 	}
@@ -124,6 +136,11 @@ func EnsureFreshContainer(
 		return 0, err
 	}
 	return nMessages, nil
+}
+
+// IsBusy reports whether err represents a SQLite busy/locked condition.
+func IsBusy(err error) bool {
+	return isBusy(err)
 }
 
 func backingFilePath(p string) string {

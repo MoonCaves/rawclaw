@@ -87,6 +87,16 @@ func newTagPrepCmd() *cobra.Command {
 // runTagPrep is the testable core: load a session's messages, find the earliest
 // contiguous untagged window capped at chunkByteCap, and print the condensed dump.
 func runTagPrep(w io.Writer, con *sql.DB, fullSID string) error {
+	existingSegs, err := store.TopicsForSession(con, fullSID)
+	if err != nil {
+		return fmt.Errorf("load existing topics: %w", err)
+	}
+	return runTagPrepWithTopics(w, con, fullSID, existingSegs)
+}
+
+// runTagPrepWithTopics dumps a session's messages from con, using the provided
+// existing topic segments to compute the untagged window.
+func runTagPrepWithTopics(w io.Writer, con *sql.DB, fullSID string, existingSegs []store.TopicSegment) error {
 	msgs, err := loadSessionMessages(con, fullSID)
 	if err != nil {
 		return err
@@ -103,11 +113,6 @@ func runTagPrep(w io.Writer, con *sql.DB, fullSID string) error {
 	}
 	if len(displayable) == 0 {
 		return fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
-	}
-
-	existingSegs, err := store.TopicsForSession(con, fullSID)
-	if err != nil {
-		return fmt.Errorf("load existing topics: %w", err)
 	}
 
 	win, tagged := computeUntaggedWindow(displayable, msgs, existingSegs, chunkByteCap)
