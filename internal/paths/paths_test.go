@@ -575,3 +575,25 @@ func TestCatalogEntry_ReadWrite(t *testing.T) {
 		t.Fatalf("readBack = %+v, want %+v", readBack, entry)
 	}
 }
+
+func TestWriteCatalogEntry_InvalidSessionID(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{"empty session id", ""},
+		{"session id with forward slash", "subagent/123"},
+		{"session id with path separator", "subagent" + string(os.PathSeparator) + "123"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := WriteCatalogEntry(dir, CatalogEntry{SessionID: tt.id})
+			if err == nil {
+				t.Fatalf("WriteCatalogEntry with ID %q succeeded, want error", tt.id)
+			}
+		})
+	}
+}
