@@ -2,6 +2,7 @@ package goose
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -230,5 +231,150 @@ func TestGooseEndToEndIndexing(t *testing.T) {
 	msgs, err := fn.Messages(containers[0])
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("Messages failed: %v, len=%d", err, len(msgs))
+	}
+}
+
+// TestGooseRealSchema_DiscoveredAndIndexed tests the exact upstream Block/AAIF Goose v1.10.0+
+// SQLite schema (sessions: id, working_dir, name, user_set_name, session_type, created_at;
+// messages: id, session_id, role, content JSON array, timestamp) and verifies discovery,
+// message ordering, MCP block text extraction, CWD mapping, subagent defaults, and resume argv.
+func TestGooseRealSchema_DiscoveredAndIndexed(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	sessionsDB := filepath.Join(sessionsDir, "sessions.db")
+
+	db, err := sql.Open("sqlite", sessionsDB)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	// Upstream Block/AAIF Goose v1.10.0+ schema
+	_, err = db.Exec(`
+		PRAGMA journal_mode = WAL;
+
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			working_dir TEXT NOT NULL,
+			name TEXT NOT NULL,
+			user_set_name INTEGER DEFAULT 0,
+			session_type TEXT DEFAULT 'user',
+			created_at TIMESTAMP
+		);
+
+		CREATE TABLE messages (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		t.Fatalf("create real goose schema: %v", err)
+	}
+
+	// Insert realistic sessions with MCP JSON content
+	_, err = db.Exec(`
+		INSERT INTO sessions (id, working_dir, name, user_set_name, session_type, created_at) VALUES
+			('01918a3b-745a-7140-84a1-000000000001', '/Users/alice/projects/api-service', 'investigate-latency', 1, 'user', '2026-08-25 10:00:00'),
+			('01918a3b-745a-7140-84a1-000000000002', '/Users/alice/projects/web-ui', 'fix-nav-header', 0, 'user', '2026-08-25 11:00:00');
+
+		INSERT INTO messages (id, session_id, role, content, timestamp) VALUES
+			('msg-001', '01918a3b-745a-7140-84a1-000000000001', 'user', '[{"type":"text","text":"Why is /api/v1/checkout taking 800ms?"}]', '2026-08-25 10:00:01'),
+			('msg-002', '01918a3b-745a-7140-84a1-000000000001', 'assistant', '[{"type":"text","text":"I analyzed the profile traces."},{"type":"text","text":"The database connection pool is exhausted on checkout calls."}]', '2026-08-25 10:00:15'),
+			('msg-003', '01918a3b-745a-7140-84a1-000000000001', 'user', '[{"type":"text","text":"Can you increase the pool limit to 50?"}]', '2026-08-25 10:01:00'),
+			('msg-004', '01918a3b-745a-7140-84a1-000000000001', 'assistant', '[{"type":"tool_result","content":"Updated config/db.yaml max_connections: 50"}]', '2026-08-25 10:01:05'),
+			('msg-005', '01918a3b-745a-7140-84a1-000000000002', 'user', '[{"type":"text","text":"Fix the header padding on mobile screens"}]', '2026-08-25 11:00:01'),
+			('msg-006', '01918a3b-745a-7140-84a1-000000000002', 'assistant', '[{"type":"text","text":"Added responsive media query for header navbar."}]', '2026-08-25 11:00:20');
+	`)
+	if err != nil {
+		t.Fatalf("insert realistic records: %v", err)
+	}
+
+	adapter := NewRoot(sessionsDir)
+	containers, err := adapter.Discover()
+	if err != nil {
+		t.Fatalf("Discover failed: %v", err)
+	}
+	if len(containers) != 2 {
+		t.Fatalf("got %d containers, want 2", len(containers))
+	}
+
+	byID := make(map[string]source.Container)
+	for _, c := range containers {
+		byID[c.ID] = c
+	}
+
+	// Verify Session 1
+	c1, ok1 := byID["01918a3b-745a-7140-84a1-000000000001"]
+	if !ok1 {
+		t.Fatalf("missing container for session 1")
+	}
+	if c1.CWD != "/Users/alice/projects/api-service" {
+		t.Errorf("c1.CWD = %q, want /Users/alice/projects/api-service", c1.CWD)
+	}
+	if c1.IsSubagent {
+		t.Errorf("c1.IsSubagent = true, want false (default)")
+	}
+	if c1.ParentID != "" {
+		t.Errorf("c1.ParentID = %q, want empty", c1.ParentID)
+	}
+	wantResume := []string{"goose", "session", "--resume", "--session-id", "01918a3b-745a-7140-84a1-000000000001"}
+	if len(c1.ResumeArgv) != len(wantResume) || c1.ResumeArgv[3] != "--session-id" || c1.ResumeArgv[4] != "01918a3b-745a-7140-84a1-000000000001" {
+		t.Errorf("c1.ResumeArgv = %v, want %v", c1.ResumeArgv, wantResume)
+	}
+
+	// Verify Messages extraction for Session 1
+	msgs1, err := adapter.Messages(c1)
+	if err != nil {
+		t.Fatalf("Messages(c1) failed: %v", err)
+	}
+	if len(msgs1) != 4 {
+		t.Fatalf("got %d messages for session 1, want 4", len(msgs1))
+	}
+
+	// Check roles and parsed content
+	if msgs1[0].Role != "user" || msgs1[0].Text != "Why is /api/v1/checkout taking 800ms?" {
+		t.Errorf("unexpected msgs1[0]: role=%q text=%q", msgs1[0].Role, msgs1[0].Text)
+	}
+	wantMsg2 := "I analyzed the profile traces.\nThe database connection pool is exhausted on checkout calls."
+	if msgs1[1].Role != "assistant" || msgs1[1].Text != wantMsg2 {
+		t.Errorf("unexpected msgs1[1]: role=%q text=%q", msgs1[1].Role, msgs1[1].Text)
+	}
+	if msgs1[2].Role != "user" || msgs1[2].Text != "Can you increase the pool limit to 50?" {
+		t.Errorf("unexpected msgs1[2]: role=%q text=%q", msgs1[2].Role, msgs1[2].Text)
+	}
+	if msgs1[3].Role != "assistant" || msgs1[3].Text != "Updated config/db.yaml max_connections: 50" {
+		t.Errorf("unexpected msgs1[3]: role=%q text=%q", msgs1[3].Role, msgs1[3].Text)
+	}
+
+	// Verify ordering is strictly ascending by timestamp
+	for i := 1; i < len(msgs1); i++ {
+		if msgs1[i].TS < msgs1[i-1].TS {
+			t.Errorf("messages not in ascending timestamp order: msgs[%d].TS (%f) < msgs[%d].TS (%f)", i, msgs1[i].TS, i-1, msgs1[i-1].TS)
+		}
+	}
+
+	// Verify Session 2 isolation
+	c2, ok2 := byID["01918a3b-745a-7140-84a1-000000000002"]
+	if !ok2 {
+		t.Fatalf("missing container for session 2")
+	}
+	if c2.CWD != "/Users/alice/projects/web-ui" {
+		t.Errorf("c2.CWD = %q, want /Users/alice/projects/web-ui", c2.CWD)
+	}
+	msgs2, err := adapter.Messages(c2)
+	if err != nil {
+		t.Fatalf("Messages(c2) failed: %v", err)
+	}
+	if len(msgs2) != 2 {
+		t.Fatalf("got %d messages for session 2, want 2", len(msgs2))
+	}
+	if msgs2[0].Text != "Fix the header padding on mobile screens" {
+		t.Errorf("unexpected msgs2[0].Text = %q", msgs2[0].Text)
 	}
 }
