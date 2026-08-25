@@ -39,12 +39,6 @@ func RefreshDBPath(sourceID, sessionID, sourcePath string) string {
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".db")
 }
 
-func removeRefreshDB(dbp string) {
-	_ = os.Remove(dbp)
-	_ = os.Remove(dbp + "-wal")
-	_ = os.Remove(dbp + "-shm")
-}
-
 func pruneStaleRefreshDBs() {
 	dir := filepath.Join(store.CacheDir(), "refresh")
 	entries, err := os.ReadDir(dir)
