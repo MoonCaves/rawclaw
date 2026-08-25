@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
@@ -947,6 +948,86 @@ func TestScopeReportSkipsLocked(t *testing.T) {
 	st := env.Scopes[0].Status
 	if st != ScopeStaleFallback && st != ScopeSkippedError {
 		t.Errorf("locked-scope status = %q, want stale_fallback or skipped_error", st)
+	}
+}
+
+// TestSearch_WriteLockContentionSurfacesStale proves that when a concurrent
+// connection holds a write lock on an index db during search, the indexing pass
+// falls back to the existing cache with IndexStale, and Search surfaces this
+// to the caller: Complete=false, ScopeStaleFallback status on the scope, and
+// an incompleteness warning in both the envelope and rendered output.
+func TestSearch_WriteLockContentionSurfacesStale(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	proj := t.TempDir()
+	writeSession(t, proj, "sess-lock-contention", "u-init", "searchable original content")
+
+	// 1. Initial search/index to build the cache
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	env1 := Search("searchable", scope, SearchOpts{}, nil)
+	if !env1.Complete {
+		t.Fatalf("initial search Complete = false, want true")
+	}
+	if len(env1.Scopes) != 1 || env1.Scopes[0].Status != ScopeSearched {
+		t.Fatalf("initial scope status = %+v, want ScopeSearched", env1.Scopes)
+	}
+
+	// 2. Open a second connection to the index db and hold a write lock
+	dbp := index.DBPath(proj)
+	con2, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open second connection: %v", err)
+	}
+	defer con2.Close()
+
+	tx2, err := con2.Begin()
+	if err != nil {
+		t.Fatalf("begin con2 tx: %v", err)
+	}
+	defer tx2.Rollback()
+
+	if _, err := tx2.Exec("INSERT INTO meta(key, value) VALUES('lock_probe', 'held')"); err != nil {
+		t.Fatalf("hold write lock: %v", err)
+	}
+
+	// 3. Update the session file so reindexing is needed
+	time.Sleep(10 * time.Millisecond)
+	writeSession(t, proj, "sess-lock-contention", "u-init", "searchable updated content")
+
+	// 4. Run Search: EnsureIndexed hits SQLITE_BUSY, falls back to existing index with IndexStale
+	env2 := Search("searchable", scope, SearchOpts{}, nil)
+
+	if env2.Complete {
+		t.Errorf("Search under write lock contention must report Complete=false")
+	}
+	if len(env2.Scopes) != 1 {
+		t.Fatalf("expected 1 scope report, got %d", len(env2.Scopes))
+	}
+	if env2.Scopes[0].Status != ScopeStaleFallback {
+		t.Errorf("scope status = %q, want %q", env2.Scopes[0].Status, ScopeStaleFallback)
+	}
+
+	// Assert that the incompleteness warning is surfaced
+	foundWarning := false
+	for _, w := range env2.Warnings {
+		if w.Code == WarnScopeIncomplete {
+			foundWarning = true
+			if !strings.Contains(w.Message, "stale") {
+				t.Errorf("warning message %q does not mention stale", w.Message)
+			}
+		}
+	}
+	if !foundWarning {
+		t.Errorf("expected WarnScopeIncomplete warning in envelope, got %+v", env2.Warnings)
+	}
+
+	// 5. Render output and assert the warning is visible
+	var buf strings.Builder
+	renderSearch(&buf, env2, "searchable", "on "+paths.ProjectLabel(proj))
+	out := buf.String()
+	if !strings.Contains(out, "results may be incomplete") {
+		t.Errorf("rendered output does not surface incompleteness warning: %s", out)
 	}
 }
 

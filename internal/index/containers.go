@@ -266,8 +266,8 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		if mErr != nil {
 			continue // bad container: leave existing rows + watermark untouched
 		}
-		if !reindexContainer(con, c, ms, sourceID, origin, rp, mtime, size, fp) {
-			continue
+		if err := reindexContainer(con, c, ms, sourceID, origin, rp, mtime, size, fp); err != nil {
+			return err
 		}
 	}
 
@@ -289,28 +289,31 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 // transaction: messages, sessions row, and file_index watermark are written
 // together. If any statement or the durable vault write fails, the transaction
 // is rolled back so readers never observe a partial session or a committed
-// session without its watermark. Returns false on any failure.
+// session without its watermark. Returns an error on any failure.
 //
-// The begin is DEFERRED (database/sql's default), not BEGIN IMMEDIATE: an index
-// db has exactly one writer — store.ConnectRW hands out a single write
-// connection — so there is no second writer to lose a lock-upgrade race against,
-// and deferred avoids taking the write lock during the read-only statements. If
-// a second concurrent writer is ever introduced, this must become IMMEDIATE.
-func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64, fp string) bool {
+// The begin is DEFERRED (database/sql's default), not BEGIN IMMEDIATE:
+// store.ConnectRW calls SetMaxOpenConns(1) to limit that one pool, not the
+// database file — another process or call (such as the indexer and tag-write
+// path) can open the same file concurrently. Deferred is safe because the
+// transaction's first statement is already a write (DELETE), acquiring the
+// write lock immediately without prior reads to risk a lock-upgrade race.
+func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64, fp string) error {
 	tx, err := con.Begin()
 	if err != nil {
 		slog.Warn("reindex container begin tx failed", "session", c.ID, "err", err)
-		return false
+		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
 
 	if _, err := tx.Exec("DELETE FROM messages WHERE session_id=?", c.ID); err != nil {
-		return false
+		slog.Warn("reindex container delete messages failed", "session", c.ID, "err", err)
+		return fmt.Errorf("delete messages: %w", err)
 	}
 	if _, err := tx.Exec("DELETE FROM sessions WHERE id=?", c.ID); err != nil {
-		return false
+		slog.Warn("reindex container delete sessions failed", "session", c.ID, "err", err)
+		return fmt.Errorf("delete session: %w", err)
 	}
 	var started, last float64
 	var startedSet, lastSet bool
@@ -319,7 +322,8 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 			"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
 			c.ID, m.Role, m.Text, m.TS, m.TSISO, m.UUID,
 		); err != nil {
-			return false
+			slog.Warn("reindex container insert message failed", "session", c.ID, "err", err)
+			return fmt.Errorf("insert message: %w", err)
 		}
 		if m.TS != 0 {
 			if !startedSet || m.TS < started {
@@ -339,7 +343,8 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
 		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, originOr(origin), sourceID, realpath(c.Path), projectArg, cwdArg,
 	); err != nil {
-		return false
+		slog.Warn("reindex container insert session failed", "session", c.ID, "err", err)
+		return fmt.Errorf("insert session: %w", err)
 	}
 
 	// Drop any watermark this session held under a DIFFERENT path before writing
@@ -351,13 +356,16 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 	// session, and the still-current watermark makes the next scan skip
 	// re-indexing it: the session disappears and never comes back.
 	if _, err := tx.Exec("DELETE FROM file_index WHERE session_id=? AND path<>?", c.ID, rp); err != nil {
-		return false
+		// Returned, not logged: the caller owns the single handling of this error.
+		// Logging here as well would emit two entries for one failure.
+		return fmt.Errorf("delete stale file_index for %s: %w", c.ID, err)
 	}
 	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
 		rp, mtime, size, fp, c.ID,
 	); err != nil {
-		return false
+		slog.Warn("reindex container insert file_index failed", "session", c.ID, "err", err)
+		return fmt.Errorf("insert file_index: %w", err)
 	}
 
 	// Vault rawclaw's own copy inside the atomic success gate: own sessions
@@ -365,15 +373,15 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 	if origin == "" {
 		if err := vaultContainer(c, ms, sourceID, projectArg, cwdArg); err != nil {
 			slog.Warn("durable transcript not written", "session", c.ID, "err", err)
-			return false
+			return fmt.Errorf("vault container: %w", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		slog.Warn("reindex container commit failed", "session", c.ID, "err", err)
-		return false
+		return fmt.Errorf("commit tx: %w", err)
 	}
-	return true
+	return nil
 }
 
 // vaultContainer stores rawclaw's own copy of a container-sourced session.
