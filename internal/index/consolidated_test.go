@@ -1656,6 +1656,161 @@ func TestConsolidateFrom_PrunesLegacySourceAfterFullPass(t *testing.T) {
 	}
 }
 
+func TestConsolidateFrom_PreservesLegacySourceWhenCoContributorSkipped(t *testing.T) {
+	isolateCache(t)
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		con.Close()
+		t.Fatalf("ensure schema: %v", err)
+	}
+	// Seed legacy consolidated store with a session before session_sources exists.
+	if _, err := con.Exec(`
+		INSERT INTO sessions (
+			id, started_at, last_ts, message_count, is_subagent, parent_id,
+			origin_machine, source_tool, source_path, missing_since, project, cwd
+		) VALUES ('shared-s', 100, 200, 1, 0, NULL, 'machine', 'claude', '/tmp/shared-s.jsonl', NULL, 'project', '/tmp')
+	`); err != nil {
+		con.Close()
+		t.Fatalf("seed session: %v", err)
+	}
+	if _, err := con.Exec(`
+		INSERT INTO messages (session_id, role, content, ts, ts_iso, uuid)
+		VALUES ('shared-s', 'user', 'legacy message', 100, '2026-01-01T00:00:00Z', 'u-leg')
+	`); err != nil {
+		con.Close()
+		t.Fatalf("seed message: %v", err)
+	}
+	con.Close()
+
+	// Create good.db (current schema version) containing shared-s.
+	good := seedSessionDB(t, "good.db", sessionRow{
+		id: "shared-s", project: "good-proj", cwd: "/tmp/good",
+		msgs: []msgRow{{"u-good", "user", "good message", 100}},
+	})
+
+	// Create behind.db (behind version schema) containing shared-s.
+	behind := rewindScopeColumns(t, seedSessionDB(t, "behind.db", sessionRow{
+		id: "shared-s", project: "behind-proj", cwd: "/tmp/behind",
+		msgs: []msgRow{{"u-behind", "user", "behind message", 100}},
+	}))
+	behindCon, err := store.ConnectRW(behind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := behindCon.Exec("UPDATE meta SET value=? WHERE key='schema_version'", store.SchemaVersion-1); err != nil {
+		behindCon.Close()
+		t.Fatalf("rewind schema version: %v", err)
+	}
+	behindCon.Close()
+
+	// Consolidate both sources. behind.db will be skipped due to schema version.
+	st, err := ConsolidateFrom([]string{good, behind}, false)
+	if err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+	if st.Skipped != 1 {
+		t.Fatalf("st.Skipped = %d, want 1", st.Skipped)
+	}
+
+	con = openConsolidated(t)
+	// Because behind.db was skipped, legacy provenance for shared-s MUST NOT be pruned.
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='shared-s' AND source_db='' "); got != "1" {
+		t.Errorf("legacy row for session with skipped co-contributor = %s, want 1", got)
+	}
+	con.Close()
+
+	// Now good.db drops shared-s (e.g. session was pruned from good project).
+	goodCon, err := store.ConnectRW(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := goodCon.Exec("DELETE FROM messages WHERE session_id='shared-s'"); err != nil {
+		goodCon.Close()
+		t.Fatal(err)
+	}
+	if _, err := goodCon.Exec("DELETE FROM sessions WHERE id='shared-s'"); err != nil {
+		goodCon.Close()
+		t.Fatal(err)
+	}
+	goodCon.Close()
+
+	// Sync good.db into consolidated store.
+	if err := SyncConsolidatedFrom(good); err != nil {
+		t.Fatalf("SyncConsolidatedFrom: %v", err)
+	}
+
+	// shared-s must still survive because behind.db holds it and legacy provenance protected it.
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id='shared-s'"); got != "1" {
+		t.Errorf("session count for shared-s = %s, want 1 (session must survive drop from good.db because skipped behind.db holds it)", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM messages WHERE session_id='shared-s'"); got == "0" {
+		t.Errorf("message count for shared-s = 0, want > 0")
+	}
+	con.Close()
+
+	// Later: behind.db is reindexed to current schema.
+	behind = seedSessionDB(t, "behind.db", sessionRow{
+		id: "shared-s", project: "behind-proj", cwd: "/tmp/behind",
+		msgs: []msgRow{{"u-behind", "user", "behind message", 100}},
+	})
+
+	// Re-run ConsolidateFrom with no skipped sources.
+	st, err = ConsolidateFrom([]string{good, behind}, false)
+	if err != nil {
+		t.Fatalf("ConsolidateFrom after upgrade: %v", err)
+	}
+	if st.Skipped != 0 {
+		t.Fatalf("st.Skipped after upgrade = %d, want 0", st.Skipped)
+	}
+
+	con = openConsolidated(t)
+	// Now that all sources folded cleanly, legacy row is pruned and behind.db's real row is recorded.
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='shared-s' AND source_db='' "); got != "0" {
+		t.Errorf("legacy row after full pass without skips = %s, want 0", got)
+	}
+	var behindRows int
+	if err := con.QueryRow("SELECT COUNT(*) FROM session_sources WHERE session_id='shared-s' AND source_db=?", sourceIdentity(behind)).Scan(&behindRows); err != nil {
+		t.Fatalf("count behind rows: %v", err)
+	}
+	if behindRows != 1 {
+		t.Errorf("behind row count = %d, want 1", behindRows)
+	}
+	con.Close()
+
+	// Finally, behind.db drops shared-s.
+	behindCon, err = store.ConnectRW(behind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := behindCon.Exec("DELETE FROM messages WHERE session_id='shared-s'"); err != nil {
+		behindCon.Close()
+		t.Fatal(err)
+	}
+	if _, err := behindCon.Exec("DELETE FROM sessions WHERE id='shared-s'"); err != nil {
+		behindCon.Close()
+		t.Fatal(err)
+	}
+	behindCon.Close()
+
+	if err := SyncConsolidatedFrom(behind); err != nil {
+		t.Fatalf("SyncConsolidatedFrom behind: %v", err)
+	}
+
+	// Now that no source holds shared-s, it is cleanly pruned.
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id='shared-s'"); got != "0" {
+		t.Errorf("session count for shared-s after all sources dropped = %s, want 0", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM messages WHERE session_id='shared-s'"); got != "0" {
+		t.Errorf("message count for shared-s after all sources dropped = %s, want 0", got)
+	}
+	con.Close()
+}
+
 func TestConsolidateFrom_HealFailureAbortsBeforeBackfill(t *testing.T) {
 	isolateCache(t)
 	con, err := store.ConnectRW(ConsolidatedPath())

@@ -443,16 +443,22 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 		}
 		st.SessionsSeen += n
 	}
-	if _, err := con.Exec(`
-		DELETE FROM main.session_sources
-		WHERE source_db = ''
-		  AND EXISTS (
-			SELECT 1 FROM main.session_sources real
-			WHERE real.session_id = session_sources.session_id
-			  AND real.source_db <> ''
-		  )
-	`); err != nil {
-		return st, fmt.Errorf("prune legacy session sources: %w", err)
+	// Prune aggregate legacy baseline rows only when every source candidate
+	// successfully folded this pass. If any source was skipped (e.g. behind-version
+	// schema), its provenance is unrecorded and dropping legacy provenance could
+	// cause a later fold of a co-contributor to erroneously delete live sessions.
+	if st.Skipped == 0 && st.Sources > 0 {
+		if _, err := con.Exec(`
+			DELETE FROM main.session_sources
+			WHERE source_db = ''
+			  AND EXISTS (
+				SELECT 1 FROM main.session_sources real
+				WHERE real.session_id = session_sources.session_id
+				  AND real.source_db <> ''
+			  )
+		`); err != nil {
+			return st, fmt.Errorf("prune legacy session sources: %w", err)
+		}
 	}
 
 	if rebuild {
