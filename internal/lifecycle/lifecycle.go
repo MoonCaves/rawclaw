@@ -411,12 +411,7 @@ func appendTombstones(path string, ids []string) error {
 	}
 	defer f.Close()
 
-	var b strings.Builder
-	for _, id := range ids {
-		b.WriteString(id)
-		b.WriteByte('\n')
-	}
-	if _, err := f.WriteString(b.String()); err != nil {
+	if _, err := f.WriteString(strings.Join(ids, "\n") + "\n"); err != nil {
 		return fmt.Errorf("append tombstone: %w", err)
 	}
 	return nil
