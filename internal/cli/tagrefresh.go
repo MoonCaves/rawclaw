@@ -53,10 +53,10 @@ func refreshTagSession(
 	more agentproto.ScopeFn,
 	registrations []source.Registration,
 ) (string, string, error) {
-	// Probe only the consolidated store first. Passing no scope builder prevents
+	// Probe only the consolidated store first. A scope builder returning nil prevents
 	// a stale/missing row from triggering the old all-project indexing sweep
 	// before the targeted source refresh gets a chance to run.
-	dbp, fullSID, locateErr := agentproto.LocateSession(sessionArg, nil, nil)
+	dbp, fullSID, locateErr := agentproto.LocateSession(sessionArg, nil, func() []view.Scope { return nil })
 	if locateErr == nil {
 		match, ok := locatedTagSource(dbp, fullSID, registrations)
 		if ok {
