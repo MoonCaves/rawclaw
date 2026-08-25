@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS sessions (
     origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL,
     project TEXT, cwd TEXT
 );
+CREATE TABLE IF NOT EXISTS session_sources (
+    session_id TEXT NOT NULL, source_db TEXT NOT NULL,
+    started_at REAL, last_ts REAL, message_count INTEGER DEFAULT 0,
+    is_subagent INTEGER DEFAULT 0, parent_id TEXT,
+    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL,
+    project TEXT, cwd TEXT,
+    PRIMARY KEY (session_id, source_db)
+);
+CREATE INDEX IF NOT EXISTS idx_session_sources_session ON session_sources(session_id);
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
     role TEXT, content TEXT, ts REAL, ts_iso TEXT, uuid TEXT
@@ -134,6 +143,7 @@ DROP TRIGGER IF EXISTS messages_tri_au;
 DROP TABLE IF EXISTS messages_fts;
 DROP TABLE IF EXISTS messages_fts_trigram;
 DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS session_sources;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS file_index;`
 

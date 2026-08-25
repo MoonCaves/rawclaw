@@ -1041,3 +1041,146 @@ func TestConsolidate_VerdictMergePrecedence(t *testing.T) {
 	}
 	con2.Close()
 }
+
+// TestConsolidate_SingleSourcePurgePropagatesMissing tests that when a session's
+// only source db is purged, the consolidated store learns about it and stamps missing_since.
+func TestConsolidate_SingleSourcePurgePropagatesMissing(t *testing.T) {
+	isolateCache(t)
+	const id = "single-source-sess"
+	db := seedSessionDB(t, "single.db", sessionRow{
+		id: id, project: "ledger", cwd: "/w/ledger", missing: 0,
+		msgs: []msgRow{{"u-1", "user", "hello", 100}},
+	})
+
+	if err := SyncConsolidatedFrom(db); err != nil {
+		t.Fatalf("SyncConsolidatedFrom (live): %v", err)
+	}
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Fatalf("initial missing_since = %s, want NULL", got)
+	}
+	con.Close()
+
+	// Source is purged upstream and stamped with missing_since.
+	conSrc, err := store.ConnectRW(db)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	const purgeTS = 1784381448.0
+	if _, err := conSrc.Exec("UPDATE sessions SET missing_since=? WHERE id=?", purgeTS, id); err != nil {
+		t.Fatalf("update missing_since: %v", err)
+	}
+	conSrc.Close()
+
+	if err := SyncConsolidatedFrom(db); err != nil {
+		t.Fatalf("SyncConsolidatedFrom (purged): %v", err)
+	}
+	con = openConsolidated(t)
+	var missing sql.NullFloat64
+	if err := con.QueryRow("SELECT missing_since FROM sessions WHERE id=?", id).Scan(&missing); err != nil {
+		t.Fatalf("query missing_since: %v", err)
+	}
+	if !missing.Valid || missing.Float64 != purgeTS {
+		t.Errorf("purged missing_since = %v, want %v", missing.Float64, purgeTS)
+	}
+	con.Close()
+}
+
+// TestConsolidate_MergedSessionHonestPerContributionSemantics tests ticket #181:
+//   - A session merged from 3 sources where 1 or 2 are purged remains LIVE (missing_since = NULL).
+//   - When ALL 3 contributing sources are purged, the merged row learns of it and stamps
+//     missing_since with the latest purge timestamp (the moment the last live copy vanished).
+//   - When 1 source is restored, the merged session becomes live again (missing_since = NULL).
+func TestConsolidate_MergedSessionHonestPerContributionSemantics(t *testing.T) {
+	isolateCache(t)
+	const id = "multi-source-sess"
+	p1 := seedSessionDB(t, "p1.db", sessionRow{
+		id: id, project: "proj1", cwd: "/w/proj1", missing: 0,
+		msgs: []msgRow{{"u-1", "user", "turn 1", 100}},
+	})
+	p2 := seedSessionDB(t, "p2.db", sessionRow{
+		id: id, project: "proj2", cwd: "/w/proj2", missing: 0,
+		msgs: []msgRow{{"u-1", "user", "turn 1", 100}, {"u-2", "assistant", "turn 2", 200}},
+	})
+	p3 := seedSessionDB(t, "p3.db", sessionRow{
+		id: id, project: "proj3", cwd: "/w/proj3", missing: 0,
+		msgs: []msgRow{{"u-1", "user", "turn 1", 100}, {"u-3", "user", "turn 3", 300}},
+	})
+
+	// Initial fold: all 3 live -> consolidated must be live.
+	if err := SyncConsolidatedFrom(p1); err != nil {
+		t.Fatalf("sync p1: %v", err)
+	}
+	if err := SyncConsolidatedFrom(p2); err != nil {
+		t.Fatalf("sync p2: %v", err)
+	}
+	if err := SyncConsolidatedFrom(p3); err != nil {
+		t.Fatalf("sync p3: %v", err)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Fatalf("initial missing_since = %s, want NULL", got)
+	}
+	con.Close()
+
+	// Step 1: p1 is purged at t=1000. p2 and p3 are still live.
+	conP1, _ := store.ConnectRW(p1)
+	_, _ = conP1.Exec("UPDATE sessions SET missing_since=? WHERE id=?", 1000.0, id)
+	conP1.Close()
+
+	if err := SyncConsolidatedFrom(p1); err != nil {
+		t.Fatalf("sync p1 (purged 1000): %v", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("missing_since = %s, want NULL (p2 and p3 are still live on disk)", got)
+	}
+	con.Close()
+
+	// Step 2: p2 is ALSO purged at t=2000. p3 is still live.
+	conP2, _ := store.ConnectRW(p2)
+	_, _ = conP2.Exec("UPDATE sessions SET missing_since=? WHERE id=?", 2000.0, id)
+	conP2.Close()
+
+	if err := SyncConsolidatedFrom(p2); err != nil {
+		t.Fatalf("sync p2 (purged 2000): %v", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("missing_since = %s, want NULL (p3 is still live on disk)", got)
+	}
+	con.Close()
+
+	// Step 3: p3 is ALSO purged at t=3000. Now ALL contributing copies are purged.
+	conP3, _ := store.ConnectRW(p3)
+	_, _ = conP3.Exec("UPDATE sessions SET missing_since=? WHERE id=?", 3000.0, id)
+	conP3.Close()
+
+	if err := SyncConsolidatedFrom(p3); err != nil {
+		t.Fatalf("sync p3 (purged 3000): %v", err)
+	}
+	con = openConsolidated(t)
+	var missing3 sql.NullFloat64
+	if err := con.QueryRow("SELECT missing_since FROM sessions WHERE id=?", id).Scan(&missing3); err != nil {
+		t.Fatalf("query missing_since: %v", err)
+	}
+	if !missing3.Valid || missing3.Float64 != 3000.0 {
+		t.Errorf("all sources purged: missing_since = %v, want 3000 (latest purge watermark)", missing3.Float64)
+	}
+	con.Close()
+
+	// Step 4: p2 is restored on disk (undeleted) -> missing_since becomes NULL in p2.db.
+	conP2, _ = store.ConnectRW(p2)
+	_, _ = conP2.Exec("UPDATE sessions SET missing_since=NULL WHERE id=?", id)
+	conP2.Close()
+
+	if err := SyncConsolidatedFrom(p2); err != nil {
+		t.Fatalf("sync p2 (restored): %v", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("restored p2: missing_since = %s, want NULL", got)
+	}
+	con.Close()
+}

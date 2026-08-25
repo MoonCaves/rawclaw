@@ -112,60 +112,110 @@ type SyncStats struct {
 	Messages     int // distinct messages in the consolidated store afterwards
 }
 
-// takeNewer is the precedence rule for two rows carrying the SAME session id —
-// one session that ran in more than one project directory, which is a resume,
-// not two sessions (ruling: same id == one session). A copy still present on
-// disk beats a copy whose transcript was purged upstream; between two copies of
-// equal presence, the longer one is the continuation and wins. It decides only
-// which copy's scope/provenance to keep — no message is ever dropped by it,
-// because messages merge as a union.
-const takeNewer = `(
-    (excluded.missing_since IS NULL AND sessions.missing_since IS NOT NULL)
- OR ((excluded.missing_since IS NULL) = (sessions.missing_since IS NULL)
-     AND COALESCE(excluded.message_count,0) > COALESCE(sessions.message_count,0))
-)`
-
-// mergeSessionsSQL upserts one attached db's sessions into the consolidated
-// store. Every clause is order-independent — the result is the same whichever
-// order the source dbs are read in, which is what makes a partial re-run safe.
-//
-// message_count is carried across as the source's own count so takeNewer can
-// compare like with like; the true post-merge count is recomputed once at the
-// end of the pass (recountSQL), after the union of messages is known.
-var mergeSessionsSQL = `
-INSERT INTO main.sessions
-  (id,started_at,last_ts,message_count,is_subagent,parent_id,
+// recordSessionSourcesSQL records one attached db's view of each session into
+// main.session_sources. This tracks per-contribution provenance, scope, and missing_since
+// status so the merged session row in main.sessions reflects the honest union of all
+// contributing sources.
+const recordSessionSourcesSQL = `
+INSERT INTO main.session_sources
+  (session_id,source_db,started_at,last_ts,message_count,is_subagent,parent_id,
    origin_machine,source_tool,source_path,missing_since,project,cwd)
-SELECT id,started_at,last_ts,message_count,is_subagent,parent_id,
-       origin_machine,source_tool,source_path,missing_since,project,cwd
+SELECT id, ?, started_at, last_ts, message_count, is_subagent, parent_id,
+       origin_machine, source_tool, source_path, missing_since, project, cwd
 FROM src.sessions
 WHERE true
+ON CONFLICT(session_id, source_db) DO UPDATE SET
+  started_at     = excluded.started_at,
+  last_ts        = excluded.last_ts,
+  message_count  = excluded.message_count,
+  is_subagent    = excluded.is_subagent,
+  parent_id      = excluded.parent_id,
+  origin_machine = excluded.origin_machine,
+  source_tool    = excluded.source_tool,
+  source_path    = excluded.source_path,
+  missing_since  = excluded.missing_since,
+  project        = excluded.project,
+  cwd            = excluded.cwd
+`
+
+// mergeSessionsSQL aggregates all recorded session contributions in session_sources
+// for sessions present in src.sessions and writes the merged rows into main.sessions.
+//
+// Semantics per contribution:
+//   - A session present in ANY contributing copy is present/live (missing_since IS NULL).
+//   - Only when EVERY contributing copy has vanished is the merged session marked missing.
+//     Where all copies are purged, missing_since is MAX(missing_since) — the timestamp
+//     when the LAST live copy vanished from disk.
+//   - Scope and provenance follow the winning contribution (live beats purged; between
+//     equal presence, highest message count wins; tie-broken by latest last_ts and source_db).
+//     A known non-null value (project/cwd/source_tool/origin_machine) never loses to a NULL.
+//   - started_at is the earliest non-zero start timestamp across contributions.
+//   - last_ts is the latest activity across contributions.
+const mergeSessionsSQL = `
+WITH ranked AS (
+  SELECT
+    session_id,
+    project,
+    cwd,
+    source_path,
+    source_tool,
+    origin_machine,
+    ROW_NUMBER() OVER (
+      PARTITION BY session_id
+      ORDER BY
+        (missing_since IS NULL) DESC,
+        COALESCE(message_count, 0) DESC,
+        COALESCE(last_ts, 0) DESC,
+        source_db DESC
+    ) AS rank
+  FROM main.session_sources
+  WHERE session_id IN (SELECT id FROM src.sessions)
+),
+agg AS (
+  SELECT
+    session_id,
+    MIN(CASE WHEN started_at > 0 THEN started_at END) AS started_at,
+    MAX(COALESCE(last_ts, 0)) AS last_ts,
+    MAX(COALESCE(is_subagent, 0)) AS is_subagent,
+    MAX(parent_id) AS parent_id,
+    CASE
+      WHEN COUNT(CASE WHEN missing_since IS NULL THEN 1 END) > 0 THEN NULL
+      ELSE MAX(missing_since)
+    END AS missing_since
+  FROM main.session_sources
+  WHERE session_id IN (SELECT id FROM src.sessions)
+  GROUP BY session_id
+)
+INSERT INTO main.sessions (
+  id, started_at, last_ts, message_count, is_subagent, parent_id,
+  origin_machine, source_tool, source_path, missing_since, project, cwd
+)
+SELECT
+  a.session_id,
+  COALESCE(a.started_at, 0),
+  a.last_ts,
+  0,
+  a.is_subagent,
+  a.parent_id,
+  COALESCE(r.origin_machine, (SELECT origin_machine FROM main.session_sources s2 WHERE s2.session_id = a.session_id AND s2.origin_machine IS NOT NULL LIMIT 1)),
+  COALESCE(r.source_tool, (SELECT source_tool FROM main.session_sources s2 WHERE s2.session_id = a.session_id AND s2.source_tool IS NOT NULL LIMIT 1)),
+  r.source_path,
+  a.missing_since,
+  COALESCE(r.project, (SELECT project FROM main.session_sources s2 WHERE s2.session_id = a.session_id AND s2.project IS NOT NULL LIMIT 1)),
+  COALESCE(r.cwd, (SELECT cwd FROM main.session_sources s2 WHERE s2.session_id = a.session_id AND s2.cwd IS NOT NULL LIMIT 1))
+FROM agg a
+JOIN ranked r ON a.session_id = r.session_id AND r.rank = 1
 ON CONFLICT(id) DO UPDATE SET
-  -- Earliest start and latest activity across the copies: the session's real span.
-  started_at = CASE
-      WHEN COALESCE(excluded.started_at,0) > 0
-       AND (COALESCE(sessions.started_at,0) = 0 OR excluded.started_at < sessions.started_at)
-      THEN excluded.started_at ELSE sessions.started_at END,
-  last_ts = MAX(COALESCE(sessions.last_ts,0), COALESCE(excluded.last_ts,0)),
-  -- A session present anywhere is present: only "gone from every copy" is gone.
-  -- Two-argument MIN() gives exactly that — it returns NULL if EITHER side is
-  -- NULL, and NULL here means "still on disk". Where both copies are purged, it
-  -- keeps the earlier watermark.
-  missing_since = MIN(sessions.missing_since, excluded.missing_since),
-  is_subagent = MAX(COALESCE(sessions.is_subagent,0), COALESCE(excluded.is_subagent,0)),
-  parent_id   = COALESCE(sessions.parent_id, excluded.parent_id),
-  message_count = MAX(COALESCE(sessions.message_count,0), COALESCE(excluded.message_count,0)),
-  -- Scope and provenance follow the winning copy, but a known value never
-  -- loses to an unknown one.
-  project = CASE WHEN excluded.project IS NOT NULL
-                  AND (sessions.project IS NULL OR ` + takeNewer + `)
-                 THEN excluded.project ELSE sessions.project END,
-  cwd = CASE WHEN excluded.cwd IS NOT NULL
-              AND (sessions.cwd IS NULL OR ` + takeNewer + `)
-             THEN excluded.cwd ELSE sessions.cwd END,
-  source_path = CASE WHEN ` + takeNewer + ` THEN excluded.source_path ELSE sessions.source_path END,
-  source_tool = COALESCE(sessions.source_tool, excluded.source_tool),
-  origin_machine = COALESCE(sessions.origin_machine, excluded.origin_machine)
+  started_at     = excluded.started_at,
+  last_ts        = excluded.last_ts,
+  is_subagent    = excluded.is_subagent,
+  parent_id      = excluded.parent_id,
+  origin_machine = excluded.origin_machine,
+  source_tool    = excluded.source_tool,
+  source_path    = excluded.source_path,
+  missing_since  = excluded.missing_since,
+  project        = excluded.project,
+  cwd            = excluded.cwd
 `
 
 // mergeMessagesSQL unions one attached db's messages in, keyed by
@@ -514,6 +564,13 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 		return 0, false, true, fmt.Errorf("read sync watermark: %w", err)
 	}
 
+	srcBase := filepath.Base(src)
+	if _, err := con.Exec(recordSessionSourcesSQL, srcBase); err != nil {
+		return 0, false, true, fmt.Errorf("record session sources: %w", err)
+	}
+	if _, err := con.Exec("DELETE FROM main.session_sources WHERE source_db = ? AND session_id NOT IN (SELECT id FROM src.sessions)", srcBase); err != nil {
+		return 0, false, true, fmt.Errorf("prune stale session sources: %w", err)
+	}
 	if _, err := con.Exec(mergeSessionsSQL); err != nil {
 		return 0, false, true, fmt.Errorf("merge sessions: %w", err)
 	}
@@ -671,6 +728,9 @@ func pruneTombstoned(con *sql.DB) error {
 		}
 		if _, err := con.Exec("DELETE FROM sessions WHERE id = ? OR id LIKE ?", id, like); err != nil {
 			return fmt.Errorf("prune tombstoned sessions: %w", err)
+		}
+		if _, err := con.Exec("DELETE FROM session_sources WHERE session_id = ? OR session_id LIKE ?", id, like); err != nil {
+			return fmt.Errorf("prune tombstoned session sources: %w", err)
 		}
 	}
 	return nil
