@@ -159,7 +159,7 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 
 	// Delete must also reach RETAINED sessions — rows whose backing .jsonl the
 	// source tool already purged, but which still live in an index db
-	// (missing_since set). matchSessions above only walks the live projects
+	// (only_copy_since set). matchSessions above only walks the live projects
 	// tree, so without this union exactly the rows durable retention creates
 	// are undeletable. Filters are the same ones the live plan just used
 	// (including the positional session id), so a filter/id that matched
@@ -170,7 +170,7 @@ func runDelete(cmd *cobra.Command, f *deleteFlags, args []string) error {
 	}
 
 	// De-duplicate by session id: one session can match more than one row —
-	// live AND stale-retained (file back on disk while missing_since lingers
+	// live AND stale-retained (file back on disk while only_copy_since lingers
 	// from an earlier purge), or retained in TWO index dbs (the old and new
 	// db of a renamed project dir). Counting duplicates would trip the
 	// positional ambiguity guard on a single session — making it undeletable

@@ -272,14 +272,15 @@ var durabilityColumns = []struct{ name, decl string }{
 	{"origin_machine", "origin_machine TEXT"},
 	{"source_tool", "source_tool TEXT"},
 	{"source_path", "source_path TEXT"},
-	{"missing_since", "missing_since REAL"},
+	{"only_copy_since", "only_copy_since REAL"},
 }
 
 // migrateDurabilityColumns adds any missing D3 column to the sessions table via
-// idempotent, PRAGMA-guarded ALTER TABLE, then backfills any row still missing
+// idempotent, PRAGMA-guarded ALTER TABLE (renaming missing_since -> only_copy_since
+// where present), then backfills any row still missing
 // provenance — origin_machine = this machine, source_tool = the scope's source,
 // source_path = the session's known backing path (file_index.path),
-// missing_since = NULL. It deliberately does NOT bump SchemaVersion: that would
+// only_copy_since = NULL. It deliberately does NOT bump SchemaVersion: that would
 // trigger a full rebuild from source, re-walking the live tree and re-pruning
 // every already-retained session — exactly the loss durable retention exists to
 // prevent (D6). A fresh or rebuilt db already carries the columns via Schema, so
@@ -297,12 +298,31 @@ func migrateDurabilityColumns(con *sql.DB, sourceID string) error {
 	if err != nil {
 		return err
 	}
+	if _, ok := have["missing_since"]; ok {
+		if _, ok := have["only_copy_since"]; !ok {
+			if _, err := con.Exec("ALTER TABLE sessions RENAME COLUMN missing_since TO only_copy_since"); err != nil {
+				return fmt.Errorf("rename sessions.missing_since to only_copy_since: %w", err)
+			}
+			have["only_copy_since"] = struct{}{}
+			delete(have, "missing_since")
+		}
+	}
 	for _, c := range durabilityColumns {
 		if _, ok := have[c.name]; ok {
 			continue
 		}
 		if _, err := con.Exec("ALTER TABLE sessions ADD COLUMN " + c.decl); err != nil {
 			return fmt.Errorf("add sessions.%s: %w", c.name, err)
+		}
+	}
+	// Also rename on session_sources if table exists
+	if sHave, sErr := tableColumns(con, "session_sources"); sErr == nil && len(sHave) > 0 {
+		if _, ok := sHave["missing_since"]; ok {
+			if _, ok := sHave["only_copy_since"]; !ok {
+				if _, err := con.Exec("ALTER TABLE session_sources RENAME COLUMN missing_since TO only_copy_since"); err != nil {
+					return fmt.Errorf("rename session_sources.missing_since to only_copy_since: %w", err)
+				}
+			}
 		}
 	}
 	// Idempotent backfill, gated on the ROW STATE (any origin_machine still NULL),
@@ -312,7 +332,7 @@ func migrateDurabilityColumns(con *sql.DB, sourceID string) error {
 	// the columns and skip it forever. The probe below re-detects that pending state
 	// on the next call, so a rerun after a kill at any step boundary finishes the job.
 	// A row with no file_index watermark simply stays NULL on source_path;
-	// missing_since stays NULL — an existing session is present until a scan proves
+	// only_copy_since stays NULL — an existing session is present until a scan proves
 	// otherwise.
 	//
 	// The UPDATE runs unconditionally. Its own WHERE clause is the row-state gate, so
@@ -513,9 +533,14 @@ func backfillScope(con *sql.DB) error {
 // sessionColumns returns the set of column names on the sessions table (via
 // PRAGMA table_info), used to guard the additive migration.
 func sessionColumns(con *sql.DB) (map[string]struct{}, error) {
-	rows, err := con.Query("PRAGMA table_info(sessions)")
+	return tableColumns(con, "sessions")
+}
+
+// tableColumns returns the set of column names on any table (via PRAGMA table_info).
+func tableColumns(con *sql.DB, table string) (map[string]struct{}, error) {
+	rows, err := con.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
-		return nil, fmt.Errorf("pragma table_info(sessions): %w", err)
+		return nil, fmt.Errorf("pragma table_info(%s): %w", table, err)
 	}
 	defer rows.Close()
 	have := map[string]struct{}{}
@@ -614,7 +639,7 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scop
 	} // else nil -> SQL NULL for a missing parent
 	projectArg, cwdArg := scopeOf(cwd, scope)
 	if _, err := tx.Exec(
-		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
+		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,only_copy_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
 		sid, started, last, len(rows), isSub, parentArg, originOr(origin), sourceClaude, realpath(path), projectArg, cwdArg,
 	); err != nil {
 		return fmt.Errorf("session %s insert session: %w", sid, err)
@@ -695,12 +720,12 @@ func applyRetentionToVault(res retention.Result, now float64, origin string) {
 		return
 	}
 	for _, id := range res.Stamped {
-		if err := durable.SetMissingSince(id, now); err != nil {
+		if err := durable.SetOnlyCopySince(id, now); err != nil {
 			slog.Warn("durable transcript flag not written", "session", id, "err", err)
 		}
 	}
 	for _, id := range res.Cleared {
-		if err := durable.SetMissingSince(id, 0); err != nil {
+		if err := durable.SetOnlyCopySince(id, 0); err != nil {
 			slog.Warn("durable transcript flag not cleared", "session", id, "err", err)
 		}
 	}
@@ -946,7 +971,7 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 	}
 
 	// Retention pass (replaces the old "absent from the walk → DELETE" prune): an
-	// absent own-source file is flagged missing_since and RETAINED; only an
+	// absent own-source file is flagged only_copy_since and RETAINED; only an
 	// explicit tombstone deletes; a foreign-origin row is never a candidate
 	// (D1/D2/D5). An ARCHIVE-replica scan (origin set — the tree is a synced
 	// copy inside the archive clone) instead treats absence as authoritative:
@@ -961,14 +986,14 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 	return nil
 }
 
-// nowEpoch is the current time as fractional Unix seconds (the missing_since /
+// nowEpoch is the current time as fractional Unix seconds (the only_copy_since /
 // mtime unit).
 func nowEpoch() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
 // ReconcileOrphanDB reconciles an existing index db whose source dir has vanished
 // entirely — the 30-day-purge case where AllProjectDirs no longer yields the
 // project, so the normal source→index pass never runs for it (D8). It reconciles
-// against an EMPTY live scan: every own-source session is stamped missing_since
+// against an EMPTY live scan: every own-source session is stamped only_copy_since
 // and RETAINED, an explicit tombstone deletes, a foreign row is untouched — the
 // same rules as an in-place UpdateIndex, minus the reindex (there is no source to
 // read). Returns the surviving top-level session count so the caller can drop a
@@ -981,6 +1006,10 @@ func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
 	}
 	defer con.Close()
 
+	// Ensure the schema is current BEFORE reconciling. An older index db
+	// (e.g. from an archive clone created before durable retention) lacks the
+	// provenance columns and must be migrated in place so the scan has columns
+	// to read and stamp.
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		if isBusy(err) {
 			return store.CountTopLevelSessions(dbp), nil
@@ -989,14 +1018,11 @@ func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
 	}
 	tombstoned, terr := lifecycle.LoadTombstones("")
 	if terr != nil {
-		tombstoned = map[string]struct{}{} // best-effort: never block discovery
+		tombstoned = map[string]struct{}{} // best-effort: missing sidecar = no tombstones
 	}
-	// Empty onDisk: the whole source is gone, so every backing file is "absent".
-	// mirror=false ALWAYS: the mirror setting governs live scans; an orphaned
-	// archive's retained rows are removed only by explicit tombstone (D5) — a
-	// search run with RAWCLAW_RETENTION=mirror must never wipe them.
-	// replica=false too: this pass covers LOCAL orphaned dbs (archive-replica
-	// dbs are excluded from orphan discovery by their name prefix), and an
+
+	// Empty live scan (onDisk = empty): every own-source session absent from disk
+	// is stamped only_copy_since (or pruned if tombstoned). replica=false: an
 	// empty scan under replica semantics would wipe the db wholesale.
 	now := nowEpoch()
 	res, rerr := retention.ReconcileRetention(con, map[string]struct{}{}, tombstoned, now, false, false)
@@ -1020,7 +1046,7 @@ func ReconcileOrphanDB(dbp string) (nSessions int, err error) {
 // EnsureOrphanReconciled reconciles an orphaned index db read-MOSTLY:
 // a read-only probe first decides whether a reconcile would change anything —
 // a tombstoned session still present, an own-source row not yet stamped
-// missing_since, or (mirror mode) an own-source row awaiting the prune. Only
+// only_copy_since, or (mirror mode) an own-source row awaiting the prune. Only
 // pending work opens the db read-write (ReconcileOrphanDB); the common case —
 // re-discovering an already-reconciled archive on every search — is a pure
 // read that never touches the file. A probe failure (e.g. a pre-durability
@@ -1049,7 +1075,7 @@ func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE is_subagent=0").Scan(&n); err != nil {
 		return false, 0, fmt.Errorf("orphan probe count: %w", err)
 	}
-	rows, err := con.Query("SELECT id, origin_machine, missing_since FROM sessions")
+	rows, err := con.Query("SELECT id, origin_machine, only_copy_since FROM sessions")
 	if err != nil {
 		return false, 0, fmt.Errorf("orphan probe scan: %w", err)
 	}
@@ -1058,8 +1084,8 @@ func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool
 	for rows.Next() {
 		var id string
 		var origin sql.NullString
-		var missing sql.NullFloat64
-		if err := rows.Scan(&id, &origin, &missing); err != nil {
+		var onlyCopy sql.NullFloat64
+		if err := rows.Scan(&id, &origin, &onlyCopy); err != nil {
 			return false, 0, fmt.Errorf("orphan probe row: %w", err)
 		}
 		// Same tree as the acting reconcile, against an empty live scan
@@ -1067,7 +1093,7 @@ func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool
 		// replica=false (matching ReconcileOrphanDB: retained rows die only
 		// by tombstone). Any predicted action is pending work.
 		own := !origin.Valid || origin.String == mid
-		if retention.DecideRetention(false, isMember(tombstoned, id), own, missing.Valid, false, false) != retention.ActNone {
+		if retention.DecideRetention(false, isMember(tombstoned, id), own, onlyCopy.Valid, false, false) != retention.ActNone {
 			return true, n, nil
 		}
 	}

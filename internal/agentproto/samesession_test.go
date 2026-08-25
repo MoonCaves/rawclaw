@@ -67,9 +67,9 @@ func TestLocateSessionReturnsMergedRow(t *testing.T) {
 	}
 
 	// The first directory was deleted afterwards: durable retention keeps its row
-	// with a missing_since watermark, so only the second half is live.
+	// with an only_copy_since watermark, so only the second half is live.
 	con := openCacheRW(t, firstDB)
-	if _, err := con.Exec("UPDATE sessions SET missing_since=? WHERE id=?", 1.0, sid); err != nil {
+	if _, err := con.Exec("UPDATE sessions SET only_copy_since=? WHERE id=?", 1.0, sid); err != nil {
 		t.Fatalf("mark retained: %v", err)
 	}
 	con.Close()

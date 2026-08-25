@@ -38,12 +38,12 @@ const RRFConstant = 60
 
 // VecHit is one vector-KNN anchor: id, session_id, iso, parent, dist.
 type VecHit struct {
-	ID           int
-	SessionID    string
-	ISO          string
-	Parent       string
-	MissingSince float64 // sessions.missing_since (0 when NULL); carried so a vector-only hit on a retained-but-missing session keeps the D7 flag
-	Dist         float64 // cosine similarity (higher = nearer)
+	ID            int
+	SessionID     string
+	ISO           string
+	Parent        string
+	OnlyCopySince float64 // sessions.only_copy_since (0 when NULL); carried so a vector-only hit on an only-copy session keeps the flag
+	Dist          float64 // cosine similarity (higher = nearer)
 }
 
 // packVec encodes a float vector as little-endian float32 bytes. Stored values
@@ -399,7 +399,7 @@ func VecKNN(con *sql.DB, qvec []float64, k int, includeSubagents bool) []VecHit 
 	cand := knn(qvec, stored, k*3)
 	out := []VecHit{}
 	for _, c := range cand {
-		iso, parent, isSub, missing, ok := store.MessageMeta(con, c.msgID)
+		iso, parent, isSub, onlyCopy, ok := store.MessageMeta(con, c.msgID)
 		if !ok { // churned / gone row
 			continue
 		}
@@ -407,12 +407,12 @@ func VecKNN(con *sql.DB, qvec []float64, k int, includeSubagents bool) []VecHit 
 			continue
 		}
 		out = append(out, VecHit{
-			ID:           c.msgID,
-			SessionID:    c.sid,
-			ISO:          iso,
-			Parent:       parent,
-			MissingSince: missing, // 0 when NULL (present)
-			Dist:         c.sim,
+			ID:            c.msgID,
+			SessionID:     c.sid,
+			ISO:           iso,
+			Parent:        parent,
+			OnlyCopySince: onlyCopy, // 0 when NULL (present)
+			Dist:          c.sim,
 		})
 		if len(out) >= k {
 			break
@@ -438,16 +438,16 @@ func Fuse(con *sql.DB, kwRows []retrieve.Anchor, qvec []float64, knnK int, inclu
 		score[v.ID] += 1.0 / float64(RRFConstant+rank+1)
 		if _, ok := rowmap[v.ID]; !ok {
 			// Vector-only synthesized anchor (Role empty, Snip empty, Cov 0).
-			// Carry missing_since so a retained-but-missing session matched only by
-			// vector still surfaces the D7 flag (a keyword-also-hit keeps its own
+			// Carry only_copy_since so an only-copy session matched only by
+			// vector still surfaces the flag (a keyword-also-hit keeps its own
 			// Anchor, which already carries it — that branch is untouched).
 			rowmap[v.ID] = retrieve.Anchor{
-				ID:           v.ID,
-				SessionID:    v.SessionID,
-				ISO:          v.ISO,
-				Parent:       v.Parent,
-				MissingSince: v.MissingSince,
-				Cov:          0,
+				ID:            v.ID,
+				SessionID:     v.SessionID,
+				ISO:           v.ISO,
+				Parent:        v.Parent,
+				OnlyCopySince: v.OnlyCopySince,
+				Cov:           0,
 			}
 		}
 	}

@@ -171,8 +171,8 @@ func TestMigrateDurabilityColumns_Idempotent(t *testing.T) {
 	}
 
 	var origin, tool, path string
-	var missing sql.NullFloat64
-	if err := con.QueryRow("SELECT origin_machine, source_tool, source_path, missing_since FROM sessions WHERE id='sess-idem'").Scan(&origin, &tool, &path, &missing); err != nil {
+	var onlyCopy sql.NullFloat64
+	if err := con.QueryRow("SELECT origin_machine, source_tool, source_path, only_copy_since FROM sessions WHERE id='sess-idem'").Scan(&origin, &tool, &path, &onlyCopy); err != nil {
 		t.Fatalf("scan backfilled row: %v", err)
 	}
 	if origin != provenance.MachineID() {
@@ -184,8 +184,8 @@ func TestMigrateDurabilityColumns_Idempotent(t *testing.T) {
 	if path != "/repo/sess-idem.jsonl" {
 		t.Errorf("source_path = %q, want /repo/sess-idem.jsonl", path)
 	}
-	if missing.Valid {
-		t.Errorf("missing_since = %v, want NULL", missing.Float64)
+	if onlyCopy.Valid {
+		t.Errorf("only_copy_since = %v, want NULL", onlyCopy.Float64)
 	}
 
 	// Second pass: idempotent clean no-op
@@ -194,19 +194,154 @@ func TestMigrateDurabilityColumns_Idempotent(t *testing.T) {
 	}
 
 	var origin2, tool2, path2 string
-	var missing2 sql.NullFloat64
-	if err := con.QueryRow("SELECT origin_machine, source_tool, source_path, missing_since FROM sessions WHERE id='sess-idem'").Scan(&origin2, &tool2, &path2, &missing2); err != nil {
+	var onlyCopy2 sql.NullFloat64
+	if err := con.QueryRow("SELECT origin_machine, source_tool, source_path, only_copy_since FROM sessions WHERE id='sess-idem'").Scan(&origin2, &tool2, &path2, &onlyCopy2); err != nil {
 		t.Fatalf("scan row after second run: %v", err)
 	}
-	if origin2 != origin || tool2 != tool || path2 != path || missing2.Valid != missing.Valid {
+	if origin2 != origin || tool2 != tool || path2 != path || onlyCopy2.Valid != onlyCopy.Valid {
 		t.Errorf("row values mutated on second run: got (%q, %q, %q, %v), want (%q, %q, %q, %v)",
-			origin2, tool2, path2, missing2, origin, tool, path, missing)
+			origin2, tool2, path2, onlyCopy2, origin, tool, path, onlyCopy)
 	}
 
 	// Also verify on an already fully ensured schema (e.g. EnsureSchema)
 	conFresh, _ := openTestDB(t)
 	if err := migrateDurabilityColumns(conFresh, "codex"); err != nil {
 		t.Fatalf("migrateDurabilityColumns on fresh schema: %v", err)
+	}
+}
+
+// TestMigrateDurabilityColumns_OnlyCopySinceRename is the migration regression guard:
+// building a store with the old column name (missing_since) and running the migration
+// must rename the column to only_copy_since, preserve existing row values, and be idempotent.
+func TestMigrateDurabilityColumns_OnlyCopySinceRename(t *testing.T) {
+	dbp := filepath.Join(t.TempDir(), "legacy_missing_since.db")
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("store.ConnectRW: %v", err)
+	}
+	t.Cleanup(func() { con.Close() })
+
+	// Build a store with the OLD column name: missing_since
+	if _, err := con.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			started_at REAL,
+			last_ts REAL,
+			message_count INTEGER DEFAULT 0,
+			is_subagent INTEGER DEFAULT 0,
+			parent_id TEXT,
+			origin_machine TEXT,
+			source_tool TEXT,
+			source_path TEXT,
+			missing_since REAL,
+			project TEXT,
+			cwd TEXT
+		);
+		CREATE TABLE session_sources (
+			session_id TEXT NOT NULL,
+			source_db TEXT NOT NULL,
+			started_at REAL,
+			last_ts REAL,
+			message_count INTEGER DEFAULT 0,
+			is_subagent INTEGER DEFAULT 0,
+			parent_id TEXT,
+			origin_machine TEXT,
+			source_tool TEXT,
+			source_path TEXT,
+			missing_since REAL,
+			project TEXT,
+			cwd TEXT,
+			PRIMARY KEY (session_id, source_db)
+		);
+		CREATE TABLE file_index (
+			path TEXT PRIMARY KEY,
+			mtime REAL,
+			size INTEGER,
+			fp TEXT,
+			session_id TEXT
+		);
+		INSERT INTO sessions (
+			id, started_at, last_ts, message_count, is_subagent, parent_id,
+			origin_machine, source_tool, source_path, missing_since, project, cwd
+		) VALUES (
+			'sess-legacy', 1700000000.0, 1700001000.0, 12, 0, NULL,
+			'mach-prev', 'claude', '/path/to/sess-legacy.jsonl', 1750000000.5, 'my-proj', '/home/user/code'
+		);
+		INSERT INTO session_sources (
+			session_id, source_db, started_at, last_ts, message_count, is_subagent, parent_id,
+			origin_machine, source_tool, source_path, missing_since, project, cwd
+		) VALUES (
+			'sess-legacy', 'src.db', 1700000000.0, 1700001000.0, 12, 0, NULL,
+			'mach-prev', 'claude', '/path/to/sess-legacy.jsonl', 1750000000.5, 'my-proj', '/home/user/code'
+		);
+	`); err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+
+	// 1. Run the migration pass
+	if err := migrateDurabilityColumns(con, "claude"); err != nil {
+		t.Fatalf("migrateDurabilityColumns pass 1: %v", err)
+	}
+
+	// Assert (a): column is renamed (only_copy_since present, missing_since gone)
+	cols, err := sessionColumns(con)
+	if err != nil {
+		t.Fatalf("sessionColumns: %v", err)
+	}
+	if _, hasOld := cols["missing_since"]; hasOld {
+		t.Errorf("sessions.missing_since column still exists after migration")
+	}
+	if _, hasNew := cols["only_copy_since"]; !hasNew {
+		t.Fatalf("sessions.only_copy_since column not found after migration")
+	}
+
+	srcCols, err := tableColumns(con, "session_sources")
+	if err != nil {
+		t.Fatalf("tableColumns(session_sources): %v", err)
+	}
+	if _, hasOld := srcCols["missing_since"]; hasOld {
+		t.Errorf("session_sources.missing_since column still exists after migration")
+	}
+	if _, hasNew := srcCols["only_copy_since"]; !hasNew {
+		t.Fatalf("session_sources.only_copy_since column not found after migration")
+	}
+
+	// Assert (b): existing row values survive intact
+	var (
+		id, origin, tool, path, proj, cwd string
+		started, last                     float64
+		msgCount, isSub                   int
+		onlyCopy                          sql.NullFloat64
+	)
+	if err := con.QueryRow(`
+		SELECT id, started_at, last_ts, message_count, is_subagent,
+		       origin_machine, source_tool, source_path, only_copy_since, project, cwd
+		  FROM sessions WHERE id='sess-legacy'
+	`).Scan(&id, &started, &last, &msgCount, &isSub, &origin, &tool, &path, &onlyCopy, &proj, &cwd); err != nil {
+		t.Fatalf("query migrated row: %v", err)
+	}
+
+	if id != "sess-legacy" || started != 1700000000.0 || last != 1700001000.0 || msgCount != 12 || isSub != 0 {
+		t.Errorf("base fields corrupted: id=%q started=%v last=%v count=%d isSub=%d", id, started, last, msgCount, isSub)
+	}
+	if origin != "mach-prev" || tool != "claude" || path != "/path/to/sess-legacy.jsonl" || proj != "my-proj" || cwd != "/home/user/code" {
+		t.Errorf("provenance/scope corrupted: origin=%q tool=%q path=%q proj=%q cwd=%q", origin, tool, path, proj, cwd)
+	}
+	if !onlyCopy.Valid || onlyCopy.Float64 != 1750000000.5 {
+		t.Errorf("only_copy_since = %+v, want 1750000000.5", onlyCopy)
+	}
+
+	// Assert (c): running migration a second time is a clean no-op
+	if err := migrateDurabilityColumns(con, "claude"); err != nil {
+		t.Fatalf("migrateDurabilityColumns pass 2 (idempotent): %v", err)
+	}
+
+	var onlyCopy2 sql.NullFloat64
+	if err := con.QueryRow("SELECT only_copy_since FROM sessions WHERE id='sess-legacy'").Scan(&onlyCopy2); err != nil {
+		t.Fatalf("query row after pass 2: %v", err)
+	}
+	if !onlyCopy2.Valid || onlyCopy2.Float64 != 1750000000.5 {
+		t.Errorf("only_copy_since mutated on pass 2: got %+v, want 1750000000.5", onlyCopy2)
 	}
 }
 
@@ -435,7 +570,7 @@ func TestUpdateIndexIncrementalAndPrune(t *testing.T) {
 	// Lay out a project transcript dir; UpdateIndex must index it, skip an
 	// unchanged file on the second pass, and — under durable retention (D1) — a
 	// file that merely vanishes from the walk (no tombstone) is RETAINED with
-	// missing_since stamped, NOT pruned. Only an explicit tombstone deletes.
+	// only_copy_since stamped, NOT pruned. Only an explicit tombstone deletes.
 	proj := t.TempDir()
 	a := filepath.Join(proj, "a.jsonl")
 	b := filepath.Join(proj, "b.jsonl")
@@ -467,7 +602,7 @@ func TestUpdateIndexIncrementalAndPrune(t *testing.T) {
 	}
 
 	// Remove b's backing file (no tombstone), reindex: durable retention keeps the
-	// session — both rows survive, and b is flagged missing_since (D1).
+	// session — both rows survive, and b is flagged only_copy_since (D1).
 	if err := os.Remove(b); err != nil {
 		t.Fatal(err)
 	}
@@ -483,18 +618,18 @@ func TestUpdateIndexIncrementalAndPrune(t *testing.T) {
 	if exists != 1 {
 		t.Errorf("session 'b' must be retained when its file merely vanishes (no tombstone)")
 	}
-	var missing sql.NullFloat64
-	if err := con.QueryRow("SELECT missing_since FROM sessions WHERE id='b'").Scan(&missing); err != nil {
-		t.Fatalf("read b.missing_since: %v", err)
+	var onlyCopy sql.NullFloat64
+	if err := con.QueryRow("SELECT only_copy_since FROM sessions WHERE id='b'").Scan(&onlyCopy); err != nil {
+		t.Fatalf("read b.only_copy_since: %v", err)
 	}
-	if !missing.Valid || missing.Float64 <= 0 {
-		t.Errorf("session 'b' missing_since = %+v, want a positive timestamp", missing)
+	if !onlyCopy.Valid || onlyCopy.Float64 <= 0 {
+		t.Errorf("session 'b' only_copy_since = %+v, want a positive timestamp", onlyCopy)
 	}
-	// a is still present on disk → its missing_since stays NULL.
-	var aMissing sql.NullFloat64
-	con.QueryRow("SELECT missing_since FROM sessions WHERE id='a'").Scan(&aMissing)
-	if aMissing.Valid {
-		t.Errorf("session 'a' (present) should not be flagged missing, got %v", aMissing.Float64)
+	// a is still present on disk → its only_copy_since stays NULL.
+	var aOnlyCopy sql.NullFloat64
+	con.QueryRow("SELECT only_copy_since FROM sessions WHERE id='a'").Scan(&aOnlyCopy)
+	if aOnlyCopy.Valid {
+		t.Errorf("session 'a' (present) should not be flagged only copy, got %v", aOnlyCopy.Float64)
 	}
 }
 

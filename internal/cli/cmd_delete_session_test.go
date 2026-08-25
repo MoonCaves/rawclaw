@@ -201,12 +201,12 @@ func TestDeleteCmd_PositionalForeignRefused(t *testing.T) {
 }
 
 // TestDeleteCmd_PositionalLivePlusStaleRetainedRow: a session whose file is
-// back on disk while its retained row still carries missing_since (purged,
+// back on disk while its retained row still carries only_copy_since (purged,
 // then restored, not yet reconciled) is ONE session, not an ambiguous pair —
 // the delete proceeds, removing the file and tombstoning the id once.
 func TestDeleteCmd_PositionalLivePlusStaleRetainedRow(t *testing.T) {
 	root := newCfgRoot(t)
-	// Retain it (index → purge → reindex marks missing_since)…
+	// Retain it (index → purge → reindex marks only_copy_since)…
 	retainSession(t, root, "proj-a", "cafe0012-0000-0000-0000-000000000013", 2)
 	// …then the file comes back, with no reconcile pass in between.
 	restored := writeSession(t, root, "proj-a", "cafe0012-0000-0000-0000-000000000013", 2)

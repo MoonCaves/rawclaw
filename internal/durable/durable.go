@@ -46,7 +46,7 @@ func Root() string { return paths.TranscriptsRoot() }
 // restore the file_index watermark keyed on the ORIGINAL source path. Keying it
 // on the vault path instead would be actively harmful: the next live pass
 // compares file_index paths against the source walk, so a vault-keyed row reads
-// as "source absent" and would stamp missing_since on a perfectly live session.
+// as "source absent" and would stamp only_copy_since on a perfectly live session.
 type Meta struct {
 	ID            string  `json:"id"`
 	Source        string  `json:"source"`
