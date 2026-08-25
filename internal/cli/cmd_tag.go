@@ -209,7 +209,7 @@ func computeUntaggedWindow(
 	}
 
 	stretchStart := -1
-	for i := 0; i < len(displayable); i++ {
+	for i := range displayable {
 		if !tagged[i] {
 			stretchStart = i
 			break
