@@ -61,6 +61,7 @@ type Hit struct {
 	IsSubagent bool
 	Parent     string
 	Snippet    string
+	Routine    bool
 }
 
 // AllHit is one cross-project cross-project result: a Hit plus the project label and
@@ -96,6 +97,7 @@ type Anchor struct {
 	Project string  // project label
 	DBP     string  // db path this anchor came from
 	Rank    int     // original keyword rank (tiebreak)
+	Routine bool    // true when the session has an effective routine verdict
 }
 
 // SearchParams groups the many optional filters shared by Search / MatchAnchors
@@ -424,6 +426,7 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 		}
 	}
 
+	routines, _ := store.RoutineSet(con)
 	lterms := lowerSet(terms)
 	scored := make([]scoredHit, 0, len(hits))
 	for _, h := range hits {
@@ -453,16 +456,24 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 				IsSubagent: h.IsSubagent,
 				Parent:     h.Parent,
 				Snippet:    disp,
+				Routine:    routines[h.SessionID],
 			},
 			cov: cov,
 		})
 	}
 
-	// Coverage re-rank (relevance mode only): docs matching more distinct terms
-	// float up; bm25 order is the tiebreak (stable sort by original index).
-	if multi && p.Sort == "" {
+	// Coverage re-rank and stable routine partition (relevance mode only):
+	// docs matching more distinct terms float up; at equal coverage, non-routine
+	// before routine; bm25 order is the tiebreak.
+	if p.Sort == "" {
 		sort.SliceStable(scored, func(i, j int) bool {
-			return scored[i].cov > scored[j].cov
+			if scored[i].cov != scored[j].cov {
+				return scored[i].cov > scored[j].cov
+			}
+			if scored[i].Routine != scored[j].Routine {
+				return !scored[i].Routine && scored[j].Routine
+			}
+			return false
 		})
 	}
 
@@ -674,6 +685,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 		}
 	}
 
+	routines, _ := store.RoutineSet(con)
 	lterms := lowerSet(terms)
 	out := []Anchor{}
 	for _, a := range anchors {
@@ -700,12 +712,19 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			Cov:          cov,
 			MissingSince: a.MissingSince, // 0 when NULL (present)
 			Project:      a.Project,      // "" from a database that predates the scope columns
+			Routine:      routines[a.SessionID],
 		})
 	}
 
-	if multi && p.Sort == "" {
+	if p.Sort == "" {
 		sort.SliceStable(out, func(i, j int) bool {
-			return out[i].Cov > out[j].Cov
+			if out[i].Cov != out[j].Cov {
+				return out[i].Cov > out[j].Cov
+			}
+			if out[i].Routine != out[j].Routine {
+				return !out[i].Routine && out[j].Routine
+			}
+			return false
 		})
 	}
 	return out
