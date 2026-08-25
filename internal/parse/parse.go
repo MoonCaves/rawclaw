@@ -115,9 +115,9 @@ func appendBlock(parts []string, b map[string]any) []string {
 			parts = append(parts, "[THINKING] "+capRunes(s, BlockCap))
 		}
 	case "tool_use":
-		name, _ := b["name"].(string)
-		if name == "" {
-			name = "?"
+		name := "?"
+		if n, ok := b["name"].(string); ok {
+			name = n
 		}
 		input := b["input"]
 		if input == nil {
