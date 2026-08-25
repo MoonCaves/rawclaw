@@ -48,6 +48,13 @@ func ConfigDir() string {
 	return expandHome("~/.claude")
 }
 
+func rawclawDataDir(subdir string) string {
+	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
+		return filepath.Join(x, "rawclaw", subdir)
+	}
+	return expandHome(filepath.Join("~/.local/share/rawclaw", subdir))
+}
+
 // TranscriptsRoot is the durable home for rawclaw's OWN copy of every session
 // it indexes — the transcript vault. It lives in the XDG DATA dir, NOT the
 // disposable cache (which holds only rebuildable index dbs), because the vault
@@ -57,10 +64,7 @@ func ConfigDir() string {
 // NOT when the session was last active: freshness comes from the live
 // sources, which are re-indexed on every invoke.
 func TranscriptsRoot() string {
-	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
-		return filepath.Join(x, "rawclaw", "transcripts")
-	}
-	return expandHome("~/.local/share/rawclaw/transcripts")
+	return rawclawDataDir("transcripts")
 }
 
 // CatalogDir is the durable home for rawclaw's session catalog: one flat
@@ -71,10 +75,7 @@ func CatalogDir() string {
 	if c := os.Getenv("RAWCLAW_CATALOG_DIR"); c != "" {
 		return c
 	}
-	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
-		return filepath.Join(x, "rawclaw", "catalog")
-	}
-	return expandHome("~/.local/share/rawclaw/catalog")
+	return rawclawDataDir("catalog")
 }
 
 // CatalogEntry is one entry in the durable session catalog.
