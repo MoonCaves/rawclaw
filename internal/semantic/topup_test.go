@@ -33,7 +33,7 @@ type mockEmbedder struct {
 	vec []float64
 }
 
-func (m *mockEmbedder) Embed(text string) []float64 {
+func (m *mockEmbedder) Embed(context.Context, string) []float64 {
 	return m.vec
 }
 
