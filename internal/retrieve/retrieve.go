@@ -357,11 +357,9 @@ func Explain(covs []int, in ExplainInputs) []ScoreExplain {
 // single-term query is byte-identical to a plain FTS5 MATCH).
 func Search(dbp, q string, limit int, p SearchParams) []Hit {
 	scored, _ := searchScored(dbp, q, limit, p)
-	if limit < 0 {
-		limit = 0
-	}
-	out := make([]Hit, 0, limit)
-	for i := 0; i < len(scored) && i < limit; i++ {
+	n := min(len(scored), max(0, limit))
+	out := make([]Hit, 0, n)
+	for i := 0; i < n; i++ {
 		out = append(out, scored[i].Hit)
 	}
 	return out
