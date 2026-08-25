@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -161,17 +162,11 @@ type BuildInfo struct {
 // versionString renders the one-line version banner shown by `--version` and the
 // `version` subcommand. Empty fields fall back to "dev"/"unknown".
 func (b BuildInfo) versionString() string {
-	v, c, d := b.Version, b.Commit, b.Date
-	if v == "" {
-		v = "dev"
-	}
-	if c == "" {
-		c = "unknown"
-	}
-	if d == "" {
-		d = "unknown"
-	}
-	return fmt.Sprintf("rawclaw %s (commit: %s, built: %s)", v, c, d)
+	return fmt.Sprintf("rawclaw %s (commit: %s, built: %s)",
+		cmp.Or(b.Version, "dev"),
+		cmp.Or(b.Commit, "unknown"),
+		cmp.Or(b.Date, "unknown"),
+	)
 }
 
 // NewRootCmd builds the rawclaw cobra command tree (root + the `read`, `outline`,
@@ -1835,7 +1830,7 @@ func ListProjects(w io.Writer) {
 	for _, sc := range scopes.Claude() {
 		if sc.TDir != "" { // live project: count from its transcripts (unchanged)
 			matches, _ := filepath.Glob(filepath.Join(sc.TDir, "*.jsonl"))
-			rows = append(rows, row{len(matches), paths.ProjectLabel(sc.TDir), baseName(sc.TDir), false})
+			rows = append(rows, row{len(matches), paths.ProjectLabel(sc.TDir), filepath.Base(sc.TDir), false})
 			continue
 		}
 		// Orphaned source: no jsonl on disk — count retained sessions from the db.
@@ -1938,10 +1933,7 @@ func validateChoice(flag, val string, opts ...string) error {
 
 // orQ returns s, or "?" when s is empty.
 func orQ(s string) string {
-	if s == "" {
-		return "?"
-	}
-	return s
+	return cmp.Or(s, "?")
 }
 
 // trunc8 returns the first 8 runes of s (rune-safe truncation, no padding).
