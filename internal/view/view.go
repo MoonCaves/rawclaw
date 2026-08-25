@@ -8,12 +8,11 @@ package view
 
 import (
 	"database/sql"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
-	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -103,10 +102,7 @@ func bookendFetch(opts AnchoredViewOpts) int {
 	if opts.IncludeTools {
 		return opts.Bookend
 	}
-	if opts.Bookend > bookendScan {
-		return opts.Bookend
-	}
-	return bookendScan
+	return max(opts.Bookend, bookendScan)
 }
 
 // IsDisplayable reports whether a record still says something after everything
@@ -239,11 +235,8 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 	}
 
 	// win = reversed(before) + after (both ascending by id).
-	win := make([]store.Msg, 0, len(before)+len(after))
-	for i := len(before) - 1; i >= 0; i-- {
-		win = append(win, before[i])
-	}
-	win = append(win, after...)
+	slices.Reverse(before)
+	win := slices.Concat(before, after)
 	if len(win) == 0 {
 		return nil
 	}
@@ -289,68 +282,15 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 
 	bookendStart := TakeDisplayableWith(bs, opts.Bookend, opts.IncludeTools, opts.IncludeThinking, dispCap)
 	// bookend_end: emit reversed(be) (be is DESC, so output is ASC by id).
-	rev := make([]store.Msg, 0, len(be))
-	for i := len(be) - 1; i >= 0; i-- {
-		rev = append(rev, be[i])
-	}
-	bookendEnd := TakeDisplayableTailWith(rev, opts.Bookend, opts.IncludeTools, opts.IncludeThinking, dispCap)
+	bookendEnd := TakeDisplayableTailWith(Reversed(be), opts.Bookend, opts.IncludeTools, opts.IncludeThinking, dispCap)
 
-	messagesBefore := len(before) - 1
-	if messagesBefore < 0 {
-		messagesBefore = 0
-	}
+	messagesBefore := max(0, len(before)-1)
 	return &AnchoredView{
 		BookendStart:   bookendStart,
 		Window:         wmsgs,
 		BookendEnd:     bookendEnd,
 		MessagesBefore: messagesBefore,
 		MessagesAfter:  len(after),
-	}
-}
-
-// sortCandidates orders discovery candidates per the requested sort mode.
-//
-//	newest: by iso desc (empty iso sinks)
-//	oldest: by iso asc  (empty iso floats)
-//	"":     relevance — fused desc, then cov desc, then rank asc
-//
-// sort.SliceStable keeps the ordering stable for equal keys.
-func sortCandidates(cands []retrieve.Anchor, mode string) {
-	switch mode {
-	case "newest":
-		sort.SliceStable(cands, func(i, j int) bool {
-			if cands[i].ISO != cands[j].ISO {
-				return cands[i].ISO > cands[j].ISO
-			}
-			if cands[i].Routine != cands[j].Routine {
-				return !cands[i].Routine && cands[j].Routine
-			}
-			return false
-		})
-	case "oldest":
-		sort.SliceStable(cands, func(i, j int) bool {
-			if cands[i].ISO != cands[j].ISO {
-				return cands[i].ISO < cands[j].ISO
-			}
-			if cands[i].Routine != cands[j].Routine {
-				return !cands[i].Routine && cands[j].Routine
-			}
-			return false
-		})
-	default:
-		sort.SliceStable(cands, func(i, j int) bool {
-			a, b := cands[i], cands[j]
-			if a.Fused != b.Fused {
-				return a.Fused > b.Fused
-			}
-			if a.Cov != b.Cov {
-				return a.Cov > b.Cov
-			}
-			if a.Routine != b.Routine {
-				return !a.Routine && b.Routine
-			}
-			return a.Rank < b.Rank
-		})
 	}
 }
 
@@ -497,10 +437,9 @@ func SessionLastActivity(con *sql.DB, sessionID string) string {
 // captions the row.
 func isBareBlockMarker(text string) bool {
 	t := strings.TrimSpace(text)
-	for _, marker := range []string{"[THINKING]", "[SYSTEM]", "[TOOL_RESULT]"} {
-		if t == marker {
-			return true
-		}
+	switch t {
+	case "[THINKING]", "[SYSTEM]", "[TOOL_RESULT]":
+		return true
 	}
 	return strings.HasPrefix(t, "[TOOL:") && strings.HasSuffix(t, "]") &&
 		!strings.Contains(t[1:len(t)-1], "]")
