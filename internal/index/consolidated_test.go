@@ -1226,6 +1226,71 @@ func TestUnconsolidatedDBs_DoesNotTrustAmbiguousLegacyBasename(t *testing.T) {
 	}
 }
 
+// TestUnconsolidatedDBs_RemoveAndReplaceLegacyBasename tests issue #14:
+// When database A (with legacy basename watermark) is removed and replaced by an
+// unrelated database B with the same basename, B must NOT inherit A's stale watermark.
+// B must be reported unconsolidated and successfully consolidated.
+func TestUnconsolidatedDBs_RemoveAndReplaceLegacyBasename(t *testing.T) {
+	isolateCache(t)
+	first := seedSessionDB(t, "sessions.db", sessionRow{
+		id: "first-session", project: "first", cwd: "/w/first",
+		msgs: []msgRow{{"first-msg", "user", "first message", 100}},
+	})
+
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := con.Exec("INSERT INTO meta(key, value) VALUES('sync:sessions.db', 'legacy-mark')"); err != nil {
+		t.Fatalf("seed legacy watermark: %v", err)
+	}
+
+	// First pass: sole candidate 'first' carries the legacy basename.
+	missingA, err := unconsolidatedDBs(con, []string{first})
+	if err != nil {
+		t.Fatalf("unconsolidatedDBs first: %v", err)
+	}
+	if len(missingA) != 0 {
+		t.Fatalf("missing databases for first pass = %v, want empty (accepted legacy watermark)", missingA)
+	}
+
+	// Remove database A.
+	if err := os.Remove(first); err != nil {
+		t.Fatalf("remove first: %v", err)
+	}
+
+	// Introduce an unrelated database B with the same basename "sessions.db".
+	second := seedSessionDB(t, "sessions.db", sessionRow{
+		id: "second-session", project: "second", cwd: "/w/second",
+		msgs: []msgRow{{"second-msg", "user", "second message", 200}},
+	})
+
+	// Second pass: B is now the sole candidate, but must NOT inherit A's stale watermark.
+	missingB, err := unconsolidatedDBs(con, []string{second})
+	if err != nil {
+		t.Fatalf("unconsolidatedDBs second: %v", err)
+	}
+	if len(missingB) != 1 || missingB[0] != second {
+		t.Fatalf("missing databases for replaced second = %v, want [%s]", missingB, second)
+	}
+
+	// Consolidate second and assert its content is actually merged rather than skipped.
+	if _, err := ConsolidateFrom([]string{second}, false); err != nil {
+		t.Fatalf("consolidate second: %v", err)
+	}
+	var count int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='second-session'").Scan(&count); err != nil {
+		t.Fatalf("query second session: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("second session count = %d, want 1 (database B should be consolidated)", count)
+	}
+}
+
 // TestConsolidate_MergedSessionHonestPerContributionSemantics tests ticket #181:
 //   - A session merged from 3 sources where 1 or 2 are purged remains LIVE (missing_since = NULL).
 //   - When ALL 3 contributing sources are purged, the merged row learns of it and stamps
