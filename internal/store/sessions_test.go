@@ -70,6 +70,131 @@ func TestBrowseSessions(t *testing.T) {
 	}
 }
 
+func TestBrowseScopedSessions(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	day := 24 * 3600.0
+	base := 1750000000.0
+
+	storetest.InsertSession(t, con, storetest.Session{
+		ID: "p1-claude", Project: "proj-1", SourceTool: "claude", LastTS: base + 3*day, MessageCount: 5,
+	})
+	storetest.InsertSession(t, con, storetest.Session{
+		ID: "p1-codex", Project: "proj-1", SourceTool: "codex", LastTS: base + 2*day, MessageCount: 4,
+	})
+	storetest.InsertSession(t, con, storetest.Session{
+		ID: "p2-claude", Project: "proj-2", SourceTool: "claude", LastTS: base + day, MessageCount: 3,
+	})
+	storetest.InsertSession(t, con, storetest.Session{
+		ID: "p2-codex", Project: "proj-2", SourceTool: "codex", LastTS: base, MessageCount: 2,
+	})
+	storetest.InsertSession(t, con, storetest.Session{
+		ID: "p1-sub", Project: "proj-1", SourceTool: "claude", LastTS: base + 4*day, MessageCount: 1,
+		IsSubagent: true, ParentID: "p1-claude",
+	})
+
+	// All sessions (top-level only), newest first.
+	rows, err := store.BrowseScopedSessions(con, "", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("BrowseScopedSessions all: %v", err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("BrowseScopedSessions all = %d rows, want 4", len(rows))
+	}
+	if rows[0].SessionID != "p1-claude" || rows[0].Project != "proj-1" {
+		t.Errorf("row 0 = %+v, want p1-claude on proj-1", rows[0])
+	}
+	if rows[3].SessionID != "p2-codex" || rows[3].Project != "proj-2" {
+		t.Errorf("row 3 = %+v, want p2-codex on proj-2", rows[3])
+	}
+
+	// Filter by project.
+	rows, err = store.BrowseScopedSessions(con, "", "", "", []string{"proj-2"}, 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("BrowseScopedSessions proj-2 = %d rows (%v), want 2", len(rows), err)
+	}
+	if rows[0].SessionID != "p2-claude" || rows[1].SessionID != "p2-codex" {
+		t.Errorf("proj-2 rows = %v, want [p2-claude p2-codex]", rows)
+	}
+
+	// Filter by source_tool.
+	rows, err = store.BrowseScopedSessions(con, "", "", "codex", nil, 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("BrowseScopedSessions source codex = %d rows (%v), want 2", len(rows), err)
+	}
+	if rows[0].SessionID != "p1-codex" || rows[1].SessionID != "p2-codex" {
+		t.Errorf("codex rows = %v, want [p1-codex p2-codex]", rows)
+	}
+
+	// Filter by both project and source_tool.
+	rows, err = store.BrowseScopedSessions(con, "", "", "claude", []string{"proj-1"}, 10)
+	if err != nil || len(rows) != 1 || rows[0].SessionID != "p1-claude" {
+		t.Fatalf("BrowseScopedSessions proj-1 claude = %+v (%v), want [p1-claude]", rows, err)
+	}
+
+	// Filter with limit.
+	rows, err = store.BrowseScopedSessions(con, "", "", "", nil, 2)
+	if err != nil || len(rows) != 2 || rows[0].SessionID != "p1-claude" || rows[1].SessionID != "p1-codex" {
+		t.Fatalf("BrowseScopedSessions limit 2 = %+v (%v), want [p1-claude p1-codex]", rows, err)
+	}
+}
+
+func TestBrowseScopedSessions_NullProjectAppearsUnderFilter(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	base := 1750000000.0
+
+	// Insert a session with an explicit project and a session with NULL project (unscoped/unstamped).
+	storetest.InsertSession(t, con, storetest.Session{
+		ID: "p1-stamped", Project: "proj-1", SourceTool: "claude", LastTS: base + 100, MessageCount: 2,
+	})
+	storetest.InsertSession(t, con, storetest.Session{
+		ID: "null-project", Project: "", SourceTool: "claude", LastTS: base + 200, MessageCount: 3,
+	})
+
+	// When filtering by project "proj-1", the NULL-project session must still appear (over-inclusive).
+	rows, err := store.BrowseScopedSessions(con, "", "", "", []string{"proj-1"}, 10)
+	if err != nil {
+		t.Fatalf("BrowseScopedSessions: %v", err)
+	}
+
+	foundNull := false
+	foundStamped := false
+	for _, r := range rows {
+		if r.SessionID == "null-project" {
+			foundNull = true
+		}
+		if r.SessionID == "p1-stamped" {
+			foundStamped = true
+		}
+	}
+	if !foundNull {
+		t.Errorf("expected null-project session to appear under project filter, rows = %+v", rows)
+	}
+	if !foundStamped {
+		t.Errorf("expected p1-stamped session to appear under project filter, rows = %+v", rows)
+	}
+}
+
+func TestBrowseScopedSessions_DeterministicTieBreak(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	base := 1750000000.0
+
+	// Insert three sessions with identical last_ts but different IDs.
+	storetest.InsertSession(t, con, storetest.Session{ID: "sess-c", LastTS: base, MessageCount: 1})
+	storetest.InsertSession(t, con, storetest.Session{ID: "sess-a", LastTS: base, MessageCount: 1})
+	storetest.InsertSession(t, con, storetest.Session{ID: "sess-b", LastTS: base, MessageCount: 1})
+
+	rows, err := store.BrowseScopedSessions(con, "", "", "", nil, 10)
+	if err != nil {
+		t.Fatalf("BrowseScopedSessions: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+	if rows[0].SessionID != "sess-a" || rows[1].SessionID != "sess-b" || rows[2].SessionID != "sess-c" {
+		t.Errorf("rows = [%s %s %s], want [sess-a sess-b sess-c]", rows[0].SessionID, rows[1].SessionID, rows[2].SessionID)
+	}
+}
+
 func TestSessionsByPrefix(t *testing.T) {
 	con, _ := storetest.NewDB(t)
 	storetest.InsertSession(t, con, storetest.Session{ID: "run-a"})
