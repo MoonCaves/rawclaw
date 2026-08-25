@@ -221,3 +221,93 @@ func TestEnsureIndexedContainers_SQLiteWALTrigger(t *testing.T) {
 		t.Fatalf("expected reindex triggered by WAL update, got call count %d", msgCallCount)
 	}
 }
+
+// TestEnsureIndexedContainers_StaleWatermarkDroppedOnRename proves that when a container's
+// backing file path changes for the same session ID, the old file_index watermark is
+// purged so retention does not treat the old path as a purged session and flag/prune it.
+func TestEnsureIndexedContainers_StaleWatermarkDroppedOnRename(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "antigravity.db")
+
+	f1 := filepath.Join(dir, "transcript.jsonl")
+	f2 := filepath.Join(dir, "transcript_full.jsonl")
+	if err := os.WriteFile(f1, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c1 := source.Container{ID: "sess-rename", Path: f1, CWD: "/repo"}
+	msgs1 := func(source.Container) ([]model.Message, error) {
+		return []model.Message{{Role: "user", Text: "rotate secret keys", TS: 1, TSISO: "2026-08-15T00:00:00Z", UUID: "u1"}}, nil
+	}
+
+	// Pass 1: indexed under f1 (transcript.jsonl)
+	n, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c1}, msgs1, "antigravity", "")
+	if err != nil {
+		t.Fatalf("initial EnsureIndexedContainers: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("sessions = %d, want 1", n)
+	}
+
+	// Now f1 is removed, and f2 (transcript_full.jsonl) is created
+	if err := os.Remove(f1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f2, []byte("x\ny\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c2 := source.Container{ID: "sess-rename", Path: f2, CWD: "/repo"}
+	msgs2 := func(source.Container) ([]model.Message, error) {
+		return []model.Message{
+			{Role: "user", Text: "rotate secret keys", TS: 1, TSISO: "2026-08-15T00:00:00Z", UUID: "u1"},
+			{Role: "user", Text: "validate secret keys", TS: 2, TSISO: "2026-08-15T00:00:01Z", UUID: "u2"},
+		}, nil
+	}
+
+	// Pass 2: indexed under f2 (transcript_full.jsonl).
+	//
+	// reindex MUST be false here. ensureIndexedContainers os.Remove()s the whole db
+	// when reindex is true, which wipes the f1 watermark before this pass can run —
+	// the stale row would never exist, and this test would pass with or without the
+	// fix it exists to pin. Carrying the db forward is the entire scenario.
+	n2, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c2}, msgs2, "antigravity", "")
+	if err != nil {
+		t.Fatalf("second EnsureIndexedContainers: %v", err)
+	}
+	if n2 != 1 {
+		t.Fatalf("sessions after rename = %d, want 1", n2)
+	}
+
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+
+	// file_index must have exactly 1 row pointing to f2 (the stale row for f1 is gone)
+	var fiCount int
+	if err := con.QueryRow("SELECT COUNT(*) FROM file_index WHERE session_id='sess-rename'").Scan(&fiCount); err != nil {
+		t.Fatal(err)
+	}
+	if fiCount != 1 {
+		t.Errorf("file_index row count for sess-rename = %d, want 1", fiCount)
+	}
+
+	var fiPath string
+	if err := con.QueryRow("SELECT path FROM file_index WHERE session_id='sess-rename'").Scan(&fiPath); err != nil {
+		t.Fatal(err)
+	}
+	if fiPath != realpath(f2) {
+		t.Errorf("file_index path = %q, want %q", fiPath, realpath(f2))
+	}
+
+	// missing_since must NOT be stamped
+	var missing sql.NullFloat64
+	if err := con.QueryRow("SELECT missing_since FROM sessions WHERE id='sess-rename'").Scan(&missing); err != nil {
+		t.Fatal(err)
+	}
+	if missing.Valid {
+		t.Errorf("missing_since = %v, want NULL (session is live, not missing)", missing.Float64)
+	}
+}

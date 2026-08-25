@@ -313,18 +313,22 @@ func migrateDurabilityColumns(con *sql.DB, sourceID string) error {
 	// A row with no file_index watermark simply stays NULL on source_path;
 	// missing_since stays NULL — an existing session is present until a scan proves
 	// otherwise.
-	var needsBackfill int
-	if err := con.QueryRow("SELECT 1 FROM sessions WHERE origin_machine IS NULL LIMIT 1").Scan(&needsBackfill); err == nil && needsBackfill == 1 {
-		if _, err := con.Exec(
-			`UPDATE sessions
-			    SET origin_machine = ?,
-			        source_tool = ?,
-			        source_path = (SELECT path FROM file_index WHERE file_index.session_id = sessions.id)
-			  WHERE origin_machine IS NULL`,
-			provenance.MachineID(), sourceID,
-		); err != nil {
-			return fmt.Errorf("backfill provenance: %w", err)
-		}
+	//
+	// The UPDATE runs unconditionally. Its own WHERE clause is the row-state gate, so
+	// on an already-stamped db it matches zero rows and costs nothing worth guarding.
+	// A SELECT probe in front of it was tried and removed: it could only skip a no-op,
+	// and it turned every probe-time failure — SQLITE_BUSY, an I/O error — into a
+	// silent success, because a non-nil Scan error fell through to `return nil` and
+	// reported a fully migrated schema to callers that then wrote against it.
+	if _, err := con.Exec(
+		`UPDATE sessions
+		    SET origin_machine = ?,
+		        source_tool = ?,
+		        source_path = (SELECT path FROM file_index WHERE file_index.session_id = sessions.id)
+		  WHERE origin_machine IS NULL`,
+		provenance.MachineID(), sourceID,
+	); err != nil {
+		return fmt.Errorf("backfill provenance: %w", err)
 	}
 	return nil
 }
@@ -616,6 +620,13 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scop
 		return false
 	}
 
+	// Drop any watermark this session held under a DIFFERENT path before writing
+	// the current one — see the same guard in reindexContainer. Keyed by path, an
+	// orphaned row looks to retention like a purged source and prunes a session
+	// that is still present.
+	if _, err := tx.Exec("DELETE FROM file_index WHERE session_id=? AND path<>?", sid, rp); err != nil {
+		return false
+	}
 	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
 		rp, mtime, size, provenance.FileFingerprint(path, size), sid,
