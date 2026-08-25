@@ -85,6 +85,10 @@ type SearchRef struct {
 	// retained-but-missing hit is not read as current state (D7). omitempty keeps
 	// the JSON byte-identical for the common present case.
 	Missing bool `json:"missing,omitempty"`
+
+	// Routine is true when this conversation carries an effective routine verdict.
+	// omitempty keeps the JSON byte-identical for normal sessions.
+	Routine bool `json:"routine,omitempty"`
 }
 
 // Scope status values for incompleteness-as-data (#6).
@@ -603,6 +607,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			Snippet:   r.Snip,
 			ReadRef:   fmtRef(r.SessionID, r.UUID),
 			Missing:   r.MissingSince > 0,
+			Routine:   r.Routine,
 		})
 		picked = append(picked, r)
 	}
@@ -908,12 +913,14 @@ func searchOneStore(
 	}
 
 	dbp := index.ConsolidatedPath()
+	routines, _ := store.RoutineSet(con)
 	for i := range rows {
 		rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
 		// The project label comes off the ROW, not off a scope: in one store the
 		// project is a column, and one query returns rows from many projects.
 		rows[i].DBP = dbp
 		rows[i].Rank = i
+		rows[i].Routine = routines[rows[i].SessionID]
 		cands = append(cands, rows[i])
 	}
 
@@ -1163,11 +1170,13 @@ func collectCandidates(
 		if qvecFn != nil && store.HasVectors(con) {
 			rows = semantic.Fuse(con, rows, qvecFn(), fetch, p.IncludeSubagents)
 		}
+		routines, _ := store.RoutineSet(con)
 		for i := range rows {
 			rows[i].Root = retrieve.LineageRoot(con, rows[i].SessionID)
 			rows[i].Project = sc.Project
 			rows[i].DBP = dbp
 			rows[i].Rank = i
+			rows[i].Routine = routines[rows[i].SessionID]
 			cands = append(cands, rows[i])
 		}
 		_ = con.Close()
@@ -1410,17 +1419,28 @@ func attachLastActivity(refs []SearchRef, anchors []retrieve.Anchor) {
 }
 
 // sortCandidates orders the merged candidates: newest/oldest sort by ISO;
-// relevance sorts by (-fused, -cov, rank). fused is always zero here (agentproto
-// never fuses) — kept for parity with the shared anchor ordering.
+// relevance sorts by (-fused, -cov, !routine, rank).
 func sortCandidates(cands []retrieve.Anchor, mode string) {
 	switch mode {
 	case "newest":
 		sort.SliceStable(cands, func(i, j int) bool {
-			return cands[i].ISO > cands[j].ISO
+			if cands[i].ISO != cands[j].ISO {
+				return cands[i].ISO > cands[j].ISO
+			}
+			if cands[i].Routine != cands[j].Routine {
+				return !cands[i].Routine && cands[j].Routine
+			}
+			return false
 		})
 	case "oldest":
 		sort.SliceStable(cands, func(i, j int) bool {
-			return cands[i].ISO < cands[j].ISO
+			if cands[i].ISO != cands[j].ISO {
+				return cands[i].ISO < cands[j].ISO
+			}
+			if cands[i].Routine != cands[j].Routine {
+				return !cands[i].Routine && cands[j].Routine
+			}
+			return false
 		})
 	default:
 		sort.SliceStable(cands, func(i, j int) bool {
@@ -1430,6 +1450,9 @@ func sortCandidates(cands []retrieve.Anchor, mode string) {
 			}
 			if a.Cov != b.Cov {
 				return a.Cov > b.Cov
+			}
+			if a.Routine != b.Routine {
+				return !a.Routine && b.Routine
 			}
 			return a.Rank < b.Rank
 		})
@@ -2336,6 +2359,7 @@ type TopicHit struct {
 	Topic   string `json:"topic"`
 	Project string `json:"project"`
 	ReadRef string `json:"read_ref"`
+	Routine bool   `json:"routine,omitempty"`
 }
 
 // TopicsResult wraps the topic-finder hits with the query and a note. Note is
@@ -2430,6 +2454,7 @@ func topicsFromStore(con *sql.DB, query string, limit int, opts TopicsOpts) (Top
 	if err != nil {
 		return TopicsResult{}, false
 	}
+	routines, _ := store.RoutineVerdictSet(con)
 	hits := []TopicHit{}
 	for _, h := range thits {
 		uuid := store.MessageUUID(con, h.MsgID)
@@ -2440,8 +2465,17 @@ func topicsFromStore(con *sql.DB, query string, limit int, opts TopicsOpts) (Top
 			Topic:   h.Topic,
 			Project: h.Project,
 			ReadRef: fmtRef(h.SessionID, uuid),
+			Routine: routines[h.SessionID],
 		})
 	}
+
+	// Stable partition at equal relevance: non-routine before routine
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].Routine != hits[j].Routine {
+			return !hits[i].Routine && hits[j].Routine
+		}
+		return false
+	})
 
 	// No empty-state note here: reaching this point means the store DOES carry
 	// topic rows, so zero hits is a query that matched nothing, not an untagged
@@ -2511,6 +2545,7 @@ func topicsByFanOut(query string, scope []view.Scope, limit int, opts TopicsOpts
 		// The map is per-project because that is the only place dedup is sound
 		// here: it is keyed on a lineage root read from THIS database, and the
 		// rank order it consumes is only comparable within it.
+		routines, _ := store.RoutineVerdictSet(con)
 		seenTopic := map[string]struct{}{}
 		kept := 0
 		for _, h := range thits {
@@ -2531,6 +2566,7 @@ func topicsByFanOut(query string, scope []view.Scope, limit int, opts TopicsOpts
 				Topic:   h.Topic,
 				Project: sc.Project,
 				ReadRef: fmtRef(h.SessionID, uuid),
+				Routine: routines[h.SessionID],
 			})
 			kept++
 			if kept == limit {
@@ -2539,6 +2575,14 @@ func topicsByFanOut(query string, scope []view.Scope, limit int, opts TopicsOpts
 		}
 		_ = con.Close()
 	}
+
+	// Stable partition at equal relevance: non-routine before routine
+	sort.SliceStable(hits, func(i, j int) bool {
+		if hits[i].Routine != hits[j].Routine {
+			return !hits[i].Routine && hits[j].Routine
+		}
+		return false
+	})
 
 	res := TopicsResult{Query: query, Hits: hits}
 	if len(hits) == 0 && !anyTopics {
