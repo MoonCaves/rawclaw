@@ -184,7 +184,7 @@ func NormalizeRecord(rec map[string]any) (role, text string, ok bool) {
 		r, _ := p["role"].(string)
 		return mapRole(r), contentText(p["content"]), true
 	case "reasoning":
-		s := summaryText(p["summary"])
+		s := contentText(p["summary"])
 		if s == "" {
 			return "", "", false
 		}
@@ -258,9 +258,12 @@ func mapRole(r string) string {
 	}
 }
 
-// contentText joins the text of a content-block array ([{type:input_text|
-// output_text, text:…}]). Non-array or block-less content yields "".
+// contentText joins the text of a string or content-block array ([{type:input_text|
+// output_text|summary_text, text:…}]). Non-array or block-less content yields "".
 func contentText(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
 	blocks, ok := v.([]any)
 	if !ok {
 		return ""
@@ -281,15 +284,6 @@ func contentText(v any) string {
 	return b.String()
 }
 
-// summaryText flattens a reasoning summary, which may be a string or an array of
-// {type:summary_text, text:…} blocks.
-func summaryText(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return contentText(v)
-}
-
 // outputText renders a function_call_output payload, which may be a string or a
 // {output:…} / content-block shape.
 func outputText(v any) string {
@@ -300,9 +294,7 @@ func outputText(v any) string {
 		if s, ok := o["output"].(string); ok {
 			return s
 		}
-		if s := contentText(o["content"]); s != "" {
-			return s
-		}
+		return contentText(o["content"])
 	}
 	return ""
 }
