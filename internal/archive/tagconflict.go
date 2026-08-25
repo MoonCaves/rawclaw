@@ -64,13 +64,7 @@ func readTagConflicts() []string {
 	if err != nil {
 		return nil
 	}
-	var out []string
-	for _, line := range strings.Split(string(b), "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			out = append(out, s)
-		}
-	}
-	return out
+	return strings.Fields(string(b))
 }
 
 // tagIngestStampPath is the mtime gate for the tag-ingest pass: it advances after
