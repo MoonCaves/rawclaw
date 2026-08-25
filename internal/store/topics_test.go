@@ -259,54 +259,54 @@ func TestSessionHasRealSegments(t *testing.T) {
 	})
 }
 
-func TestReplaceSessionRangeSegments(t *testing.T) {
+func TestInsertTopicSegments(t *testing.T) {
 	con, _ := storetest.NewDB(t)
 	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
 
-	const sid = "sess-range-1"
-	// Insert 3 initial segments
+	const sid = "sess-insert-1"
 	initial := []store.TopicSegment{
 		{SessionID: sid, StartUUID: "u-1", EndUUID: "u-2", Topic: "first", Summary: "s1", TaggedAt: 1.0},
-		{SessionID: sid, StartUUID: "u-3", EndUUID: "u-4", Topic: "second", Summary: "s2", TaggedAt: 1.0},
-		{SessionID: sid, StartUUID: "u-5", EndUUID: "u-6", Topic: "third", Summary: "s3", TaggedAt: 1.0},
 	}
-	if err := store.ReplaceSessionSegments(con, sid, initial); err != nil {
-		t.Fatalf("ReplaceSessionSegments: %v", err)
+	if err := store.InsertTopicSegments(con, initial); err != nil {
+		t.Fatalf("InsertTopicSegments initial: %v", err)
 	}
 
-	// Selectively replace segment 2 ("u-3") with a new segment "u-3.5"
-	newSegs := []store.TopicSegment{
-		{SessionID: sid, StartUUID: "u-3.5", EndUUID: "u-4.5", Topic: "replaced second", Summary: "s2-new", TaggedAt: 2.0},
+	appended := []store.TopicSegment{
+		{SessionID: sid, StartUUID: "u-3", EndUUID: "u-4", Topic: "second", Summary: "s2", TaggedAt: 2.0},
 	}
-	if err := store.ReplaceSessionRangeSegments(con, sid, []string{"u-3"}, newSegs); err != nil {
-		t.Fatalf("ReplaceSessionRangeSegments: %v", err)
+	if err := store.InsertTopicSegments(con, appended); err != nil {
+		t.Fatalf("InsertTopicSegments appended: %v", err)
 	}
 
 	segs, err := store.TopicsForSession(con, sid)
 	if err != nil {
 		t.Fatalf("TopicsForSession: %v", err)
 	}
-	if len(segs) != 3 {
-		t.Fatalf("segs count = %d, want 3", len(segs))
+	if len(segs) != 2 {
+		t.Fatalf("segs count = %d, want 2", len(segs))
 	}
+	if segs[0].Topic != "first" || segs[1].Topic != "second" {
+		t.Errorf("segs = %+v, want first and second preserved", segs)
+	}
+}
 
-	byStart := make(map[string]store.TopicSegment)
-	for _, s := range segs {
-		byStart[s.StartUUID] = s
+func TestTopicForMessageUntaggedReturnsEmpty(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
+	storetest.InsertSession(t, con, storetest.Session{ID: "sess1"})
+	storetest.InsertMessage(t, con, storetest.Message{SessionID: "sess1", Role: "user", Content: "m1", UUID: "u1"})
+	storetest.InsertMessage(t, con, storetest.Message{SessionID: "sess1", Role: "assistant", Content: "m2", UUID: "u2"})
 
-	if s, ok := byStart["u-1"]; !ok || s.Topic != "first" {
-		t.Errorf("u-1 segment = %+v, want preserved first", s)
+	// One segment covering only u1; u2 is outside the range. Partial coverage
+	// reads honestly as untagged ("").
+	if err := store.UpsertTopicSegment(con, "sess1", "u1", "u1", "only topic", "", 1.0); err != nil {
+		t.Fatalf("upsert: %v", err)
 	}
-	if s, ok := byStart["u-5"]; !ok || s.Topic != "third" {
-		t.Errorf("u-5 segment = %+v, want preserved third", s)
-	}
-	if s, ok := byStart["u-3.5"]; !ok || s.Topic != "replaced second" {
-		t.Errorf("u-3.5 segment = %+v, want replaced second", s)
-	}
-	if _, ok := byStart["u-3"]; ok {
-		t.Errorf("u-3 segment survived, want deleted")
+	if got := store.TopicForMessage(con, "sess1", "u2"); got != "" {
+		t.Errorf("TopicForMessage(u2) = %q, want empty for untagged message", got)
 	}
 }
