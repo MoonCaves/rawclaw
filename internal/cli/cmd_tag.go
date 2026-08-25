@@ -25,11 +25,13 @@ import (
 // the full text.
 const condenseCap = 200
 
-// dumpByteCap is the total size ceiling (in bytes) for a tag-prep dump. Past
-// this, the dump stops and prints a truncation note instead of handing a
-// tagging subagent a session too large for its context — this happens for
-// real: outlier sessions run into the thousands of messages. var, not const,
-// so a test can shrink it to force truncation without fabricating huge sessions.
+// chunkByteCap is the total size ceiling (in bytes) for a single tag-prep pass.
+// Sessions exceeding this budget are processed incrementally in chunked passes,
+// keeping each pass in the reliably-attended context band (~15k tokens / 60KB).
+// var, not const, so a test can shrink it to force chunking without huge sessions.
+var chunkByteCap = 60_000
+
+// dumpByteCap is retained for backward compatibility / tests that set it.
 var dumpByteCap = 120_000
 
 // uuid8Len is the prefix length of a message uuid printed by tag-prep and
@@ -43,6 +45,23 @@ type rawSegment struct {
 	StartUUID string `json:"start_uuid"`
 	Topic     string `json:"topic"`
 	Summary   string `json:"summary"`
+}
+
+// messageRange represents a contiguous index range [start, end] (inclusive)
+// in the displayable messages slice.
+type messageRange struct {
+	start int
+	end   int
+}
+
+// tagChunk holds the untagged ranges and sized pass messages for a session.
+type tagChunk struct {
+	displayable  []store.SessionMessage
+	msgs         []store.SessionMessage
+	ranges       []messageRange
+	prevSegs     map[int]*store.TopicSegment
+	moreUntagged bool
+	fullyTagged  bool
 }
 
 // ── verb: tag-prep ────────────────────────────────────────────────────────────
@@ -77,8 +96,8 @@ func newTagPrepCmd() *cobra.Command {
 	return cmd
 }
 
-// runTagPrep is the testable core: load a session's messages and print the
-// condensed dump (header + one `<uuid8> [<role>] <text>` line per message).
+// runTagPrep is the testable core: load a session's messages, compute untagged ranges,
+// and print the condensed dump for the current pass.
 func runTagPrep(w io.Writer, con *sql.DB, fullSID string) error {
 	msgs, err := loadSessionMessages(con, fullSID)
 	if err != nil {
@@ -88,78 +107,240 @@ func runTagPrep(w io.Writer, con *sql.DB, fullSID string) error {
 		return fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
 	}
 
-	vis := visibleMessages(msgs)
+	existingSegs, err := store.TopicsForSession(con, fullSID)
+	if err != nil {
+		return fmt.Errorf("load existing topics: %w", err)
+	}
+
+	chunk := computeTagChunk(msgs, existingSegs, chunkByteCap)
+	if len(chunk.displayable) == 0 {
+		return fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
+	}
+	if chunk.fullyTagged {
+		fmt.Fprintf(w, "# session %s is already fully tagged\n", lastSlice8(fullSID))
+		return nil
+	}
 
 	fmt.Fprintf(w, "# condensed session %s — one line per message: <uuid8> [<role>] <text>\n",
 		lastSlice8(fullSID))
 	fmt.Fprintf(w, "# split into contiguous TOPIC segments; feed back via: rawclaw tag-write %s\n",
 		lastSlice8(fullSID))
-	for i, m := range vis.msgs {
-		if i == vis.gapAt {
-			fmt.Fprintf(w, "# ⋯ middle of session omitted (dump exceeds %dKB) — a topic segment may NOT "+
-				"span this gap; start a new segment for what follows\n", dumpByteCap/1000)
+
+	for rIdx, r := range chunk.ranges {
+		if prev, ok := chunk.prevSegs[rIdx]; ok && prev != nil {
+			endRef := uuid8(prev.EndUUID)
+			if endRef == "" {
+				endRef = uuid8(prev.StartUUID)
+			}
+			fmt.Fprintf(w, "# previous topic: %q (ended at %s)\n", prev.Topic, endRef)
 		}
-		fmt.Fprintln(w, condensedLine(m))
+		for i := r.start; i <= r.end; i++ {
+			fmt.Fprintln(w, condensedLine(chunk.displayable[i]))
+		}
+	}
+
+	if chunk.moreUntagged {
+		fmt.Fprintf(w, "# untagged content remains beyond budget; rerun 'rawclaw tag %s' after writing\n",
+			lastSlice8(fullSID))
 	}
 	return nil
 }
 
-// visibleSet is what a tag-prep dump actually shows: the messages themselves,
-// plus the bookend gap boundary (gapAt = -1 if the whole session fit). The two
-// always travel together — every consumer needs both to resolve or clamp
-// segments correctly, so they're one value rather than two parameters that
-// could drift out of sync.
-type visibleSet struct {
-	msgs  []store.SessionMessage
-	gapAt int
-}
-
-// visibleMessages returns the subset of msgs a tag-prep dump actually shows:
-// non-displayable rows dropped (tool-only, envelope-only, bare [THINKING]).
-// When what's left still exceeds dumpByteCap, it bookends rather than
-// truncating from the head alone — a session's setup AND its conclusion both
-// matter for topic segmentation — keeping a head prefix and a tail suffix
-// (each up to half the budget) and dropping the middle.
-//
-// writeSegments walks this SAME set (not the raw msgs) to resolve start_uuid
-// and to compute segment end_uuid, clamping at gapAt — so a bookended dump can
-// never cause tag-write to silently stretch a segment over the dropped middle,
-// even if the tagging subagent ignores the gap note above and never splits.
-func visibleMessages(msgs []store.SessionMessage) visibleSet {
+// computeTagChunk calculates untagged ranges over displayable messages by
+// inspecting existing topic_segment rows, and packs untagged messages into
+// a pass capped at byteCap.
+func computeTagChunk(msgs []store.SessionMessage, existingSegs []store.TopicSegment, byteCap int) tagChunk {
 	var displayable []store.SessionMessage
 	for _, m := range msgs {
 		if view.IsDisplayable(m.Content) {
 			displayable = append(displayable, m)
 		}
 	}
+	if len(displayable) == 0 {
+		return tagChunk{fullyTagged: true}
+	}
 
-	lines := make([]string, len(displayable))
-	total := 0
+	uuidToDispIdx := make(map[string]int, len(displayable))
 	for i, m := range displayable {
-		lines[i] = condensedLine(m)
-		total += len(lines[i]) + 1
-	}
-	if total <= dumpByteCap {
-		return visibleSet{msgs: displayable, gapAt: -1}
+		uuidToDispIdx[m.UUID] = i
 	}
 
-	half := dumpByteCap / 2
-	head, size := 0, 0
-	for head < len(displayable) && size+len(lines[head])+1 <= half {
-		size += len(lines[head]) + 1
-		head++
-	}
-	remaining := dumpByteCap - size
-	tail, tailSize := 0, 0
-	for tail < len(displayable)-head && tailSize+len(lines[len(displayable)-1-tail])+1 <= remaining {
-		tailSize += len(lines[len(displayable)-1-tail]) + 1
-		tail++
+	uuidToMsgID := make(map[string]int, len(msgs))
+	for _, m := range msgs {
+		uuidToMsgID[m.UUID] = m.ID
 	}
 
-	shown := make([]store.SessionMessage, 0, head+tail)
-	shown = append(shown, displayable[:head]...)
-	shown = append(shown, displayable[len(displayable)-tail:]...)
-	return visibleSet{msgs: shown, gapAt: head}
+	tagged := make([]bool, len(displayable))
+	for _, seg := range existingSegs {
+		startDispIdx, startOK := uuidToDispIdx[seg.StartUUID]
+		if !startOK {
+			if startID, hasID := uuidToMsgID[seg.StartUUID]; hasID {
+				for i, dm := range displayable {
+					if dm.ID >= startID {
+						startDispIdx = i
+						startOK = true
+						break
+					}
+				}
+			}
+		}
+
+		endUUID := seg.EndUUID
+		if endUUID == "" {
+			endUUID = seg.StartUUID
+		}
+		endDispIdx, endOK := uuidToDispIdx[endUUID]
+		if !endOK {
+			if endID, hasID := uuidToMsgID[endUUID]; hasID {
+				for i := len(displayable) - 1; i >= 0; i-- {
+					if displayable[i].ID <= endID {
+						endDispIdx = i
+						endOK = true
+						break
+					}
+				}
+			}
+		}
+
+		if startOK && endOK && startDispIdx <= endDispIdx && startDispIdx < len(displayable) && endDispIdx >= 0 {
+			if startDispIdx < 0 {
+				startDispIdx = 0
+			}
+			if endDispIdx >= len(displayable) {
+				endDispIdx = len(displayable) - 1
+			}
+			for k := startDispIdx; k <= endDispIdx; k++ {
+				tagged[k] = true
+			}
+		}
+	}
+
+	var allUntagged []messageRange
+	for i := 0; i < len(displayable); {
+		if !tagged[i] {
+			start := i
+			for i < len(displayable) && !tagged[i] {
+				i++
+			}
+			allUntagged = append(allUntagged, messageRange{start: start, end: i - 1})
+		} else {
+			i++
+		}
+	}
+
+	if len(allUntagged) == 0 {
+		return tagChunk{
+			displayable: displayable,
+			fullyTagged: true,
+		}
+	}
+
+	var (
+		passMsgs     []store.SessionMessage
+		passRanges   []messageRange
+		prevSegs     = make(map[int]*store.TopicSegment)
+		totalBytes   int
+		moreUntagged bool
+	)
+
+	for _, uRange := range allUntagged {
+		if moreUntagged {
+			break
+		}
+
+		var currentSubRange *messageRange
+		for msgIdx := uRange.start; msgIdx <= uRange.end; msgIdx++ {
+			m := displayable[msgIdx]
+			line := condensedLine(m)
+			lineBytes := len(line) + 1
+
+			if len(passMsgs) > 0 && totalBytes+lineBytes > byteCap {
+				moreUntagged = true
+				break
+			}
+
+			passMsgs = append(passMsgs, m)
+			totalBytes += lineBytes
+
+			if currentSubRange == nil {
+				currentSubRange = &messageRange{start: msgIdx, end: msgIdx}
+				pRangeIdx := len(passRanges)
+				if msgIdx > 0 && tagged[msgIdx-1] {
+					if prev := findSegmentCovering(existingSegs, uuidToDispIdx, uuidToMsgID, displayable, msgIdx-1); prev != nil {
+						prevCopy := *prev
+						prevSegs[pRangeIdx] = &prevCopy
+					}
+				}
+			} else {
+				currentSubRange.end = msgIdx
+			}
+		}
+
+		if currentSubRange != nil {
+			passRanges = append(passRanges, *currentSubRange)
+		}
+	}
+
+	return tagChunk{
+		displayable:  displayable,
+		msgs:         passMsgs,
+		ranges:       passRanges,
+		prevSegs:     prevSegs,
+		moreUntagged: moreUntagged,
+		fullyTagged:  false,
+	}
+}
+
+func findSegmentCovering(
+	existingSegs []store.TopicSegment,
+	uuidToDispIdx map[string]int,
+	uuidToMsgID map[string]int,
+	displayable []store.SessionMessage,
+	targetDispIdx int,
+) *store.TopicSegment {
+	var bestSeg *store.TopicSegment
+	bestStart := -1
+
+	for i := range existingSegs {
+		seg := &existingSegs[i]
+		startDispIdx, startOK := uuidToDispIdx[seg.StartUUID]
+		if !startOK {
+			if startID, hasID := uuidToMsgID[seg.StartUUID]; hasID {
+				for j, dm := range displayable {
+					if dm.ID >= startID {
+						startDispIdx = j
+						startOK = true
+						break
+					}
+				}
+			}
+		}
+
+		endUUID := seg.EndUUID
+		if endUUID == "" {
+			endUUID = seg.StartUUID
+		}
+		endDispIdx, endOK := uuidToDispIdx[endUUID]
+		if !endOK {
+			if endID, hasID := uuidToMsgID[endUUID]; hasID {
+				for j := len(displayable) - 1; j >= 0; j-- {
+					if displayable[j].ID <= endID {
+						endDispIdx = j
+						endOK = true
+						break
+					}
+				}
+			}
+		}
+
+		if startOK && endOK && startDispIdx <= targetDispIdx && targetDispIdx <= endDispIdx {
+			if startDispIdx > bestStart {
+				bestStart = startDispIdx
+				bestSeg = seg
+			}
+		}
+	}
+	return bestSeg
 }
 
 // ── verb: tag-write ────────────────────────────────────────────────────────────
@@ -403,9 +584,20 @@ func runTagWrite(con *sql.DB, fullSID string, r io.Reader, taggedAt float64) (in
 	if len(msgs) == 0 {
 		return 0, fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
 	}
-	vis := visibleMessages(msgs)
-	if len(vis.msgs) == 0 {
+
+	existingSegs, err := store.TopicsForSession(con, fullSID)
+	if err != nil {
+		return 0, fmt.Errorf("load existing topics: %w", err)
+	}
+
+	chunk := computeTagChunk(msgs, existingSegs, chunkByteCap)
+	if len(chunk.displayable) == 0 {
 		return 0, fmt.Errorf("session %q has no messages to tag", lastSlice8(fullSID))
+	}
+	if chunk.fullyTagged {
+		// All messages are already tagged, so an explicit write is a re-tagging pass.
+		chunk.msgs = chunk.displayable
+		chunk.ranges = []messageRange{{start: 0, end: len(chunk.displayable) - 1}}
 	}
 
 	var segs []rawSegment
@@ -417,7 +609,7 @@ func runTagWrite(con *sql.DB, fullSID string, r io.Reader, taggedAt float64) (in
 		return 0, fmt.Errorf("tag-write got an empty segment array — nothing to write")
 	}
 
-	return writeSegments(con, fullSID, vis, segs, taggedAt)
+	return writeSegments(con, fullSID, chunk, existingSegs, segs, taggedAt)
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────
@@ -449,37 +641,21 @@ func uuid8(u string) string {
 	return u[:uuid8Len]
 }
 
-// writeSegments maps the subagent's segments to topic_segment rows and REPLACES
-// the session's whole segment set with them (ReplaceSessionSegments) — so a
-// re-tag redoes the tags instead of stacking a second set beside the first.
-// start_uuid is prefix-resolved to a message's full uuid; end_uuid is the full
-// uuid of the message just BEFORE the next segment's start (the session's last
-// message for the final segment). A segment missing start_uuid/topic, or whose
-// start_uuid resolves to no/ambiguous message, returns a clear error (and, since
-// the whole set is applied in one transaction, leaves the prior tags untouched).
-//
-// vis.gapAt is visibleMessages' bookend boundary (-1 if none): a segment
-// starting before it never gets an end past it, even if the subagent's
-// segments imply otherwise — a bookended dump's dropped middle can never be
-// silently claimed by whatever topic was open on either side of it. And a
-// bookended dump with a real tail (gapAt < len(msgs)) REQUIRES at least one
-// segment starting at or after the gap: a lazy single segment covering "the
-// whole thing" is rejected outright, rather than accepted-but-clamped. A
-// session never gets left half-labeled — either it's tagged properly on both
-// sides of the gap, or tag-write errors and the subagent tries again.
+// writeSegments maps the subagent's segments to topic_segment rows, resolves
+// start_uuid and end_uuid against the current pass chunk, clamps boundaries
+// to the dumped ranges, and updates topic_segment rows: it deletes only prior
+// segments overlapping the dumped ranges and inserts the new ones, preserving
+// prior segments outside those ranges.
 //
 // Returns the number of rows written.
-func writeSegments(con *sql.DB, fullSID string, vis visibleSet, segs []rawSegment, taggedAt float64) (int, error) {
-	msgs, gapAt := vis.msgs, vis.gapAt
-	if len(msgs) == 0 {
+func writeSegments(con *sql.DB, fullSID string, chunk tagChunk, existingSegs []store.TopicSegment, segs []rawSegment, taggedAt float64) (int, error) {
+	if len(chunk.msgs) == 0 {
 		return 0, nil
 	}
-	lastIdx := len(msgs) - 1
 
-	// First pass: validate each row and resolve its start_uuid → message index, so
-	// the end-boundary computation can look at the next segment's resolved index.
-	startIdx := make([]int, len(segs))
-	coversTail := false
+	startDispIdx := make([]int, len(segs))
+	rangeCovered := make([]bool, len(chunk.ranges))
+
 	for i, seg := range segs {
 		if strings.TrimSpace(seg.StartUUID) == "" {
 			return 0, fmt.Errorf("segment %d: missing start_uuid", i)
@@ -487,74 +663,140 @@ func writeSegments(con *sql.DB, fullSID string, vis visibleSet, segs []rawSegmen
 		if strings.TrimSpace(seg.Topic) == "" {
 			return 0, fmt.Errorf("segment %d (start_uuid %q): missing topic", i, seg.StartUUID)
 		}
-		idx, err := resolveStartUUID(msgs, seg.StartUUID)
+		dispIdx, err := resolveStartUUIDInChunk(chunk, seg.StartUUID)
 		if err != nil {
 			return 0, fmt.Errorf("segment %d: %w", i, err)
 		}
-		startIdx[i] = idx
-		if idx >= gapAt {
-			coversTail = true
+		startDispIdx[i] = dispIdx
+		for rIdx, r := range chunk.ranges {
+			if dispIdx >= r.start && dispIdx <= r.end {
+				rangeCovered[rIdx] = true
+				break
+			}
 		}
 	}
-	if gapAt >= 0 && gapAt < len(msgs) && !coversTail {
-		return 0, fmt.Errorf("dump was bookended (middle omitted) but no segment starts at or after " +
-			"the tail shown in the dump — segments must cover BOTH sides of the gap, not just the head")
+
+	if len(chunk.ranges) > 1 {
+		for rIdx, covered := range rangeCovered {
+			if !covered {
+				return 0, fmt.Errorf("dump contained multiple ranges but range %d (%s..%s) has no segment starting in it — segments must cover ALL ranges shown in the dump",
+					rIdx,
+					uuid8(chunk.displayable[chunk.ranges[rIdx].start].UUID),
+					uuid8(chunk.displayable[chunk.ranges[rIdx].end].UUID))
+			}
+		}
 	}
 
 	out := make([]store.TopicSegment, len(segs))
 	for i, seg := range segs {
-		// end = the index of the message just before the NEXT segment's start.
-		endIdx := lastIdx
-		if i+1 < len(segs) {
-			nextIdx := startIdx[i+1]
-			if nextIdx > 0 {
-				endIdx = nextIdx - 1
-			} else {
-				endIdx = nextIdx
+		st := startDispIdx[i]
+		rEnd := chunk.ranges[len(chunk.ranges)-1].end
+		for _, r := range chunk.ranges {
+			if st >= r.start && st <= r.end {
+				rEnd = r.end
+				break
 			}
 		}
-		// Clamp: a segment starting before the gap can't end past it.
-		if gapAt >= 0 && startIdx[i] < gapAt && endIdx >= gapAt {
-			endIdx = gapAt - 1
+
+		endDisp := rEnd
+		if i+1 < len(segs) {
+			nextSt := startDispIdx[i+1]
+			if nextSt > st && nextSt <= rEnd {
+				endDisp = nextSt - 1
+			}
 		}
 
 		out[i] = store.TopicSegment{
 			SessionID: fullSID,
-			StartUUID: msgs[startIdx[i]].UUID,
-			EndUUID:   msgs[endIdx].UUID,
+			StartUUID: chunk.displayable[st].UUID,
+			EndUUID:   chunk.displayable[endDisp].UUID,
 			Topic:     seg.Topic,
 			Summary:   seg.Summary,
 			TaggedAt:  taggedAt,
-			// OriginMachine left empty — local authoring, stored NULL.
 		}
 	}
 
-	// Apply the tagging as ONE unit: DELETE the session's prior rows, INSERT this
-	// set. A re-tag replaces; it never stacks a stale set beside the fresh one.
-	if err := store.ReplaceSessionSegments(con, fullSID, out); err != nil {
+	uuidToDispIdx := make(map[string]int, len(chunk.displayable))
+	for i, m := range chunk.displayable {
+		uuidToDispIdx[m.UUID] = i
+	}
+	uuidToMsgID := make(map[string]int, len(chunk.displayable))
+	for _, m := range chunk.displayable {
+		uuidToMsgID[m.UUID] = m.ID
+	}
+
+	var deleteStartUUIDs []string
+	for _, prior := range existingSegs {
+		priorStart, startOK := uuidToDispIdx[prior.StartUUID]
+		if !startOK {
+			if startID, hasID := uuidToMsgID[prior.StartUUID]; hasID {
+				for j, dm := range chunk.displayable {
+					if dm.ID >= startID {
+						priorStart = j
+						startOK = true
+						break
+					}
+				}
+			}
+		}
+		endUUID := prior.EndUUID
+		if endUUID == "" {
+			endUUID = prior.StartUUID
+		}
+		priorEnd, endOK := uuidToDispIdx[endUUID]
+		if !endOK {
+			if endID, hasID := uuidToMsgID[endUUID]; hasID {
+				for j := len(chunk.displayable) - 1; j >= 0; j-- {
+					if chunk.displayable[j].ID <= endID {
+						priorEnd = j
+						endOK = true
+						break
+					}
+				}
+			}
+		}
+
+		if startOK && endOK && priorStart <= priorEnd {
+			overlaps := false
+			for _, r := range chunk.ranges {
+				if !(priorEnd < r.start || priorStart > r.end) {
+					overlaps = true
+					break
+				}
+			}
+			if overlaps {
+				deleteStartUUIDs = append(deleteStartUUIDs, prior.StartUUID)
+			}
+		}
+	}
+
+	if err := store.ReplaceSessionRangeSegments(con, fullSID, deleteStartUUIDs, out); err != nil {
 		return 0, err
 	}
 	return len(out), nil
 }
 
-// resolveStartUUID resolves a uuid prefix against the session's message uuids,
-// mirroring the read path's uuid8 resolution: exactly one match wins; zero
-// matches and more-than-one match are both clear errors. Returns the matching
-// message's index in msgs.
-func resolveStartUUID(msgs []store.SessionMessage, prefix string) (int, error) {
-	match := -1
-	for i, m := range msgs {
+// resolveStartUUIDInChunk resolves a uuid prefix against the current pass's
+// message uuids.
+func resolveStartUUIDInChunk(chunk tagChunk, prefix string) (int, error) {
+	matchDispIdx := -1
+	for _, m := range chunk.msgs {
 		if strings.HasPrefix(m.UUID, prefix) {
-			if match >= 0 {
+			if matchDispIdx >= 0 {
 				return 0, fmt.Errorf("start_uuid %q is ambiguous (matches multiple messages)", prefix)
 			}
-			match = i
+			for i, dm := range chunk.displayable {
+				if dm.UUID == m.UUID {
+					matchDispIdx = i
+					break
+				}
+			}
 		}
 	}
-	if match < 0 {
+	if matchDispIdx < 0 {
 		return 0, fmt.Errorf("start_uuid %q matches no message in this session", prefix)
 	}
-	return match, nil
+	return matchDispIdx, nil
 }
 
 // nowUnix is the CLI-runtime wall-clock stamp for tagged_at (seconds since the
