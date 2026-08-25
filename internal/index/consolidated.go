@@ -969,8 +969,12 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 		ingestTimeStr string
 		catMTimeStr   string
 	)
-	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestTime).Scan(&ingestTimeStr)
-	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestCatalogMTime).Scan(&catMTimeStr)
+	if err := con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestTime).Scan(&ingestTimeStr); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return IndexFreshness{Fresh: false, Reason: "read_ingest_watermark_failed"}, fmt.Errorf("read %s watermark: %w", MetaLastIngestTime, err)
+	}
+	if err := con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestCatalogMTime).Scan(&catMTimeStr); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return IndexFreshness{Fresh: false, Reason: "read_catalog_watermark_failed"}, fmt.Errorf("read %s watermark: %w", MetaLastIngestCatalogMTime, err)
+	}
 
 	if ingestTimeStr == "" && catMTimeStr == "" {
 		return IndexFreshness{Fresh: false, Reason: "no_ingest_watermark"}, nil
@@ -983,7 +987,7 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 			// Catalog does not exist on disk (hooks absent); missing signal must report not fresh.
 			return IndexFreshness{Fresh: false, Reason: "catalog_dir_missing"}, nil
 		}
-		return IndexFreshness{Fresh: false, Reason: "catalog_stat_failed"}, nil
+		return IndexFreshness{Fresh: false, Reason: "catalog_stat_failed"}, fmt.Errorf("stat catalog directory %q: %w", catDir, err)
 	}
 
 	curCatMTime := mtimeOf(st)
@@ -1029,7 +1033,7 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string) (IndexFreshne
 		if os.IsNotExist(err) {
 			return IndexFreshness{Fresh: true}, nil
 		}
-		return IndexFreshness{Fresh: false, Reason: "stat_tdir_failed"}, nil
+		return IndexFreshness{Fresh: false, Reason: "stat_tdir_failed"}, fmt.Errorf("stat project directory %q: %w", tdir, err)
 	}
 
 	rows, err := con.Query(`
@@ -1068,7 +1072,10 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string) (IndexFreshne
 		return IndexFreshness{Fresh: false, Reason: "iterate_file_index_failed"}, err
 	}
 	if nRows == 0 {
-		entries, _ := os.ReadDir(tdir)
+		entries, err := os.ReadDir(tdir)
+		if err != nil {
+			return IndexFreshness{Fresh: false, Reason: "read_project_dir_failed"}, fmt.Errorf("read project directory %q: %w", tdir, err)
+		}
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
 				return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
