@@ -503,3 +503,67 @@ func TestRunTagWriteRoutine_ReTagReverses(t *testing.T) {
 		t.Error("expected re-tagging with routine to re-establish routine (IsEffectivelyRoutine = true)")
 	}
 }
+
+func TestApplyFloorRoutine_RetractsOnGrowth(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "sess-floor-growth"
+	addMsg(t, con, sid, "user", "hi", "11111111-aaaa")
+	addMsg(t, con, sid, "assistant", "hello", "22222222-bbbb")
+
+	if err := applyFloorRoutine(con, sid, true, 10.0); err != nil {
+		t.Fatalf("mark floor routine: %v", err)
+	}
+	if v, ok, _ := store.VerdictFor(con, sid); !ok || v.Source != store.VerdictSourceFloor {
+		t.Fatalf("floor verdict = %+v, %v; want floor verdict", v, ok)
+	}
+
+	if err := applyFloorRoutine(con, sid, false, 20.0); err != nil {
+		t.Fatalf("retract floor routine: %v", err)
+	}
+	if _, ok, _ := store.VerdictFor(con, sid); ok {
+		t.Fatal("floor verdict survived retraction after session growth")
+	}
+}
+
+func TestApplyFloorRoutine_PreservesAgentVerdict(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "sess-floor-agent"
+	addMsg(t, con, sid, "user", "date?", "11111111-aaaa")
+	if err := store.UpsertVerdict(con, store.Verdict{
+		SessionID: sid,
+		Verdict:   store.VerdictRoutine,
+		Source:    store.VerdictSourceAgent,
+		TaggedAt:  9,
+	}); err != nil {
+		t.Fatalf("seed agent verdict: %v", err)
+	}
+
+	if err := applyFloorRoutine(con, sid, true, 10.0); err != nil {
+		t.Fatalf("apply floor routine: %v", err)
+	}
+	v, ok, _ := store.VerdictFor(con, sid)
+	if !ok || v.Source != store.VerdictSourceAgent || v.TaggedAt != 9 {
+		t.Fatalf("verdict after floor = %+v, %v; want original agent verdict", v, ok)
+	}
+}
+
+func TestRunTagWriteRoutine_FloorPreservesRealTopics(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "sess-floor-topic"
+	addMsg(t, con, sid, "user", "real work", "11111111-aaaa")
+	if _, err := runTagWrite(con, sid, strings.NewReader(
+		`[{"start_uuid":"11111111","topic":"real","summary":"work"}]`), 1.0); err != nil {
+		t.Fatalf("seed topic: %v", err)
+	}
+
+	if err := runTagWriteRoutine(con, sid, store.VerdictSourceFloor, 2.0); err != nil {
+		t.Fatalf("apply floor routine: %v", err)
+	}
+	segs, err := store.TopicsForSession(con, sid)
+	if err != nil {
+		t.Fatalf("read topics: %v", err)
+	}
+	if len(segs) != 1 || segs[0].Topic != "real" {
+		t.Fatalf("topics after floor = %+v, want existing real topic preserved", segs)
+	}
+}
