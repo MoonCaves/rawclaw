@@ -138,11 +138,15 @@ func PrintDebugSearch(w io.Writer, hits []retrieve.Hit, explains []retrieve.Scor
 		if iso == "" {
 			iso = "?"
 		}
+		subagent := ""
+		if h.IsSubagent && h.Parent != "" {
+			subagent = fmt.Sprintf(" · subagent⟵%s", sid8(h.Parent))
+		}
 		routine := ""
 		if h.Routine {
 			routine = " · routine"
 		}
-		fmt.Fprintf(w, "━━ %s · %s%s ━━\n", iso, sid8(h.SessionID), routine)
+		fmt.Fprintf(w, "━━ %s · %s%s%s ━━\n", iso, sid8(h.SessionID), subagent, routine)
 		if i < len(explains) {
 			fmt.Fprintln(w, FmtScoreExplain(explains[i]))
 		} else {
