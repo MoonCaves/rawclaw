@@ -230,8 +230,9 @@ func discoverTagSources(
 			exact = append(exact, match)
 		}
 	}
+	discoveryErr := errors.Join(errs...)
 	if len(exact) > 0 {
-		return exact, nil
+		return exact, discoveryErr
 	}
 	nonSub := make([]tagSourceMatch, 0, len(matches))
 	for _, match := range matches {
@@ -240,12 +241,9 @@ func discoverTagSources(
 		}
 	}
 	if len(nonSub) > 0 {
-		return nonSub, nil
+		return nonSub, discoveryErr
 	}
-	if len(matches) > 0 || len(errs) == 0 {
-		return matches, nil
-	}
-	return nil, errors.Join(errs...)
+	return matches, discoveryErr
 }
 
 func refreshTagMatches(matches []tagSourceMatch) error {

@@ -1649,7 +1649,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 			projLabel = paths.ProjectLabel(td)
 		}
 		if con, _, err := index.OpenConsolidated(); err == nil {
-			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td)
+			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td, o.Source)
 			_ = con.Close()
 			if fErr != nil || !freshness.Fresh {
 				refreshThisProject(o)

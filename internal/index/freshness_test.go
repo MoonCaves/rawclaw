@@ -477,3 +477,84 @@ func TestHealUpgradedStore_MergedSessionSurvivesSingleSourceRefold(t *testing.T)
 		t.Errorf("expected session_sources to be populated after heal, got %d", sources)
 	}
 }
+
+func TestCheckProjectFreshness_IsSourceScoped(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	catDir := filepath.Join(cfg, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	if err := os.MkdirAll(catDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tdir := filepath.Join(cfg, "project")
+	if err := os.MkdirAll(tdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudePath := filepath.Join(tdir, "claude.jsonl")
+	codexPath := filepath.Join(tdir, "codex.jsonl")
+	if err := os.WriteFile(claudePath, []byte("claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexPath, []byte("codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	con, err := store.ConnectRW(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatal(err)
+	}
+
+	claudeMTime, claudeSize, claudeFP, err := backingFileState(claudePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexMTime, codexSize, codexFP, err := backingFileState(codexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []struct {
+		id, source, path string
+		mtime            float64
+		size             int64
+		fp               string
+	}{
+		{id: "claude-session", source: "claude", path: claudePath, mtime: claudeMTime, size: claudeSize, fp: claudeFP},
+		{id: "codex-session", source: "codex", path: codexPath, mtime: codexMTime, size: codexSize, fp: codexFP},
+	} {
+		if _, err := con.Exec("INSERT INTO sessions(id, source_tool, source_path, project) VALUES(?,?,?,?)", row.id, row.source, row.path, "source-project"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := con.Exec("INSERT INTO file_index(path, mtime, size, fp, session_id) VALUES(?,?,?,?,?)", row.path, row.mtime, row.size, row.fp, row.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := StampIngestWatermark(con); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(codexPath, []byte("codex\nnew turn\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	claudeFresh, err := CheckProjectFreshness(con, "source-project", tdir, "claude")
+	if err != nil {
+		t.Fatalf("claude freshness: %v", err)
+	}
+	if !claudeFresh.Fresh {
+		t.Fatalf("unchanged Claude source reported stale: %+v", claudeFresh)
+	}
+
+	codexFresh, err := CheckProjectFreshness(con, "source-project", tdir, "codex")
+	if err != nil {
+		t.Fatalf("codex freshness: %v", err)
+	}
+	if codexFresh.Fresh {
+		t.Fatalf("changed Codex source reported fresh: %+v", codexFresh)
+	}
+}
