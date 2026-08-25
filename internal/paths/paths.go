@@ -509,7 +509,7 @@ func expandHome(path string) string {
 	if path == "~" {
 		return home
 	}
-	return filepath.Join(home, path[2:])
+	return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 }
 
 // realpath canonicalizes a path, resolving symlinks for the components that
