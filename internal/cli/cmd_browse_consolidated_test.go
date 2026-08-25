@@ -340,3 +340,33 @@ func TestBrowseConsolidated_TiedTimestampsByteIdentical(t *testing.T) {
 			storeOut.String(), fallbackOut.String())
 	}
 }
+
+// TestBrowseConsolidated_ReindexSkipsConsolidated verifies that when --reindex is passed,
+// browse bypasses the consolidated store and forces a reindex via the per-project fallback.
+func TestBrowseConsolidated_ReindexSkipsConsolidated(t *testing.T) {
+	root, scopeList := seedBrowseCorpus(t)
+
+	// Write a 5th session to projA without updating the consolidated store
+	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa3333-0000-0000-0000-000000000005",
+		"2026-06-05T10:00:00Z", "fifth question in project A added after initial consolidation")
+
+	// 1. Browse with Reindex=false answers from consolidated store (which doesn't have session 5 yet)
+	var storeOut bytes.Buffer
+	optsNormal := Options{All: true, Limit: 10, Reindex: false}
+	if err := runBrowseScoped(&storeOut, &optsNormal, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped (normal): %v", err)
+	}
+	if strings.Contains(storeOut.String(), "aaaa3333") {
+		t.Errorf("expected consolidated browse to not have unindexed session 5 yet")
+	}
+
+	// 2. Browse with Reindex=true must bypass consolidated store and reindex per-project
+	var reindexOut bytes.Buffer
+	optsReindex := Options{All: true, Limit: 10, Reindex: true}
+	if err := runBrowseScoped(&reindexOut, &optsReindex, scopeList); err != nil {
+		t.Fatalf("runBrowseScoped (reindex): %v", err)
+	}
+	if !strings.Contains(reindexOut.String(), "aaaa3333") {
+		t.Errorf("expected reindex browse to discover newly written session 5, got:\n%s", reindexOut.String())
+	}
+}
