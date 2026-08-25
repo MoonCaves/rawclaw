@@ -139,7 +139,8 @@ ON CONFLICT(session_id, source_db) DO UPDATE SET
 `
 
 // mergeSessionsSQL aggregates all recorded session contributions in session_sources
-// for sessions present in src.sessions and writes the merged rows into main.sessions.
+// for sessions present in src.sessions or removed from this source during the
+// current pass, and writes the merged rows into main.sessions.
 //
 // Semantics per contribution:
 //   - A session present in ANY contributing copy is present/live (missing_since IS NULL).
@@ -170,6 +171,7 @@ WITH ranked AS (
     ) AS rank
   FROM main.session_sources
   WHERE session_id IN (SELECT id FROM src.sessions)
+     OR session_id IN (SELECT session_id FROM temp.consolidation_affected_sessions)
 ),
 agg AS (
   SELECT
@@ -184,6 +186,7 @@ agg AS (
     END AS missing_since
   FROM main.session_sources
   WHERE session_id IN (SELECT id FROM src.sessions)
+     OR session_id IN (SELECT session_id FROM temp.consolidation_affected_sessions)
   GROUP BY session_id
 )
 INSERT INTO main.sessions (
@@ -565,6 +568,22 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	}
 
 	srcBase := filepath.Base(src)
+	if _, err := con.Exec(`CREATE TEMP TABLE IF NOT EXISTS consolidation_affected_sessions (
+		session_id TEXT PRIMARY KEY
+	)`); err != nil {
+		return 0, false, true, fmt.Errorf("create affected session set: %w", err)
+	}
+	if _, err := con.Exec("DELETE FROM temp.consolidation_affected_sessions"); err != nil {
+		return 0, false, true, fmt.Errorf("clear affected session set: %w", err)
+	}
+	if _, err := con.Exec(`
+		INSERT INTO temp.consolidation_affected_sessions(session_id)
+		SELECT session_id FROM main.session_sources
+		WHERE source_db = ?
+		  AND session_id NOT IN (SELECT id FROM src.sessions)
+	`, srcBase); err != nil {
+		return 0, false, true, fmt.Errorf("record deleted session sources: %w", err)
+	}
 	if _, err := con.Exec(recordSessionSourcesSQL, srcBase); err != nil {
 		return 0, false, true, fmt.Errorf("record session sources: %w", err)
 	}
@@ -590,6 +609,30 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 		if _, err := con.Exec(mergeVerdictsSQL); err != nil {
 			return 0, false, true, fmt.Errorf("merge verdicts: %w", err)
 		}
+	}
+	if _, err := con.Exec(`
+		DELETE FROM main.messages
+		WHERE session_id IN (
+			SELECT a.session_id
+			FROM temp.consolidation_affected_sessions a
+			WHERE NOT EXISTS (
+				SELECT 1 FROM main.session_sources s WHERE s.session_id = a.session_id
+			)
+		)
+	`); err != nil {
+		return 0, false, true, fmt.Errorf("prune deleted session messages: %w", err)
+	}
+	if _, err := con.Exec(`
+		DELETE FROM main.sessions
+		WHERE id IN (
+			SELECT a.session_id
+			FROM temp.consolidation_affected_sessions a
+			WHERE NOT EXISTS (
+				SELECT 1 FROM main.session_sources s WHERE s.session_id = a.session_id
+			)
+		)
+	`); err != nil {
+		return 0, false, true, fmt.Errorf("prune deleted sessions: %w", err)
 	}
 	if _, err := con.Exec(`
 		UPDATE main.sessions SET message_count =
