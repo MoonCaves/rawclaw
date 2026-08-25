@@ -189,10 +189,7 @@ func newTagWriteCmd() *cobra.Command {
 			"decides the segments or routine verdict and pipes/flags them here.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cmd.CalledAs() == "tag-floor" {
-				if len(args) > 1 {
-					return cobra.MaximumNArgs(1)(cmd, args)
-				}
-				return nil
+				return cobra.NoArgs(cmd, args)
 			}
 			return cobra.ExactArgs(1)(cmd, args)
 		},
