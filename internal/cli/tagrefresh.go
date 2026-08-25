@@ -9,6 +9,7 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
@@ -70,6 +71,14 @@ func refreshTagSession(
 		}
 	}
 
+	stemMatches := stemTagSources(sessionArg, registrations)
+	if len(stemMatches) > 0 {
+		if err := refreshTagMatches(stemMatches); err != nil {
+			return "", "", err
+		}
+		return agentproto.LocateSession(sessionArg, scope, more)
+	}
+
 	matches, discoverErr := discoverTagSources(sessionArg, registrations)
 	if len(matches) > 0 {
 		if err := refreshTagMatches(matches); err != nil {
@@ -83,6 +92,50 @@ func refreshTagSession(
 	// No live source remains. Fall back to RawClaw's deliberately retained
 	// history, applying the caller's project scope only at this final read.
 	return agentproto.LocateSession(sessionArg, scope, more)
+}
+
+func stemTagSources(
+	sessionArg string,
+	registrations []source.Registration,
+) []tagSourceMatch {
+	prefix := agentproto.NormalizeSessionArg(sessionArg)
+	hits := paths.ResolveSession(prefix)
+	if len(hits) == 0 {
+		return nil
+	}
+	var matches []tagSourceMatch
+	for _, hit := range hits {
+		reg, ok := registrationFor("claude", hit.Path, registrations)
+		if !ok || reg.New == nil {
+			continue
+		}
+		adapter := reg.New()
+		if adapter == nil {
+			continue
+		}
+		matches = append(matches, tagSourceMatch{
+			registration: reg,
+			adapter:      adapter,
+			container: source.Container{
+				ID:         hit.SessionID,
+				Path:       hit.Path,
+				CWD:        hit.CWD,
+				IsSubagent: false,
+				ParentID:   "",
+				ResumeArgv: source.ResumeArgv(reg.ID, hit.SessionID),
+			},
+		})
+	}
+	exact := make([]tagSourceMatch, 0, len(matches))
+	for _, match := range matches {
+		if match.container.ID == prefix {
+			exact = append(exact, match)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return matches
 }
 
 func locatedTagSource(
