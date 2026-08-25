@@ -25,11 +25,11 @@ func countIngestSpawns(t *testing.T) (*int, *[]string) {
 	return &calls, &args
 }
 
-// TestAnswerFirst_StaleIndexSearch_AnswersImmediatelyWithStalenessNoteAndSpawnsIngest
-// verifies that a stale index answers immediately without blocking, surfaces an honest
-// staleness note in text and structured boolean in --json, and kicks background ingest.
-func TestAnswerFirst_StaleIndexSearch_AnswersImmediatelyWithStalenessNoteAndSpawnsIngest(t *testing.T) {
-	cfg, _, sessionID, _, _ := setupFreshnessTestEnv(t)
+// TestAnswerFirst_StaleIndexSearch_RefreshesBeforeAnswer verifies that a stale
+// current-project search refreshes synchronously, answers with the new session,
+// and does not use the answer-first stale-note/background-ingest machinery.
+func TestAnswerFirst_StaleIndexSearch_RefreshesBeforeAnswer(t *testing.T) {
+	_, projDir, sessionID, _, _ := setupFreshnessTestEnv(t)
 
 	// 1. Fresh search: no note, no ingest spawn
 	calls, _ := countIngestSpawns(t)
@@ -67,7 +67,7 @@ func TestAnswerFirst_StaleIndexSearch_AnswersImmediatelyWithStalenessNoteAndSpaw
 	// 2. Make index stale by creating a new session in catalog
 	time.Sleep(20 * time.Millisecond)
 	newSID := "b2c3d4e5-9999-8888-7777-666655554444"
-	newTransPath := filepath.Join(cfg, "new-session.jsonl")
+	newTransPath := filepath.Join(projDir, newSID+".jsonl")
 	newContent := `{"type":"user","message":{"role":"user","content":"born in catalog"},"uuid":"9f3e1c23-1111-2222-3333-444455556666","timestamp":"2026-08-20T11:00:00Z"}` + "\n"
 	if err := os.WriteFile(newTransPath, []byte(newContent), 0o644); err != nil {
 		t.Fatal(err)
@@ -75,29 +75,48 @@ func TestAnswerFirst_StaleIndexSearch_AnswersImmediatelyWithStalenessNoteAndSpaw
 	if err := paths.WriteCatalogEntry(paths.CatalogDir(), paths.CatalogEntry{
 		SessionID:      newSID,
 		TranscriptPath: newTransPath,
-		CWD:            filepath.Join(cfg, "work"),
+		CWD:            projDir,
 		Source:         "claude",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// 3. Stale search (text): answers from store immediately + surfaces staleness note + spawns ingest
+	// 3. Stale search (text): refreshes the current project before answering.
 	staleCalls, staleArgs := countIngestSpawns(t)
-	staleOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "Investigate O1")
+	staleOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", projDir, "born in catalog")
 	if err != nil {
 		t.Fatalf("stale search failed: %v\nout: %s", err, staleOut)
 	}
-	if !strings.Contains(staleOut, sessionID[:8]) {
-		t.Errorf("stale search did not answer with session %s: %s", sessionID[:8], staleOut)
+	if !strings.Contains(staleOut, newSID[:8]) {
+		t.Errorf("stale search did not answer with refreshed session %s: %s", newSID[:8], staleOut)
 	}
-	if !strings.Contains(staleOut, "note: sessions not yet ingested — background ingest triggered") {
-		t.Errorf("stale search missing staleness note: %s", staleOut)
+	if strings.Contains(staleOut, "sessions not yet ingested") {
+		t.Errorf("stale search surfaced an answer-first staleness note: %s", staleOut)
 	}
-	if *staleCalls != 1 {
-		t.Errorf("stale search spawned %d ingest child, want 1", *staleCalls)
+	if *staleCalls != 0 {
+		t.Errorf("stale search spawned %d background ingest children, want 0", *staleCalls)
 	}
-	if len(*staleArgs) > 0 && (*staleArgs)[0] != "" {
-		t.Errorf("global search spawned ingest for specific session %q, want empty (all)", (*staleArgs)[0])
+	if len(*staleArgs) != 0 {
+		t.Errorf("stale search spawned background ingest arguments %q, want none", *staleArgs)
+	}
+
+	staleJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", projDir, "--json", "born in catalog")
+	if err != nil {
+		t.Fatalf("stale json search failed: %v\nout: %s", err, staleJSONOut)
+	}
+	var staleEnv struct {
+		agentproto.SearchEnvelope
+		Stale     bool   `json:"stale"`
+		StaleNote string `json:"stale_note"`
+	}
+	if err := json.Unmarshal([]byte(staleJSONOut), &staleEnv); err != nil {
+		t.Fatalf("unmarshal stale json: %v\nout: %s", err, staleJSONOut)
+	}
+	if staleEnv.Stale || staleEnv.StaleNote != "" {
+		t.Errorf("stale search json reported stale state after synchronous refresh: stale=%v note=%q", staleEnv.Stale, staleEnv.StaleNote)
+	}
+	if staleEnv.Count < 1 || staleEnv.Results[0].SessionID != newSID {
+		t.Errorf("stale json search did not return refreshed session: %+v", staleEnv)
 	}
 }
 
@@ -326,8 +345,8 @@ func TestAnswerFirst_SpawnThrottling_RestrainsProcessStorm(t *testing.T) {
 
 	calls, _ := countIngestSpawns(t)
 
-	// 1st stale search: triggers background ingest spawn
-	out1, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "Investigate O1")
+	// 1st stale browse: triggers background ingest spawn
+	out1, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--all")
 	if err != nil {
 		t.Fatalf("first search failed: %v", err)
 	}
@@ -338,8 +357,8 @@ func TestAnswerFirst_SpawnThrottling_RestrainsProcessStorm(t *testing.T) {
 		t.Fatalf("first search spawn count = %d, want 1", *calls)
 	}
 
-	// 2nd stale search immediately after: throttled, zero new spawns, note does not claim trigger
-	out2, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "Investigate O1")
+	// 2nd stale browse immediately after: throttled, zero new spawns, note does not claim trigger
+	out2, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--all")
 	if err != nil {
 		t.Fatalf("second search failed: %v", err)
 	}
@@ -353,8 +372,8 @@ func TestAnswerFirst_SpawnThrottling_RestrainsProcessStorm(t *testing.T) {
 		t.Errorf("second search spawn count = %d, want 1 (throttled)", *calls)
 	}
 
-	// 3rd search in --json: throttled, zero new spawns, honest json note
-	jsonOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "Investigate O1")
+	// 3rd browse in --json: throttled, zero new spawns, honest json note
+	jsonOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--all", "--json")
 	if err != nil {
 		t.Fatalf("third json search failed: %v", err)
 	}
@@ -378,8 +397,8 @@ func TestAnswerFirst_SpawnThrottling_RestrainsProcessStorm(t *testing.T) {
 	if *calls != 1 {
 		t.Errorf("third json search spawn count = %d, want 1", *calls)
 	}
-	if env.Count < 1 || env.Results[0].SessionID != sessionID {
-		t.Errorf("json search did not answer with session: %+v", env)
+	if !strings.Contains(jsonOut, sessionID) {
+		t.Errorf("json browse did not answer with session %s: %s", sessionID, jsonOut)
 	}
 }
 
@@ -454,37 +473,7 @@ func TestAnswerFirst_SuppressedSpawn_HonestNote(t *testing.T) {
 		t.Errorf("browse json missing honest stale note: %q", bJSON.StaleNote)
 	}
 
-	// 2. Search (text and json)
-	searchText, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "Investigate O1")
-	if err != nil {
-		t.Fatalf("search text: %v", err)
-	}
-	if strings.Contains(searchText, "background ingest triggered") {
-		t.Errorf("search text falsely claimed ingest triggered: %s", searchText)
-	}
-	if !strings.Contains(searchText, "note: sessions not yet ingested — run 'rawclaw ingest' to refresh") {
-		t.Errorf("search text missing honest note: %s", searchText)
-	}
-
-	searchJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "Investigate O1")
-	if err != nil {
-		t.Fatalf("search json: %v", err)
-	}
-	var sJSON struct {
-		Stale     bool   `json:"stale"`
-		StaleNote string `json:"stale_note"`
-	}
-	if err := json.Unmarshal([]byte(searchJSONOut), &sJSON); err != nil {
-		t.Fatalf("unmarshal search json: %v", err)
-	}
-	if !sJSON.Stale {
-		t.Errorf("search json reported stale=false, want true")
-	}
-	if strings.Contains(sJSON.StaleNote, "background ingest triggered") {
-		t.Errorf("search json falsely claimed ingest triggered: %q", sJSON.StaleNote)
-	}
-
-	// 3. Read (text and json)
+	// 2. Read (text and json)
 	ref := sessionID[:8] + ":" + uuid[:8]
 	readText, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "read", ref)
 	if err != nil {
@@ -515,7 +504,7 @@ func TestAnswerFirst_SuppressedSpawn_HonestNote(t *testing.T) {
 		t.Errorf("read json falsely claimed ingest triggered: %q", rJSON.StaleNote)
 	}
 
-	// 4. Outline (text and json)
+	// 3. Outline (text and json)
 	outlineText, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "outline", sessionID[:8])
 	if err != nil {
 		t.Fatalf("outline text: %v", err)
