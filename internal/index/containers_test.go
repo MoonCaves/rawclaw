@@ -631,6 +631,20 @@ func TestEnsureFreshContainer_PruneStaleLeftovers(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Mixed-age group: an old .db whose -wal is fresh is a LIVE database mid-write
+	// (WAL holds unlanded pages) — the whole group must survive the prune.
+	mixedDB := filepath.Join(refreshDir, "active-mixed.db")
+	if err := os.WriteFile(mixedDB, []byte("old-db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(mixedDB, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+	mixedWal := filepath.Join(refreshDir, "active-mixed.db-wal")
+	if err := os.WriteFile(mixedWal, []byte("fresh-wal"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	// 1. Successful run: EnsureFreshContainer prunes staleFile and staleWal on next run,
 	// while keeping freshLeftover and creating dbp1 for incremental watermarks.
 	n, err := EnsureFreshContainer(dbp1, c1, msgs1, "claude")
@@ -642,6 +656,12 @@ func TestEnsureFreshContainer_PruneStaleLeftovers(t *testing.T) {
 	}
 	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
 		t.Errorf("stale leftover %s still exists, want pruned on next run", staleFile)
+	}
+	if _, err := os.Stat(mixedDB); err != nil {
+		t.Errorf("mixed-age db %s pruned, want kept (fresh -wal marks it live)", mixedDB)
+	}
+	if _, err := os.Stat(mixedWal); err != nil {
+		t.Errorf("mixed-age wal %s pruned, want kept", mixedWal)
 	}
 	if _, err := os.Stat(staleWal); !os.IsNotExist(err) {
 		t.Errorf("stale leftover wal %s still exists, want pruned on next run", staleWal)
