@@ -235,11 +235,8 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 	}
 
 	// win = reversed(before) + after (both ascending by id).
-	win := make([]store.Msg, 0, len(before)+len(after))
-	for i := len(before) - 1; i >= 0; i-- {
-		win = append(win, before[i])
-	}
-	win = append(win, after...)
+	slices.Reverse(before)
+	win := append(before, after...)
 	if len(win) == 0 {
 		return nil
 	}
