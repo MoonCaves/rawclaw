@@ -222,17 +222,26 @@ func LoadTombstones(cacheDir string) (map[string]struct{}, error) {
 	set := make(map[string]struct{}) // never nil — safe to range / read
 	path := TombstonePath(cacheDir)
 
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return set, nil
 		}
-		return set, fmt.Errorf("read tombstone %q: %w", path, err)
+		return set, fmt.Errorf("open tombstone %q: %w", path, err)
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if id := strings.TrimSpace(line); id != "" {
-			set[id] = struct{}{}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 4096), 1024*1024)
+	for sc.Scan() {
+		id := strings.TrimSpace(sc.Text())
+		if id == "" {
+			continue
 		}
+		set[id] = struct{}{}
+	}
+	if err := sc.Err(); err != nil {
+		return set, fmt.Errorf("read tombstone %q: %w", path, err)
 	}
 	return set, nil
 }
