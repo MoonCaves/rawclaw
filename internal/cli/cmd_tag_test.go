@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/store/storetest"
 	"github.com/MoonCaves/rawclaw/internal/view"
+	"github.com/gofrs/flock"
 )
 
 // newTagTestDB builds a fresh writable db with the base + topic schema, returning
@@ -721,5 +723,62 @@ func TestRunTagWriteRoutine_AgentPreservesRealTopics(t *testing.T) {
 	}
 	if eff, err := store.IsEffectivelyRoutine(con, sid); err != nil || eff {
 		t.Fatalf("IsEffectivelyRoutine = %v, %v, want false because the real topic survives", eff, err)
+	}
+}
+
+// TestRunTagFloorCmd_WaitsForConsolidatedFence pins the release-blocking fix
+// found by the final review: runTagFloorCmd writes directly to the
+// consolidated store (no per-project fold to fence it afterward), and used to
+// do so unfenced — a concurrent rebuild's snapshot-then-rename could silently
+// discard the write. It must now go through the SAME fence a rebuild takes,
+// so a held lock blocks it rather than letting it race past.
+func TestRunTagFloorCmd_WaitsForConsolidatedFence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	con, err := store.ConnectRW(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated store: %v", err)
+	}
+	if err := index.EnsureSchema(con, "claude"); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close setup connection: %v", err)
+	}
+
+	holder := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
+	locked, err := holder.TryLock()
+	if err != nil || !locked {
+		t.Fatalf("hold consolidated lock: locked=%t err=%v", locked, err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		var b strings.Builder
+		done <- runTagFloorCmd(&b, nil)
+	}()
+
+	select {
+	case err := <-done:
+		holder.Unlock()
+		t.Fatalf("runTagFloorCmd returned (err=%v) while the fence was held — it wrote to the consolidated store without waiting for the lock", err)
+	case <-time.After(200 * time.Millisecond):
+		// still blocked, as expected
+	}
+
+	if err := holder.Unlock(); err != nil {
+		t.Fatalf("release held lock: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runTagFloorCmd after lock release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runTagFloorCmd did not complete after the fence was released")
 	}
 }
