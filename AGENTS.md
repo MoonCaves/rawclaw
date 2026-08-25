@@ -70,6 +70,9 @@ sovereign and dependency-free:
 - Touch only the files your task names. If another file needs changing, say so; don't take it.
 - Green before you finish: `CGO_ENABLED=0 go test -race -count=1 ./...` and `gofmt -l internal/`.
 - "No bug here" is a real result. Never report a green you did not observe.
+- Steering mailbox: if a commit is rejected with an `[agent-mailbox-guard]` message, that text is
+  a live directive from your supervisor. Follow it, mark it read as the rejection instructs, then
+  commit. The `.agent-mailbox/` folder is repo-local plumbing — never stage or commit it.
 
 ## Agent skills
 
