@@ -7,6 +7,7 @@ package paths
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,6 +60,58 @@ func TranscriptsRoot() string {
 		return filepath.Join(x, "rawclaw", "transcripts")
 	}
 	return expandHome("~/.local/share/rawclaw/transcripts")
+}
+
+// CatalogDir is the durable home for rawclaw's session catalog: one flat
+// directory under the rawclaw data home holding one entry per session id
+// written at session birth. Honors $RAWCLAW_CATALOG_DIR if set, else
+// $XDG_DATA_HOME/rawclaw/catalog (or ~/.local/share/rawclaw/catalog).
+func CatalogDir() string {
+	if c := os.Getenv("RAWCLAW_CATALOG_DIR"); c != "" {
+		return c
+	}
+	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
+		return filepath.Join(x, "rawclaw", "catalog")
+	}
+	return expandHome("~/.local/share/rawclaw/catalog")
+}
+
+// CatalogEntry is one entry in the durable session catalog.
+type CatalogEntry struct {
+	SessionID      string `json:"session_id"`
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	CWD            string `json:"cwd,omitempty"`
+	Source         string `json:"source,omitempty"`
+}
+
+// ReadCatalogEntry reads and parses a catalog entry from disk.
+func ReadCatalogEntry(path string) (CatalogEntry, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return CatalogEntry{}, err
+	}
+	var e CatalogEntry
+	if err := json.Unmarshal(b, &e); err != nil {
+		return CatalogEntry{}, err
+	}
+	return e, nil
+}
+
+// WriteCatalogEntry writes a catalog entry to dir/<session_id> atomically.
+func WriteCatalogEntry(catalogDir string, entry CatalogEntry) error {
+	if err := os.MkdirAll(catalogDir, 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(entry, "", "  ")
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(catalogDir, entry.SessionID)
+	tmp := filepath.Join(catalogDir, fmt.Sprintf(".tmp.%s.%d", entry.SessionID, os.Getpid()))
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, target)
 }
 
 // FindTranscriptDir resolves the projects subdir for `cwd` by matching the cwd
