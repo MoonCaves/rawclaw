@@ -513,11 +513,7 @@ func epochSeconds(dt time.Time) float64 {
 // Disp normalizes content for display: generated material optionally removed,
 // whitespace collapsed, capped to `cap` runes.
 func Disp(content string, includeTools bool, cap int) string {
-	t := content
-	if !includeTools {
-		t = StripGenerated(content)
-	}
-	return capRunes(collapseSpaces(t), cap)
+	return DispWith(content, includeTools, true, cap)
 }
 
 // DispWith normalizes content for display with granular inclusion of tools and
