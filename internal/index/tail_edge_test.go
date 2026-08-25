@@ -13,6 +13,8 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
+	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -211,7 +213,7 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 	dbCodex := filepath.Join(dir, "codex_trunc.db")
 	msgsCodex := func(got source.Container) ([]model.Message, error) {
 		return []model.Message{
-			{Role: "user", Text: "Codex prompt", TS: 1, TSISO: "2026-08-25T10:00:00Z", UUID: mintCodexUUID(got.ID, 0)},
+			{Role: "user", Text: "Codex prompt", TS: 1, TSISO: "2026-08-25T10:00:00Z", UUID: codex.MintUUID(got.ID, 0)},
 		}, nil
 	}
 
@@ -250,7 +252,7 @@ func TestTailEdge_TruncatedTailRecord(t *testing.T) {
 	dbAgy := filepath.Join(dir, "agy_trunc.db")
 	msgsAgy := func(got source.Container) ([]model.Message, error) {
 		return []model.Message{
-			{Role: "user", Text: "Agy prompt", TS: 1, TSISO: "2026-08-25T10:00:00Z", UUID: mintAntigravityUUID(got.ID, 0, 0)},
+			{Role: "user", Text: "Agy prompt", TS: 1, TSISO: "2026-08-25T10:00:00Z", UUID: antigravity.MintUUID(got.ID, 0, 0)},
 		}, nil
 	}
 

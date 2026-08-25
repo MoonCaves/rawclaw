@@ -16,6 +16,8 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
+	"github.com/MoonCaves/rawclaw/internal/source/codex"
 )
 
 // Ingest tracing counters for verification and test assertions.
@@ -193,7 +195,7 @@ func parseCodexTail(chunk []byte, sessionID string, startOrdinal int) ([]model.M
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			return nil, fmt.Errorf("malformed codex tail record: %w", err)
 		}
-		role, text, ok := normalizeCodex(rec)
+		role, text, ok := codex.NormalizeRecord(rec)
 		if !ok {
 			return nil, fmt.Errorf("unrecognized codex tail record")
 		}
@@ -206,142 +208,11 @@ func parseCodexTail(chunk []byte, sessionID string, startOrdinal int) ([]model.M
 			Text:  text,
 			TS:    parse.ISOToEpoch(iso),
 			TSISO: iso,
-			UUID:  mintCodexUUID(sessionID, ordinal),
+			UUID:  codex.MintUUID(sessionID, ordinal),
 		})
 		ordinal++
 	}
 	return out, nil
-}
-
-// normalizeCodex mirrors codex.normalize for response_item records.
-func normalizeCodex(rec map[string]any) (role, text string, ok bool) {
-	if t, _ := rec["type"].(string); t != "response_item" {
-		return "", "", false
-	}
-	p, ok := rec["payload"].(map[string]any)
-	if !ok {
-		return "", "", false
-	}
-	switch pt, _ := p["type"].(string); pt {
-	case "message":
-		r, _ := p["role"].(string)
-		return mapCodexRole(r), codexContentText(p["content"]), true
-	case "reasoning":
-		s := codexSummaryText(p["summary"])
-		if s == "" {
-			return "", "", false
-		}
-		return "assistant", "[THINKING] " + s, true
-	case "function_call":
-		name, _ := p["name"].(string)
-		args, _ := p["arguments"].(string)
-		return "assistant", strings.TrimSpace(fmt.Sprintf("[TOOL:%s] %s", name, args)), true
-	case "function_call_output", "custom_tool_call_output":
-		return "tool", "[TOOL_RESULT] " + codexOutputText(p["output"]), true
-	case "custom_tool_call":
-		name, _ := p["name"].(string)
-		input, _ := p["input"].(string)
-		return "assistant", strings.TrimSpace(fmt.Sprintf("[TOOL:%s] %s", name, input)), true
-	case "web_search_call":
-		return "assistant", strings.TrimSpace("[TOOL:web_search] " + codexActionQuery(p["action"])), true
-	case "tool_search_call":
-		return "assistant", strings.TrimSpace("[TOOL:tool_search] " + codexArgsText(p["arguments"])), true
-	case "tool_search_output":
-		return "tool", "[TOOL_RESULT] " + codexOutputText(p["output"]), true
-	case "image_generation_call":
-		prompt, _ := p["prompt"].(string)
-		return "assistant", strings.TrimSpace("[TOOL:image_generation] " + prompt), true
-	default:
-		return "", "", false
-	}
-}
-
-func mapCodexRole(r string) string {
-	switch r {
-	case "developer", "system":
-		return "system"
-	case "user":
-		return "user"
-	case "assistant":
-		return "assistant"
-	default:
-		if r == "" {
-			return "assistant"
-		}
-		return r
-	}
-}
-
-func codexContentText(v any) string {
-	blocks, ok := v.([]any)
-	if !ok {
-		return ""
-	}
-	var b strings.Builder
-	for _, blk := range blocks {
-		m, ok := blk.(map[string]any)
-		if !ok {
-			continue
-		}
-		if t, ok := m["text"].(string); ok && t != "" {
-			if b.Len() > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(t)
-		}
-	}
-	return b.String()
-}
-
-func codexSummaryText(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return codexContentText(v)
-}
-
-func codexOutputText(v any) string {
-	switch o := v.(type) {
-	case string:
-		return o
-	case map[string]any:
-		if s, ok := o["output"].(string); ok {
-			return s
-		}
-		if s := codexContentText(o["content"]); s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-func codexActionQuery(v any) string {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return ""
-	}
-	q, _ := m["query"].(string)
-	return q
-}
-
-func codexArgsText(v any) string {
-	switch a := v.(type) {
-	case string:
-		return a
-	case map[string]any:
-		if q, ok := a["query"].(string); ok && q != "" {
-			return q
-		}
-		if b, err := json.Marshal(a); err == nil {
-			return string(b)
-		}
-	}
-	return ""
-}
-
-func mintCodexUUID(sessionID string, ordinal int) string {
-	h := sha1.Sum([]byte(fmt.Sprintf("%s:%d", sessionID, ordinal)))
-	return hex.EncodeToString(h[:])[:16]
 }
 
 // parseAntigravityTail parses newly appended Antigravity step records from chunk.
@@ -357,7 +228,7 @@ func parseAntigravityTail(chunk []byte, sessionID string, startOrdinal int) ([]m
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			return nil, fmt.Errorf("malformed antigravity tail record: %w", err)
 		}
-		role, text, ok := normalizeAntigravity(rec)
+		role, text, ok := antigravity.NormalizeRecord(rec)
 		if !ok {
 			return nil, fmt.Errorf("unrecognized antigravity tail record")
 		}
@@ -376,121 +247,9 @@ func parseAntigravityTail(chunk []byte, sessionID string, startOrdinal int) ([]m
 			Text:  text,
 			TS:    parse.ISOToEpoch(iso),
 			TSISO: iso,
-			UUID:  mintAntigravityUUID(sessionID, stepIdx, ordinal),
+			UUID:  antigravity.MintUUID(sessionID, stepIdx, ordinal),
 		})
 		ordinal++
 	}
 	return out, nil
-}
-
-func normalizeAntigravity(rec map[string]any) (role, text string, ok bool) {
-	stepType, _ := rec["type"].(string)
-	sourceVal, _ := rec["source"].(string)
-
-	switch stepType {
-	case "USER_INPUT":
-		content, _ := rec["content"].(string)
-		cleanText := parseAntigravityUserRequest(content)
-		if cleanText == "" {
-			return "", "", false
-		}
-		return "user", cleanText, true
-
-	case "PLANNER_RESPONSE":
-		var parts []string
-		if thinking, _ := rec["thinking"].(string); strings.TrimSpace(thinking) != "" {
-			parts = append(parts, "[THINKING] "+strings.TrimSpace(thinking))
-		}
-		if content, _ := rec["content"].(string); strings.TrimSpace(content) != "" {
-			parts = append(parts, strings.TrimSpace(content))
-		}
-		if toolCalls, ok := rec["tool_calls"].([]any); ok {
-			for _, tc := range toolCalls {
-				if tcMap, ok := tc.(map[string]any); ok {
-					name, _ := tcMap["name"].(string)
-					argsStr := formatAntigravityToolArgs(tcMap["args"])
-					if argsStr != "" {
-						parts = append(parts, strings.TrimSpace(fmt.Sprintf("[TOOL:%s] %s", name, argsStr)))
-					} else {
-						parts = append(parts, fmt.Sprintf("[TOOL:%s]", name))
-					}
-				}
-			}
-		}
-		if len(parts) == 0 {
-			return "", "", false
-		}
-		return "assistant", strings.Join(parts, "\n"), true
-
-	case "SYSTEM_MESSAGE":
-		content, _ := rec["content"].(string)
-		if strings.TrimSpace(content) == "" {
-			return "", "", false
-		}
-		return "system", strings.TrimSpace(content), true
-
-	case "CONVERSATION_HISTORY", "CHECKPOINT":
-		return "", "", false
-
-	default:
-		if content, _ := rec["content"].(string); strings.TrimSpace(content) != "" {
-			return "tool", "[TOOL_RESULT] " + strings.TrimSpace(content), true
-		}
-		if sourceVal == "MODEL" || sourceVal == "SYSTEM" {
-			if content, _ := rec["content"].(string); strings.TrimSpace(content) != "" {
-				return "tool", "[TOOL_RESULT] " + strings.TrimSpace(content), true
-			}
-		}
-		return "", "", false
-	}
-}
-
-func parseAntigravityUserRequest(s string) string {
-	const startTag = "<USER_REQUEST>"
-	const endTag = "</USER_REQUEST>"
-	start := strings.Index(s, startTag)
-	if start >= 0 {
-		sub := s[start+len(startTag):]
-		if end := strings.Index(sub, endTag); end >= 0 {
-			return strings.TrimSpace(sub[:end])
-		}
-		return strings.TrimSpace(sub)
-	}
-	return strings.TrimSpace(s)
-}
-
-func formatAntigravityToolArgs(v any) string {
-	switch a := v.(type) {
-	case string:
-		var unq string
-		if err := json.Unmarshal([]byte(a), &unq); err == nil && unq != "" {
-			return unq
-		}
-		return strings.TrimSpace(a)
-	case map[string]any:
-		if cmd, ok := a["CommandLine"].(string); ok && cmd != "" {
-			return cmd
-		}
-		if q, ok := a["query"].(string); ok && q != "" {
-			return q
-		}
-		if q, ok := a["Query"].(string); ok && q != "" {
-			return q
-		}
-		if p, ok := a["AbsolutePath"].(string); ok && p != "" {
-			return p
-		}
-		if p, ok := a["TargetFile"].(string); ok && p != "" {
-			return p
-		}
-		if b, err := json.Marshal(a); err == nil {
-			return string(b)
-		}
-	}
-	return ""
-}
-
-func mintAntigravityUUID(sessionID string, stepIndex, ordinal int) string {
-	h := sha1.Sum([]byte(fmt.Sprintf("%s:%d:%d", sessionID, stepIndex, ordinal)))
-	return hex.EncodeToString(h[:])[:16]
 }
