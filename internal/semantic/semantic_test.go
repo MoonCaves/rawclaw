@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 
@@ -689,4 +690,52 @@ func TestMeasureCoverage(t *testing.T) {
 			t.Errorf("proj-a+b cov = %+v, want Candidates: 2, Vectored: 0, Missing: 2", covBoth)
 		}
 	})
+}
+
+type errorOnUpsertEmbedder struct {
+	con  *sql.DB
+	once sync.Once
+}
+
+func (e *errorOnUpsertEmbedder) Embed(text string) []float64 {
+	return []float64{1.0, 0.0, 0.0}
+}
+
+func (e *errorOnUpsertEmbedder) EmbedBatch(texts []string) [][]float64 {
+	e.once.Do(func() {
+		// Drop the chunk_vec table on the first batch so subsequent VecUpsert fails.
+		_, _ = e.con.Exec("DROP TABLE chunk_vec")
+	})
+	out := make([][]float64, len(texts))
+	for i := range texts {
+		out[i] = []float64{1.0, 0.0, 0.0}
+	}
+	return out
+}
+
+func TestVecIndex_DBUpsertError_NoGoroutineLeak(t *testing.T) {
+	con := openTestDB(t)
+
+	// Insert 16 messages (>150k char boundary per pair) in a single transaction.
+	storetest.InsertSession(t, con, storetest.Session{ID: "s1"})
+	tx, err := con.Begin()
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	blob := fmt.Sprintf("message %s", strings.Repeat("x", 80000))
+	for i := 0; i < 16; i++ {
+		if _, err := tx.Exec("INSERT INTO messages(session_id, role, content, ts, ts_iso) VALUES (?, ?, ?, ?, ?)",
+			"s1", "user", fmt.Sprintf("%d %s", i, blob), float64(1000+i), "2026-06-18T10:00:00Z"); err != nil {
+			t.Fatalf("insert message %d: %v", i, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	emb := &errorOnUpsertEmbedder{con: con}
+	_, err = VecIndex(context.Background(), con, emb, 0)
+	if err == nil {
+		t.Fatal("expected error from VecIndex when chunk_vec table is dropped, got nil")
+	}
 }
