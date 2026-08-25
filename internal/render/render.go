@@ -35,11 +35,11 @@ func fmtMsg(m view.ViewMsg) string {
 // PrintBrowse renders the recent-sessions list for a project.
 func PrintBrowse(w io.Writer, rows []view.BrowseRow, project string) {
 	if len(rows) == 0 {
-		fmt.Fprintf(w, "No sessions on %s · live-indexed on invoke.\n", project)
+		fmt.Fprintf(w, "No sessions on %s · answers from local store; refreshes in background.\n", project)
 		return
 	}
 
-	fmt.Fprintf(w, "%d most-recent sessions on %s · live-indexed on invoke:\n\n", len(rows), project)
+	fmt.Fprintf(w, "%d most-recent sessions on %s · answers from local store; refreshes in background:\n\n", len(rows), project)
 	for _, r := range rows {
 		fmt.Fprintf(w, "  · %s · %d msgs · %s\n", sid8(r.SessionID), r.N, r.Preview)
 		printLastActivity(w, r.Last)
@@ -68,11 +68,11 @@ func printLastActivity(w io.Writer, last string) {
 // question's answer as another's.
 func PrintBrowseAll(w io.Writer, rows []view.BrowseAllRow, scope string) {
 	if len(rows) == 0 {
-		fmt.Fprintf(w, "No sessions across %s · live-indexed on invoke. Try --list to see the searchable projects.\n", scope)
+		fmt.Fprintf(w, "No sessions across %s · answers from local store; refreshes in background. Try --list to see the searchable projects.\n", scope)
 		return
 	}
 
-	fmt.Fprintf(w, "%d most-recent sessions across %s · live-indexed on invoke:\n\n", len(rows), scope)
+	fmt.Fprintf(w, "%d most-recent sessions across %s · answers from local store; refreshes in background:\n\n", len(rows), scope)
 	for _, r := range rows {
 		fmt.Fprintf(w, "  · %s · %s · %d msgs · %s\n", sid8(r.SessionID), r.Project, r.N, r.Preview)
 		printLastActivity(w, r.Last)
@@ -127,7 +127,7 @@ func yesNo(b bool) string {
 // panicking on a short slice.
 func PrintDebugSearch(w io.Writer, hits []retrieve.Hit, explains []retrieve.ScoreExplain) {
 	if len(hits) == 0 {
-		fmt.Fprintln(w, "No matches to explain · live-indexed on invoke. (--debug-search shows WHY each hit ranked where it did.)")
+		fmt.Fprintln(w, "No matches to explain · answers from local store; refreshes in background. (--debug-search shows WHY each hit ranked where it did.)")
 		return
 	}
 
