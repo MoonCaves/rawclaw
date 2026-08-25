@@ -329,7 +329,7 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 				for _, l := range strings.Split(content, "\n") {
 					if _, val, ok := strings.Cut(l, "conversationId"); ok {
 						if _, cid, ok := strings.Cut(val, ":"); ok {
-							cid = strings.Trim(cid, "\", \t\r\n ")
+							cid = strings.Trim(cid, "\", \t\r\n")
 							if cid != "" {
 								children = append(children, cid)
 							}
