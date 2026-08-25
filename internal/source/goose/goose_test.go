@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 // TestGooseSharedDatabase tests the single monolithic sessions.db schema containing
@@ -435,7 +437,10 @@ func TestGooseSQLInjectionPrevention(t *testing.T) {
 	}
 
 	// An unsanitized table name must be rejected and return nil without executing PRAGMA
-	cols := tableColumns(db, "messages; DROP TABLE messages; --")
+	cols, err := tableColumns(db, "messages; DROP TABLE messages; --")
+	if err != nil {
+		t.Fatalf("unexpected error for unsafe table name: %v", err)
+	}
 	if cols != nil {
 		t.Errorf("tableColumns with injected SQL returned %v, want nil", cols)
 	}
@@ -444,7 +449,10 @@ func TestGooseSQLInjectionPrevention(t *testing.T) {
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS chat ("role" TEXT, "content" TEXT, "sess; DROP TABLE foo; --" TEXT);`); err != nil {
 		t.Fatalf("create chat table: %v", err)
 	}
-	chatCols := tableColumns(db, "chat")
+	chatCols, err := tableColumns(db, "chat")
+	if err != nil {
+		t.Fatalf("tableColumns(chat) failed: %v", err)
+	}
 	for _, col := range chatCols {
 		if !isSafeIdent(col) {
 			t.Errorf("tableColumns returned unsanitized column %q", col)
@@ -548,8 +556,8 @@ func TestSessionContainersFromRows_DoesNotFallThroughOnRowsError(t *testing.T) {
 		rowErr: rowsErr,
 	}
 
-	containers, ok, gotErr := sessionContainersFromRows(rows, "/tmp/sessions.db")
-	if ok {
+	containers, gotErr := sessionContainersFromRows(rows, "/tmp/sessions.db")
+	if gotErr == nil {
 		t.Fatal("sessionContainersFromRows returned success after rows.Err")
 	}
 	if !errors.Is(gotErr, rowsErr) {
@@ -557,5 +565,137 @@ func TestSessionContainersFromRows_DoesNotFallThroughOnRowsError(t *testing.T) {
 	}
 	if containers != nil {
 		t.Fatalf("sessionContainersFromRows returned %d partial containers, want nil", len(containers))
+	}
+}
+
+// TestGooseDiscovery_RowsErr_DoesNotDeleteOmittedDatabaseSessions (Issue #16)
+// verifies that when discovery encounters a rows.Err() mid-iteration on one database,
+// it returns an error rather than silently omitting that database and returning a partial
+// set as success — preventing a caller running --reindex from treating the partial set as
+// authoritative and deleting the omitted database's live sessions.
+func TestGooseDiscovery_RowsErr_DoesNotDeleteOmittedDatabaseSessions(t *testing.T) {
+	tmpDir := t.TempDir()
+	sessionsDir := filepath.Join(tmpDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// 1. Setup DB 1 with session sess-healthy-1 sharing CWD /workspace/shared
+	db1Path := filepath.Join(sessionsDir, "db1.db")
+	db1, err := sql.Open("sqlite", db1Path)
+	if err != nil {
+		t.Fatalf("open db1: %v", err)
+	}
+	if _, err := db1.Exec(`
+		CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT);
+		CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT);
+		INSERT INTO sessions VALUES ('sess-healthy-1', '/workspace/shared');
+		INSERT INTO messages VALUES ('m1', 'sess-healthy-1', 'user', 'Healthy session msg', '2026-08-25T10:00:00Z');
+	`); err != nil {
+		db1.Close()
+		t.Fatalf("init db1: %v", err)
+	}
+	db1.Close()
+
+	// 2. Setup DB 2 initially with valid session sess-db2-1 sharing CWD /workspace/shared
+	db2Path := filepath.Join(sessionsDir, "db2.db")
+	db2, err := sql.Open("sqlite", db2Path)
+	if err != nil {
+		t.Fatalf("open db2: %v", err)
+	}
+	if _, err := db2.Exec(`
+		CREATE TABLE raw_sessions (id TEXT PRIMARY KEY, working_dir TEXT, payload TEXT);
+		CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, created_at TEXT);
+		INSERT INTO raw_sessions VALUES ('sess-db2-1', '/workspace/shared', '{"valid":true}');
+		INSERT INTO messages VALUES ('m2', 'sess-db2-1', 'user', 'DB2 session msg', '2026-08-25T10:00:00Z');
+		CREATE VIEW sessions AS SELECT id, working_dir FROM raw_sessions;
+	`); err != nil {
+		db2.Close()
+		t.Fatalf("init db2: %v", err)
+	}
+	db2.Close()
+
+	// 3. Initial indexing: discover both databases and index into RawClaw store
+	adapter := NewRoot(sessionsDir)
+	containers, err := adapter.Discover()
+	if err != nil {
+		t.Fatalf("initial Discover failed: %v", err)
+	}
+	if len(containers) != 2 {
+		t.Fatalf("initial Discover got %d containers, want 2", len(containers))
+	}
+
+	storeDB := filepath.Join(tmpDir, "index_store.db")
+	nIndexed, status, err := index.EnsureIndexedContainers(storeDB, false, containers, adapter.Messages, ID, "")
+	if err != nil || status != index.IndexFresh || nIndexed != 2 {
+		t.Fatalf("initial indexing failed: n=%d status=%v err=%v", nIndexed, status, err)
+	}
+
+	// Verify both sessions exist in storeDB
+	con, err := store.ConnectRO(storeDB)
+	if err != nil {
+		t.Fatalf("connect storeDB: %v", err)
+	}
+	var count1, count2 int
+	_ = con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='sess-healthy-1'").Scan(&count1)
+	_ = con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='sess-db2-1'").Scan(&count2)
+	con.Close()
+	if count1 != 1 || count2 != 1 {
+		t.Fatalf("initial store state wrong: count1=%d count2=%d", count1, count2)
+	}
+
+	// 4. Force a rows.Err() mid-iteration during DB2 session discovery
+	db2Corrupt, err := sql.Open("sqlite", db2Path)
+	if err != nil {
+		t.Fatalf("open db2 for corruption: %v", err)
+	}
+	if _, err := db2Corrupt.Exec(`
+		DROP VIEW sessions;
+		INSERT INTO raw_sessions VALUES ('sess-corrupt-row', '/workspace/shared', '{"bad json');
+		CREATE VIEW sessions AS
+		SELECT
+			id,
+			CASE WHEN id = 'sess-corrupt-row' THEN json_extract(payload, '$.valid') ELSE working_dir END AS working_dir
+		FROM raw_sessions
+		ORDER BY id ASC;
+	`); err != nil {
+		db2Corrupt.Close()
+		t.Fatalf("corrupt db2 view: %v", err)
+	}
+	db2Corrupt.Close()
+
+	// 5. Run discovery against the directory with the failing DB2
+	reindexAdapter := NewRoot(sessionsDir)
+	discovered, discErr := reindexAdapter.Discover()
+
+	// If discovery falsely succeeds, the caller (e.g. scopes.Goose or cli) proceeds with reindex
+	if discErr == nil {
+		// Simulating what the caller does on reindex when Discover() returns success:
+		// Rebuilds storeDB from the discovered container set
+		_, _, _ = index.EnsureIndexedContainers(storeDB, true, discovered, reindexAdapter.Messages, ID, "")
+	}
+
+	// 6. Assertions:
+	// A: Discover MUST return an error when a database query fails mid-iteration
+	if discErr == nil {
+		t.Fatalf("Discover returned nil error after rows.Err() mid-iteration in db2 (partial discovery returned as success)")
+	}
+	if discovered != nil {
+		t.Fatalf("Discover returned %d partial containers on error, want nil", len(discovered))
+	}
+
+	// B: DB2's session must NOT have been deleted from storeDB
+	conAfter, err := store.ConnectRO(storeDB)
+	if err != nil {
+		t.Fatalf("connect storeDB after: %v", err)
+	}
+	defer conAfter.Close()
+
+	var countDB2After int
+	if err := conAfter.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='sess-db2-1'").Scan(&countDB2After); err != nil {
+		t.Fatalf("count db2 sessions after: %v", err)
+	}
+	if countDB2After == 0 {
+		t.Fatalf("DATA LOSS (Issue #16): sess-db2-1 was deleted from index store because discovery silently omitted db2 on rows.Err")
 	}
 }
