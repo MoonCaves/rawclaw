@@ -22,17 +22,21 @@ const DefaultTopupMaxNew = 50
 // database store. Within it an ordinary invocation costs one stat check.
 const topupWindow = 1 * time.Minute
 
+// topupPath returns <state-dir>/vector-topup/<encoded-dbp><ext>.
+func topupPath(dbp, ext string) string {
+	enc := filepath.Base(filepath.Clean(dbp))
+	return filepath.Join(store.CacheDir(), "vector-topup", enc+ext)
+}
+
 // topupLockPath returns the flock file path for serializing vector top-ups on a store:
 // <state-dir>/vector-topup/<encoded-dbp>.lock
 func topupLockPath(dbp string) string {
-	enc := filepath.Base(filepath.Clean(dbp))
-	return filepath.Join(store.CacheDir(), "vector-topup", enc+".lock")
+	return topupPath(dbp, ".lock")
 }
 
 // topupTokenPath returns <state-dir>/vector-topup/<encoded-dbp>.token — the spawn throttle token.
 func topupTokenPath(dbp string) string {
-	enc := filepath.Base(filepath.Clean(dbp))
-	return filepath.Join(store.CacheDir(), "vector-topup", enc+".token")
+	return topupPath(dbp, ".token")
 }
 
 // VectorTopupLogPath is <state-dir>/vector-topup.log — where the detached
@@ -47,7 +51,7 @@ func AcquireTopupToken(dbp string, now time.Time) bool {
 	p := topupTokenPath(dbp)
 	st, err := os.Stat(p)
 	if err == nil {
-		if age := now.Sub(st.ModTime()); age > -topupWindow && age < topupWindow {
+		if now.Sub(st.ModTime()).Abs() < topupWindow {
 			return false
 		}
 		_ = os.Remove(p)
