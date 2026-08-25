@@ -1508,11 +1508,16 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	}
 
 	// Keep the project you are working in searchable if not fresh or if an explicit
-	// folder was requested. If the index is current during default search, skip refreshing
-	// the current project entirely — O(1) reads perform no source discovery or transcript stats.
+	// folder was requested. If the project is current during default search, skip refreshing
+	// the current project entirely — O(1) reads perform no source discovery or transcript scans.
 	if !o.Reindex && !o.DirSet && !o.ThisProject {
+		td := resolveTDir(o.Dir, o.DirSet)
+		projLabel := ""
+		if td != "" {
+			projLabel = paths.ProjectLabel(td)
+		}
 		if con, _, err := index.OpenConsolidated(); err == nil {
-			freshness, fErr := index.CheckIndexFreshness(con)
+			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td)
 			_ = con.Close()
 			if fErr != nil || !freshness.Fresh {
 				refreshThisProject(o)

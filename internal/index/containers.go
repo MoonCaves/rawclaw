@@ -205,19 +205,19 @@ func ensureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
+		return 0, IndexStatusUnknown, fmt.Errorf("ensure schema: %w", err)
 	}
 	if err := updateContainers(con, cs, msgs, sourceID, origin); err != nil {
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return 0, IndexFresh, fmt.Errorf("update containers: %w", err)
+		return 0, IndexStatusUnknown, fmt.Errorf("update containers: %w", err)
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&nSessions); err != nil {
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return 0, IndexFresh, fmt.Errorf("count sessions: %w", err)
+		return 0, IndexStatusUnknown, fmt.Errorf("count sessions: %w", err)
 	}
 	return nSessions, IndexFresh, nil
 }
