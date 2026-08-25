@@ -266,6 +266,8 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
 	count := 0
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -341,6 +343,9 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 				}
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("antigravity: scan transcript error", "path", path, "err", err)
 	}
 	return hdr, children
 }
