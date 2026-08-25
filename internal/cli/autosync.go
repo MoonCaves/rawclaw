@@ -30,6 +30,10 @@ const autosyncLogMax = 512 * 1024
 // point at a fake instead of the test binary.
 var selfExe = os.Executable
 
+// autosyncLogPath resolves the receipt log path (<state-dir>/archive/autosync.log) —
+// a seam so tests can isolate the receipt log to a per-test temp dir.
+var autosyncLogPath = archive.AutosyncLogPath
+
 // spawnAutosync launches the detached sync child — a seam so unit tests can
 // count spawn decisions without forking processes.
 var spawnAutosync = spawnAutosyncChild
@@ -89,7 +93,7 @@ func spawnAutosyncChild() {
 // openAutosyncLog opens the receipt log for append, rotating an oversized log
 // to a single .old generation first.
 func openAutosyncLog() (*os.File, error) {
-	p := archive.AutosyncLogPath()
+	p := autosyncLogPath()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return nil, fmt.Errorf("create %s: %w", filepath.Dir(p), err)
 	}
