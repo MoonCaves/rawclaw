@@ -79,6 +79,10 @@ func UnconsolidatedDBs(con *sql.DB) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return unconsolidatedDBs(con, dbs)
+}
+
+func unconsolidatedDBs(con *sql.DB, dbs []string) ([]string, error) {
 	rows, err := con.Query("SELECT key FROM meta WHERE key LIKE 'sync:%'")
 	if err != nil {
 		return nil, fmt.Errorf("read fold-in watermarks: %w", err)
@@ -95,14 +99,21 @@ func UnconsolidatedDBs(con *sql.DB) ([]string, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	basenameCount := make(map[string]int)
+	for _, dbp := range dbs {
+		basenameCount[filepath.Base(dbp)]++
+	}
 	var missing []string
 	for _, dbp := range dbs {
 		if _, ok := folded[sourceIdentity(dbp)]; !ok {
 			// Accept pre-path-identity watermarks written by older builds. They
-			// remain inherently ambiguous when two paths share a basename, but
-			// new folds use the full path below so that ambiguity cannot recur.
-			if _, ok := folded[filepath.Base(dbp)]; ok {
-				continue
+			// only when the current source set has one candidate with that name.
+			// If two paths share a basename, neither can be proved to be the
+			// source that wrote the legacy row, so both must be reported missing.
+			if basenameCount[filepath.Base(dbp)] == 1 {
+				if _, ok := folded[filepath.Base(dbp)]; ok {
+					continue
+				}
 			}
 			missing = append(missing, dbp)
 		}

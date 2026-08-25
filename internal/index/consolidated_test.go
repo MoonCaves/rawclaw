@@ -1180,6 +1180,52 @@ func TestConsolidate_DistinguishesSourcesWithTheSameBasename(t *testing.T) {
 	}
 }
 
+// TestUnconsolidatedDBs_DoesNotTrustAmbiguousLegacyBasename keeps a legacy
+// basename watermark from hiding a different source with the same basename.
+func TestUnconsolidatedDBs_DoesNotTrustAmbiguousLegacyBasename(t *testing.T) {
+	isolateCache(t)
+	first := seedSessionDB(t, "sessions.db", sessionRow{
+		id: "first-legacy-source", project: "first", cwd: "/w/first",
+		msgs: []msgRow{{"first", "user", "first source", 100}},
+	})
+	second := seedSessionDB(t, "sessions.db", sessionRow{
+		id: "second-unprocessed-source", project: "second", cwd: "/w/second",
+		msgs: []msgRow{{"second", "user", "second source", 200}},
+	})
+
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := con.Exec("INSERT INTO meta(key, value) VALUES('sync:sessions.db', 'legacy-mark')"); err != nil {
+		t.Fatalf("seed legacy watermark: %v", err)
+	}
+
+	missing, err := unconsolidatedDBs(con, []string{first, second})
+	if err != nil {
+		t.Fatalf("unconsolidatedDBs: %v", err)
+	}
+	if len(missing) != 2 {
+		t.Fatalf("missing databases = %v, want both same-basename sources", missing)
+	}
+	for _, want := range []string{first, second} {
+		found := false
+		for _, got := range missing {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing databases = %v, want %s included", missing, want)
+		}
+	}
+}
+
 // TestConsolidate_MergedSessionHonestPerContributionSemantics tests ticket #181:
 //   - A session merged from 3 sources where 1 or 2 are purged remains LIVE (missing_since = NULL).
 //   - When ALL 3 contributing sources are purged, the merged row learns of it and stamps
@@ -1526,8 +1572,19 @@ func TestConsolidateFrom_PrunesLegacySourceAfterFullPass(t *testing.T) {
 	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db='' "); got != "0" {
 		t.Errorf("legacy row for session with real source = %s, want 0", got)
 	}
-	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db='real.db'"); got != "1" {
-		t.Errorf("real row for session with real source = %s, want 1", got)
+	// source_db holds the source's full-path identity (sourceIdentity), not its
+	// basename. This assertion used to hard-code "real.db" and silently began
+	// failing when identity moved from basename to absolute path — the row was
+	// always written correctly, the test was just looking under the old name.
+	var realRows int
+	if err := con.QueryRow(
+		"SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db=?",
+		sourceIdentity(src),
+	).Scan(&realRows); err != nil {
+		t.Fatalf("count real rows: %v", err)
+	}
+	if realRows != 1 {
+		t.Errorf("real row for session with real source = %d, want 1", realRows)
 	}
 	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='legacy-only' AND source_db='' "); got != "1" {
 		t.Errorf("legacy-only row = %s, want 1", got)
