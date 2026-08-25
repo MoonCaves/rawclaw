@@ -145,7 +145,15 @@ func TestReindexContainer_RollbackOnFailure(t *testing.T) {
 		{Role: "fail", Text: "replacement message 2", TS: 4, TSISO: "2026-08-15T00:00:03Z", UUID: "u-bad"}, // triggers RAISE(ABORT)
 	}
 
-	err = reindexContainer(con, c, brokenMsgs, "test", "", f, 100.0, 10, "testfp")
+	err = reindexContainer(con, reindexContainerParams{
+		container:   c,
+		messages:    brokenMsgs,
+		sourceID:    "test",
+		path:        f,
+		mtime:       100.0,
+		size:        10,
+		fingerprint: "testfp",
+	})
 	if err == nil {
 		t.Fatal("reindexContainer should have returned error on injected failure")
 	}

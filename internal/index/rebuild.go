@@ -135,7 +135,13 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 			st.Unreadable++
 			continue
 		}
-		if err := restoreSession(con, v, rows, started, last, fileCWD); err != nil {
+		if err := restoreSession(con, restoreSessionParams{
+			session: v,
+			rows:    rows,
+			started: started,
+			last:    last,
+			fileCWD: fileCWD,
+		}); err != nil {
 			return st, err
 		}
 		st.Sessions++
@@ -147,6 +153,14 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 	return st, nil
 }
 
+type restoreSessionParams struct {
+	session durable.Session
+	rows    []reindexRow
+	started float64
+	last    float64
+	fileCWD string
+}
+
 // restoreSession writes one vaulted session back into the store: its messages,
 // its session row (scope and provenance from the sidecar, falling back to what
 // the transcript itself records), and its file_index watermark.
@@ -155,7 +169,13 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 // That matters: the next live pass compares file_index paths against the source
 // walk, so a vault-keyed row would read as "source absent" and stamp
 // missing_since on a session that is perfectly alive.
-func restoreSession(con *sql.DB, v durable.Session, rows []reindexRow, started, last float64, fileCWD string) error {
+func restoreSession(con *sql.DB, params restoreSessionParams) error {
+	v := params.session
+	rows := params.rows
+	started := params.started
+	last := params.last
+	fileCWD := params.fileCWD
+
 	tx, err := con.Begin()
 	if err != nil {
 		return fmt.Errorf("begin restore session %s: %w", v.ID, err)
