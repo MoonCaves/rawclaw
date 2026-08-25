@@ -85,10 +85,10 @@ type Anchor struct {
 	Snip      string
 	Cov       int
 
-	// MissingSince is the session's missing_since watermark: >0 when the backing
-	// source file is gone but the row is retained (durable retention, D1). Surfaced
-	// so a retained-but-missing hit doesn't read as current (D7). 0 = present.
-	MissingSince float64
+	// OnlyCopySince is the session's only_copy_since watermark: >0 when the backing
+	// source file was deleted by the CLI but the row is retained (RawClaw is now the only copy).
+	// Surfaced so the only-copy state is clear. 0 = present upstream.
+	OnlyCopySince float64
 
 	// Attached by the fusion / discovery layers (zero until set):
 	Fused   float64 // RRF score (semantic.Fuse)
@@ -712,17 +712,17 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 		}
 		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, a.Content)), multi)
 		out = append(out, Anchor{
-			ID:           a.ID,
-			SessionID:    a.SessionID,
-			UUID:         a.UUID,
-			Role:         a.Role,
-			ISO:          a.ISO,
-			Parent:       a.Parent,
-			Snip:         disp,
-			Cov:          cov,
-			MissingSince: a.MissingSince, // 0 when NULL (present)
-			Project:      a.Project,      // "" from a database that predates the scope columns
-			Routine:      routines[a.SessionID],
+			ID:            a.ID,
+			SessionID:     a.SessionID,
+			UUID:          a.UUID,
+			Role:          a.Role,
+			ISO:           a.ISO,
+			Parent:        a.Parent,
+			Snip:          disp,
+			Cov:           cov,
+			OnlyCopySince: a.OnlyCopySince, // 0 when NULL (present)
+			Project:       a.Project,       // "" from a database that predates the scope columns
+			Routine:       routines[a.SessionID],
 		})
 	}
 

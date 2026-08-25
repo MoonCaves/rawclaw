@@ -186,7 +186,7 @@ func verifyConsolidatedCount(sessionID string, minimum int) error {
 // CONTRACT — cs MUST be the COMPLETE container set for dbp on every call. The
 // retention pass (updateContainers) reconciles indexed sessions against cs as
 // the full live scan: in a REPLICA scope (origin set) an omitted session is
-// pruned outright; in a local scope it is stamped missing_since — either way
+// pruned outright; in a local scope it is stamped only_copy_since — either way
 // a partial cs corrupts the outcome for the omitted sessions. Corollary:
 // never point two sources (or two scopes) at the same dbp — give each its
 // own, distinctly-namespaced cache file, so one source's set is never
@@ -314,7 +314,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 	}
 
 	// Retention pass (parallel of UpdateIndex): an absent own-source container is
-	// flagged missing_since and retained; only an explicit tombstone deletes; a
+	// flagged only_copy_since and retained; only an explicit tombstone deletes; a
 	// foreign-origin row is never a candidate (D1/D2/D5). An ARCHIVE-replica
 	// scan (origin set) instead treats absence as authoritative — the owner's
 	// delete propagated through the archive (E5); see DecideRetention.
@@ -398,7 +398,7 @@ func reindexContainer(con *sql.DB, params reindexContainerParams) error {
 	} // else nil → SQL NULL
 	projectArg, cwdArg := scopeOf(c.CWD, projectScope{})
 	if _, err := tx.Exec(
-		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
+		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,only_copy_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
 		c.ID, started, last, len(ms), b2i(c.IsSubagent), parentArg, originOr(origin), sourceID, realpath(c.Path), projectArg, cwdArg,
 	); err != nil {
 		return fmt.Errorf("session %s insert session: %w", c.ID, err)
@@ -469,7 +469,7 @@ func appendContainer(con *sql.DB, c source.Container, ms []model.Message, source
 		UPDATE sessions
 		SET message_count = (SELECT COUNT(*) FROM messages WHERE messages.session_id = sessions.id),
 		    last_ts = CASE WHEN ? > COALESCE(last_ts, 0) THEN ? ELSE last_ts END,
-		    missing_since = NULL
+		    only_copy_since = NULL
 		WHERE id = ?`,
 		maxTS, maxTS, c.ID,
 	); err != nil {

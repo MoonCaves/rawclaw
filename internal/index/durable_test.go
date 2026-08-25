@@ -99,8 +99,8 @@ func TestVaultFlagFollowsRetention(t *testing.T) {
 	if err := UpdateIndex(con, proj); err != nil {
 		t.Fatal(err)
 	}
-	if v := vaultOf(t, "s"); v.MissingSince != 0 {
-		t.Fatalf("freshly indexed session already flagged: %v", v.MissingSince)
+	if v := vaultOf(t, "s"); v.OnlyCopySince != 0 {
+		t.Fatalf("freshly indexed session already flagged: %v", v.OnlyCopySince)
 	}
 
 	if err := os.Remove(f); err != nil {
@@ -109,8 +109,8 @@ func TestVaultFlagFollowsRetention(t *testing.T) {
 	if err := UpdateIndex(con, proj); err != nil {
 		t.Fatal(err)
 	}
-	if v := vaultOf(t, "s"); v.MissingSince == 0 {
-		t.Error("source purged but the vault sidecar is not flagged missing")
+	if v := vaultOf(t, "s"); v.OnlyCopySince == 0 {
+		t.Error("source purged but the vault sidecar is not flagged only copy")
 	}
 
 	// The source comes back: the flag has to clear, or the rebuild would keep
@@ -119,8 +119,8 @@ func TestVaultFlagFollowsRetention(t *testing.T) {
 	if err := UpdateIndex(con, proj); err != nil {
 		t.Fatal(err)
 	}
-	if v := vaultOf(t, "s"); v.MissingSince != 0 {
-		t.Errorf("source reappeared but the vault sidecar is still flagged: %v", v.MissingSince)
+	if v := vaultOf(t, "s"); v.OnlyCopySince != 0 {
+		t.Errorf("source reappeared but the vault sidecar is still flagged: %v", v.OnlyCopySince)
 	}
 }
 
@@ -138,7 +138,7 @@ func TestApplyRetentionToVaultMirrorsEveryVerdict(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := durable.SetMissingSince("clear", 1780000000); err != nil {
+	if err := durable.SetOnlyCopySince("clear", 1780000000); err != nil {
 		t.Fatal(err)
 	}
 
@@ -157,16 +157,16 @@ func TestApplyRetentionToVaultMirrorsEveryVerdict(t *testing.T) {
 	for _, v := range list {
 		got[v.ID] = v
 	}
-	if v, ok := got["stamp"]; !ok || v.MissingSince != 1790000000 {
-		t.Errorf("stamped session sidecar = %+v, want missing_since 1790000000", v)
+	if v, ok := got["stamp"]; !ok || v.OnlyCopySince != 1790000000 {
+		t.Errorf("stamped session sidecar = %+v, want only_copy_since 1790000000", v)
 	}
-	if v, ok := got["clear"]; !ok || v.MissingSince != 0 {
-		t.Errorf("cleared session sidecar = %+v, want missing_since 0", v)
+	if v, ok := got["clear"]; !ok || v.OnlyCopySince != 0 {
+		t.Errorf("cleared session sidecar = %+v, want only_copy_since 0", v)
 	}
 	if _, ok := got["prune"]; ok {
 		t.Error("pruned session still has a durable copy — a rebuild would resurrect it")
 	}
-	if v, ok := got["replica"]; !ok || v.MissingSince != 0 {
+	if v, ok := got["replica"]; !ok || v.OnlyCopySince != 0 {
 		t.Errorf("a replica verdict reached the vault: %+v (present=%v)", v, ok)
 	}
 }
@@ -286,7 +286,7 @@ func TestDeleteTheStoreAndRebuild_RestoresPurgedSession(t *testing.T) {
 	if got := scalar(t, before, "SELECT COUNT(*) FROM sessions"); got != "2" {
 		t.Fatalf("indexed sessions before the wipe = %s, want 2", got)
 	}
-	if got := scalar(t, before, "SELECT missing_since IS NOT NULL FROM sessions WHERE id='purged'"); got != "1" {
+	if got := scalar(t, before, "SELECT only_copy_since IS NOT NULL FROM sessions WHERE id='purged'"); got != "1" {
 		t.Fatalf("purged session not flagged before the wipe (got %s)", got)
 	}
 	before.Close()
@@ -337,11 +337,11 @@ func TestDeleteTheStoreAndRebuild_RestoresPurgedSession(t *testing.T) {
 		t.Errorf("full-text search finds %s hits for a restored session, want 1", got)
 	}
 	// The watermark survived the round trip through the transcripts.
-	if got := scalar(t, after, "SELECT missing_since IS NOT NULL FROM sessions WHERE id='purged'"); got != "1" {
-		t.Errorf("purged session lost its missing_since label in the rebuild (got %s)", got)
+	if got := scalar(t, after, "SELECT only_copy_since IS NOT NULL FROM sessions WHERE id='purged'"); got != "1" {
+		t.Errorf("purged session lost its only_copy_since label in the rebuild (got %s)", got)
 	}
-	if got := scalar(t, after, "SELECT missing_since FROM sessions WHERE id='live'"); got != "<NULL>" {
-		t.Errorf("live session came back flagged as missing (missing_since=%s)", got)
+	if got := scalar(t, after, "SELECT only_copy_since FROM sessions WHERE id='live'"); got != "<NULL>" {
+		t.Errorf("live session came back flagged as only copy (only_copy_since=%s)", got)
 	}
 	// Scope came back too, so the rebuilt store is still filterable by project.
 	if got := scalar(t, after, "SELECT project FROM sessions WHERE id='purged'"); got != "ledger" {
@@ -356,7 +356,7 @@ func TestDeleteTheStoreAndRebuild_RestoresPurgedSession(t *testing.T) {
 // TestRebuiltStoreSurvivesTheNextLivePass is the other half of the guarantee: a
 // rebuilt store has to behave like one that was never lost. The retention pass
 // reconciles file_index paths against the live walk, so a store whose watermarks
-// pointed at the vault would stamp every live session as missing on the very
+// pointed at the vault would stamp every live session as only copy on the very
 // next search.
 func TestRebuiltStoreSurvivesTheNextLivePass(t *testing.T) {
 	isolateCache(t)
@@ -391,10 +391,10 @@ func TestRebuiltStoreSurvivesTheNextLivePass(t *testing.T) {
 	if err := UpdateIndex(rcon, proj); err != nil {
 		t.Fatalf("UpdateIndex on the rebuilt store: %v", err)
 	}
-	if got := scalar(t, rcon, "SELECT missing_since FROM sessions WHERE id='live'"); got != "<NULL>" {
-		t.Errorf("a live session was flagged missing after a pass over the rebuilt store (missing_since=%s)", got)
+	if got := scalar(t, rcon, "SELECT only_copy_since FROM sessions WHERE id='live'"); got != "<NULL>" {
+		t.Errorf("a live session was flagged only copy after a pass over the rebuilt store (only_copy_since=%s)", got)
 	}
-	if got := scalar(t, rcon, "SELECT missing_since IS NOT NULL FROM sessions WHERE id='purged'"); got != "1" {
+	if got := scalar(t, rcon, "SELECT only_copy_since IS NOT NULL FROM sessions WHERE id='purged'"); got != "1" {
 		t.Errorf("the purged session lost its flag on the next live pass (got %s)", got)
 	}
 }

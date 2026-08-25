@@ -16,12 +16,12 @@ import (
 
 // Result reports which sessions a reconcile pass acted on, by id. The pass
 // owns the decision but not everything that has to follow it: the durable
-// transcript vault keeps its own copy of the missing watermark, and a pruned
+// transcript vault keeps its own copy of the only-copy watermark, and a pruned
 // session's vault copy has to go too or the next rebuild resurrects it. Rather
 // than teach this package about the vault, hand the caller the outcome.
 type Result struct {
-	Cleared []string // missing_since un-flagged: the source reappeared
-	Stamped []string // retained + flagged: own source newly absent
+	Cleared []string // only_copy_since un-flagged: the source reappeared
+	Stamped []string // retained + flagged: own source newly absent (RawClaw is now the only copy)
 	Pruned  []string // rows deleted: tombstone, replica absence, or mirror mode
 }
 
@@ -30,7 +30,7 @@ type Result struct {
 // deleted any session whose backing file was absent from the disk walk. For each
 // file_index row:
 //
-//   - file back on disk → clear any stale missing_since (the source reappeared,
+//   - file back on disk → clear any stale only_copy_since (the source reappeared,
 //     mirroring Zoekt restoring a repo from .trash).
 //   - file absent + REPLICA scope → DELETE the row: the scanned tree is the
 //     synced archive clone, whose only file-removal mechanism is the owner's
@@ -41,8 +41,8 @@ type Result struct {
 //     thing that prunes (D5).
 //   - file absent + foreign origin_machine (another machine's row in a shared
 //     store) → skip untouched: out of THIS scan's scope, not "missing" (D2).
-//   - file absent + this machine's own row → stamp missing_since and RETAIN it,
-//     so the content stays searchable/readable after the source tool purges its
+//   - file absent + this machine's own row → stamp only_copy_since and RETAIN it,
+//     so RawClaw is now the only holder after the source tool purges its
 //     transcripts (D1). Idempotent: an existing timestamp is left as-is.
 //
 // onDisk is the realpath set of the live scan; tombstoned is the loaded delete
@@ -61,10 +61,10 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 		path      string
 		sessionID string
 		origin    sql.NullString
-		missing   sql.NullFloat64
+		onlyCopy  sql.NullFloat64
 	}
 	rows, err := con.Query(
-		`SELECT fi.path, fi.session_id, s.origin_machine, s.missing_since
+		`SELECT fi.path, fi.session_id, s.origin_machine, s.only_copy_since
 		   FROM file_index fi
 		   LEFT JOIN sessions s ON s.id = fi.session_id`)
 	if err != nil {
@@ -75,7 +75,7 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 	var all []fiRow
 	for rows.Next() {
 		var r fiRow
-		if err := rows.Scan(&r.path, &r.sessionID, &r.origin, &r.missing); err != nil {
+		if err := rows.Scan(&r.path, &r.sessionID, &r.origin, &r.onlyCopy); err != nil {
 			rows.Close()
 			return res, fmt.Errorf("scan retention row: %w", err)
 		}
@@ -91,10 +91,10 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 	for _, r := range all {
 		_, present := onDisk[r.path]
 		own := !r.origin.Valid || r.origin.String == mid
-		switch DecideRetention(present, isMember(tombstoned, r.sessionID), own, r.missing.Valid, mirror, replica) {
+		switch DecideRetention(present, isMember(tombstoned, r.sessionID), own, r.onlyCopy.Valid, mirror, replica) {
 		case ActClear: // reappeared — un-flag
-			if _, err := con.Exec("UPDATE sessions SET missing_since=NULL WHERE id=?", r.sessionID); err != nil {
-				return res, fmt.Errorf("clear missing_since: %w", err)
+			if _, err := con.Exec("UPDATE sessions SET only_copy_since=NULL WHERE id=?", r.sessionID); err != nil {
+				return res, fmt.Errorf("clear only_copy_since: %w", err)
 			}
 			res.Cleared = append(res.Cleared, r.sessionID)
 		case ActPrune: // replica absence, explicit tombstone, or own-source under mirror
@@ -102,9 +102,9 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 				return res, err
 			}
 			res.Pruned = append(res.Pruned, r.sessionID)
-		case ActStamp: // own-source, newly absent — retain + flag (D1)
-			if _, err := con.Exec("UPDATE sessions SET missing_since=? WHERE id=?", now, r.sessionID); err != nil {
-				return res, fmt.Errorf("mark missing_since: %w", err)
+		case ActStamp: // own-source, newly absent — retain + flag only_copy_since (D1)
+			if _, err := con.Exec("UPDATE sessions SET only_copy_since=? WHERE id=?", now, r.sessionID); err != nil {
+				return res, fmt.Errorf("mark only_copy_since: %w", err)
 			}
 			res.Stamped = append(res.Stamped, r.sessionID)
 		case ActNone:
@@ -122,9 +122,9 @@ type RetentionAction int
 
 const (
 	ActNone  RetentionAction = iota // present-and-unflagged, foreign-origin (D2), or already flagged
-	ActClear                        // file reappeared — clear the stale missing_since (Zoekt .trash restore)
+	ActClear                        // file reappeared — clear the stale only_copy_since (Zoekt .trash restore)
 	ActPrune                        // replica absence (propagated E5 delete), explicit tombstone (D5), or own-source under the user's mirror setting
-	ActStamp                        // own-source newly absent — retain + flag missing_since (D1)
+	ActStamp                        // own-source newly absent — retain + flag only_copy_since (RawClaw is now the only copy) (D1)
 )
 
 // DecideRetention is the single retention decision tree shared by
@@ -135,9 +135,9 @@ const (
 // the owner's delete propagated through the archive (E5) and the rows die
 // here too. Durable retention (D1) protects LOCAL sources from upstream
 // purges; it must never let a replica resurrect a session its owner deleted.
-func DecideRetention(present, tombstoned, own, missingSet, mirror, replica bool) RetentionAction {
+func DecideRetention(present, tombstoned, own, onlyCopySet, mirror, replica bool) RetentionAction {
 	switch {
-	case present && missingSet:
+	case present && onlyCopySet:
 		return ActClear
 	case present:
 		return ActNone
@@ -149,7 +149,7 @@ func DecideRetention(present, tombstoned, own, missingSet, mirror, replica bool)
 		return ActNone // foreign-origin — out of this scan's scope (D2)
 	case mirror:
 		return ActPrune // v0.2.0 parity: the user opted out of retention
-	case !missingSet:
+	case !onlyCopySet:
 		return ActStamp
 	default:
 		return ActNone // already flagged — idempotent

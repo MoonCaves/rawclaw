@@ -132,8 +132,8 @@ func TestConsolidate_SameSessionIDMergesToOneRow(t *testing.T) {
 	}
 
 	con := openConsolidated(t)
-	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
-		t.Errorf("missing_since = %s, want NULL — a session present in ANY copy is present", got)
+	if got := scalar(t, con, "SELECT COALESCE(only_copy_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("only_copy_since = %s, want NULL — a session present in ANY copy is present", got)
 	}
 	if got := scalar(t, con, "SELECT project FROM sessions WHERE id=?", id); got != "billing" {
 		t.Errorf("project = %q, want %q — the live continuation's scope wins over the purged copy's", got, "billing")
@@ -170,8 +170,8 @@ func TestConsolidate_MergeIsOrderIndependent(t *testing.T) {
 	if got := scalar(t, con, "SELECT project FROM sessions WHERE id=?", id); got != "billing" {
 		t.Errorf("project = %q, want %q — arrival order decided the winner", got, "billing")
 	}
-	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
-		t.Errorf("missing_since = %s, want NULL — a later stale copy re-flagged a present session", got)
+	if got := scalar(t, con, "SELECT COALESCE(only_copy_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("only_copy_since = %s, want NULL — a later stale copy re-flagged a present session", got)
 	}
 }
 
@@ -482,7 +482,7 @@ func seedSessionDB(t *testing.T, name string, rows ...sessionRow) string {
 		}
 		if _, err := con.Exec(
 			`INSERT INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,
-			 origin_machine,source_tool,source_path,missing_since,project,cwd)
+			 origin_machine,source_tool,source_path,only_copy_since,project,cwd)
 			 VALUES(?,?,?,?,0,NULL,'m',?,?,?,?,?)`,
 			r.id, started, last, len(r.msgs), sourceClaude, "/t/"+r.id+".jsonl", missing, r.project, r.cwd,
 		); err != nil {
@@ -1043,7 +1043,7 @@ func TestConsolidate_VerdictMergePrecedence(t *testing.T) {
 }
 
 // TestConsolidate_SingleSourcePurgePropagatesMissing tests that when a session's
-// only source db is purged, the consolidated store learns about it and stamps missing_since.
+// only source db is purged, the consolidated store learns about it and stamps only_copy_since.
 func TestConsolidate_SingleSourcePurgePropagatesMissing(t *testing.T) {
 	isolateCache(t)
 	const id = "single-source-sess"
@@ -1056,19 +1056,19 @@ func TestConsolidate_SingleSourcePurgePropagatesMissing(t *testing.T) {
 		t.Fatalf("SyncConsolidatedFrom (live): %v", err)
 	}
 	con := openConsolidated(t)
-	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
-		t.Fatalf("initial missing_since = %s, want NULL", got)
+	if got := scalar(t, con, "SELECT COALESCE(only_copy_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Fatalf("initial only_copy_since = %s, want NULL", got)
 	}
 	con.Close()
 
-	// Source is purged upstream and stamped with missing_since.
+	// Source is purged upstream and stamped with only_copy_since.
 	conSrc, err := store.ConnectRW(db)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	const purgeTS = 1784381448.0
-	if _, err := conSrc.Exec("UPDATE sessions SET missing_since=? WHERE id=?", purgeTS, id); err != nil {
-		t.Fatalf("update missing_since: %v", err)
+	if _, err := conSrc.Exec("UPDATE sessions SET only_copy_since=? WHERE id=?", purgeTS, id); err != nil {
+		t.Fatalf("update only_copy_since: %v", err)
 	}
 	conSrc.Close()
 
@@ -1076,12 +1076,12 @@ func TestConsolidate_SingleSourcePurgePropagatesMissing(t *testing.T) {
 		t.Fatalf("SyncConsolidatedFrom (purged): %v", err)
 	}
 	con = openConsolidated(t)
-	var missing sql.NullFloat64
-	if err := con.QueryRow("SELECT missing_since FROM sessions WHERE id=?", id).Scan(&missing); err != nil {
-		t.Fatalf("query missing_since: %v", err)
+	var onlyCopy sql.NullFloat64
+	if err := con.QueryRow("SELECT only_copy_since FROM sessions WHERE id=?", id).Scan(&onlyCopy); err != nil {
+		t.Fatalf("query only_copy_since: %v", err)
 	}
-	if !missing.Valid || missing.Float64 != purgeTS {
-		t.Errorf("purged missing_since = %v, want %v", missing.Float64, purgeTS)
+	if !onlyCopy.Valid || onlyCopy.Float64 != purgeTS {
+		t.Errorf("purged only_copy_since = %v, want %v", onlyCopy.Float64, purgeTS)
 	}
 	con.Close()
 }
@@ -1172,8 +1172,8 @@ func TestConsolidate_DistinguishesSourcesWithTheSameBasename(t *testing.T) {
 	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id=?", id); got != "1" {
 		t.Errorf("session count after deleting one same-basename source = %s, want 1", got)
 	}
-	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
-		t.Errorf("missing_since after deleting one same-basename source = %s, want NULL", got)
+	if got := scalar(t, con, "SELECT COALESCE(only_copy_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("only_copy_since after deleting one same-basename source = %s, want NULL", got)
 	}
 	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id=?", id); got != "1" {
 		t.Errorf("session source count after deleting one same-basename source = %s, want 1", got)
@@ -1292,10 +1292,10 @@ func TestUnconsolidatedDBs_RemoveAndReplaceLegacyBasename(t *testing.T) {
 }
 
 // TestConsolidate_MergedSessionHonestPerContributionSemantics tests ticket #181:
-//   - A session merged from 3 sources where 1 or 2 are purged remains LIVE (missing_since = NULL).
+//   - A session merged from 3 sources where 1 or 2 are purged remains LIVE (only_copy_since = NULL).
 //   - When ALL 3 contributing sources are purged, the merged row learns of it and stamps
-//     missing_since with the latest purge timestamp (the moment the last live copy vanished).
-//   - When 1 source is restored, the merged session becomes live again (missing_since = NULL).
+//     only_copy_since with the latest purge timestamp (the moment the last live copy vanished).
+//   - When 1 source is restored, the merged session becomes live again (only_copy_since = NULL).
 func TestConsolidate_MergedSessionHonestPerContributionSemantics(t *testing.T) {
 	isolateCache(t)
 	const id = "multi-source-sess"
@@ -1324,68 +1324,68 @@ func TestConsolidate_MergedSessionHonestPerContributionSemantics(t *testing.T) {
 	}
 
 	con := openConsolidated(t)
-	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
-		t.Fatalf("initial missing_since = %s, want NULL", got)
+	if got := scalar(t, con, "SELECT COALESCE(only_copy_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Fatalf("initial only_copy_since = %s, want NULL", got)
 	}
 	con.Close()
 
 	// Step 1: p1 is purged at t=1000. p2 and p3 are still live.
 	conP1, _ := store.ConnectRW(p1)
-	_, _ = conP1.Exec("UPDATE sessions SET missing_since=? WHERE id=?", 1000.0, id)
+	_, _ = conP1.Exec("UPDATE sessions SET only_copy_since=? WHERE id=?", 1000.0, id)
 	conP1.Close()
 
 	if err := SyncConsolidatedFrom(p1); err != nil {
 		t.Fatalf("sync p1 (purged 1000): %v", err)
 	}
 	con = openConsolidated(t)
-	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
-		t.Errorf("missing_since = %s, want NULL (p2 and p3 are still live on disk)", got)
+	if got := scalar(t, con, "SELECT COALESCE(only_copy_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("only_copy_since = %s, want NULL (p2 and p3 are still live on disk)", got)
 	}
 	con.Close()
 
 	// Step 2: p2 is ALSO purged at t=2000. p3 is still live.
 	conP2, _ := store.ConnectRW(p2)
-	_, _ = conP2.Exec("UPDATE sessions SET missing_since=? WHERE id=?", 2000.0, id)
+	_, _ = conP2.Exec("UPDATE sessions SET only_copy_since=? WHERE id=?", 2000.0, id)
 	conP2.Close()
 
 	if err := SyncConsolidatedFrom(p2); err != nil {
 		t.Fatalf("sync p2 (purged 2000): %v", err)
 	}
 	con = openConsolidated(t)
-	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
-		t.Errorf("missing_since = %s, want NULL (p3 is still live on disk)", got)
+	if got := scalar(t, con, "SELECT COALESCE(only_copy_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("only_copy_since = %s, want NULL (p3 is still live on disk)", got)
 	}
 	con.Close()
 
 	// Step 3: p3 is ALSO purged at t=3000. Now ALL contributing copies are purged.
 	conP3, _ := store.ConnectRW(p3)
-	_, _ = conP3.Exec("UPDATE sessions SET missing_since=? WHERE id=?", 3000.0, id)
+	_, _ = conP3.Exec("UPDATE sessions SET only_copy_since=? WHERE id=?", 3000.0, id)
 	conP3.Close()
 
 	if err := SyncConsolidatedFrom(p3); err != nil {
 		t.Fatalf("sync p3 (purged 3000): %v", err)
 	}
 	con = openConsolidated(t)
-	var missing3 sql.NullFloat64
-	if err := con.QueryRow("SELECT missing_since FROM sessions WHERE id=?", id).Scan(&missing3); err != nil {
-		t.Fatalf("query missing_since: %v", err)
+	var onlyCopy3 sql.NullFloat64
+	if err := con.QueryRow("SELECT only_copy_since FROM sessions WHERE id=?", id).Scan(&onlyCopy3); err != nil {
+		t.Fatalf("query only_copy_since: %v", err)
 	}
-	if !missing3.Valid || missing3.Float64 != 3000.0 {
-		t.Errorf("all sources purged: missing_since = %v, want 3000 (latest purge watermark)", missing3.Float64)
+	if !onlyCopy3.Valid || onlyCopy3.Float64 != 3000.0 {
+		t.Errorf("all sources purged: only_copy_since = %v, want 3000 (latest purge watermark)", onlyCopy3.Float64)
 	}
 	con.Close()
 
-	// Step 4: p2 is restored on disk (undeleted) -> missing_since becomes NULL in p2.db.
+	// Step 4: p2 is restored on disk (undeleted) -> only_copy_since becomes NULL in p2.db.
 	conP2, _ = store.ConnectRW(p2)
-	_, _ = conP2.Exec("UPDATE sessions SET missing_since=NULL WHERE id=?", id)
+	_, _ = conP2.Exec("UPDATE sessions SET only_copy_since=NULL WHERE id=?", id)
 	conP2.Close()
 
 	if err := SyncConsolidatedFrom(p2); err != nil {
 		t.Fatalf("sync p2 (restored): %v", err)
 	}
 	con = openConsolidated(t)
-	if got := scalar(t, con, "SELECT COALESCE(missing_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
-		t.Errorf("restored p2: missing_since = %s, want NULL", got)
+	if got := scalar(t, con, "SELECT COALESCE(only_copy_since,'<NULL>') FROM sessions WHERE id=?", id); got != "<NULL>" {
+		t.Errorf("restored p2: only_copy_since = %s, want NULL", got)
 	}
 	con.Close()
 }
@@ -1393,9 +1393,9 @@ func TestConsolidate_MergedSessionHonestPerContributionSemantics(t *testing.T) {
 // TestConsolidate_LegacyStoreSessionSourcesBackfill exercises the upgrade path:
 // an existing store populated before table session_sources was introduced.
 // It verifies that:
-//   - An unscanned session's message_count, missing_since, project, and cwd remain UNCHANGED.
+//   - An unscanned session's message_count, only_copy_since, project, and cwd remain UNCHANGED.
 //   - session_sources is backfilled with a legacy contribution for unscanned sessions.
-//   - A multi-source session previously merged does not get falsely marked missing or have its
+//   - A multi-source session previously merged does not get falsely marked only-copy or have its
 //     scope clobbered when an incremental pass scans a partial/purged source copy.
 func TestConsolidate_LegacyStoreSessionSourcesBackfill(t *testing.T) {
 	isolateCache(t)
@@ -1416,7 +1416,7 @@ func TestConsolidate_LegacyStoreSessionSourcesBackfill(t *testing.T) {
 	if _, err := con.Exec(`
 		INSERT INTO sessions (
 			id, started_at, last_ts, message_count, is_subagent, parent_id,
-			origin_machine, source_tool, source_path, missing_since, project, cwd
+			origin_machine, source_tool, source_path, only_copy_since, project, cwd
 		) VALUES (?, 100, 200, 5, 0, NULL, 'mach-1', 'claude', '/w/unscanned/a.jsonl', NULL, 'unscanned-proj', '/w/unscanned')
 	`, unscannedID); err != nil {
 		t.Fatalf("seed unscanned session: %v", err)
@@ -1432,7 +1432,7 @@ func TestConsolidate_LegacyStoreSessionSourcesBackfill(t *testing.T) {
 	if _, err := con.Exec(`
 		INSERT INTO sessions (
 			id, started_at, last_ts, message_count, is_subagent, parent_id,
-			origin_machine, source_tool, source_path, missing_since, project, cwd
+			origin_machine, source_tool, source_path, only_copy_since, project, cwd
 		) VALUES (?, 100, 400, 8, 0, NULL, 'mach-1', 'claude', '/w/multi/b.jsonl', NULL, 'multi-proj', '/w/multi')
 	`, multiID); err != nil {
 		t.Fatalf("seed multi session: %v", err)
@@ -1467,18 +1467,18 @@ func TestConsolidate_LegacyStoreSessionSourcesBackfill(t *testing.T) {
 
 	// Assert unscanned session is completely UNCHANGED:
 	var msgCount int
-	var missingSince sql.NullFloat64
+	var onlyCopySince sql.NullFloat64
 	var project, cwd string
-	err = conRO.QueryRow("SELECT message_count, missing_since, project, cwd FROM sessions WHERE id=?", unscannedID).
-		Scan(&msgCount, &missingSince, &project, &cwd)
+	err = conRO.QueryRow("SELECT message_count, only_copy_since, project, cwd FROM sessions WHERE id=?", unscannedID).
+		Scan(&msgCount, &onlyCopySince, &project, &cwd)
 	if err != nil {
 		t.Fatalf("query unscanned session: %v", err)
 	}
 	if msgCount != 5 {
 		t.Errorf("unscanned message_count = %d, want 5", msgCount)
 	}
-	if missingSince.Valid {
-		t.Errorf("unscanned missing_since = %v, want NULL", missingSince.Float64)
+	if onlyCopySince.Valid {
+		t.Errorf("unscanned only_copy_since = %v, want NULL", onlyCopySince.Float64)
 	}
 	if project != "unscanned-proj" {
 		t.Errorf("unscanned project = %q, want 'unscanned-proj'", project)
@@ -1497,16 +1497,16 @@ func TestConsolidate_LegacyStoreSessionSourcesBackfill(t *testing.T) {
 	}
 
 	// Assert multi-source session preserved its live state and scope despite partial purged scan:
-	err = conRO.QueryRow("SELECT message_count, missing_since, project, cwd FROM sessions WHERE id=?", multiID).
-		Scan(&msgCount, &missingSince, &project, &cwd)
+	err = conRO.QueryRow("SELECT message_count, only_copy_since, project, cwd FROM sessions WHERE id=?", multiID).
+		Scan(&msgCount, &onlyCopySince, &project, &cwd)
 	if err != nil {
 		t.Fatalf("query multi session: %v", err)
 	}
 	if msgCount != 8 {
 		t.Errorf("multi message_count = %d, want 8", msgCount)
 	}
-	if missingSince.Valid {
-		t.Errorf("multi missing_since = %v, want NULL (legacy contribution was live)", missingSince.Float64)
+	if onlyCopySince.Valid {
+		t.Errorf("multi only_copy_since = %v, want NULL (legacy contribution was live)", onlyCopySince.Float64)
 	}
 	if project != "multi-proj" {
 		t.Errorf("multi project = %q, want 'multi-proj' (legacy richer contribution)", project)
@@ -1545,7 +1545,7 @@ func TestConsolidate_PartialSessionSourcesBackfill(t *testing.T) {
 		if _, err := con.Exec(`
 			INSERT INTO sessions (
 				id, started_at, last_ts, message_count, is_subagent, parent_id,
-				origin_machine, source_tool, source_path, missing_since, project, cwd
+				origin_machine, source_tool, source_path, only_copy_since, project, cwd
 			) VALUES (?, 100, 200, 3, 0, NULL, 'mach-1', 'claude', '/w/p/s.jsonl', NULL, 'proj', '/w/p')
 		`, id); err != nil {
 			t.Fatalf("seed session %s: %v", id, err)
@@ -1556,7 +1556,7 @@ func TestConsolidate_PartialSessionSourcesBackfill(t *testing.T) {
 	if _, err := con.Exec(`
 		INSERT INTO session_sources (
 			session_id, source_db, started_at, last_ts, message_count, is_subagent, parent_id,
-			origin_machine, source_tool, source_path, missing_since, project, cwd
+			origin_machine, source_tool, source_path, only_copy_since, project, cwd
 		) VALUES ('s1', 'existing.db', 100, 200, 3, 0, NULL, 'mach-1', 'claude', '/w/p/s.jsonl', NULL, 'proj', '/w/p')
 	`); err != nil {
 		t.Fatalf("seed session_sources for s1: %v", err)
@@ -1616,7 +1616,7 @@ func TestConsolidateFrom_PrunesLegacySourceAfterFullPass(t *testing.T) {
 		if _, err := con.Exec(`
 			INSERT INTO sessions (
 				id, started_at, last_ts, message_count, is_subagent, parent_id,
-				origin_machine, source_tool, source_path, missing_since, project, cwd
+				origin_machine, source_tool, source_path, only_copy_since, project, cwd
 			) VALUES (?, 100, 200, 1, 0, NULL, 'machine', 'claude', '/tmp/' || ? || '.jsonl', NULL, 'project', '/tmp')
 		`, id, id); err != nil {
 			con.Close()
@@ -1670,7 +1670,7 @@ func TestConsolidateFrom_PreservesLegacySourceWhenCoContributorSkipped(t *testin
 	if _, err := con.Exec(`
 		INSERT INTO sessions (
 			id, started_at, last_ts, message_count, is_subagent, parent_id,
-			origin_machine, source_tool, source_path, missing_since, project, cwd
+			origin_machine, source_tool, source_path, only_copy_since, project, cwd
 		) VALUES ('shared-s', 100, 200, 1, 0, NULL, 'machine', 'claude', '/tmp/shared-s.jsonl', NULL, 'project', '/tmp')
 	`); err != nil {
 		con.Close()
@@ -1946,7 +1946,7 @@ func TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour(t *testing.T) {
 		if _, err := con.Exec(`
 			INSERT INTO sessions (
 				id, started_at, last_ts, message_count, is_subagent, parent_id,
-				origin_machine, source_tool, source_path, missing_since, project, cwd
+				origin_machine, source_tool, source_path, only_copy_since, project, cwd
 			) VALUES (?, 100, 200, 1, 1, NULL, 'm', 'claude', '/tmp/x.jsonl', NULL, 'p', '/tmp')
 		`, id); err != nil {
 			t.Fatalf("seed %s: %v", id, err)
@@ -1995,7 +1995,7 @@ func TestConsolidateFrom_RebuildFailureLeavesLiveStoreIntact(t *testing.T) {
 	if _, err := con.Exec(`
 		INSERT INTO sessions (
 			id, started_at, last_ts, message_count, is_subagent, parent_id,
-			origin_machine, source_tool, source_path, missing_since, project, cwd
+			origin_machine, source_tool, source_path, only_copy_since, project, cwd
 		) VALUES ('precious', 100, 200, 1, 0, NULL, 'm', 'claude', '/tmp/p.jsonl', NULL, 'proj', '/tmp')
 	`); err != nil {
 		con.Close()

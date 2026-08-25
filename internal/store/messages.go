@@ -247,24 +247,24 @@ func MessageUUID(con *sql.DB, msgID int) string {
 }
 
 // MessageMeta reads one message's ts_iso plus its session's parent_id,
-// is_subagent, and missing_since (the vector-candidate existence check). A
+// is_subagent, and only_copy_since (the vector-candidate existence check). A
 // missing/churned row reads as ok=false; NULL fields read as their zero
 // values. [semantic.VecKNN]
-func MessageMeta(con *sql.DB, msgID int) (iso, parent string, isSubagent bool, missingSince float64, ok bool) {
+func MessageMeta(con *sql.DB, msgID int) (iso, parent string, isSubagent bool, onlyCopySince float64, ok bool) {
 	var (
-		isoN    sql.NullString
-		parentN sql.NullString
-		isSub   int
-		missing sql.NullFloat64
+		isoN     sql.NullString
+		parentN  sql.NullString
+		isSub    int
+		onlyCopy sql.NullFloat64
 	)
 	err := con.QueryRow(
-		"SELECT m.ts_iso, s.parent_id, s.is_subagent, s.missing_since FROM messages m "+
+		"SELECT m.ts_iso, s.parent_id, s.is_subagent, s.only_copy_since FROM messages m "+
 			"JOIN sessions s ON s.id=m.session_id WHERE m.id=?", msgID,
-	).Scan(&isoN, &parentN, &isSub, &missing)
+	).Scan(&isoN, &parentN, &isSub, &onlyCopy)
 	if err != nil {
 		return "", "", false, 0, false
 	}
-	return isoN.String, parentN.String, isSub != 0, missing.Float64, true
+	return isoN.String, parentN.String, isSub != 0, onlyCopy.Float64, true
 }
 
 // LastMessages returns a session's final `limit` messages as (role, content),

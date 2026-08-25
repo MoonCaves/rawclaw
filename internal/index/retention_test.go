@@ -14,7 +14,7 @@ import (
 
 // TestRetentionPurgeSurvives is Test-plan #1: a session whose backing file is
 // removed from the walk (no tombstone) is RETAINED — still counted, its messages
-// and FTS content intact (so read/search keep working), and flagged missing_since.
+// and FTS content intact (so read/search keep working), and flagged only_copy_since.
 func TestRetentionPurgeSurvives(t *testing.T) {
 	proj := t.TempDir()
 	f := filepath.Join(proj, "s.jsonl")
@@ -49,23 +49,23 @@ func TestRetentionPurgeSurvives(t *testing.T) {
 	if hits != 1 {
 		t.Errorf("FTS lost the retained session (%d hits), want 1", hits)
 	}
-	// And it is flagged missing so it doesn't read as current.
-	var missing sql.NullFloat64
-	con.QueryRow("SELECT missing_since FROM sessions WHERE id='s'").Scan(&missing)
-	if !missing.Valid || missing.Float64 <= 0 {
-		t.Errorf("retained session not flagged missing_since, got %+v", missing)
+	// And it is flagged only copy so it is clear RawClaw is now the only copy.
+	var onlyCopy sql.NullFloat64
+	con.QueryRow("SELECT only_copy_since FROM sessions WHERE id='s'").Scan(&onlyCopy)
+	if !onlyCopy.Valid || onlyCopy.Float64 <= 0 {
+		t.Errorf("retained session not flagged only_copy_since, got %+v", onlyCopy)
 	}
 
 	// A later reindex, still with the file gone, is idempotent (stays retained,
-	// missing_since not churned to a new value).
-	before := missing.Float64
+	// only_copy_since not churned to a new value).
+	before := onlyCopy.Float64
 	if err := UpdateIndex(con, proj); err != nil {
 		t.Fatalf("UpdateIndex pass 3: %v", err)
 	}
 	var after sql.NullFloat64
-	con.QueryRow("SELECT missing_since FROM sessions WHERE id='s'").Scan(&after)
+	con.QueryRow("SELECT only_copy_since FROM sessions WHERE id='s'").Scan(&after)
 	if !after.Valid || after.Float64 != before {
-		t.Errorf("missing_since changed on a repeat pass: %v -> %v (want stable)", before, after)
+		t.Errorf("only_copy_since changed on a repeat pass: %v -> %v (want stable)", before, after)
 	}
 }
 
@@ -132,7 +132,7 @@ func TestRetentionTombstonePrunes(t *testing.T) {
 
 // TestRetentionForeignOriginSurvives is Test-plan #3: a row stamped with another
 // machine's origin_machine is never a prune candidate for this machine's scan —
-// it survives an absent-file scan and is NOT even flagged missing (it is out of
+// it survives an absent-file scan and is NOT even flagged only-copy (it is out of
 // this scan's scope, not "missing" here).
 func TestRetentionForeignOriginSurvives(t *testing.T) {
 	proj := t.TempDir()
@@ -162,11 +162,11 @@ func TestRetentionForeignOriginSurvives(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("foreign-origin session pruned by this machine's scan (count=%d), want 1", n)
 	}
-	// Not flagged missing: it is not part of this machine's live tree at all.
-	var missing sql.NullFloat64
-	con.QueryRow("SELECT missing_since FROM sessions WHERE id='f'").Scan(&missing)
-	if missing.Valid {
-		t.Errorf("foreign-origin row wrongly flagged missing_since=%v, want NULL (out of scope)", missing.Float64)
+	// Not flagged only copy: it is not part of this machine's live tree at all.
+	var onlyCopy sql.NullFloat64
+	con.QueryRow("SELECT only_copy_since FROM sessions WHERE id='f'").Scan(&onlyCopy)
+	if onlyCopy.Valid {
+		t.Errorf("foreign-origin row wrongly flagged only_copy_since=%v, want NULL (out of scope)", onlyCopy.Float64)
 	}
 }
 
@@ -309,7 +309,7 @@ func TestMigrationInterruptedBackfillResumes(t *testing.T) {
 		CREATE TABLE sessions (
 		    id TEXT PRIMARY KEY, started_at REAL, last_ts REAL,
 		    message_count INTEGER DEFAULT 0, is_subagent INTEGER DEFAULT 0, parent_id TEXT,
-		    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL);
+		    origin_machine TEXT, source_tool TEXT, source_path TEXT, only_copy_since REAL);
 		CREATE TABLE messages (
 		    id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
 		    role TEXT, content TEXT, ts REAL, ts_iso TEXT, uuid TEXT);
@@ -435,10 +435,10 @@ func TestRetentionSettingUnrecognizedKeeps(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("unrecognized setting value pruned the session (count=%d), want 1 (keep default)", n)
 	}
-	var missing sql.NullFloat64
-	con.QueryRow("SELECT missing_since FROM sessions WHERE id='k'").Scan(&missing)
-	if !missing.Valid {
-		t.Errorf("retained session not flagged missing_since under unrecognized setting value")
+	var onlyCopy sql.NullFloat64
+	con.QueryRow("SELECT only_copy_since FROM sessions WHERE id='k'").Scan(&onlyCopy)
+	if !onlyCopy.Valid {
+		t.Errorf("retained session not flagged only_copy_since under unrecognized setting value")
 	}
 }
 
@@ -488,7 +488,7 @@ func dbDigest(t *testing.T, dbp string) string {
 
 // TestOrphanReconcileIsReadMostly: discovery of an orphaned
 // db is read-MOSTLY — the first pass after orphaning may write (it stamps
-// missing_since), but every subsequent pass with no pending work is a pure
+// only_copy_since), but every subsequent pass with no pending work is a pure
 // read: the db file's bytes stay identical. New work (a fresh tombstone) gets
 // exactly one write pass, then it goes quiet again.
 func TestOrphanReconcileIsReadMostly(t *testing.T) {
@@ -509,7 +509,7 @@ func TestOrphanReconcileIsReadMostly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Pass 1: reconcile stamps missing_since — a write is expected and allowed.
+	// Pass 1: reconcile stamps only_copy_since — a write is expected and allowed.
 	n, err := EnsureOrphanReconciled(dbp)
 	if err != nil {
 		t.Fatalf("EnsureOrphanReconciled pass 1: %v", err)
