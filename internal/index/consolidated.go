@@ -387,21 +387,44 @@ UPDATE sessions SET message_count =
 //
 // Sources are read through SQLite's ATTACH, so nothing is parsed twice: the
 // transcripts were already turned into rows once, and this moves those rows.
-func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
-	var st SyncStats
+func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) {
 	dst := ConsolidatedPath()
 	var preserved tagState
 	if rebuild {
-		var err error
 		preserved, err = readTagState(dst)
 		if err != nil {
 			return st, fmt.Errorf("preserve consolidated tags: %w", err)
 		}
 	}
 	if rebuild {
+		// Build the replacement BESIDE the live store and swap only once it is
+		// complete. Deleting first meant any later failure — connect, schema,
+		// heal, or a single bad source mid-fold — left the user with no store
+		// at all until another full rebuild happened to succeed.
+		live := dst
+		dst = live + ".rebuild"
 		for _, suffix := range []string{"", "-wal", "-shm"} {
-			_ = os.Remove(dst + suffix) // best-effort; a missing file is the goal state
+			_ = os.Remove(dst + suffix) // clear a previous interrupted attempt, never the live store
 		}
+		defer func() {
+			// Registered BEFORE `defer con.Close()`, so it runs after the
+			// connection is closed and the files are quiescent.
+			if err != nil {
+				for _, suffix := range []string{"", "-wal", "-shm"} {
+					_ = os.Remove(dst + suffix)
+				}
+				return // live store untouched
+			}
+			if rErr := os.Rename(dst, live); rErr != nil {
+				err = fmt.Errorf("swap rebuilt store into place: %w", rErr)
+				return
+			}
+			// The old sidecars describe the replaced file, not the new one.
+			for _, suffix := range []string{"-wal", "-shm"} {
+				_ = os.Remove(live + suffix)
+				_ = os.Remove(dst + suffix)
+			}
+		}()
 	}
 
 	con, err := store.ConnectRW(dst)
