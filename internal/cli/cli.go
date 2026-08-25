@@ -1243,9 +1243,8 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 // runBrowseScoped is the cross-project shape of the no-query browse: recent
 // sessions across the scopes the Scope flags leave standing (Claude + Codex +
 // retained — the same enumeration search uses), merged newest-first and capped
-// at --limit. universe is what --all / --this-project selected; the path
-// predicate prunes it BEFORE any scope resolves, so a narrowed browse also
-// opens fewer dbs.
+// at --limit. It answers from the consolidated store with a single read connection,
+// falling back to per-project databases only if the consolidated store is unavailable.
 func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 	scope := scopes.FilterByPath(universe, o.IncludePath, o.ExcludePath)
 	if o.pathScoped() && len(scope) == 0 {
@@ -1253,21 +1252,38 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 	}
 
 	rows := []view.BrowseAllRow{} // non-nil so --json emits [] rather than null
-	for _, sc := range scope {
-		dbp, _, err := scopes.Resolve(sc, o.Reindex)
-		if err != nil {
-			continue // an unresolvable scope can't contribute rows; others still can
+
+	if con, _, err := index.OpenConsolidated(); err == nil {
+		defer con.Close()
+		var projects []string
+		if o.pathScoped() || o.ThisProject {
+			seen := make(map[string]bool, len(scope))
+			for _, sc := range scope {
+				if !seen[sc.Project] {
+					seen[sc.Project] = true
+					projects = append(projects, sc.Project)
+				}
+			}
 		}
-		for _, r := range view.BrowseDB(dbp, o.Limit, o.Since, o.Before) {
-			rows = append(rows, view.BrowseAllRow{Project: sc.Project, BrowseRow: r})
+		rows = view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, projects)
+	} else {
+		for _, sc := range scope {
+			dbp, _, err := scopes.Resolve(sc, o.Reindex)
+			if err != nil {
+				continue // an unresolvable scope can't contribute rows; others still can
+			}
+			for _, r := range view.BrowseDB(dbp, o.Limit, o.Since, o.Before) {
+				rows = append(rows, view.BrowseAllRow{Project: sc.Project, BrowseRow: r})
+			}
+		}
+		// Newest-first across projects; each scope contributed at most --limit rows,
+		// so the merge only has to re-sort and cap.
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].LastTS > rows[j].LastTS })
+		if len(rows) > o.Limit {
+			rows = rows[:o.Limit]
 		}
 	}
-	// Newest-first across projects; each scope contributed at most --limit rows,
-	// so the merge only has to re-sort and cap.
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].LastTS > rows[j].LastTS })
-	if len(rows) > o.Limit {
-		rows = rows[:o.Limit]
-	}
+
 	if o.JSON {
 		return EmitJSON(w, browseScopeJSON(o, len(scope), rows))
 	}
