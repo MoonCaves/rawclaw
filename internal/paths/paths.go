@@ -19,6 +19,7 @@ import (
 // dir recorded in the transcript, and a friendly project label.
 type SessionHit struct {
 	SessionID string // full session id (the .jsonl stem == claude --resume id)
+	Path      string // backing transcript file path
 	CWD       string // working dir recorded in the transcript (may be "")
 	Project   string // friendly project label
 }
@@ -302,6 +303,7 @@ func ResolveSession(prefix string) []SessionHit {
 			if strings.HasPrefix(stem, prefix) {
 				hits = append(hits, SessionHit{
 					SessionID: stem,
+					Path:      f,
 					CWD:       firstCWD(f),
 					Project:   ProjectLabel(d),
 				})

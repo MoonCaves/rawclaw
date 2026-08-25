@@ -10,6 +10,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/claude"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -244,5 +245,140 @@ func TestRunTagPrepCmdReusesUnchangedRefreshWatermark(t *testing.T) {
 	}
 	if got := src.messagesCalls - seedCalls; got != 1 {
 		t.Fatalf("refresh parsed unchanged source %d times, want 1", got)
+	}
+}
+
+func TestRunTagPrepCmdResolvesTopLevelClaudeByFilenameStemWithoutDiscovery(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+
+	projDir := filepath.Join(configDir, "projects", "-test-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir projDir: %v", err)
+	}
+
+	const fullSID = "a1b2c3d4-full-session-uuid-0001"
+	transcriptPath := filepath.Join(projDir, fullSID+".jsonl")
+	transcriptContent := `{"type":"user","uuid":"11111111-uuid","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"stem resolved message"}}` + "\n" +
+		`{"type":"assistant","uuid":"22222222-uuid","timestamp":"2026-06-01T10:00:01Z","message":{"role":"assistant","content":"stem resolved response"}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	otherSrc := &tagTestSource{
+		containers: []source.Container{},
+		messages:   []model.Message{},
+	}
+	otherReg := tagTestRegistration("other-runtime", otherSrc)
+	claudeReg := claude.Registration()
+
+	var out strings.Builder
+	// Pass 8-character prefix "a1b2c3d4"
+	if err := runTagPrepCmdWithSources(&out, "a1b2c3d4", nil, nil, []source.Registration{claudeReg, otherReg}); err != nil {
+		t.Fatalf("runTagPrepCmdWithSources: %v", err)
+	}
+
+	if otherSrc.discoverCalls != 0 {
+		t.Fatalf("other runtime Discover called %d times, want 0 (should resolve via stem)", otherSrc.discoverCalls)
+	}
+	if !strings.Contains(out.String(), "11111111 [user] stem resolved message") {
+		t.Fatalf("tag-prep output missing expected user message:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "22222222 [assistant] stem resolved response") {
+		t.Fatalf("tag-prep output missing expected assistant message:\n%s", out.String())
+	}
+}
+
+func TestRunTagPrepCmdSubagentFallsThroughToDiscovery(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+
+	projDir := filepath.Join(configDir, "projects", "-test-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir projDir: %v", err)
+	}
+	parentPath := filepath.Join(projDir, "parent-session-0001.jsonl")
+	writeTagSourceFile(t, parentPath, `{"type":"user","uuid":"11111111-uuid","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"parent"}}`+"\n")
+
+	subagentDir := filepath.Join(projDir, "subagents")
+	if err := os.MkdirAll(subagentDir, 0o755); err != nil {
+		t.Fatalf("mkdir subagentDir: %v", err)
+	}
+
+	const subSID = "c1d2e3f4-subagent-uuid"
+	transcriptPath := filepath.Join(subagentDir, subSID+".jsonl")
+	transcriptContent := `{"type":"user","uuid":"33333333-uuid","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"subagent message"}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	otherSrc := &tagTestSource{
+		containers: []source.Container{},
+		messages:   []model.Message{},
+	}
+	otherReg := tagTestRegistration("other-runtime", otherSrc)
+	claudeReg := claude.Registration()
+
+	var out strings.Builder
+	// Subagent session ID is "subagents/c1d2e3f4-subagent-uuid"
+	if err := runTagPrepCmdWithSources(&out, "subagents/c1d2e3f4", nil, nil, []source.Registration{claudeReg, otherReg}); err != nil {
+		t.Fatalf("runTagPrepCmdWithSources: %v", err)
+	}
+
+	// Subagent is skipped by stem resolver and falls through to full discovery
+	if otherSrc.discoverCalls != 1 {
+		t.Fatalf("other runtime Discover called %d times, want 1 (subagent falls through to discovery)", otherSrc.discoverCalls)
+	}
+	if !strings.Contains(out.String(), "33333333 [user] subagent message") {
+		t.Fatalf("tag-prep output missing subagent message:\n%s", out.String())
+	}
+}
+
+func TestRunTagPrepCmdNeverIndexedSessionEndToEnd(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+
+	projDir := filepath.Join(configDir, "projects", "-e2e-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir projDir: %v", err)
+	}
+
+	const fullSID = "e2e00001-unindexed-session-uuid"
+	transcriptPath := filepath.Join(projDir, fullSID+".jsonl")
+	transcriptContent := `{"type":"user","uuid":"44444444-uuid","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"unindexed session message"}}` + "\n" +
+		`{"type":"assistant","uuid":"55555555-uuid","timestamp":"2026-06-01T10:00:01Z","message":{"role":"assistant","content":"unindexed session reply"}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	var out strings.Builder
+	// Call default runTagPrepCmd which uses default sources.Registered()
+	if err := runTagPrepCmd(&out, "e2e00001", nil, nil); err != nil {
+		t.Fatalf("runTagPrepCmd failed for never-indexed session: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "44444444 [user] unindexed session message") {
+		t.Fatalf("tag-prep output missing user message:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "55555555 [assistant] unindexed session reply") {
+		t.Fatalf("tag-prep output missing assistant message:\n%s", out.String())
+	}
+
+	// Verify session is now indexed in consolidated store
+	con, err := store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("connect consolidated store: %v", err)
+	}
+	defer con.Close()
+
+	var count int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id = ?", fullSID).Scan(&count); err != nil {
+		t.Fatalf("query consolidated store: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row in consolidated store for %s, got %d", fullSID, count)
 	}
 }
