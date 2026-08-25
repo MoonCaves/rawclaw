@@ -12,6 +12,9 @@ import (
 )
 
 func TestCLIJourney_GooseEndToEnd(t *testing.T) {
+	// The journey exercises goose end to end, so it opts in the way a real
+	// goose user does.
+	t.Setenv("RAWCLAW_GOOSE", "1")
 	newCfgRoot(t)
 
 	gooseDir := t.TempDir()

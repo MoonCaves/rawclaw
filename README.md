@@ -48,7 +48,7 @@ never duplicates. `rawclaw setup --eject` removes exactly what setup installed �
 
 ## What it does
 
-Your coding agents quietly save conversations as JSONL transcripts on disk (**Claude Code** in `~/.claude/projects`, **Codex** in `~/.codex/sessions`, and **Google Antigravity** in `~/.gemini/antigravity-cli/brain`). RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type. **Goose** (SQLite sessions under `~/.local/share/goose/sessions/sessions.db`, Goose v1.10.0+) is read too.
+Your coding agents quietly save conversations as JSONL transcripts on disk (**Claude Code** in `~/.claude/projects`, **Codex** in `~/.codex/sessions`, and **Google Antigravity** in `~/.gemini/antigravity-cli/brain`). RawClaw indexes them with SQLite **FTS5** and searches them the way you actually type. **Goose** (SQLite sessions under `~/.local/share/goose/sessions/sessions.db`, Goose v1.10.0+) is supported but opt-in — pass `--source goose` or set `RAWCLAW_GOOSE=1`; goose discovery walks the filesystem, so it never runs unless you ask.
 
 - **Answer-first search.** Search answers immediately from the consolidated store without blocking on synchronous directory scans or reindexing. When uningested sessions or stale scopes exist, search returns what it has with an honest staleness note and nudges a background refresh; explicit flags (`--reindex`, `--dir`, `--this-project`) refresh synchronously.
 - **Goal → match → resolution.** Every hit returns the session's opening (what it set out to do), the matched message in context, and the closing (what was decided) — so one result usually answers the question without opening a file.
