@@ -434,6 +434,9 @@ func TestResolveSession(t *testing.T) {
 		if h.SessionID != "a1b2c3d4-full-session" {
 			t.Errorf("SessionID = %q", h.SessionID)
 		}
+		if h.Path != filepath.Join(tdir, "a1b2c3d4-full-session.jsonl") {
+			t.Errorf("Path = %q, want %q", h.Path, filepath.Join(tdir, "a1b2c3d4-full-session.jsonl"))
+		}
 		if h.CWD != "/home/user/proj" {
 			t.Errorf("CWD = %q", h.CWD)
 		}
