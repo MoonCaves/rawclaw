@@ -1591,3 +1591,58 @@ func TestConsolidateFrom_HealFailureAbortsBeforeBackfill(t *testing.T) {
 		t.Errorf("session_sources after retry = %s, want 1", got)
 	}
 }
+
+// TestConsolidate_RollsBackA midFoldFailure verifies that a failure after the
+// session merge does not leave provenance or session rows committed ahead of
+// the message merge.
+func TestConsolidate_RollsBackAMidFoldFailure(t *testing.T) {
+	isolateCache(t)
+	src := seedSessionDB(t, "mid-fold.db", sessionRow{
+		id:      "mid-fold-session",
+		project: "ledger",
+		cwd:     "/w/ledger",
+		msgs:    []msgRow{{"mid-fold-message", "user", "hello", 100}},
+	})
+
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		con.Close()
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := con.Exec(`
+		CREATE TRIGGER abort_consolidated_messages
+		BEFORE INSERT ON messages
+		BEGIN
+			SELECT RAISE(ABORT, 'injected mid-fold failure');
+		END
+	`); err != nil {
+		con.Close()
+		t.Fatalf("install mid-fold failure trigger: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close consolidated: %v", err)
+	}
+
+	if _, err := ConsolidateFrom([]string{src}, false); err == nil || !strings.Contains(err.Error(), "merge messages") {
+		t.Fatalf("ConsolidateFrom error = %v, want injected message merge failure", err)
+	}
+
+	con = openConsolidated(t)
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{name: "session sources", query: "SELECT COUNT(*) FROM session_sources WHERE session_id='mid-fold-session'"},
+		{name: "sessions", query: "SELECT COUNT(*) FROM sessions WHERE id='mid-fold-session'"},
+		{name: "messages", query: "SELECT COUNT(*) FROM messages WHERE session_id='mid-fold-session'"},
+		{name: "file index", query: "SELECT COUNT(*) FROM file_index WHERE session_id='mid-fold-session'"},
+		{name: "watermark", query: "SELECT COUNT(*) FROM meta WHERE key LIKE 'sync:%'"},
+	} {
+		if got := scalar(t, con, tc.query); got != "0" {
+			t.Errorf("%s after failed fold = %s, want 0", tc.name, got)
+		}
+	}
+}

@@ -595,6 +595,13 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	if err := con.QueryRow("SELECT COUNT(*) FROM src.sessions").Scan(&offered); err != nil {
 		return 0, false, true, fmt.Errorf("count source sessions: %w", err)
 	}
+	srcOrigin := false
+	if hasTopics {
+		srcOrigin, err = srcHasColumn(con, "topic_segment", "origin_machine")
+		if err != nil {
+			return 0, false, true, err
+		}
+	}
 
 	// Skip a source that has not changed since its last fold-in. Without this
 	// the write-through would re-scan every message of every project on every
@@ -612,15 +619,29 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	if err := migrateSessionSources(con); err != nil {
 		return 0, false, true, fmt.Errorf("migrate session sources: %w", err)
 	}
-	if _, err := con.Exec(`CREATE TEMP TABLE IF NOT EXISTS consolidation_affected_sessions (
+
+	tx, err := con.Begin()
+	if err != nil {
+		return 0, false, true, fmt.Errorf("begin fold: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if rErr := tx.Rollback(); rErr != nil && err == nil {
+				err = fmt.Errorf("rollback fold: %w", rErr)
+			}
+		}
+	}()
+
+	if _, err := tx.Exec(`CREATE TEMP TABLE IF NOT EXISTS consolidation_affected_sessions (
 		session_id TEXT PRIMARY KEY
 	)`); err != nil {
 		return 0, false, true, fmt.Errorf("create affected session set: %w", err)
 	}
-	if _, err := con.Exec("DELETE FROM temp.consolidation_affected_sessions"); err != nil {
+	if _, err := tx.Exec("DELETE FROM temp.consolidation_affected_sessions"); err != nil {
 		return 0, false, true, fmt.Errorf("clear affected session set: %w", err)
 	}
-	if _, err := con.Exec(`
+	if _, err := tx.Exec(`
 		INSERT INTO temp.consolidation_affected_sessions(session_id)
 		SELECT session_id FROM main.session_sources
 		WHERE source_db = ?
@@ -628,33 +649,30 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	`, srcID); err != nil {
 		return 0, false, true, fmt.Errorf("record deleted session sources: %w", err)
 	}
-	if _, err := con.Exec(recordSessionSourcesSQL, srcID); err != nil {
+	// Inside tx: these writes must roll back with the fold, not survive it.
+	if _, err := tx.Exec(recordSessionSourcesSQL, srcID); err != nil {
 		return 0, false, true, fmt.Errorf("record session sources: %w", err)
 	}
-	if _, err := con.Exec("DELETE FROM main.session_sources WHERE source_db = ? AND session_id NOT IN (SELECT id FROM src.sessions)", srcID); err != nil {
+	if _, err := tx.Exec("DELETE FROM main.session_sources WHERE source_db = ? AND session_id NOT IN (SELECT id FROM src.sessions)", srcID); err != nil {
 		return 0, false, true, fmt.Errorf("prune stale session sources: %w", err)
 	}
-	if _, err := con.Exec(mergeSessionsSQL); err != nil {
+	if _, err := tx.Exec(mergeSessionsSQL); err != nil {
 		return 0, false, true, fmt.Errorf("merge sessions: %w", err)
 	}
-	if _, err := con.Exec(mergeMessagesSQL); err != nil {
+	if _, err := tx.Exec(mergeMessagesSQL); err != nil {
 		return 0, false, true, fmt.Errorf("merge messages: %w", err)
 	}
 	if hasTopics {
-		srcOrigin, err := srcHasColumn(con, "topic_segment", "origin_machine")
-		if err != nil {
-			return 0, false, true, err
-		}
-		if _, err := con.Exec(mergeTopicsSQLFor(srcOrigin)); err != nil {
+		if _, err := tx.Exec(mergeTopicsSQLFor(srcOrigin)); err != nil {
 			return 0, false, true, fmt.Errorf("merge topics: %w", err)
 		}
 	}
 	if hasVerdicts {
-		if _, err := con.Exec(mergeVerdictsSQL); err != nil {
+		if _, err := tx.Exec(mergeVerdictsSQL); err != nil {
 			return 0, false, true, fmt.Errorf("merge verdicts: %w", err)
 		}
 	}
-	if _, err := con.Exec(`
+	if _, err := tx.Exec(`
 		DELETE FROM main.messages
 		WHERE session_id IN (
 			SELECT a.session_id
@@ -666,7 +684,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("prune deleted session messages: %w", err)
 	}
-	if _, err := con.Exec(`
+	if _, err := tx.Exec(`
 		DELETE FROM main.sessions
 		WHERE id IN (
 			SELECT a.session_id
@@ -678,14 +696,14 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("prune deleted sessions: %w", err)
 	}
-	if _, err := con.Exec(`
+	if _, err := tx.Exec(`
 		UPDATE main.sessions SET message_count =
 		  (SELECT COUNT(*) FROM main.messages WHERE main.messages.session_id = main.sessions.id)
 		WHERE main.sessions.id IN (SELECT id FROM src.sessions)
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("recount source sessions: %w", err)
 	}
-	if _, err := con.Exec(`
+	if _, err := tx.Exec(`
 		INSERT INTO main.file_index(path,mtime,size,fp,session_id)
 		SELECT path,mtime,size,fp,session_id FROM src.file_index
 		WHERE true
@@ -693,13 +711,17 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 		  mtime = excluded.mtime,
 		  size = excluded.size,
 		  fp = excluded.fp,
-		  session_id = excluded.session_id
+			 session_id = excluded.session_id
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("merge file_index: %w", err)
 	}
-	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
+	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
 		return 0, false, true, fmt.Errorf("stamp sync watermark: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, true, fmt.Errorf("commit fold: %w", err)
+	}
+	committed = true
 	return offered, true, false, nil
 }
 
