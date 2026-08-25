@@ -583,28 +583,24 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scop
 
 	tx, err := con.Begin()
 	if err != nil {
-		slog.Warn("reindex file begin tx failed", "session", sid, "err", err)
-		return fmt.Errorf("begin tx: %w", err)
+		return fmt.Errorf("session %s begin tx: %w", sid, err)
 	}
 	defer func() {
 		_ = tx.Rollback()
 	}()
 
 	if _, err := tx.Exec("DELETE FROM messages WHERE session_id=?", sid); err != nil {
-		slog.Warn("reindex file delete messages failed", "session", sid, "err", err)
-		return fmt.Errorf("delete messages: %w", err)
+		return fmt.Errorf("session %s delete messages: %w", sid, err)
 	}
 	if _, err := tx.Exec("DELETE FROM sessions WHERE id=?", sid); err != nil {
-		slog.Warn("reindex file delete sessions failed", "session", sid, "err", err)
-		return fmt.Errorf("delete session: %w", err)
+		return fmt.Errorf("session %s delete session: %w", sid, err)
 	}
 	for _, r := range rows {
 		if _, err := tx.Exec(
 			"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
 			sid, r.role, r.content, r.ts, r.tsISO, r.uuid,
 		); err != nil {
-			slog.Warn("reindex file insert message failed", "session", sid, "err", err)
-			return fmt.Errorf("insert message: %w", err)
+			return fmt.Errorf("session %s insert message: %w", sid, err)
 		}
 	}
 	var parentArg any
@@ -616,29 +612,25 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scop
 		"INSERT OR REPLACE INTO sessions(id,started_at,last_ts,message_count,is_subagent,parent_id,origin_machine,source_tool,source_path,missing_since,project,cwd) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,?)",
 		sid, started, last, len(rows), isSub, parentArg, originOr(origin), sourceClaude, realpath(path), projectArg, cwdArg,
 	); err != nil {
-		slog.Warn("reindex file insert session failed", "session", sid, "err", err)
-		return fmt.Errorf("insert session: %w", err)
+		return fmt.Errorf("session %s insert session: %w", sid, err)
 	}
 
 	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
 		rp, mtime, size, provenance.FileFingerprint(path, size), sid,
 	); err != nil {
-		slog.Warn("reindex file insert file_index failed", "session", sid, "err", err)
-		return fmt.Errorf("insert file_index: %w", err)
+		return fmt.Errorf("session %s insert file_index: %w", sid, err)
 	}
 
 	// Vault rawclaw's own copy inside the atomic success gate.
 	if origin == "" {
 		if err := vaultFile(path, sid, isSub, parent, projectArg, cwdArg); err != nil {
-			slog.Warn("durable transcript not written", "session", sid, "err", err)
-			return fmt.Errorf("vault file: %w", err)
+			return fmt.Errorf("session %s vault file: %w", sid, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		slog.Warn("reindex file commit failed", "session", sid, "err", err)
-		return fmt.Errorf("commit tx: %w", err)
+		return fmt.Errorf("session %s commit tx: %w", sid, err)
 	}
 	return nil
 }
