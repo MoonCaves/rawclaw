@@ -470,3 +470,61 @@ func Fuse(con *sql.DB, kwRows []retrieve.Anchor, qvec []float64, knnK int, inclu
 	}
 	return merged
 }
+
+// CoverageStats reports candidate embedding coverage across a store.
+type CoverageStats struct {
+	Candidates int
+	Vectored   int
+	Missing    int
+}
+
+// MeasureCoverage scans live candidate messages (tool-stripped prose >= MinChars)
+// and compares them against stored vectors in chunk_vec. If projects is provided,
+// only messages belonging to those projects are considered.
+func MeasureCoverage(con *sql.DB, projects ...string) (CoverageStats, error) {
+	var msgs []store.MessageRow
+	var err error
+	if len(projects) > 0 {
+		msgs, err = store.MessagesForProjects(con, projects)
+	} else {
+		msgs, err = store.AllMessages(con)
+	}
+	if err != nil {
+		return CoverageStats{}, fmt.Errorf("scan messages: %w", err)
+	}
+
+	current := map[vecKey]struct{}{}
+	for _, m := range msgs {
+		text := strings.TrimSpace(parse.StripGenerated(m.Content))
+		if len([]rune(text)) < MinChars {
+			continue
+		}
+		current[vecKey{m.SessionID, contentHash(text)}] = struct{}{}
+	}
+	if len(current) == 0 {
+		return CoverageStats{Candidates: 0, Vectored: 0, Missing: 0}, nil
+	}
+
+	keys, err := store.VecKeys(con)
+	if err != nil {
+		// Missing chunk_vec table or query failure -> 0 vectored.
+		return CoverageStats{
+			Candidates: len(current),
+			Vectored:   0,
+			Missing:    len(current),
+		}, nil
+	}
+
+	vectored := 0
+	for _, k := range keys {
+		if _, ok := current[vecKey{k.SessionID, k.ContentHash}]; ok {
+			vectored++
+		}
+	}
+
+	return CoverageStats{
+		Candidates: len(current),
+		Vectored:   vectored,
+		Missing:    len(current) - vectored,
+	}, nil
+}
