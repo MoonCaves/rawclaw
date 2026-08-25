@@ -27,6 +27,9 @@ func TestCLIJourney_AntigravityEndToEnd(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(cfg, ".config"))
+	t.Setenv("GOOSE_HOME", filepath.Join(cfg, ".goose"))
+	t.Setenv("CODEX_HOME", filepath.Join(cfg, ".codex"))
 
 	// Hard-fail if the resolved cache store is not isolated inside cfg
 	cacheDir := store.CacheDir()
@@ -166,6 +169,9 @@ func TestCLIJourney_CrossRuntimeDisambiguation(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(cfg, ".config"))
+	t.Setenv("GOOSE_HOME", filepath.Join(cfg, ".goose"))
+	t.Setenv("CODEX_HOME", filepath.Join(cfg, ".codex"))
 
 	// 1. Seed Claude session
 	claudeProjDir := filepath.Join(cfg, "projects", "backend")
@@ -230,6 +236,9 @@ func TestCLIJourney_AntigravityCurrentSessionExclusion(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(cfg, ".config"))
+	t.Setenv("GOOSE_HOME", filepath.Join(cfg, ".goose"))
+	t.Setenv("CODEX_HOME", filepath.Join(cfg, ".codex"))
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 
 	agRoot := filepath.Join(cfg, ".gemini", "antigravity-cli")
@@ -313,6 +322,9 @@ func TestCLIJourney_AntigravityTranscriptRename(t *testing.T) {
 	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(cfg, ".gemini", "antigravity-cli"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(cfg, ".config"))
+	t.Setenv("GOOSE_HOME", filepath.Join(cfg, ".goose"))
+	t.Setenv("CODEX_HOME", filepath.Join(cfg, ".codex"))
 
 	// Hard-fail if the resolved cache store is not isolated inside cfg
 	cacheDir := store.CacheDir()
