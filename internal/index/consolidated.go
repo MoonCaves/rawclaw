@@ -396,6 +396,17 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 		}
 		st.SessionsSeen += n
 	}
+	if _, err := con.Exec(`
+		DELETE FROM main.session_sources
+		WHERE source_db = ''
+		  AND EXISTS (
+			SELECT 1 FROM main.session_sources real
+			WHERE real.session_id = session_sources.session_id
+			  AND real.source_db <> ''
+		  )
+	`); err != nil {
+		return st, fmt.Errorf("prune legacy session sources: %w", err)
+	}
 
 	if rebuild {
 		if _, err := con.Exec(recountSQL); err != nil {
