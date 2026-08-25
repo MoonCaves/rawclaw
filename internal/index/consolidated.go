@@ -328,18 +328,14 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 		}
 	}
 
-	anyChanged := false
 	for _, src := range srcPaths {
-		n, changed, skipped, err := consolidateOne(con, src)
+		n, _, skipped, err := consolidateOne(con, src)
 		if err != nil {
 			return st, fmt.Errorf("consolidate %s: %w", filepath.Base(src), err)
 		}
 		st.Sources++
 		if skipped {
 			st.Skipped++
-		}
-		if changed {
-			anyChanged = true
 		}
 		st.SessionsSeen += n
 	}
@@ -349,10 +345,8 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (SyncStats, error) {
 			return st, fmt.Errorf("recount messages: %w", err)
 		}
 	}
-	if rebuild || anyChanged {
-		if err := pruneTombstoned(con); err != nil {
-			return st, err
-		}
+	if err := pruneTombstoned(con); err != nil {
+		return st, err
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&st.Sessions); err != nil {
 		return st, fmt.Errorf("count sessions: %w", err)
