@@ -1256,21 +1256,23 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 		usedConsolidated bool
 	)
 
-	if con, _, err := index.OpenConsolidated(); err == nil {
-		defer con.Close()
-		var projects []string
-		if o.pathScoped() || o.ThisProject {
-			seen := make(map[string]bool, len(scope))
-			for _, sc := range scope {
-				if !seen[sc.Project] {
-					seen[sc.Project] = true
-					projects = append(projects, sc.Project)
+	if !o.Reindex {
+		if con, _, err := index.OpenConsolidated(); err == nil {
+			defer con.Close()
+			var projects []string
+			if o.pathScoped() || o.ThisProject {
+				seen := make(map[string]bool, len(scope))
+				for _, sc := range scope {
+					if !seen[sc.Project] {
+						seen[sc.Project] = true
+						projects = append(projects, sc.Project)
+					}
 				}
 			}
-		}
-		if res, err := view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, projects); err == nil {
-			rows = res
-			usedConsolidated = true
+			if res, err := view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, projects); err == nil {
+				rows = res
+				usedConsolidated = true
+			}
 		}
 	}
 
