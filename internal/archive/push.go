@@ -574,12 +574,10 @@ func (a *Archive) pushWithRetry(ctx context.Context) (int, error) {
 // rejections worth a rebase-retry; auth, network, and missing-remote failures
 // return immediately instead of burning retries.
 func isRejectedPush(out string) bool {
-	for _, marker := range []string{"[rejected]", "non-fast-forward", "fetch first", "cannot lock ref"} {
-		if strings.Contains(out, marker) {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(out, "[rejected]") ||
+		strings.Contains(out, "non-fast-forward") ||
+		strings.Contains(out, "fetch first") ||
+		strings.Contains(out, "cannot lock ref")
 }
 
 // isDir reports whether path exists and is a directory.
