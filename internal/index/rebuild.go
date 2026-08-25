@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
@@ -29,6 +30,11 @@ var ErrRebuildWouldLoseHistory = errors.New("rebuild would lose history")
 // variable rather than a flag because the honest use for it is a scripted
 // recovery on a machine whose store is already known to be junk.
 const rebuildForceEnv = "RAWCLAW_REBUILD_FORCE"
+
+// rebuildBeforeSwapHook is nil in normal operation. Tests use it to force a
+// failure after the replacement has been built but before it can replace the
+// live store, exercising the data-preservation boundary deterministically.
+var rebuildBeforeSwapHook func() error
 
 // rebuildForced reports whether the user asked to rebuild anyway.
 func rebuildForced() bool {
@@ -61,9 +67,6 @@ func storedSessionCount(dbp string) (int, error) {
 // transcript vault alone — the guarantee that makes the store a cache: delete
 // it, run this, and every session comes back, INCLUDING the ones whose original
 // source file no longer exists anywhere on disk.
-//
-// The db file is removed first rather than reused, so EnsureSchema starts from
-// nothing and its rebuild-on-version-mismatch behavior has no rows to drop.
 //
 // There is deliberately NO retention pass here. Retention reconciles indexed
 // sessions against a live source scan; this pass has no scan — its input is the
@@ -104,17 +107,33 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 			ErrRebuildWouldLoseHistory, have, len(vaulted), have-len(vaulted), rebuildForceEnv)
 	}
 
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.Remove(dbp + suffix); err != nil && !os.IsNotExist(err) {
-			return st, fmt.Errorf("clear store %s: %w", dbp+suffix, err)
-		}
-	}
-
-	con, err := store.ConnectRW(dbp)
+	tempDir, err := os.MkdirTemp(filepath.Dir(dbp), ".rawclaw-rebuild-*")
 	if err != nil {
-		return st, fmt.Errorf("open store: %w", err)
+		return st, fmt.Errorf("create replacement directory: %w", err)
 	}
-	defer con.Close()
+	defer func() { _ = os.RemoveAll(tempDir) }()
+	tempDB := filepath.Join(tempDir, filepath.Base(dbp))
+
+	con, err := store.ConnectRW(tempDB)
+	if err != nil {
+		return st, fmt.Errorf("open replacement store: %w", err)
+	}
+	closeStore := func() error {
+		if _, err := con.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+			_ = con.Close()
+			return fmt.Errorf("checkpoint replacement store: %w", err)
+		}
+		if err := con.Close(); err != nil {
+			return fmt.Errorf("close replacement store: %w", err)
+		}
+		con = nil
+		return nil
+	}
+	defer func() {
+		if con != nil {
+			_ = con.Close()
+		}
+	}()
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		return st, fmt.Errorf("ensure schema: %w", err)
 	}
@@ -149,6 +168,25 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 		if v.MissingSince != 0 {
 			st.Missing++
 		}
+	}
+	if err := closeStore(); err != nil {
+		return st, err
+	}
+	if rebuildBeforeSwapHook != nil {
+		if err := rebuildBeforeSwapHook(); err != nil {
+			return st, fmt.Errorf("prepare store swap: %w", err)
+		}
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Remove(tempDB + suffix); err != nil && !os.IsNotExist(err) {
+			return st, fmt.Errorf("remove replacement sidecar %s: %w", tempDB+suffix, err)
+		}
+		if err := os.Remove(dbp + suffix); err != nil && !os.IsNotExist(err) {
+			return st, fmt.Errorf("remove old sidecar %s: %w", dbp+suffix, err)
+		}
+	}
+	if err := os.Rename(tempDB, dbp); err != nil {
+		return st, fmt.Errorf("swap rebuilt store: %w", err)
 	}
 	return st, nil
 }
