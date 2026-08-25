@@ -306,21 +306,7 @@ func isUpper(b byte) bool { return b >= 'A' && b <= 'Z' }
 // collapseSpaces replaces every run of whitespace with a single space and trims
 // leading/trailing spaces.
 func collapseSpaces(s string) string {
-	var out strings.Builder
-	out.Grow(len(s))
-	inSpace := false
-	for i := 0; i < len(s); i++ {
-		if isSpace(s[i]) {
-			inSpace = true
-			continue
-		}
-		if inSpace && out.Len() > 0 {
-			out.WriteByte(' ')
-		}
-		inSpace = false
-		out.WriteByte(s[i])
-	}
-	return out.String()
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // TitleCap is the rune ceiling for a derived session title.
@@ -368,14 +354,10 @@ func IsLowSignal(text string) bool {
 	// Bare slash-command: the first whitespace-delimited word is a known
 	// control verb and nothing substantive follows beyond it.
 	if t[0] == '/' {
-		head := lower
-		if i := strings.IndexFunc(lower, func(r rune) bool {
-			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
-		}); i >= 0 {
-			head = lower[:i]
-		}
-		if _, ok := slashCommands[head]; ok {
-			return true
+		if fields := strings.Fields(lower); len(fields) > 0 {
+			if _, ok := slashCommands[fields[0]]; ok {
+				return true
+			}
 		}
 	}
 
