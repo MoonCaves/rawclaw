@@ -17,14 +17,14 @@ import (
 
 // SchemaVersion gates a full rebuild on mismatch. It is deliberately NOT bumped
 // for the durable-retention columns (origin_machine/source_tool/source_path/
-// missing_since) nor for the scope columns (project/cwd): a bump forces
+// only_copy_since) nor for the scope columns (project/cwd): a bump forces
 // Rebuild() to re-walk the live tree and re-prune every already-retained
 // session, defeating retention on the first upgrade. Those columns are added in
 // place by index's migrateDurabilityColumns / migrateScopeColumns instead.
 const SchemaVersion = 4
 
 // Schema is the base (non-FTS) DDL. The sessions provenance/retention columns
-// (origin_machine/source_tool/source_path/missing_since) and the scope columns
+// (origin_machine/source_tool/source_path/only_copy_since) and the scope columns
 // (project/cwd) are present here so a fresh or rebuilt db carries them from the
 // start; an existing current-version db gets them via index's in-place
 // migrateDurabilityColumns / migrateScopeColumns migrations.
@@ -39,14 +39,14 @@ const Schema = `
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY, started_at REAL, last_ts REAL,
     message_count INTEGER DEFAULT 0, is_subagent INTEGER DEFAULT 0, parent_id TEXT,
-    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL,
+    origin_machine TEXT, source_tool TEXT, source_path TEXT, only_copy_since REAL,
     project TEXT, cwd TEXT
 );
 CREATE TABLE IF NOT EXISTS session_sources (
     session_id TEXT NOT NULL, source_db TEXT NOT NULL,
     started_at REAL, last_ts REAL, message_count INTEGER DEFAULT 0,
     is_subagent INTEGER DEFAULT 0, parent_id TEXT,
-    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL,
+    origin_machine TEXT, source_tool TEXT, source_path TEXT, only_copy_since REAL,
     project TEXT, cwd TEXT,
     PRIMARY KEY (session_id, source_db)
 );
