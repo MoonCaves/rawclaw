@@ -265,8 +265,13 @@ func TestEnsureIndexedContainers_StaleWatermarkDroppedOnRename(t *testing.T) {
 		}, nil
 	}
 
-	// Pass 2: indexed under f2 (transcript_full.jsonl)
-	n2, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c2}, msgs2, "antigravity", "")
+	// Pass 2: indexed under f2 (transcript_full.jsonl).
+	//
+	// reindex MUST be false here. ensureIndexedContainers os.Remove()s the whole db
+	// when reindex is true, which wipes the f1 watermark before this pass can run —
+	// the stale row would never exist, and this test would pass with or without the
+	// fix it exists to pin. Carrying the db forward is the entire scenario.
+	n2, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c2}, msgs2, "antigravity", "")
 	if err != nil {
 		t.Fatalf("second EnsureIndexedContainers: %v", err)
 	}
