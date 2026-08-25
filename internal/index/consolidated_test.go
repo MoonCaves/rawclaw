@@ -185,6 +185,9 @@ func TestConsolidate_HonorsTombstones(t *testing.T) {
 		sessionRow{id: "drop", project: "ledger", cwd: "/w/ledger", msgs: []msgRow{{"u-2", "user", "delete me", 200}}},
 		sessionRow{id: "drop/agent-1", project: "ledger", cwd: "/w/ledger", msgs: []msgRow{{"u-3", "assistant", "child of the deleted", 300}}},
 	)
+	// Tag the doomed session so the prune has real sidecar rows to take:
+	// mergeTopicsSQL folds the segment in during the same pass that prunes.
+	tagSession(t, src, "drop", "u-2", "secrets", "the deleted conversation's summary", 400)
 	if err := lifecycle.TombstoneIDs("", []string{"drop"}); err != nil {
 		t.Fatalf("write tombstone: %v", err)
 	}
@@ -202,6 +205,14 @@ func TestConsolidate_HonorsTombstones(t *testing.T) {
 	}
 	if got := scalar(t, con, "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'delete'"); got != "0" {
 		t.Error("a deleted session's text is still searchable in the consolidated index")
+	}
+	// The tagging sidecars summarize the conversation's content, so a user
+	// delete must take them too — a surviving topic row IS surviving content.
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment WHERE session_id LIKE 'drop%'"); got != "0" {
+		t.Errorf("%s topic segments of a deleted session survived the prune", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_verdict WHERE session_id LIKE 'drop%'"); got != "0" {
+		t.Errorf("%s verdicts of a deleted session survived the prune", got)
 	}
 }
 
@@ -1812,5 +1823,106 @@ func TestConsolidateFrom_RebuildFailureLeavesLiveStoreIntact(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("session lost to a failed rebuild: count = %d, want 1", n)
+	}
+}
+
+// TestConsolidateRebuild_CarriesForwardStoreOnlySessions is issue #22's test: a
+// session that survives ONLY in the consolidated store — its per-project db
+// gone along with its transcript — must outlive a --rebuild. The sessions
+// absent from every source are exactly the purged history the store exists to
+// keep, and before the carry-forward a rebuild dropped them silently.
+func TestConsolidateRebuild_CarriesForwardStoreOnlySessions(t *testing.T) {
+	isolateCache(t)
+	keep := seedSessionDB(t, "-w-keep.db", sessionRow{
+		id: "kept", project: "keep", cwd: "/w/keep",
+		msgs: []msgRow{{"u-k1", "user", "still has a live index", 100}},
+	})
+	gone := seedSessionDB(t, "-w-gone.db", sessionRow{
+		id: "orphan", project: "gone", cwd: "/w/gone", missing: 200,
+		msgs: []msgRow{{"u-g1", "user", "index and transcript both purged", 100}},
+	})
+	if _, err := ConsolidateFrom([]string{keep, gone}, false); err != nil {
+		t.Fatal(err)
+	}
+	// The orphan's source db vanishes — the state after a cache wipe, or a
+	// per-project rebuild from a live tree whose transcript was purged.
+	for _, sfx := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(gone + sfx)
+	}
+
+	st, err := ConsolidateFrom([]string{keep}, true)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if st.CarriedForward != 1 {
+		t.Errorf("CarriedForward = %d, want 1", st.CarriedForward)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions"); got != "2" {
+		t.Fatalf("rebuild kept %s sessions, want 2 — the store-only session was dropped", got)
+	}
+	if got := scalar(t, con, "SELECT content FROM messages WHERE session_id='orphan'"); got != "index and transcript both purged" {
+		t.Errorf("orphan message = %q — the carried session lost its body", got)
+	}
+	if got := scalar(t, con, "SELECT only_copy_since FROM sessions WHERE id='orphan'"); !strings.HasPrefix(got, "200") {
+		t.Errorf("orphan only_copy_since = %s, want 200 — the retention flag did not ride along", got)
+	}
+	if got := scalar(t, con, "SELECT source_db FROM session_sources WHERE session_id='orphan'"); got != "" {
+		t.Errorf("orphan source_db = %q, want the legacy-baseline '' row", got)
+	}
+	// Present but unfindable would be a quieter version of the same loss: the
+	// carried message must be in the FTS index too.
+	if got := scalar(t, con, "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'purged'"); got != "1" {
+		t.Errorf("FTS matched %s rows for the carried message, want 1", got)
+	}
+}
+
+// TestConsolidate_CurrentIdentityFormWinsMetadataTie is issue #19's test: when
+// a legacy bare-filename contribution and a current absolute-path contribution
+// tie on presence, message count, and last_ts, the current form must win the
+// merge. In ASCII a letter outranks '/' on a bare DESC sort, so without the
+// form-first ordering the legacy row's stale project/cwd is displayed forever.
+func TestConsolidate_CurrentIdentityFormWinsMetadataTie(t *testing.T) {
+	isolateCache(t)
+	src := seedSessionDB(t, "-w-current.db", sessionRow{
+		id: "tied", project: "current-proj", cwd: "/w/current",
+		msgs: []msgRow{{"u-t1", "user", "hello", 100}},
+	})
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inject the legacy contribution by hand: bare-filename identity, stale
+	// scope, and values that tie with the real fold on every rank above the
+	// identity — then clear the watermark so the next pass re-merges.
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec(`
+		INSERT INTO session_sources
+		  (session_id,source_db,started_at,last_ts,message_count,is_subagent,parent_id,
+		   origin_machine,source_tool,source_path,only_copy_since,project,cwd)
+		VALUES('tied','w-current.db',100,100,1,0,NULL,'m',?, '/t/tied.jsonl',NULL,'stale-proj','/w/stale')
+	`, sourceClaude); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("DELETE FROM meta WHERE key LIKE 'sync:%'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatal(err)
+	}
+	ro := openConsolidated(t)
+	if got := scalar(t, ro, "SELECT project FROM sessions WHERE id='tied'"); got != "current-proj" {
+		t.Errorf("merged project = %q, want current-proj — the legacy bare-name contribution won the tie (#19)", got)
+	}
+	if got := scalar(t, ro, "SELECT cwd FROM sessions WHERE id='tied'"); got != "/w/current" {
+		t.Errorf("merged cwd = %q, want /w/current", got)
 	}
 }
