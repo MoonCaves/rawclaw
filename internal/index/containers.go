@@ -342,6 +342,17 @@ func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourc
 		return false
 	}
 
+	// Drop any watermark this session held under a DIFFERENT path before writing
+	// the current one. file_index is keyed by path, not session_id, so a source
+	// that renames its backing file — Antigravity prefers transcript_full.jsonl
+	// once it appears, having previously served transcript.jsonl for the same
+	// session — otherwise leaves the old row behind. That orphan then names a file
+	// that no longer exists, retention reads it as a purged source and prunes the
+	// session, and the still-current watermark makes the next scan skip
+	// re-indexing it: the session disappears and never comes back.
+	if _, err := tx.Exec("DELETE FROM file_index WHERE session_id=? AND path<>?", c.ID, rp); err != nil {
+		return false
+	}
 	if _, err := tx.Exec(
 		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
 		rp, mtime, size, fp, c.ID,
