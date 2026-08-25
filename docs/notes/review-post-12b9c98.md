@@ -128,8 +128,13 @@ test starts two independent consolidators against one store.
 - `go test ./internal/index ./internal/cli`: failed in
   `TestConsolidateFrom_PrunesLegacySourceAfterFullPass` (expected
   `source_db='real.db'`, found no such row after the new absolute-path write).
-- `CGO_ENABLED=0 go test -race -count=1 ./...`: result recorded after
-  completion.
+- `CGO_ENABLED=0 go test -race -count=1 ./...`: did not complete within the
+  review window. It produced no package result after several minutes while the
+  machine had many concurrent `cli.test ingest` processes and an index test in
+  an uninterruptible state; I terminated the waiting test session rather than
+  claim a green gate. This is consistent with the concurrency/deadlock risk
+  called out above, but is not by itself proof that this exact range caused the
+  other processes.
 
 ## Verdict
 
