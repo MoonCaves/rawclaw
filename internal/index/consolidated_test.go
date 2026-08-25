@@ -1973,3 +1973,52 @@ func TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour(t *testing.T) {
 		t.Errorf("UNRELATED neighbour session deleted: count = %d, want 1", neighbour)
 	}
 }
+
+// TestConsolidateFrom_RebuildFailureLeavesLiveStoreIntact covers issue #18: a
+// rebuild deleted the consolidated store BEFORE connecting, so any later
+// failure left the user with no searchable store at all until another full
+// rebuild happened to succeed. The replacement is now built beside the live
+// store and swapped only once it is complete.
+func TestConsolidateFrom_RebuildFailureLeavesLiveStoreIntact(t *testing.T) {
+	isolateCache(t)
+	dst := ConsolidatedPath()
+
+	// Stand up a live store holding one session.
+	con, err := store.ConnectRW(dst)
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		con.Close()
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if _, err := con.Exec(`
+		INSERT INTO sessions (
+			id, started_at, last_ts, message_count, is_subagent, parent_id,
+			origin_machine, source_tool, source_path, missing_since, project, cwd
+		) VALUES ('precious', 100, 200, 1, 0, NULL, 'm', 'claude', '/tmp/p.jsonl', NULL, 'proj', '/tmp')
+	`); err != nil {
+		con.Close()
+		t.Fatalf("seed live session: %v", err)
+	}
+	con.Close()
+
+	// Rebuild from a source path that cannot be read. The fold must fail.
+	if _, err := ConsolidateFrom([]string{filepath.Join(t.TempDir(), "does-not-exist.db")}, true); err == nil {
+		t.Log("rebuild returned no error; the survival assertion below is what matters")
+	}
+
+	// The live store must still be there, with its session.
+	after, err := store.ConnectRW(dst)
+	if err != nil {
+		t.Fatalf("live store unreadable after a failed rebuild: %v", err)
+	}
+	defer after.Close()
+	var n int
+	if err := after.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='precious'").Scan(&n); err != nil {
+		t.Fatalf("query live store after failed rebuild: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("session lost to a failed rebuild: count = %d, want 1", n)
+	}
+}
