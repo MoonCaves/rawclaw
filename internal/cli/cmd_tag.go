@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -377,6 +378,19 @@ func newTagWriteCmd() *cobra.Command {
 // parser's substantive-human filter instead of the inflated sessions count.
 // A per-session read error is unknown and is never written as routine.
 func runTagFloorCmd(w io.Writer, scope []view.Scope) error {
+	// This writes directly to the consolidated store, not through a
+	// per-project fold — the ONE path in this file that touches
+	// consolidated.db without going through SyncConsolidatedFrom (which
+	// fences itself). A concurrent rebuild snapshots the live store, builds
+	// a replacement beside it, and renames over it; an unfenced write here
+	// can land on the live file just before that rename and be silently
+	// discarded. AcquireConsolidatedFence is the same fence rebuild takes.
+	fence, err := index.AcquireConsolidatedFence(context.Background())
+	if err != nil {
+		return fmt.Errorf("acquire consolidated store lock: %w", err)
+	}
+	defer func() { _ = fence.Close() }()
+
 	con, err := store.ConnectRW(index.ConsolidatedPath())
 	if err != nil {
 		return fmt.Errorf("open consolidated store read-write: %w", err)
@@ -462,6 +476,21 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 	dbp, fullSID, err := agentproto.LocateSession(session8, scope, more)
 	if err != nil {
 		return err
+	}
+
+	// A session with no surviving per-project source (retained-but-purged,
+	// or #22's carried-forward store-only history) resolves dbp to the
+	// consolidated store itself — this write then lands directly on
+	// consolidated.db with no per-project fold afterward to fence it. Same
+	// hazard as runTagFloorCmd: fence only for that case, so the common
+	// per-project write path pays no extra lock contention.
+	var fence *index.ConsolidatedFence
+	if dbp == index.ConsolidatedPath() {
+		fence, err = index.AcquireConsolidatedFence(context.Background())
+		if err != nil {
+			return fmt.Errorf("acquire consolidated store lock: %w", err)
+		}
+		defer func() { _ = fence.Close() }()
 	}
 
 	con, err := store.ConnectRW(dbp)
