@@ -1253,3 +1253,65 @@ func TestEnsureIndexedTree_ReindexFailure_WrapsContextWithoutLogging(t *testing.
 		t.Errorf("got %d slog.Warn calls, want 0 (single handling rule: errors are returned, not logged in index package)", got)
 	}
 }
+
+// TestIndexStatus_ZeroValueNotFresh guards against an uninitialized IndexStatus
+// enum silently masquerading as IndexFresh (Finding 6).
+func TestIndexStatus_ZeroValueNotFresh(t *testing.T) {
+	var zero IndexStatus
+	if zero == IndexFresh {
+		t.Fatalf("uninitialized IndexStatus (zero value) must not equal IndexFresh")
+	}
+	if zero != IndexStatusUnknown {
+		t.Errorf("uninitialized IndexStatus = %v, want IndexStatusUnknown (%v)", zero, IndexStatusUnknown)
+	}
+}
+
+// TestEnsureIndexedTree_ErrorReturnsUnknownStatus verifies that non-busy errors
+// during indexing do not falsely report IndexFresh status.
+func TestEnsureIndexedTree_ErrorReturnsUnknownStatus(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "fail.db")
+	tdir := filepath.Join(dir, "transcripts")
+	if err := os.MkdirAll(tdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(tdir, "sess1.jsonl")
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+	)
+
+	// 1. Initial index
+	if _, _, err := EnsureIndexedTree(dbp, tdir, true, ""); err != nil {
+		t.Fatalf("initial indexing failed: %v", err)
+	}
+
+	// 2. Install a trigger on messages to force a non-busy failure during reindex
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := con.Exec("CREATE TRIGGER fail_messages BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, 'forced write failure'); END;"); err != nil {
+		con.Close()
+		t.Fatalf("create trigger: %v", err)
+	}
+	con.Close()
+
+	// 3. Touch transcript to trigger reindex
+	time.Sleep(10 * time.Millisecond)
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+		`{"type":"user","uuid":"u2","timestamp":"2026-08-25T00:01:00Z","message":{"role":"user","content":"second version"}}`,
+	)
+
+	// 4. EnsureIndexedTree must fail and must return IndexStatusUnknown, NOT IndexFresh
+	_, status, err := EnsureIndexedTree(dbp, tdir, false, "")
+	if err == nil {
+		t.Fatal("expected error when trigger fires")
+	}
+	if status == IndexFresh {
+		t.Fatalf("EnsureIndexedTree status on error = %v, must not masquerade as IndexFresh", status)
+	}
+	if status != IndexStatusUnknown {
+		t.Errorf("EnsureIndexedTree status on error = %v, want IndexStatusUnknown (%v)", status, IndexStatusUnknown)
+	}
+}
