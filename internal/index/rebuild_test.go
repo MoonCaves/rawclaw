@@ -51,7 +51,13 @@ func TestRestoreSession_RollbackOnFailure(t *testing.T) {
 		{role: "fail", content: "replacement message 2", ts: 4.0, tsISO: "2026-08-15T00:00:03Z", uuid: "u-new-2"},
 	}
 
-	err := restoreSession(con, v, rows, 3.0, 4.0, "/path")
+	err := restoreSession(con, restoreSessionParams{
+		session: v,
+		rows:    rows,
+		started: 3.0,
+		last:    4.0,
+		fileCWD: "/path",
+	})
 	if err == nil {
 		t.Fatal("restoreSession should have returned error on injected failure")
 	}
