@@ -4,8 +4,44 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Routine verdicts and sort-tier surfacing (#122).** `rawclaw tag-write --routine` marks a session
+  with a routine verdict (trivial / low-signal). Search applies a stable routine partition at the
+  shared result-assembly seam so routine hits sort below equal-relevance normal hits; routine results
+  render a visible `routine` marker and `--debug-search` (`ScoreExplain`) explains the sort tier.
+- **Targeted session background ingest (`rawclaw ingest`).** Added `rawclaw ingest [session]` command
+  to index targeted sessions into the consolidated store. SessionStart prime hooks trigger detached
+  background ingest at session start, serialized contention-safely via flock-based store locking
+  (`consolidated.lock`).
+- **Durable session catalog and catalog-first lookup.** Prime hooks record session catalog entries
+  in `~/.cache/rawclaw/catalog/<session-id>`, enabling O(1) exact file checks and fast stem resolution
+  across `tag-prep`, `resume`, `read`, and `outline`.
+- **Consolidated scoped browse.** Bare `rawclaw` browse mode now queries the consolidated search store
+  directly (`store.BrowseScopedSessions`) in a single connection rather than re-walking all project
+  databases, honoring `--include-path` and `--exclude-path` with deterministic tiebreaker ordering.
+
 ### Fixed
 
+- **Goose SQLite adapter verified against upstream schema (#205, #206).** Live-fire verified against
+  the Block/AAIF Goose v1.10.0+ `sessions.db` schema and MCP content block shapes with hermetic test
+  fixtures. Verified that moving a WAL-mode SQLite database without `-wal`/`-shm` sidecars degrades
+  cleanly on read to the last-checkpointed state.
+- **Unconditional tombstone pruning during consolidation (#217).** `ConsolidateFrom` now prunes
+  tombstones unconditionally on every consolidation pass rather than gating on source database changes,
+  guaranteeing deleted sessions do not linger in `consolidated.db`.
+- **Merged session learns when contributing source is purged (#181).** When a contributing source
+  database is purged, merged sessions in the consolidated store update their provenance metadata and
+  source counts.
+- **SQLite read-path tuning.** Configured read-only database connections with `mmap_size` (256MB) for
+  optimized search and browse memory mapping.
+- **Stale watermark cleanup on backing file rename.** Indexing cleans up stale session watermarks when
+  backing transcript files are renamed, preventing false-positive retention prunes.
+- **Honest write lock contention propagation.** Write lock contention during container reindexing is
+  propagated so indexing accurately reports freshness status (`IndexStale`).
+- **Go standards audit findings.** Sanitized dynamic table/column identifiers in Goose adapter against
+  SQL injection, added `rows.Err()` checks, propagated query errors in `SessionHasRealSegments`, and
+  prevented worker goroutine leaks on DB upsert failures.
 - **CI race detector gate and source registry thread-safety.** The CI test step now runs
   `go test -race -count=1 ./...` matching the `CONTRIBUTING.md` contract, and matrices over the
   declared Go floor (`1.24.0`) and `stable` with a `CGO_ENABLED=0` build check. Synchronized the

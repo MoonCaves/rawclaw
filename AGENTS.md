@@ -17,7 +17,7 @@ The core is small and self-contained: read local agent transcripts, index them (
 `search` / `read` / `outline`. Capability that isn't core rides a **seam**, so the core stays
 sovereign and dependency-free:
 
-- **Sources are adapters.** Claude Code, Codex, and Antigravity today; more are new *readers*, not changes to
+- **Sources are adapters.** Claude Code, Codex, Antigravity, and Goose today; more are new *readers*, not changes to
   search. A source teaches RawClaw to parse one transcript shape — nothing downstream should care
   which source a session came from.
 - **The archive is any git remote — there is no RawClaw server.** Backup and cross-machine sync are
@@ -32,8 +32,8 @@ sovereign and dependency-free:
   server that would break the nothing-to-install promise. (An external transparent-git-crypto tool
   is a poor fit anyway: RawClaw's clone is a rebuildable cache it re-creates on its own, so ciphertext
   would come back un-decryptable without an unlock step the core shouldn't own.)
-- **Discovery rides editor hooks.** `rawclaw setup` wires a POSIX-sh SessionStart/SessionEnd hook
-  into Claude Code / Codex so a session learns RawClaw exists. It changes no editor behavior and is
+- **Discovery rides editor hooks.** `rawclaw setup` wires discovery hooks into Claude Code, Codex,
+  and Antigravity so a session learns RawClaw exists. It changes no editor behavior and is
   fully removable with `--eject`.
 
 ## Invariants (don't regress these)
