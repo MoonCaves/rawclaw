@@ -1,7 +1,6 @@
 package index
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1088,21 +1087,6 @@ func TestTailEdge_InterleavedAppendThenRead(t *testing.T) {
 	}
 	if finalCount != 9 {
 		t.Errorf("final message count after concurrent operations = %d, want 9", finalCount)
-	}
-}
-
-func assertFTSMatchCount(t *testing.T, con *sql.DB, query string, want int) {
-	t.Helper()
-	var count int
-	err := con.QueryRow(
-		`SELECT COUNT(*) FROM messages_fts f
-		 JOIN messages m ON m.id = f.rowid
-		 WHERE messages_fts MATCH ?`, query).Scan(&count)
-	if err != nil {
-		t.Fatalf("FTS query %q failed: %v", query, err)
-	}
-	if count != want {
-		t.Errorf("FTS match count for %q = %d, want %d", query, count, want)
 	}
 }
 

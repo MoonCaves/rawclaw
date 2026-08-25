@@ -1,7 +1,6 @@
 package index
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -820,41 +819,5 @@ func TestEnsureFreshContainer_IncrementalEndToEnd(t *testing.T) {
 	}
 	if rowCount != 3 {
 		t.Errorf("consolidated messages row count = %d, want 3", rowCount)
-	}
-}
-
-func assertMessagesEqual(t *testing.T, con1, con2 *sql.DB, sessionID string) {
-	t.Helper()
-	rows1, err := con1.Query("SELECT role, content, ts, ts_iso, uuid FROM messages WHERE session_id=? ORDER BY id ASC", sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows1.Close()
-
-	rows2, err := con2.Query("SELECT role, content, ts, ts_iso, uuid FROM messages WHERE session_id=? ORDER BY id ASC", sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows2.Close()
-
-	for {
-		has1 := rows1.Next()
-		has2 := rows2.Next()
-		if has1 != has2 {
-			t.Fatalf("mismatched row count between databases: con1=%v, con2=%v", has1, has2)
-		}
-		if !has1 {
-			break
-		}
-		var r1, r2 model.Message
-		if err := rows1.Scan(&r1.Role, &r1.Text, &r1.TS, &r1.TSISO, &r1.UUID); err != nil {
-			t.Fatal(err)
-		}
-		if err := rows2.Scan(&r2.Role, &r2.Text, &r2.TS, &r2.TSISO, &r2.UUID); err != nil {
-			t.Fatal(err)
-		}
-		if r1 != r2 {
-			t.Errorf("mismatched message: con1=%+v, con2=%+v", r1, r2)
-		}
 	}
 }
