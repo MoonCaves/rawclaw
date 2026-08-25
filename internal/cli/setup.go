@@ -32,6 +32,7 @@ const rawclawMarker = "hooks/rawclaw/"
 // writes a durable session catalog entry to
 // ${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/rawclaw/catalog}/<session_id>
 // (recording transcript_path, cwd, source; readers must tolerate unparseable entries as dedup markers),
+// kicks a detached background ingest run for the session,
 // and prints the discovery banner at most once per session (surviving reboots via the catalog entry's presence).
 // resolvePlaceholder is swapped for the real binary-resolution preamble at install time.
 const rawclawPrimeScript = `#!/bin/sh
@@ -70,6 +71,7 @@ if [ -n "$session_id" ]; then
 		printf '  "source": "claude"\n'
 		printf '}\n'
 	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
+	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 
 cat <<'BANNER'
@@ -105,7 +107,8 @@ BANNER
 // Writes a durable session catalog entry to
 // ${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/rawclaw/catalog}/<session_id>
 // with whatever fields the hook provides (partial entries are valid; readers
-// must tolerate unparseable entries as dedup markers).
+// must tolerate unparseable entries as dedup markers), kicks a detached background
+// ingest run for the session, and emits the banner in Codex JSON format.
 // JSON envelope for banner delivery is built with python3 (its buffer.read().decode(...,"replace")
 // tolerates invalid UTF-8, which would otherwise emit lone surrogates serde rejects).
 // If python3 is absent the banner is skipped rather than erroring the hook — the
@@ -145,6 +148,7 @@ if [ -n "$session_id" ]; then
 		printf '  "source": "codex"\n'
 		printf '}\n'
 	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
+	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 
 # No python3 for JSON encoding — silent no-op rather than a hook error (a
