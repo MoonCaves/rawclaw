@@ -112,6 +112,14 @@ func TestEachWarningFiresOnlyOnItsCondition(t *testing.T) {
 			},
 			want: WarnProjectSpread,
 		},
+		{
+			name: "vector gap: semantic tier has missing candidate vectors",
+			in: func(in warningInputs) warningInputs {
+				in.vectorCoverage = VectorCoverage{Ran: true, CandidateMsgs: 10, VectoredMsgs: 3, MissingMsgs: 7}
+				return in
+			},
+			want: WarnVectorGap,
+		},
 	}
 
 	for _, tc := range tests {
@@ -303,5 +311,39 @@ func TestFreshnessNoteHasNoBakedPrefix(t *testing.T) {
 	}, "kw", "x")
 	if strings.Contains(buf.String(), "note: note:") {
 		t.Errorf("doubled prefix in output:\n%s", buf.String())
+	}
+}
+
+// TestWarningOrderWithVectorGap ensures WarnVectorGap sits in its defined slot
+// between NotConsolidated and StoreFallback.
+func TestWarningOrderWithVectorGap(t *testing.T) {
+	ws := buildWarnings(warningInputs{
+		results: append(oneResult, SearchRef{Project: "q", SessionID: "bbbb", ISO: "2026-06-18T10:00:00Z"}),
+		reports: []ScopeReport{
+			{Project: "p", Status: ScopeSearched},
+			{Project: "q", Status: ScopeStaleFallback},
+			{Project: "r", Status: ScopeNotConsolidated},
+		},
+		newestISO:   "2026-08-01T10:00:00Z",
+		total:       99,
+		hitCeiling:  true,
+		droppedTurn: 2,
+		storeNote:   "searched per project instead",
+		vectorCoverage: VectorCoverage{
+			Ran:           true,
+			CandidateMsgs: 10,
+			VectoredMsgs:  3,
+			MissingMsgs:   7,
+		},
+	})
+
+	want := []string{
+		WarnRecencySkew, WarnBroadQuery, WarnCurrentTurnExcluded,
+		WarnScopeIncomplete, WarnNotConsolidated, WarnVectorGap,
+		WarnStoreFallback, WarnProjectSpread, WarnRawHistory,
+	}
+	got := codes(ws)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("warning order = %v, want %v", got, want)
 	}
 }
