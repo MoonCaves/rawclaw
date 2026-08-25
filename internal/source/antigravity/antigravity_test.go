@@ -427,3 +427,34 @@ func TestExtractCWDFromTranscript(t *testing.T) {
 		t.Errorf("sess-tool-cwd CWD = %q, want /Users/test/workspace/tool-repo", c2.CWD)
 	}
 }
+
+// TestInspectSessionHeaderCWDPrecedence verifies that tool_calls Cwd takes precedence
+// over <user_information> CWD when both appear in the same record or session.
+func TestInspectSessionHeaderCWDPrecedence(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+
+	sessID := "sess-precedence"
+	tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
+
+	// Single record containing BOTH tool_calls Cwd and <user_information> block with different paths.
+	dualRecord := `{"step_index":0,"source":"PLANNER_RESPONSE","type":"PLANNER_RESPONSE","created_at":"2026-08-14T10:00:00Z","content":"<user_information>\n/Users/test/workspace/user-info-repo -> repo\n</user_information>","tool_calls":[{"name":"run_command","args":{"Cwd":"/Users/test/workspace/tool-call-repo","CommandLine":"git status"}}]}`
+	writeJSONL(t, tPath, dualRecord)
+
+	hdr, _ := inspectSessionHeaderAndSubagents(tPath)
+	if hdr.cwd != "/Users/test/workspace/tool-call-repo" {
+		t.Errorf("hdr.cwd = %q, want /Users/test/workspace/tool-call-repo (tool_calls Cwd must take precedence over user_information)", hdr.cwd)
+	}
+
+	ad := NewRoot(tmp)
+	containers, err := ad.Discover()
+	if err != nil {
+		t.Fatalf("Discover() error: %v", err)
+	}
+	if len(containers) != 1 {
+		t.Fatalf("Discover() returned %d containers, want 1", len(containers))
+	}
+	if containers[0].CWD != "/Users/test/workspace/tool-call-repo" {
+		t.Errorf("containers[0].CWD = %q, want /Users/test/workspace/tool-call-repo", containers[0].CWD)
+	}
+}

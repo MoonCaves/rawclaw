@@ -291,11 +291,6 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 						hdr.parentID = pid
 					}
 				}
-				if hdr.cwd == "" && strings.Contains(content, "<user_information>") {
-					if extracted := extractCWDFromUserInformation(content); extracted != "" {
-						hdr.cwd = extracted
-					}
-				}
 				if hdr.cwd == "" {
 					if tcList, ok := rec["tool_calls"].([]any); ok {
 						for _, tc := range tcList {
@@ -318,6 +313,11 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 								}
 							}
 						}
+					}
+				}
+				if hdr.cwd == "" && strings.Contains(content, "<user_information>") {
+					if extracted := extractCWDFromUserInformation(content); extracted != "" {
+						hdr.cwd = extracted
 					}
 				}
 			}
