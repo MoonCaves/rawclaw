@@ -291,11 +291,12 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 // is rolled back so readers never observe a partial session or a committed
 // session without its watermark. Returns false on any failure.
 //
-// The begin is DEFERRED (database/sql's default), not BEGIN IMMEDIATE: an index
-// db has exactly one writer — store.ConnectRW hands out a single write
-// connection — so there is no second writer to lose a lock-upgrade race against,
-// and deferred avoids taking the write lock during the read-only statements. If
-// a second concurrent writer is ever introduced, this must become IMMEDIATE.
+// The begin is DEFERRED (database/sql's default), not BEGIN IMMEDIATE:
+// store.ConnectRW calls SetMaxOpenConns(1) to limit that one pool, not the
+// database file — another process or call (such as the indexer and tag-write
+// path) can open the same file concurrently. Deferred is safe because the
+// transaction's first statement is already a write (DELETE), acquiring the
+// write lock immediately without prior reads to risk a lock-upgrade race.
 func reindexContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, mtime float64, size int64, fp string) bool {
 	tx, err := con.Begin()
 	if err != nil {
