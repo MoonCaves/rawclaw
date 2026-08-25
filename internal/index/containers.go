@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"time"
+
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -24,6 +26,9 @@ import (
 // The index stays source-agnostic; the caller (cli) wires source → index.
 type MessagesFunc func(source.Container) ([]model.Message, error)
 
+// refreshStaleAfter is the maximum age for leftover temporary refresh dbs.
+var refreshStaleAfter = 24 * time.Hour
+
 // RefreshDBPath returns the private per-container cache used by targeted live
 // refreshes. It lives below the cache root so normal scope/orphan discovery
 // never mistakes it for another searchable project database.
@@ -32,6 +37,33 @@ func RefreshDBPath(sourceID, sessionID, sourcePath string) string {
 	dir := filepath.Join(store.CacheDir(), "refresh")
 	_ = os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".db")
+}
+
+func removeRefreshDB(dbp string) {
+	_ = os.Remove(dbp)
+	_ = os.Remove(dbp + "-wal")
+	_ = os.Remove(dbp + "-shm")
+}
+
+func pruneStaleRefreshDBs() {
+	dir := filepath.Join(store.CacheDir(), "refresh")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if now.Sub(info.ModTime()) > refreshStaleAfter {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
 
 // EnsureFreshContainer incrementally refreshes one live container, proves its
@@ -44,6 +76,8 @@ func EnsureFreshContainer(
 	msgs MessagesFunc,
 	sourceID string,
 ) (int, error) {
+	pruneStaleRefreshDBs()
+
 	var loadErr error
 	strictMessages := func(got source.Container) ([]model.Message, error) {
 		ms, err := msgs(got)
