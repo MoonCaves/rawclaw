@@ -241,7 +241,7 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, bool) {
 							}
 						}
 					}
-					if len(res) > 0 {
+					if err := rows.Err(); err == nil && len(res) > 0 {
 						return res, true
 					}
 				}
@@ -404,6 +404,10 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 		})
 	}
 
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("goose: iterate messages %s: %w", backingPath, err)
+	}
+
 	return messages, nil
 }
 
@@ -411,7 +415,7 @@ func findMessageTable(db *sql.DB) string {
 	candidates := []string{"messages", "chat", "chat_messages", "events", "conversation_history", "history"}
 	for _, cand := range candidates {
 		var exists int
-		_ = db.QueryRow("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", cand).Scan(&exists)
+		_ = db.QueryRow("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name=? LIMIT 1", cand).Scan(&exists)
 		if exists == 1 {
 			return cand
 		}
@@ -439,6 +443,9 @@ func tableColumns(db *sql.DB, tableName string) []string {
 		if err := rows.Scan(&cid, &name, &typ, &notnull, &dfltValue, &pk); err == nil {
 			cols = append(cols, strings.ToLower(name))
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil
 	}
 	return cols
 }
