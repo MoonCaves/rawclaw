@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/source"
@@ -275,5 +276,83 @@ func TestCodexOrphanLabel(t *testing.T) {
 	base := filepath.Base(codexDBPath(cwd))
 	if got, want := codexOrphanLabel(base), codexLabel(cwd); got != want {
 		t.Errorf("codexOrphanLabel(%q) = %q, want %q (matching codexLabel(%q))", base, got, want, cwd)
+	}
+}
+
+// TestCodex_WriteLockContention proves that when a concurrent connection holds
+// a write lock on a Codex cwd index db during discovery/indexing, the returned
+// Scope is marked Stale=true, and Resolve on that scope returns IndexStale.
+func TestCodex_WriteLockContention(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+
+	cwd := "/tmp/lock-codex-proj"
+	day := filepath.Join(codexHome, "sessions", "2026", "08", "25")
+	rolloutPath := filepath.Join(day, "rollout-sess1.jsonl")
+	writeCodexRollout(t, rolloutPath, "sess1", cwd)
+
+	dbp := codexDBPath(cwd)
+
+	// 1. Initial indexing
+	scs := Codex(true)
+	if len(scs) != 1 {
+		t.Fatalf("initial Codex() returned %d scopes, want 1", len(scs))
+	}
+	if scs[0].Stale {
+		t.Fatalf("initial scope.Stale = true, want false")
+	}
+
+	// 2. Open second connection and hold exclusive write lock
+	con2, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open second connection: %v", err)
+	}
+	defer con2.Close()
+
+	tx2, err := con2.Begin()
+	if err != nil {
+		t.Fatalf("begin con2 tx: %v", err)
+	}
+	defer tx2.Rollback()
+
+	if _, err := tx2.Exec("INSERT INTO meta(key, value) VALUES('lock_probe', 'held')"); err != nil {
+		t.Fatalf("hold write lock: %v", err)
+	}
+
+	// 3. Update rollout file so reindexing is triggered
+	time.Sleep(10 * time.Millisecond)
+	lines := []string{
+		fmt.Sprintf(`{"type":"session_meta","timestamp":"2026-08-25T10:00:00Z","payload":{"id":%q,"cwd":%q,"thread_source":"user"}}`, "sess1", cwd),
+		`{"type":"response_item","timestamp":"2026-08-25T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"updated token"}]}}`,
+	}
+	if err := os.WriteFile(rolloutPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Run Codex(): write lock held by con2 causes reindexing to fail with SQLITE_BUSY.
+	// Codex() must mark the scope Stale.
+	scs2 := Codex(false)
+	if len(scs2) != 1 {
+		t.Fatalf("Codex() returned %d scopes, want 1", len(scs2))
+	}
+	if !scs2[0].Stale {
+		t.Errorf("scope.Stale = false, want true when index encountered write lock contention")
+	}
+
+	// 5. Resolve on the scope must return IndexStale
+	resolvedDBP, status, err := Resolve(scs2[0], false)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolvedDBP != dbp {
+		t.Errorf("resolvedDBP = %q, want %q", resolvedDBP, dbp)
+	}
+	if status == index.IndexFresh {
+		t.Errorf("Resolve status = %v, want not fresh (IndexStale)", status)
+	}
+	if status != index.IndexStale {
+		t.Errorf("Resolve status = %v, want IndexStale", status)
 	}
 }
