@@ -121,7 +121,10 @@ func SessionHasRealSegments(con *sql.DB, sessionID string) (bool, error) {
 		sessionID,
 	).Scan(&n)
 	if err != nil {
-		return false, nil // missing table / read error reads as "no real segments"
+		if strings.Contains(err.Error(), "no such table") {
+			return false, nil
+		}
+		return false, fmt.Errorf("check real segments for %s: %w", sessionID, err)
 	}
 	return n > 0, nil
 }
