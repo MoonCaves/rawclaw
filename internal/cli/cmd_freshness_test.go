@@ -25,7 +25,7 @@ func setupFreshnessTestEnv(t *testing.T) (cfg, projDir, sessionID, uuid, transPa
 
 	sessionID = "a1b2c3d4-5555-6666-7777-888899990000"
 	uuid = "9f3e1c20-1111-2222-3333-444455556666"
-	projDir = filepath.Join(cfg, ".claude", "projects", "-freshness-project")
+	projDir = filepath.Join(paths.ProjectsRoot(), "-freshness-project")
 	if err := os.MkdirAll(projDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func setupFreshnessTestEnv(t *testing.T) (cfg, projDir, sessionID, uuid, transPa
 	catEntry := paths.CatalogEntry{
 		SessionID:      sessionID,
 		TranscriptPath: transPath,
-		CWD:            filepath.Join(cfg, "work", "freshness-project"),
+		CWD:            projDir,
 		Source:         "claude",
 	}
 	if err := paths.WriteCatalogEntry(paths.CatalogDir(), catEntry); err != nil {
@@ -310,5 +310,78 @@ func TestO1Freshness_ZeroSourceDiscoveryOnFreshReads(t *testing.T) {
 	}
 	if !strings.Contains(searchOut, sessionID) {
 		t.Errorf("search missing session: %s", searchOut)
+	}
+}
+
+// TestO1Freshness_TranscriptGrowth_SearchRefreshesCurrentProject verifies Fix 1:
+// when a transcript in the current project grows (new turns appended to an existing session),
+// search detects the project change and refreshes the current project so the new content is found.
+func TestO1Freshness_TranscriptGrowth_SearchRefreshesCurrentProject(t *testing.T) {
+	_, projDir, sessionID, _, transPath := setupFreshnessTestEnv(t)
+
+	// Search initially finds the existing content
+	outInitial, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", projDir, "--json", "O1 freshness check")
+	if err != nil {
+		t.Fatalf("initial search failed: %v\nout: %s", err, outInitial)
+	}
+	if !strings.Contains(outInitial, sessionID) {
+		t.Fatalf("session not found in initial search: %s", outInitial)
+	}
+
+	// Append a new turn to the same transcript file (no new sessions born)
+	time.Sleep(20 * time.Millisecond)
+	newTurn := `{"type":"user","message":{"role":"user","content":"Appended unique search term: quantum_teleportation_99"},"uuid":"9f3e1c25-1111-2222-3333-444455556666","timestamp":"2026-08-20T12:00:00Z"}` + "\n"
+	f, err := os.OpenFile(transPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(newTurn); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// Search for the newly appended term — search must refresh the current project and find it!
+	outAfter, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", projDir, "--json", "quantum_teleportation_99")
+	if err != nil {
+		t.Fatalf("search after transcript growth failed: %v\nout: %s", err, outAfter)
+	}
+	if !strings.Contains(outAfter, sessionID) {
+		t.Errorf("search failed to find newly appended turn in growing transcript: %s", outAfter)
+	}
+}
+
+// TestO1Freshness_HooksAbsent_GateReportsNotFresh verifies Fix 1:
+// when hooks are absent (no catalog dir exists), CheckIndexFreshness returns
+// Fresh: false rather than falsely reporting fresh.
+func TestO1Freshness_HooksAbsent_GateReportsNotFresh(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(cfg, "nonexistent-catalog-dir"))
+
+	con, err := store.ConnectRW(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	if err := index.EnsureSchema(con, "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stamp watermark
+	if err := index.StampIngestWatermark(con); err != nil {
+		t.Fatal(err)
+	}
+
+	// With catalog dir missing, CheckIndexFreshness must report not fresh
+	freshness, err := index.CheckIndexFreshness(con)
+	if err != nil {
+		t.Fatalf("CheckIndexFreshness: %v", err)
+	}
+	if freshness.Fresh {
+		t.Errorf("expected Fresh: false when catalog dir is absent, got true")
+	}
+	if freshness.Reason != "catalog_dir_missing" {
+		t.Errorf("expected Reason catalog_dir_missing, got %q", freshness.Reason)
 	}
 }

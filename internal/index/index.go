@@ -1073,6 +1073,8 @@ const (
 	// IndexStale: a busy/lock collision forced a fall-back to the EXISTING
 	// (possibly out-of-date) cached index — the result may be incomplete.
 	IndexStale
+	// IndexStatusUnknown: an error prevented completing the index operation.
+	IndexStatusUnknown
 )
 
 // EnsureIndexed builds/updates one project's FTS index and returns
@@ -1154,19 +1156,19 @@ func ensureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return 0, IndexFresh, fmt.Errorf("ensure schema: %w", err)
+		return 0, IndexStatusUnknown, fmt.Errorf("ensure schema: %w", err)
 	}
 	if err := updateIndexWithOrigin(con, tdir, origin); err != nil {
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return 0, IndexFresh, fmt.Errorf("update index: %w", err)
+		return 0, IndexStatusUnknown, fmt.Errorf("update index: %w", err)
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&nSessions); err != nil {
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
 		}
-		return 0, IndexFresh, fmt.Errorf("count sessions: %w", err)
+		return 0, IndexStatusUnknown, fmt.Errorf("count sessions: %w", err)
 	}
 	return nSessions, IndexFresh, nil
 }
