@@ -5,9 +5,10 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -255,11 +256,7 @@ func (a *Archive) codexScopes(m manifest, stale, reindex, ingest bool) []view.Sc
 	for _, c := range containers {
 		byCWD[c.CWD] = append(byCWD[c.CWD], c)
 	}
-	cwds := make([]string, 0, len(byCWD))
-	for k := range byCWD {
-		cwds = append(cwds, k)
-	}
-	sort.Strings(cwds)
+	cwds := slices.Sorted(maps.Keys(byCWD))
 
 	out := make([]view.Scope, 0, len(cwds))
 	for _, cwd := range cwds {
@@ -293,15 +290,9 @@ func (a *Archive) codexScopes(m manifest, stale, reindex, ingest bool) []view.Sc
 // the ReadDir counterpart of the local scopes' top-level glob check.
 func hasTopLevelJSONL(dir string) bool {
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-			return true
-		}
-	}
-	return false
+	return err == nil && slices.ContainsFunc(entries, func(e os.DirEntry) bool {
+		return !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl")
+	})
 }
 
 // codexGroupLabel is the friendly label for a Codex cwd group (basename of the
@@ -335,11 +326,7 @@ func (a *Archive) antigravityScopes(m manifest, stale, reindex, ingest bool) []v
 	for _, c := range containers {
 		byCWD[c.CWD] = append(byCWD[c.CWD], c)
 	}
-	cwds := make([]string, 0, len(byCWD))
-	for k := range byCWD {
-		cwds = append(cwds, k)
-	}
-	sort.Strings(cwds)
+	cwds := slices.Sorted(maps.Keys(byCWD))
 
 	out := make([]view.Scope, 0, len(cwds))
 	for _, cwd := range cwds {
@@ -398,17 +385,15 @@ const dbSegmentCap = 80
 // safe filename segment: [a-zA-Z0-9_-] kept, everything else folded to "-",
 // capped, "unknown" when nothing survives.
 func sanitizeDBSegment(key string) string {
-	var b strings.Builder
-	for _, r := range key {
+	out := strings.Trim(strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
 			r == '-', r == '_':
-			b.WriteRune(r)
+			return r
 		default:
-			b.WriteByte('-')
+			return '-'
 		}
-	}
-	out := strings.Trim(b.String(), "-")
+	}, key), "-")
 	if len(out) > dbSegmentCap {
 		out = out[:dbSegmentCap]
 	}
