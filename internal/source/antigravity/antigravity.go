@@ -276,62 +276,62 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 		}
 		count++
 
+		if count > 50 && !strings.Contains(line, "INVOKE_SUBAGENT") {
+			continue
+		}
+
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			continue
+		}
+
 		// Header inspection for opening records (up to 50 records)
 		if count <= 50 {
-			var rec map[string]any
-			if err := json.Unmarshal([]byte(line), &rec); err == nil {
-				content, _ := rec["content"].(string)
-				if strings.Contains(content, "<subagent_reminder>") || strings.Contains(line, "<subagent_reminder>") {
-					hdr.isSub = true
-					target := content
-					if target == "" {
-						target = line
-					}
-					if pid := extractParentFromPrompt(target); pid != "" {
-						hdr.parentID = pid
-					}
+			content, _ := rec["content"].(string)
+			if strings.Contains(content, "<subagent_reminder>") || strings.Contains(line, "<subagent_reminder>") {
+				hdr.isSub = true
+				target := content
+				if target == "" {
+					target = line
 				}
-				if hdr.cwd == "" {
-					if tcList, ok := rec["tool_calls"].([]any); ok {
-						for _, tc := range tcList {
-							if tcMap, ok := tc.(map[string]any); ok {
-								if argsMap := decodeArgsMap(tcMap["args"]); argsMap != nil {
-									if c, ok := argsMap["Cwd"].(string); ok && c != "" {
-										c = strings.Trim(c, "\"")
-										if isAbsPath(c) {
-											hdr.cwd = c
-											break
-										}
+				if pid := extractParentFromPrompt(target); pid != "" {
+					hdr.parentID = pid
+				}
+			}
+			if hdr.cwd == "" {
+				if tcList, ok := rec["tool_calls"].([]any); ok {
+					for _, tc := range tcList {
+						if tcMap, ok := tc.(map[string]any); ok {
+							if argsMap := decodeArgsMap(tcMap["args"]); argsMap != nil {
+								if c, ok := argsMap["Cwd"].(string); ok && c != "" {
+									c = strings.Trim(c, "\"")
+									if isAbsPath(c) {
+										hdr.cwd = c
+										break
 									}
 								}
 							}
 						}
 					}
 				}
-				if hdr.cwd == "" && strings.Contains(content, "<user_information>") {
-					if extracted := extractCWDFromUserInformation(content); extracted != "" {
-						hdr.cwd = extracted
-					}
+			}
+			if hdr.cwd == "" && strings.Contains(content, "<user_information>") {
+				if extracted := extractCWDFromUserInformation(content); extracted != "" {
+					hdr.cwd = extracted
 				}
 			}
 		}
 
 		// Lineage check for INVOKE_SUBAGENT
-		if strings.Contains(line, "INVOKE_SUBAGENT") {
-			var rec map[string]any
-			if err := json.Unmarshal([]byte(line), &rec); err == nil {
-				if stepType, _ := rec["type"].(string); stepType == "INVOKE_SUBAGENT" {
-					content, _ := rec["content"].(string)
-					if content != "" && strings.Contains(content, "conversationId") {
-						for _, l := range strings.Split(content, "\n") {
-							if strings.Contains(l, "conversationId") {
-								parts := strings.Split(l, ":")
-								if len(parts) >= 2 {
-									cid := strings.Trim(strings.TrimSpace(parts[1]), "\", \t\r")
-									if cid != "" {
-										children = append(children, cid)
-									}
-								}
+		if stepType, _ := rec["type"].(string); stepType == "INVOKE_SUBAGENT" {
+			content, _ := rec["content"].(string)
+			if content != "" && strings.Contains(content, "conversationId") {
+				for _, l := range strings.Split(content, "\n") {
+					if _, val, ok := strings.Cut(l, "conversationId"); ok {
+						if _, cid, ok := strings.Cut(val, ":"); ok {
+							cid = strings.Trim(cid, "\", \t\r\n ")
+							if cid != "" {
+								children = append(children, cid)
 							}
 						}
 					}
