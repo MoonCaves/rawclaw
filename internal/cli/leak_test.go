@@ -34,6 +34,13 @@ func TestMain(m *testing.M) {
 	// spawn-counting tests swap in their own per-test.
 	spawnVectorTopup = func(string) {}
 
+	// A test binary is not a RawClaw CLI binary. If a test accidentally reaches
+	// the real detached-ingest seam, os.Executable() re-execs cli.test with the
+	// `ingest` argument, which starts another full test suite and can recurse
+	// while contending on the consolidated-store lock. Individual tests that
+	// need to exercise spawn decisions replace this seam locally.
+	spawnIngest = func(string) {}
+
 	data, err := os.MkdirTemp("", "rawclaw-cli-data-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "scratch data dir:", err)
