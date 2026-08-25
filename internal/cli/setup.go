@@ -52,6 +52,7 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
+	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 	if [ -f "$entry" ]; then
 		exit 0
 	fi
@@ -71,7 +72,6 @@ if [ -n "$session_id" ]; then
 		printf '  "source": "claude"\n'
 		printf '}\n'
 	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 
 cat <<'BANNER'
@@ -129,6 +129,7 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
+	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 	if [ -f "$entry" ]; then
 		exit 0
 	fi
@@ -148,7 +149,6 @@ if [ -n "$session_id" ]; then
 		printf '  "source": "codex"\n'
 		printf '}\n'
 	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 
 # No python3 for JSON encoding — silent no-op rather than a hook error (a
