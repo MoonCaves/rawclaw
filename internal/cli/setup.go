@@ -29,11 +29,11 @@ const rawclawMarker = "hooks/rawclaw/"
 // `command -v rawclaw` silently fails even when rawclaw is installed (binary
 // present, its dir simply off the hook's PATH) — falling back to a PATH lookup
 // and degrading to a silent no-op if neither resolves (binary removed). It
-// prints the discovery banner at most once per session, keyed on the session_id
-// Claude Code passes on the hook's stdin (undocumented exact schema, so the id
-// is pulled with a tolerant sed scan rather than a full JSON parse — no
-// jq/python dependency assumed). resolvePlaceholder is swapped for the real
-// binary-resolution preamble at install time.
+// writes a durable session catalog entry to
+// ${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/rawclaw/catalog}/<session_id>
+// (recording transcript_path, cwd, source; readers must tolerate unparseable entries as dedup markers),
+// and prints the discovery banner at most once per session (surviving reboots via the catalog entry's presence).
+// resolvePlaceholder is swapped for the real binary-resolution preamble at install time.
 const rawclawPrimeScript = `#!/bin/sh
 # Installed by ` + "`rawclaw setup`" + `; removed by ` + "`rawclaw setup --eject`" + ` along with
 # its settings.json entry. Prints a one-time discovery banner on Claude Code
@@ -45,16 +45,29 @@ set -eu
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 
-# Once-per-session marker: a session_id we can't extract just means the banner
-# prints every time for that call (harmless), rather than failing the hook.
+# Session catalog & once-per-session dedup: write a durable catalog entry under
+# the rawclaw data home at session birth, and exit if this session already ran.
 if [ -n "$session_id" ]; then
-	marker_dir="${TMPDIR:-/tmp}/rawclaw-prime"
-	mkdir -p "$marker_dir" 2>/dev/null || true
-	marker="$marker_dir/$session_id"
-	if [ -f "$marker" ]; then
+	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
+	mkdir -p "$catalog_dir" 2>/dev/null || true
+	entry="$catalog_dir/$session_id"
+	if [ -f "$entry" ]; then
 		exit 0
 	fi
-	: > "$marker" 2>/dev/null || true
+	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
+	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
+	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
+	{
+		printf '{\n'
+		printf '  "session_id": "%s",\n' "$esc_session_id"
+		printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+		printf '  "cwd": "%s",\n' "$esc_cwd"
+		printf '  "source": "claude"\n'
+		printf '}\n'
+	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || : > "$entry" 2>/dev/null || true
 fi
 
 cat <<'BANNER'
@@ -87,11 +100,15 @@ BANNER
 // hook-JSON object (additionalContext), so Codex accepts it. The banner text is
 // deliberately kept byte-identical to rawclawPrimeScript's — edit both together.
 //
-// JSON is built with python3 (its buffer.read().decode(...,"replace") tolerates
-// invalid UTF-8, which would otherwise emit lone surrogates serde rejects). If
-// python3 is absent the banner is skipped rather than erroring the hook — the
+// Writes a durable session catalog entry to
+// ${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/rawclaw/catalog}/<session_id>
+// with whatever fields the hook provides (partial entries are valid; readers
+// must tolerate unparseable entries as dedup markers).
+// JSON envelope for banner delivery is built with python3 (its buffer.read().decode(...,"replace")
+// tolerates invalid UTF-8, which would otherwise emit lone surrogates serde rejects).
+// If python3 is absent the banner is skipped rather than erroring the hook — the
 // same silent-degrade posture as the missing-binary guard. Same POSIX-sh +
-// once-per-session marker as the Claude script.
+// durable session catalog as the Claude script.
 const rawclawCodexPrimeScript = `#!/bin/sh
 # Installed by ` + "`rawclaw setup`" + ` (Codex target); removed by ` + "`rawclaw setup --eject`" + `.
 # Prints a one-time discovery banner on Codex SessionStart, wrapped in Codex's
@@ -100,22 +117,37 @@ set -eu
 
 @@RAWCLAW_RESOLVE@@
 
-# No python3 for JSON encoding — silent no-op rather than a hook error (a
-# dropped banner is strictly better than a failing SessionStart).
-command -v python3 >/dev/null 2>&1 || exit 0
-
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 
 if [ -n "$session_id" ]; then
-	marker_dir="${TMPDIR:-/tmp}/rawclaw-prime"
-	mkdir -p "$marker_dir" 2>/dev/null || true
-	marker="$marker_dir/$session_id"
-	if [ -f "$marker" ]; then
+	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
+	mkdir -p "$catalog_dir" 2>/dev/null || true
+	entry="$catalog_dir/$session_id"
+	if [ -f "$entry" ]; then
 		exit 0
 	fi
-	: > "$marker" 2>/dev/null || true
+	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
+	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
+	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
+	{
+		printf '{\n'
+		printf '  "session_id": "%s",\n' "$esc_session_id"
+		printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+		printf '  "cwd": "%s",\n' "$esc_cwd"
+		printf '  "source": "codex"\n'
+		printf '}\n'
+	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || : > "$entry" 2>/dev/null || true
 fi
+
+# No python3 for JSON encoding — silent no-op rather than a hook error (a
+# dropped banner is strictly better than a failing SessionStart). Catalog write
+# runs before python3 guard: a session starting without python3 will not retry
+# the banner later (deliberate accepted trade).
+command -v python3 >/dev/null 2>&1 || exit 0
 
 # Wrap the banner as a SessionStart hook-JSON object so Codex ingests it as
 # additionalContext instead of rejecting it.
