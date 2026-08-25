@@ -306,3 +306,89 @@ func TestRoutine_HigherRelevanceOutranksNormal(t *testing.T) {
 		t.Errorf("result[1] = %s, want %s", env.Results[1].SessionID, sNormal)
 	}
 }
+
+// TestRoutine_Rendering_ShowsRoutineMarker verifies that rendered search and topic
+// results display the routine marker.
+func TestRoutine_Rendering_ShowsRoutineMarker(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	proj := t.TempDir()
+
+	sid := "11111111-routine-marker-test"
+	writeSession(t, proj, sid, "u1111111-marker", "marker test message")
+	dbp, _, _, _ := index.EnsureIndexed(proj, false)
+	index.ConsolidateFrom([]string{dbp}, true)
+	markRoutine(t, dbp, sid)
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	env := Search("marker", scope, SearchOpts{Limit: 8}, nil)
+
+	var sBuf strings.Builder
+	renderSearch(&sBuf, env, "marker", "across this project")
+	sOut := sBuf.String()
+	if !strings.Contains(sOut, " · routine") {
+		t.Errorf("renderSearch missing routine marker in output:\n%s", sOut)
+	}
+
+	// Topic search rendering
+	tagTopicSegment(t, dbp, sid, "u1111111-marker", "maintenance task")
+	con, _ := store.ConnectRW(dbp)
+	_ = store.UpsertVerdict(con, store.Verdict{
+		SessionID: sid,
+		Verdict:   store.VerdictRoutine,
+		Source:    store.VerdictSourceAgent,
+		TaggedAt:  100.0,
+	})
+	con.Close()
+	_ = index.SyncConsolidatedFrom(dbp)
+
+	tRes, err := Topics("maintenance", scope, TopicsOpts{Limit: 8})
+	if err != nil {
+		t.Fatalf("Topics: %v", err)
+	}
+	var tBuf strings.Builder
+	renderTopics(&tBuf, tRes)
+	tOut := tBuf.String()
+	if !strings.Contains(tOut, " · routine") {
+		t.Errorf("renderTopics missing routine marker in output:\n%s", tOut)
+	}
+}
+
+// TestRoutine_ReTagReverses_SearchPartition verifies that re-tagging a routine session
+// with real topic segments reverses its routine status in search ranking, and re-tagging
+// with routine restores it.
+func TestRoutine_ReTagReverses_SearchPartition(t *testing.T) {
+	proj, s1, s2 := setupRoutineTestCorpus(t)
+	dbp := index.DBPath(proj)
+
+	// Step A: Mark s1 as routine
+	markRoutine(t, dbp, s1)
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+	envA := Search("kubernetes", scope, SearchOpts{Limit: 8}, nil)
+	if len(envA.Results) != 2 || envA.Results[0].SessionID != s2 {
+		t.Fatalf("step A: want s2 first, got %v", envA.Results)
+	}
+
+	// Step B: Re-tag s1 with a real topic segment -> demotes routine
+	tagTopicSegment(t, dbp, s1, "u1111111-aaaa-bbbb-cccc-000000000001", "kubernetes cluster rollout")
+
+	envB := Search("kubernetes", scope, SearchOpts{Limit: 8}, nil)
+	if len(envB.Results) != 2 {
+		t.Fatalf("step B: want 2 results, got %d", len(envB.Results))
+	}
+	if envB.Results[0].Routine || envB.Results[1].Routine {
+		t.Errorf("step B: expected neither session to be routine after real tag, got r0=%v, r1=%v",
+			envB.Results[0].Routine, envB.Results[1].Routine)
+	}
+
+	// Step C: Re-tag s1 with routine -> restores routine status
+	markRoutine(t, dbp, s1)
+
+	envC := Search("kubernetes", scope, SearchOpts{Limit: 8}, nil)
+	if len(envC.Results) != 2 || envC.Results[0].SessionID != s2 {
+		t.Fatalf("step C: want s2 first, got %v", envC.Results)
+	}
+	if !envC.Results[1].Routine {
+		t.Errorf("step C: expected s1 to be routine again")
+	}
+}

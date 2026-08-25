@@ -2130,6 +2130,10 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		if r.Missing {
 			miss = " · source file gone — retained history"
 		}
+		routine := ""
+		if r.Routine {
+			routine = " · routine"
+		}
 		// The title answers "what was this session about?" on the header line, so
 		// an agent can choose a hit without opening it. It is the tag when the
 		// session has one and the opening ask otherwise (attachTopics); quoted
@@ -2138,7 +2142,7 @@ func renderSearch(w io.Writer, env SearchEnvelope, query, scopeLabel string) {
 		if r.Topic != "" {
 			topic = fmt.Sprintf(" · %q", r.Topic)
 		}
-		fmt.Fprintf(w, "  ━━ %s · %s · %s%s%s\n", iso, sid8(r.SessionID), r.Project, topic, miss)
+		fmt.Fprintf(w, "  ━━ %s · %s · %s%s%s%s\n", iso, sid8(r.SessionID), r.Project, topic, miss, routine)
 		fmt.Fprintf(w, "     …%s…\n", r.Snippet)
 		// Where this conversation ended up, under the point it matched at. Same
 		// "now →" vocabulary browse uses for the same fact (render.printLastActivity),
@@ -2672,7 +2676,11 @@ func renderTopics(w io.Writer, r TopicsResult) {
 	}
 	fmt.Fprintf(w, "%d topic(s) matching '%s':\n\n", len(r.Hits), r.Query)
 	for _, h := range r.Hits {
-		fmt.Fprintf(w, "  %s  ·  %s  ·  read ref=%s\n", h.Topic, h.Project, h.ReadRef)
+		routine := ""
+		if h.Routine {
+			routine = " · routine"
+		}
+		fmt.Fprintf(w, "  %s  ·  %s%s  ·  read ref=%s\n", h.Topic, h.Project, routine, h.ReadRef)
 	}
 }
 
