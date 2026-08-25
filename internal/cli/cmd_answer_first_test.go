@@ -25,10 +25,10 @@ func countIngestSpawns(t *testing.T) (*int, *[]string) {
 	return &calls, &args
 }
 
-// TestAnswerFirst_StaleIndexSearch_RefreshesBeforeAnswer verifies that a stale
-// current-project search refreshes synchronously, answers with the new session,
-// and does not use the answer-first stale-note/background-ingest machinery.
-func TestAnswerFirst_StaleIndexSearch_RefreshesBeforeAnswer(t *testing.T) {
+// TestAnswerFirst_StaleIndexSearch_AnswersImmediately verifies that a stale
+// default search answers from the consolidated store, reports incompleteness,
+// and nudges background ingest without enumerating or refreshing synchronously.
+func TestAnswerFirst_StaleIndexSearch_AnswersImmediately(t *testing.T) {
 	_, projDir, sessionID, _, _ := setupFreshnessTestEnv(t)
 
 	// 1. Fresh search: no note, no ingest spawn
@@ -81,26 +81,26 @@ func TestAnswerFirst_StaleIndexSearch_RefreshesBeforeAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 3. Stale search (text): refreshes the current project before answering.
+	// 3. Stale search (text): answers from the store before background ingest.
 	staleCalls, staleArgs := countIngestSpawns(t)
-	staleOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", projDir, "born in catalog")
+	staleOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "Investigate O1")
 	if err != nil {
 		t.Fatalf("stale search failed: %v\nout: %s", err, staleOut)
 	}
-	if !strings.Contains(staleOut, newSID[:8]) {
-		t.Errorf("stale search did not answer with refreshed session %s: %s", newSID[:8], staleOut)
+	if !strings.Contains(staleOut, sessionID[:8]) {
+		t.Errorf("stale search did not answer from indexed session %s: %s", sessionID[:8], staleOut)
 	}
-	if strings.Contains(staleOut, "sessions not yet ingested") {
-		t.Errorf("stale search surfaced an answer-first staleness note: %s", staleOut)
+	if !strings.Contains(staleOut, "note: sessions not yet ingested") {
+		t.Errorf("stale search missing staleness note: %s", staleOut)
 	}
-	if *staleCalls != 0 {
-		t.Errorf("stale search spawned %d background ingest children, want 0", *staleCalls)
+	if *staleCalls != 1 {
+		t.Errorf("stale search spawned %d background ingest children, want 1", *staleCalls)
 	}
-	if len(*staleArgs) != 0 {
-		t.Errorf("stale search spawned background ingest arguments %q, want none", *staleArgs)
+	if len(*staleArgs) != 1 || (*staleArgs)[0] != "" {
+		t.Errorf("stale search spawned background ingest arguments %q, want a global ingest", *staleArgs)
 	}
 
-	staleJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--dir", projDir, "--json", "born in catalog")
+	staleJSONOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "Investigate O1")
 	if err != nil {
 		t.Fatalf("stale json search failed: %v\nout: %s", err, staleJSONOut)
 	}
@@ -112,11 +112,14 @@ func TestAnswerFirst_StaleIndexSearch_RefreshesBeforeAnswer(t *testing.T) {
 	if err := json.Unmarshal([]byte(staleJSONOut), &staleEnv); err != nil {
 		t.Fatalf("unmarshal stale json: %v\nout: %s", err, staleJSONOut)
 	}
-	if staleEnv.Stale || staleEnv.StaleNote != "" {
-		t.Errorf("stale search json reported stale state after synchronous refresh: stale=%v note=%q", staleEnv.Stale, staleEnv.StaleNote)
+	if !staleEnv.Stale || !strings.Contains(staleEnv.StaleNote, "sessions not yet ingested") {
+		t.Errorf("stale search json missing stale state: stale=%v note=%q", staleEnv.Stale, staleEnv.StaleNote)
 	}
-	if staleEnv.Count < 1 || staleEnv.Results[0].SessionID != newSID {
-		t.Errorf("stale json search did not return refreshed session: %+v", staleEnv)
+	if staleEnv.Complete {
+		t.Errorf("stale search json reported complete=true, want false")
+	}
+	if staleEnv.Count < 1 || staleEnv.Results[0].SessionID != sessionID {
+		t.Errorf("stale json search did not return indexed session: %+v", staleEnv)
 	}
 }
 
@@ -551,6 +554,42 @@ func TestAnswerFirst_ReindexForcesSynchronousRebuild(t *testing.T) {
 	}
 	if !strings.Contains(out, sessionID[:8]) {
 		t.Errorf("reindex search missing session %s: %s", sessionID[:8], out)
+	}
+}
+
+// TestAnswerFirst_ThisProjectForcesSynchronousRebuild verifies that an explicit
+// --this-project request still refreshes before answering.
+func TestAnswerFirst_ThisProjectForcesSynchronousRebuild(t *testing.T) {
+	_, projDir, _, _, _ := setupFreshnessTestEnv(t)
+
+	newSID := "b2c3d4e5-9999-8888-7777-666655554444"
+	newTransPath := filepath.Join(projDir, newSID+".jsonl")
+	newContent := `{"type":"user","message":{"role":"user","content":"born in catalog"},"uuid":"9f3e1c23-1111-2222-3333-444455556666","timestamp":"2026-08-20T11:00:00Z"}` + "\n"
+	if err := os.WriteFile(newTransPath, []byte(newContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := paths.WriteCatalogEntry(paths.CatalogDir(), paths.CatalogEntry{
+		SessionID:      newSID,
+		TranscriptPath: newTransPath,
+		CWD:            projDir,
+		Source:         "claude",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	calls, _ := countIngestSpawns(t)
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--this-project", "--dir", projDir, "born in catalog")
+	if err != nil {
+		t.Fatalf("this-project search failed: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, newSID[:8]) {
+		t.Errorf("this-project search did not answer with refreshed session %s: %s", newSID[:8], out)
+	}
+	if strings.Contains(out, "sessions not yet ingested") {
+		t.Errorf("this-project search surfaced an answer-first staleness note: %s", out)
+	}
+	if *calls != 0 {
+		t.Errorf("this-project search spawned %d background ingest children, want 0", *calls)
 	}
 }
 
