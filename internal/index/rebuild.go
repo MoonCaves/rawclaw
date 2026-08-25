@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -76,6 +77,15 @@ func storedSessionCount(dbp string) (int, error) {
 // was already retained-and-flagged.
 func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 	var st RebuildStats
+	var fence *ConsolidatedFence
+	if filepath.Clean(dbp) == filepath.Clean(ConsolidatedPath()) {
+		var err error
+		fence, err = AcquireConsolidatedFence(context.Background())
+		if err != nil {
+			return st, err
+		}
+		defer func() { _ = fence.Close() }()
+	}
 	preserved, err := readTagState(dbp)
 	if err != nil {
 		return st, fmt.Errorf("preserve tags: %w", err)
