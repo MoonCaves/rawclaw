@@ -217,10 +217,7 @@ func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew 
 		vec  []float64
 	}
 
-	numWorkers := 8
-	if len(batches) < numWorkers {
-		numWorkers = len(batches)
-	}
+	numWorkers := min(8, len(batches))
 
 	batchChan := make(chan []embedItem, len(batches))
 	for _, b := range batches {
