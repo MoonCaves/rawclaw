@@ -13,6 +13,7 @@ package source
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
 )
@@ -50,11 +51,15 @@ type Registration struct {
 	New    func() Source
 }
 
-// registry holds the explicitly-registered sources, in registration order.
-var registry []Registration
+var (
+	registryMu sync.RWMutex
+	registry   []Registration
+)
 
 // ResetForTesting restores the registry slice to a specified state (for test isolation).
 func ResetForTesting(regs []Registration) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	registry = make([]Registration, len(regs))
 	copy(registry, regs)
 }
@@ -62,6 +67,8 @@ func ResetForTesting(regs []Registration) {
 // Register adds a source. Call it once at explicit wire-up, never from init().
 // If a source with the same ID already exists, it is replaced idempotently.
 func Register(r Registration) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	for i, existing := range registry {
 		if existing.ID == r.ID {
 			registry[i] = r
@@ -74,6 +81,8 @@ func Register(r Registration) {
 // Registered returns the registered sources in registration order. The returned
 // slice is a copy — callers may not mutate the registry through it.
 func Registered() []Registration {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	out := make([]Registration, len(registry))
 	copy(out, registry)
 	return out
@@ -82,6 +91,8 @@ func Registered() []Registration {
 // DetectID returns the ID of the first registered source whose Detect matches
 // path, or "" if none do. Used to auto-attribute a path to its runtime.
 func DetectID(path string) string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	for _, r := range registry {
 		if r.Detect != nil && r.Detect(path) {
 			return r.ID
