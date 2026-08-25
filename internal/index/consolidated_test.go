@@ -1572,8 +1572,19 @@ func TestConsolidateFrom_PrunesLegacySourceAfterFullPass(t *testing.T) {
 	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db='' "); got != "0" {
 		t.Errorf("legacy row for session with real source = %s, want 0", got)
 	}
-	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db='real.db'"); got != "1" {
-		t.Errorf("real row for session with real source = %s, want 1", got)
+	// source_db holds the source's full-path identity (sourceIdentity), not its
+	// basename. This assertion used to hard-code "real.db" and silently began
+	// failing when identity moved from basename to absolute path — the row was
+	// always written correctly, the test was just looking under the old name.
+	var realRows int
+	if err := con.QueryRow(
+		"SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db=?",
+		sourceIdentity(src),
+	).Scan(&realRows); err != nil {
+		t.Fatalf("count real rows: %v", err)
+	}
+	if realRows != 1 {
+		t.Errorf("real row for session with real source = %d, want 1", realRows)
 	}
 	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='legacy-only' AND source_db='' "); got != "1" {
 		t.Errorf("legacy-only row = %s, want 1", got)
