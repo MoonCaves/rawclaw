@@ -48,9 +48,13 @@ func BrowseScopedSessions(con *sql.DB, since, before, sourceTool string, project
 	}
 	if len(projects) > 0 {
 		// Deliberately over-inclusive so an unstamped session (NULL project) is never
-		// invisible in browse. Known ceiling: cross-source project-label collisions can pull
-		// another source's sessions into a path-scoped browse (accepted, over-inclusion beats
-		// silent disappearance).
+		// invisible in browse.
+		//
+		// Accepted ceilings:
+		// 1. Project labels are directory basenames, so a path-scoped browse can
+		//    over-include a same-basename project from another path.
+		// 2. Reads answer from the store without triggering indexing by design
+		//    (ingest-on-write — freshness comes from write-through, see issues 7 and 8).
 		where = append(where, "(s.project IN ("+placeholders(len(projects))+") OR s.project IS NULL)")
 		for _, p := range projects {
 			args = append(args, p)
