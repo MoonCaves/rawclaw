@@ -613,6 +613,18 @@ func newReadCmd() *cobra.Command {
 			if err := agentproto.ReadAndRender(cmd.OutOrStdout(), args[0], scope, more, ropts, jsonOut); err != nil {
 				return err
 			}
+			if !jsonOut {
+				if con, _, err := index.OpenConsolidated(); err == nil {
+					defer con.Close()
+					sessionPrefix := agentproto.NormalizeSessionArg(args[0])
+					if idx := strings.Index(sessionPrefix, ":"); idx >= 0 {
+						sessionPrefix = sessionPrefix[:idx]
+					}
+					if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil && sf.Note != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "note: %s\n", sf.Note)
+					}
+				}
+			}
 			maybeAutosync() // after the excerpt is printed; never before
 			return nil
 		},
@@ -665,6 +677,15 @@ func newOutlineCmd() *cobra.Command {
 			if err := agentproto.OutlineAndRender(cmd.OutOrStdout(), args[0],
 				scope, more, oopts, jsonOut); err != nil {
 				return err
+			}
+			if !jsonOut {
+				if con, _, err := index.OpenConsolidated(); err == nil {
+					defer con.Close()
+					sessionPrefix := agentproto.NormalizeSessionArg(args[0])
+					if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil && sf.Note != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "\nnote: %s\n", sf.Note)
+					}
+				}
 			}
 			maybeAutosync() // after the arc is printed; never before
 			return nil
@@ -1222,7 +1243,23 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 		return nil
 	}
 	_ = sc
-	rows := view.Browse(td, o.Limit, o.Since, o.Before)
+	var rows []view.BrowseRow
+	usedConsolidated := false
+	if !o.Reindex {
+		if con, _, err := index.OpenConsolidated(); err == nil {
+			defer con.Close()
+			if res, err := view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, []string{paths.ProjectLabel(td)}); err == nil && len(res) > 0 {
+				rows = make([]view.BrowseRow, 0, len(res))
+				for _, r := range res {
+					rows = append(rows, r.BrowseRow)
+				}
+				usedConsolidated = true
+			}
+		}
+	}
+	if !usedConsolidated {
+		rows = view.Browse(td, o.Limit, o.Since, o.Before)
+	}
 	if o.JSON {
 		return EmitJSON(w, struct {
 			Project  string           `json:"project"`
@@ -1470,12 +1507,22 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		label = "across all projects"
 	}
 
-	// Keep the project you are working in searchable. The one store is fed by
-	// indexing runs, and a search that no longer indexes anything would never see
-	// the conversation happening right now. Refreshing the CURRENT project alone
-	// costs one project's file scan instead of every project's, and it is the one
-	// whose newest sessions a search is most likely to be asking about.
-	refreshThisProject(o)
+	// Keep the project you are working in searchable if not fresh or if an explicit
+	// folder was requested. If the index is current during default search, skip refreshing
+	// the current project entirely — O(1) reads perform no source discovery or transcript stats.
+	if !o.Reindex && !o.DirSet && !o.ThisProject {
+		if con, _, err := index.OpenConsolidated(); err == nil {
+			freshness, fErr := index.CheckIndexFreshness(con)
+			_ = con.Close()
+			if fErr != nil || !freshness.Fresh {
+				refreshThisProject(o)
+			}
+		} else {
+			refreshThisProject(o)
+		}
+	} else {
+		refreshThisProject(o)
+	}
 
 	var emb embed.Embedder
 	if !o.NoVector {
