@@ -16,10 +16,7 @@ func writeJSONL(t *testing.T, path string, lines ...string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	content := ""
-	for _, l := range lines {
-		content += l + "\n"
-	}
+	content := strings.Join(lines, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
