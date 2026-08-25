@@ -21,10 +21,10 @@ This produces a `rawclaw` binary in the current directory.
 
 ```bash
 go test ./...                 # the full suite
-go test -race -count=1 ./...  # what CI runs: race detector, no test cache
+go test -race -count=1 ./...  # what CI runs: race detector, no test cache across Go 1.24 floor and stable
 ```
 
-Tests must pass with the race detector before a change is merged.
+Tests must pass with the race detector before a change is merged. CI validates `CGO_ENABLED=0 go build ./...`, `go vet ./...`, and `go test -race -count=1 ./...` across a matrix of Go versions (`1.24.0` floor and `stable`).
 
 ## Lint
 
@@ -40,7 +40,7 @@ one-line reason rather than loosening the global config.
 
 1. Branch from `main`.
 2. Keep each commit focused and its message descriptive (what changed and why).
-3. Make sure `go build ./...`, `go test -race -count=1 ./...`, and `golangci-lint run`
+3. Make sure `CGO_ENABLED=0 go build ./...`, `go test -race -count=1 ./...`, and `golangci-lint run`
    are all green.
 4. Update `CHANGELOG.md` (the `[Unreleased]` / current section) for any user-visible
    change, and the `README.md` if you change behavior or flags.
