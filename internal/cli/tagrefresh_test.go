@@ -9,6 +9,7 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/model"
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/claude"
 	"github.com/MoonCaves/rawclaw/internal/store"
@@ -380,5 +381,134 @@ func TestRunTagPrepCmdNeverIndexedSessionEndToEnd(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected 1 row in consolidated store for %s, got %d", fullSID, count)
+	}
+}
+
+func TestRunTagPrepCmdResolvesCatalogSessionWithoutDiscovery(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+
+	catDir := filepath.Join(configDir, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+
+	transcriptDir := filepath.Join(configDir, "transcripts")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatalf("mkdir transcriptDir: %v", err)
+	}
+
+	const fullSID = "b1c2d3e4-catalog-session-uuid"
+	transcriptPath := filepath.Join(transcriptDir, fullSID+".jsonl")
+	transcriptContent := `{"type":"user","uuid":"aaaa1111-uuid","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"catalog born message"}}` + "\n" +
+		`{"type":"assistant","uuid":"bbbb2222-uuid","timestamp":"2026-06-01T10:00:01Z","message":{"role":"assistant","content":"catalog born reply"}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	// Write catalog entry simulating hook birth
+	if err := paths.WriteCatalogEntry(catDir, paths.CatalogEntry{
+		SessionID:      fullSID,
+		TranscriptPath: transcriptPath,
+		CWD:            "/home/user/catalog-proj",
+		Source:         "claude",
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	otherSrc := &tagTestSource{
+		containers: []source.Container{},
+		messages:   []model.Message{},
+	}
+	otherReg := tagTestRegistration("other-runtime", otherSrc)
+	claudeReg := claude.Registration()
+
+	var out strings.Builder
+	if err := runTagPrepCmdWithSources(&out, "b1c2d3e4", nil, nil, []source.Registration{claudeReg, otherReg}); err != nil {
+		t.Fatalf("runTagPrepCmdWithSources: %v", err)
+	}
+
+	if otherSrc.discoverCalls != 0 {
+		t.Fatalf("other runtime Discover called %d times, want 0 (should resolve via catalog)", otherSrc.discoverCalls)
+	}
+	if !strings.Contains(out.String(), "aaaa1111 [user] catalog born message") {
+		t.Fatalf("tag-prep output missing user message:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "bbbb2222 [assistant] catalog born reply") {
+		t.Fatalf("tag-prep output missing assistant message:\n%s", out.String())
+	}
+}
+
+func TestRunTagPrepCmdStaleCatalogEntryFallsThrough(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+
+	catDir := filepath.Join(configDir, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+
+	// Write a stale catalog entry pointing to non-existent transcript
+	_ = paths.WriteCatalogEntry(catDir, paths.CatalogEntry{
+		SessionID:      "stale001-deleted-session-uuid",
+		TranscriptPath: filepath.Join(configDir, "does-not-exist.jsonl"),
+		CWD:            "/home/user/stale",
+		Source:         "claude",
+	})
+
+	// Put actual session in Claude projects dir (stem fallback)
+	projDir := filepath.Join(configDir, "projects", "-fallback-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir projDir: %v", err)
+	}
+	const fullSID = "stale001-fallback-session-uuid"
+	transcriptPath := filepath.Join(projDir, fullSID+".jsonl")
+	transcriptContent := `{"type":"user","uuid":"cccc3333-uuid","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"fallback session message"}}` + "\n" +
+		`{"type":"assistant","uuid":"dddd4444-uuid","timestamp":"2026-06-01T10:00:01Z","message":{"role":"assistant","content":"fallback session reply"}}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	var out strings.Builder
+	if err := runTagPrepCmd(&out, "stale001", nil, nil); err != nil {
+		t.Fatalf("runTagPrepCmd failed with stale catalog entry: %v", err)
+	}
+	if !strings.Contains(out.String(), "cccc3333 [user] fallback session message") {
+		t.Fatalf("tag-prep output missing user message:\n%s", out.String())
+	}
+}
+
+func TestRunResumeResolvesCatalogSession(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+
+	catDir := filepath.Join(configDir, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+
+	transcriptDir := filepath.Join(configDir, "transcripts")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatalf("mkdir transcriptDir: %v", err)
+	}
+
+	const fullSID = "resume01-catalog-session-uuid"
+	transcriptPath := filepath.Join(transcriptDir, fullSID+".jsonl")
+	writeTagSourceFile(t, transcriptPath, `{"cwd":"/home/user/resume-proj"}`+"\n")
+
+	if err := paths.WriteCatalogEntry(catDir, paths.CatalogEntry{
+		SessionID:      fullSID,
+		TranscriptPath: transcriptPath,
+		CWD:            "/home/user/resume-proj",
+		Source:         "claude",
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	var out strings.Builder
+	opts := &Options{Resume: "resume01"}
+	if err := runResume(&out, opts); err != nil {
+		t.Fatalf("runResume: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "claude --resume resume01-catalog-session-uuid") {
+		t.Fatalf("runResume output missing expected resume command:\n%s", out.String())
 	}
 }
