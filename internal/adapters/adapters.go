@@ -58,11 +58,29 @@ type HTTPEmbedder struct {
 	client    *http.Client
 }
 
+// ContextEmbedder is an optional capability an Embedder may implement to accept a
+// caller context for cancellation and deadlines.
+type ContextEmbedder interface {
+	EmbedWithContext(ctx context.Context, text string) []float64
+}
+
+// ContextBatchEmbedder is an optional capability a BatchEmbedder may implement to
+// accept a caller context for cancellation and deadlines.
+type ContextBatchEmbedder interface {
+	EmbedBatchWithContext(ctx context.Context, texts []string) [][]float64
+}
+
 // Compile-time check: HTTPEmbedder satisfies the Embedder port.
 var _ embed.Embedder = (*HTTPEmbedder)(nil)
 
 // Compile-time check: HTTPEmbedder satisfies the BatchEmbedder port.
 var _ embed.BatchEmbedder = (*HTTPEmbedder)(nil)
+
+// Compile-time check: HTTPEmbedder satisfies ContextEmbedder.
+var _ ContextEmbedder = (*HTTPEmbedder)(nil)
+
+// Compile-time check: HTTPEmbedder satisfies ContextBatchEmbedder.
+var _ ContextBatchEmbedder = (*HTTPEmbedder)(nil)
 
 // NewHTTPEmbedder constructs an HTTPEmbedder with sensible defaults (wire
 // "ollama", timeout 15s) filled in for zero-valued fields. The endpoint has any
@@ -99,9 +117,17 @@ type embedResponse struct {
 // from "embedding" (ollama) or data[0].embedding (openai). Any error, non-200,
 // empty vector, or dim mismatch yields nil so the keyword path covers the gap.
 func (e *HTTPEmbedder) Embed(text string) []float64 {
+	return e.EmbedWithContext(context.Background(), text)
+}
+
+// EmbedWithContext embeds text using the caller's context for cancellation and deadlines.
+func (e *HTTPEmbedder) EmbedWithContext(ctx context.Context, text string) []float64 {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	payload := e.payload(text, "")
 
-	vec := e.post(payload)
+	vec := e.post(ctx, payload)
 	if len(vec) == 0 {
 		return nil
 	}
@@ -127,8 +153,16 @@ type batchEmbedResponse struct {
 // input by ordering on the response's "index" field rather than array position.
 // Individual vectors with a dim mismatch or empty data become nil.
 func (e *HTTPEmbedder) EmbedBatch(texts []string) [][]float64 {
+	return e.EmbedBatchWithContext(context.Background(), texts)
+}
+
+// EmbedBatchWithContext embeds multiple texts using the caller's context.
+func (e *HTTPEmbedder) EmbedBatchWithContext(ctx context.Context, texts []string) [][]float64 {
 	if e.Wire != wireOpenAI || len(texts) == 0 {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	payload := map[string]any{
@@ -145,10 +179,10 @@ func (e *HTTPEmbedder) EmbedBatch(texts []string) [][]float64 {
 	}
 
 	timeout := e.batchTimeout()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.Endpoint, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, e.Endpoint, bytes.NewReader(data))
 	if err != nil {
 		return nil
 	}
@@ -225,16 +259,16 @@ func (e *HTTPEmbedder) payload(text, inputType string) map[string]any {
 // post sends the payload and returns the resolved embedding, or nil on any
 // failure. All failures collapse to nil (no error): unreachable, timeout,
 // non-200, and malformed bodies are all the graceful keyword-only signal.
-func (e *HTTPEmbedder) post(payload map[string]any) []float64 {
+func (e *HTTPEmbedder) post(ctx context.Context, payload map[string]any) []float64 {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), e.timeout())
+	reqCtx, cancel := context.WithTimeout(ctx, e.timeout())
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.Endpoint, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, e.Endpoint, bytes.NewReader(data))
 	if err != nil {
 		return nil
 	}
