@@ -455,11 +455,7 @@ func moveFile(src, dst string) error {
 // --- small fs/path helpers (kept local so the package carries no deps) ---
 
 func sessionFileName(pathOrID string) string {
-	base := filepath.Base(pathOrID)
-	if strings.HasSuffix(base, ".jsonl") {
-		return base
-	}
-	return base + ".jsonl"
+	return strings.TrimSuffix(filepath.Base(pathOrID), ".jsonl") + ".jsonl"
 }
 
 func fileExists(path string) bool {
