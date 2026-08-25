@@ -30,6 +30,13 @@ All notable changes to RawClaw are documented in this file.
 
 ### Changed
 
+- **Answer-first search with staleness reporting and background refresh.** Default searches (`rawclaw "query"`)
+  and bare browse now answer immediately from the consolidated search store without blocking on synchronous
+  transcript discovery or reindexing. When uningested sessions or stale scopes are detected, search outputs
+  what is already indexed along with an honest staleness note (`note: sessions not yet ingested — background ingest triggered`
+  or `note: sessions not yet ingested — run 'rawclaw ingest' to refresh`; in `--json`, `stale: true` and an
+  `index_stale` structured warning) and triggers a throttled background ingest. Passing explicit `--reindex`,
+  `--dir`, or `--this-project` forces a synchronous refresh before answering.
 - **Consolidated single-connection browse.** Multi-project and scoped browse (bare `rawclaw`,
   `rawclaw --all`, and path-filtered browse) now answers directly from the consolidated search store
   using a single SQLite connection and SQL-level project and source filtering, avoiding the overhead
