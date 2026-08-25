@@ -4,7 +4,7 @@ Date: 2026-08-25
 
 Target: `main` at `789ab2e`, covering the commits returned by
 `git log --since="10 hours ago" --oneline main`. I read the routed Go skills from
-`/Users/jay-m4/org/skills-upstream/shared/`, starting with `golang-how-to`, and
+an external Go standards skill set, starting with `golang-how-to`, and
 read `AGENTS.md`, `docs/notes/adversarial-review-20260825.md`, and
 `docs/notes/golang-skills-audit.md` first.
 
