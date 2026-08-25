@@ -1,8 +1,10 @@
 package antigravity
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/source"
@@ -305,5 +307,62 @@ func TestDiscoverSubagentInHistory(t *testing.T) {
 	}
 	if sub2.CWD != "/workspace/main" {
 		t.Errorf("sub-from-reminder CWD = %q, want /workspace/main", sub2.CWD)
+	}
+}
+
+// TestScanSpawnedSubagentsLargeLine verifies Bug 2 fix: a transcript with a JSON line
+// larger than the default bufio.Scanner 64KB buffer limit (e.g. 80KB) is not dropped.
+func TestScanSpawnedSubagentsLargeLine(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+
+	largePadding := strings.Repeat("x", 80*1024) // 80KB of padding in tool args/content
+	parentID := "parent-large-line"
+	childID := "sub-child-80k"
+
+	// Parent transcript with >64KB INVOKE_SUBAGENT line
+	tParent := filepath.Join(tmp, "brain", parentID, ".system_generated", "logs", "transcript.jsonl")
+	invokeLine := fmt.Sprintf(`{"step_index":1,"source":"MODEL","type":"INVOKE_SUBAGENT","created_at":"2026-08-14T10:00:02Z","content":"Created subagent:\n{\n  \"conversationId\": \"%s\"\n}","padding":"%s"}`, childID, largePadding)
+	writeJSONL(t, tParent,
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-14T10:00:00Z","content":"<USER_REQUEST>large line test</USER_REQUEST>"}`,
+		invokeLine,
+	)
+
+	// Subagent transcript
+	tChild := filepath.Join(tmp, "brain", childID, ".system_generated", "logs", "transcript.jsonl")
+	writeJSONL(t, tChild,
+		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-14T10:00:05Z","content":"subagent task"}`,
+	)
+
+	// 1. Direct scanSpawnedSubagents test
+	spawned := scanSpawnedSubagents(tParent)
+	if len(spawned) != 1 || spawned[0] != childID {
+		t.Fatalf("scanSpawnedSubagents() = %v, want [%s] (failed to scan >64KB line)", spawned, childID)
+	}
+
+	// 2. Full Discover test
+	ad := NewRoot(tmp)
+	containers, err := ad.Discover()
+	if err != nil {
+		t.Fatalf("Discover() error: %v", err)
+	}
+	if len(containers) != 2 {
+		t.Fatalf("Discover() returned %d containers, want 2", len(containers))
+	}
+
+	byID := map[string]source.Container{}
+	for _, c := range containers {
+		byID[c.ID] = c
+	}
+
+	child, ok := byID[childID]
+	if !ok {
+		t.Fatalf("%s not found", childID)
+	}
+	if !child.IsSubagent {
+		t.Errorf("%s IsSubagent = false, want true", childID)
+	}
+	if child.ParentID != parentID {
+		t.Errorf("%s ParentID = %q, want %q", childID, child.ParentID, parentID)
 	}
 }
