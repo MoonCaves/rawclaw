@@ -1,11 +1,14 @@
 package scopes
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -354,5 +357,117 @@ func TestCodex_WriteLockContention(t *testing.T) {
 	}
 	if status != index.IndexStale {
 		t.Errorf("Resolve status = %v, want IndexStale", status)
+	}
+}
+
+type testLogRecorder struct {
+	records []slog.Record
+	mu      sync.Mutex
+}
+
+func (r *testLogRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (r *testLogRecorder) Handle(_ context.Context, rec slog.Record) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, rec)
+	return nil
+}
+func (r *testLogRecorder) WithAttrs(_ []slog.Attr) slog.Handler { return r }
+func (r *testLogRecorder) WithGroup(_ string) slog.Handler      { return r }
+
+func (r *testLogRecorder) Warns() []slog.Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []slog.Record
+	for _, rec := range r.records {
+		if rec.Level >= slog.LevelWarn {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// TestCodex_IndexingFailure_SingleHandlingLog proves that a failure during container
+// reindexing propagates up to the scope boundary and produces exactly ONE log record
+// (at the scopes boundary) rather than duplicate logs below it, while marking the
+// scope Stale.
+func TestCodex_IndexingFailure_SingleHandlingLog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+
+	cwd := "/tmp/single-handling-proj"
+	day := filepath.Join(codexHome, "sessions", "2026", "08", "25")
+	rolloutPath := filepath.Join(day, "rollout-sess1.jsonl")
+	writeCodexRollout(t, rolloutPath, "sess-single-handling", cwd)
+
+	dbp := codexDBPath(cwd)
+
+	// 1. Initial index
+	scs := Codex(true)
+	if len(scs) != 1 || scs[0].Stale {
+		t.Fatalf("initial indexing failed or stale: %+v", scs)
+	}
+
+	// 2. Install a trigger on messages to force a non-busy failure during reindex
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := con.Exec("CREATE TRIGGER fail_messages BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, 'forced write failure'); END;"); err != nil {
+		con.Close()
+		t.Fatalf("create trigger: %v", err)
+	}
+	con.Close()
+
+	// 3. Update rollout file so reindexing runs
+	time.Sleep(10 * time.Millisecond)
+	lines := []string{
+		fmt.Sprintf(`{"type":"session_meta","timestamp":"2026-08-25T10:00:00Z","payload":{"id":%q,"cwd":%q,"thread_source":"user"}}`, "sess-single-handling", cwd),
+		`{"type":"response_item","timestamp":"2026-08-25T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"updated text"}]}}`,
+	}
+	if err := os.WriteFile(rolloutPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Capture slog records
+	recorder := &testLogRecorder{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(origLogger)
+
+	// 5. Run Codex(): must produce exactly ONE slog.Warn record at the scopes boundary
+	scs2 := Codex(false)
+	if len(scs2) != 1 {
+		t.Fatalf("Codex() returned %d scopes, want 1", len(scs2))
+	}
+	if !scs2[0].Stale {
+		t.Errorf("scope.Stale = false, want true when indexing failed")
+	}
+
+	warns := recorder.Warns()
+	if len(warns) != 1 {
+		t.Fatalf("got %d slog.Warn records, want exactly 1 (single-handling rule)", len(warns))
+	}
+	if warns[0].Message != "scopes: codex index failed" {
+		t.Errorf("log message = %q, want %q", warns[0].Message, "scopes: codex index failed")
+	}
+
+	// Check that the error logged at the boundary contains the session ID
+	var loggedErr error
+	warns[0].Attrs(func(a slog.Attr) bool {
+		if a.Key == "err" {
+			if e, ok := a.Value.Any().(error); ok {
+				loggedErr = e
+			}
+		}
+		return true
+	})
+	if loggedErr == nil {
+		t.Fatal("log record missing 'err' attribute")
+	}
+	if !strings.Contains(loggedErr.Error(), "sess-single-handling") {
+		t.Errorf("logged error %q does not contain session ID %q", loggedErr.Error(), "sess-single-handling")
 	}
 }

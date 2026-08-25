@@ -2,9 +2,11 @@ package index
 
 import (
 	"database/sql"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1043,5 +1045,65 @@ func TestEnsureIndexedTree_WriteLockContention(t *testing.T) {
 	}
 	if status2 != IndexStale {
 		t.Errorf("status = %v, want IndexStale", status2)
+	}
+}
+
+// TestEnsureIndexedTree_ReindexFailure_WrapsContextWithoutLogging proves that
+// when an internal reindex statement fails during file indexing, EnsureIndexedTree
+// propagates the error with session context and does NOT log locally, following Go's
+// single-handling rule.
+func TestEnsureIndexedTree_ReindexFailure_WrapsContextWithoutLogging(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "fail_tree.db")
+	tdir := filepath.Join(dir, "transcripts")
+	if err := os.MkdirAll(tdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(tdir, "sess1.jsonl")
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+	)
+
+	// 1. Initial index
+	if _, _, err := EnsureIndexedTree(dbp, tdir, true, ""); err != nil {
+		t.Fatalf("initial indexing failed: %v", err)
+	}
+
+	// 2. Install a trigger on messages to force a non-busy failure during reindex
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := con.Exec("CREATE TRIGGER fail_messages BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, 'forced write failure'); END;"); err != nil {
+		con.Close()
+		t.Fatalf("create trigger: %v", err)
+	}
+	con.Close()
+
+	// 3. Touch transcript file to force reindexFileWithOrigin to run
+	time.Sleep(10 * time.Millisecond)
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-08-25T00:00:00Z","message":{"role":"user","content":"first version"}}`,
+		`{"type":"user","uuid":"u2","timestamp":"2026-08-25T00:01:00Z","message":{"role":"user","content":"second version"}}`,
+	)
+
+	// 4. Capture slog records
+	recorder := &testLogRecorder{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(origLogger)
+
+	// 5. Run EnsureIndexedTree: must fail with non-busy error containing session ID
+	_, _, err = EnsureIndexedTree(dbp, tdir, false, "")
+	if err == nil {
+		t.Fatal("EnsureIndexedTree succeeded, want error when trigger fires")
+	}
+	if !strings.Contains(err.Error(), "sess1") {
+		t.Errorf("error %q does not contain session ID %q", err.Error(), "sess1")
+	}
+
+	// 6. Ensure no slog warnings were emitted inside reindexFileWithOrigin/EnsureIndexedTree
+	if got := len(recorder.Warns()); got != 0 {
+		t.Errorf("got %d slog.Warn calls, want 0 (single handling rule: errors are returned, not logged in index package)", got)
 	}
 }
