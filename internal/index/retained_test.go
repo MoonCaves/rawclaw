@@ -8,7 +8,7 @@ import (
 )
 
 // TestRetainedMatches_FindsRetainedSession is the base case: a session whose
-// backing file is purged (missing_since set) is found by RetainedMatches even
+// backing file is purged (only_copy_since set) is found by RetainedMatches even
 // though lifecycle.Delete's live walk can never see it.
 func TestRetainedMatches_FindsRetainedSession(t *testing.T) {
 	proj := t.TempDir()
@@ -45,7 +45,7 @@ func TestRetainedMatches_FindsRetainedSession(t *testing.T) {
 }
 
 // TestRetainedMatches_ExcludesLiveSession guards the boundary with the live
-// delete path: a still-present session (missing_since NULL) must NOT show up
+// delete path: a still-present session (only_copy_since NULL) must NOT show up
 // as a retained match, or a plain `delete --project x` would double-count it
 // once from the live walk and once from here.
 func TestRetainedMatches_ExcludesLiveSession(t *testing.T) {

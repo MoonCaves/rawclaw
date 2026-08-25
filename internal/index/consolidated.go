@@ -157,29 +157,29 @@ type SyncStats struct {
 }
 
 // recordSessionSourcesSQL records one attached db's view of each session into
-// main.session_sources. This tracks per-contribution provenance, scope, and missing_since
+// main.session_sources. This tracks per-contribution provenance, scope, and only_copy_since
 // status so the merged session row in main.sessions reflects the honest union of all
 // contributing sources.
 const recordSessionSourcesSQL = `
 INSERT INTO main.session_sources
   (session_id,source_db,started_at,last_ts,message_count,is_subagent,parent_id,
-   origin_machine,source_tool,source_path,missing_since,project,cwd)
+   origin_machine,source_tool,source_path,only_copy_since,project,cwd)
 SELECT id, ?, started_at, last_ts, message_count, is_subagent, parent_id,
-       origin_machine, source_tool, source_path, missing_since, project, cwd
+       origin_machine, source_tool, source_path, only_copy_since, project, cwd
 FROM src.sessions
 WHERE true
 ON CONFLICT(session_id, source_db) DO UPDATE SET
-  started_at     = excluded.started_at,
-  last_ts        = excluded.last_ts,
-  message_count  = excluded.message_count,
-  is_subagent    = excluded.is_subagent,
-  parent_id      = excluded.parent_id,
-  origin_machine = excluded.origin_machine,
-  source_tool    = excluded.source_tool,
-  source_path    = excluded.source_path,
-  missing_since  = excluded.missing_since,
-  project        = excluded.project,
-  cwd            = excluded.cwd
+  started_at      = excluded.started_at,
+  last_ts         = excluded.last_ts,
+  message_count   = excluded.message_count,
+  is_subagent     = excluded.is_subagent,
+  parent_id       = excluded.parent_id,
+  origin_machine  = excluded.origin_machine,
+  source_tool     = excluded.source_tool,
+  source_path     = excluded.source_path,
+  only_copy_since = excluded.only_copy_since,
+  project         = excluded.project,
+  cwd             = excluded.cwd
 `
 
 // mergeSessionsSQL aggregates all recorded session contributions in session_sources
@@ -187,9 +187,9 @@ ON CONFLICT(session_id, source_db) DO UPDATE SET
 // current pass, and writes the merged rows into main.sessions.
 //
 // Semantics per contribution:
-//   - A session present in ANY contributing copy is present/live (missing_since IS NULL).
-//   - Only when EVERY contributing copy has vanished is the merged session marked missing.
-//     Where all copies are purged, missing_since is MAX(missing_since) — the timestamp
+//   - A session present in ANY contributing copy is present/live (only_copy_since IS NULL).
+//   - Only when EVERY contributing copy has vanished is the merged session marked only-copy.
+//     Where all copies are purged, only_copy_since is MAX(only_copy_since) — the timestamp
 //     when the LAST live copy vanished from disk.
 //   - Scope and provenance follow the winning contribution (live beats purged; between
 //     equal presence, highest message count wins; tie-broken by latest last_ts and source_db).
@@ -208,7 +208,7 @@ WITH ranked AS (
     ROW_NUMBER() OVER (
       PARTITION BY session_id
       ORDER BY
-        (missing_since IS NULL) DESC,
+        (only_copy_since IS NULL) DESC,
         COALESCE(message_count, 0) DESC,
         COALESCE(last_ts, 0) DESC,
         source_db DESC
@@ -225,9 +225,9 @@ agg AS (
     MAX(COALESCE(is_subagent, 0)) AS is_subagent,
     MAX(parent_id) AS parent_id,
     CASE
-      WHEN COUNT(CASE WHEN missing_since IS NULL THEN 1 END) > 0 THEN NULL
-      ELSE MAX(missing_since)
-    END AS missing_since
+      WHEN COUNT(CASE WHEN only_copy_since IS NULL THEN 1 END) > 0 THEN NULL
+      ELSE MAX(only_copy_since)
+    END AS only_copy_since
   FROM main.session_sources
   WHERE session_id IN (SELECT id FROM src.sessions)
      OR session_id IN (SELECT session_id FROM temp.consolidation_affected_sessions)
@@ -235,7 +235,7 @@ agg AS (
 )
 INSERT INTO main.sessions (
   id, started_at, last_ts, message_count, is_subagent, parent_id,
-  origin_machine, source_tool, source_path, missing_since, project, cwd
+  origin_machine, source_tool, source_path, only_copy_since, project, cwd
 )
 SELECT
   a.session_id,
@@ -247,22 +247,22 @@ SELECT
   COALESCE(r.origin_machine, (SELECT origin_machine FROM main.session_sources s2 WHERE s2.session_id = a.session_id AND s2.origin_machine IS NOT NULL LIMIT 1)),
   COALESCE(r.source_tool, (SELECT source_tool FROM main.session_sources s2 WHERE s2.session_id = a.session_id AND s2.source_tool IS NOT NULL LIMIT 1)),
   r.source_path,
-  a.missing_since,
+  a.only_copy_since,
   COALESCE(r.project, (SELECT project FROM main.session_sources s2 WHERE s2.session_id = a.session_id AND s2.project IS NOT NULL LIMIT 1)),
   COALESCE(r.cwd, (SELECT cwd FROM main.session_sources s2 WHERE s2.session_id = a.session_id AND s2.cwd IS NOT NULL LIMIT 1))
 FROM agg a
 JOIN ranked r ON a.session_id = r.session_id AND r.rank = 1
 ON CONFLICT(id) DO UPDATE SET
-  started_at     = excluded.started_at,
-  last_ts        = excluded.last_ts,
-  is_subagent    = excluded.is_subagent,
-  parent_id      = excluded.parent_id,
-  origin_machine = excluded.origin_machine,
-  source_tool    = excluded.source_tool,
-  source_path    = excluded.source_path,
-  missing_since  = excluded.missing_since,
-  project        = excluded.project,
-  cwd            = excluded.cwd
+  started_at      = excluded.started_at,
+  last_ts         = excluded.last_ts,
+  is_subagent     = excluded.is_subagent,
+  parent_id       = excluded.parent_id,
+  origin_machine  = excluded.origin_machine,
+  source_tool     = excluded.source_tool,
+  source_path     = excluded.source_path,
+  only_copy_since = excluded.only_copy_since,
+  project         = excluded.project,
+  cwd             = excluded.cwd
 `
 
 // mergeMessagesSQL unions one attached db's messages in, keyed by
@@ -629,7 +629,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 		`SELECT (SELECT COUNT(*) FROM src.sessions) || ':' ||
 		        (SELECT COUNT(*) FROM src.messages) || ':' ||
 		        (SELECT COALESCE(MAX(id),0) FROM src.messages) || ':' ||
-		        (SELECT COUNT(missing_since) || '@' || COALESCE(MAX(missing_since),0) FROM src.sessions)`,
+		        (SELECT COUNT(only_copy_since) || '@' || COALESCE(MAX(only_copy_since),0) FROM src.sessions)`,
 	).Scan(&mark); err != nil {
 		return 0, false, true, fmt.Errorf("read source watermark: %w", err)
 	}
@@ -815,6 +815,9 @@ func migrateSourceScope(src string) error {
 	if want := strconv.Itoa(store.SchemaVersion); version != want {
 		return fmt.Errorf("source at schema v%s, want v%s", version, want)
 	}
+	if err := migrateDurabilityColumns(con, sourceClaude); err != nil {
+		return err
+	}
 	return migrateScopeColumns(con)
 }
 
@@ -968,14 +971,14 @@ func pruneTombstonedIDs(con *sql.DB, ids []string) error {
 // pre-migration consolidated baseline (potentially merged from multiple sources).
 // Backfilling them with an empty source_db ("") records this legacy contribution
 // so incremental syncs of individual source dbs do not clobber multi-source metadata
-// (message_count, missing_since, scope/provenance) from an incomplete contribution set.
+// (message_count, only_copy_since, scope/provenance) from an incomplete contribution set.
 func migrateSessionSources(con *sql.DB) error {
 	const ddl = `
 CREATE TABLE IF NOT EXISTS session_sources (
     session_id TEXT NOT NULL, source_db TEXT NOT NULL,
     started_at REAL, last_ts REAL, message_count INTEGER DEFAULT 0,
     is_subagent INTEGER DEFAULT 0, parent_id TEXT,
-    origin_machine TEXT, source_tool TEXT, source_path TEXT, missing_since REAL,
+    origin_machine TEXT, source_tool TEXT, source_path TEXT, only_copy_since REAL,
     project TEXT, cwd TEXT,
     PRIMARY KEY (session_id, source_db)
 );
@@ -983,6 +986,18 @@ CREATE INDEX IF NOT EXISTS idx_session_sources_session ON session_sources(sessio
 `
 	if _, err := con.Exec(ddl); err != nil {
 		return fmt.Errorf("ensure session_sources schema: %w", err)
+	}
+
+	// Rename missing_since on session_sources if table predates rename
+	sHave, sErr := tableColumns(con, "session_sources")
+	if sErr == nil {
+		if _, ok := sHave["missing_since"]; ok {
+			if _, ok := sHave["only_copy_since"]; !ok {
+				if _, err := con.Exec("ALTER TABLE session_sources RENAME COLUMN missing_since TO only_copy_since"); err != nil {
+					return fmt.Errorf("rename session_sources.missing_since to only_copy_since: %w", err)
+				}
+			}
+		}
 	}
 
 	var hasSessions int
@@ -997,12 +1012,12 @@ CREATE INDEX IF NOT EXISTS idx_session_sources_session ON session_sources(sessio
 INSERT OR IGNORE INTO main.session_sources (
   session_id, source_db, started_at, last_ts, message_count,
   is_subagent, parent_id, origin_machine, source_tool, source_path,
-  missing_since, project, cwd
+  only_copy_since, project, cwd
 )
 SELECT
   id, '', started_at, last_ts, message_count,
   is_subagent, parent_id, origin_machine, source_tool, source_path,
-  missing_since, project, cwd
+  only_copy_since, project, cwd
 FROM main.sessions
 WHERE NOT EXISTS (
   SELECT 1 FROM main.session_sources WHERE main.session_sources.session_id = main.sessions.id
@@ -1244,16 +1259,16 @@ type SessionFreshness struct {
 // its stored file_index watermark against a single stat of its backing transcript.
 func CheckSessionFreshness(con *sql.DB, sessionID string) (SessionFreshness, error) {
 	var (
-		fullID       string
-		sourcePath   sql.NullString
-		missingSince sql.NullFloat64
-		mtime        sql.NullFloat64
-		size         sql.NullInt64
-		fp           sql.NullString
+		fullID        string
+		sourcePath    sql.NullString
+		onlyCopySince sql.NullFloat64
+		mtime         sql.NullFloat64
+		size          sql.NullInt64
+		fp            sql.NullString
 	)
 
 	err := con.QueryRow(`
-		SELECT s.id, s.source_path, s.missing_since, f.mtime, f.size, f.fp
+		SELECT s.id, s.source_path, s.only_copy_since, f.mtime, f.size, f.fp
 		FROM sessions s
 		LEFT JOIN file_index f ON (
 			f.path = s.source_path
@@ -1262,7 +1277,7 @@ func CheckSessionFreshness(con *sql.DB, sessionID string) (SessionFreshness, err
 		WHERE s.id = ? OR s.id LIKE ?
 		ORDER BY (s.id = ?) DESC, (f.path = s.source_path) DESC, LENGTH(s.id) ASC
 		LIMIT 1
-	`, sessionID, sessionID+"%", sessionID).Scan(&fullID, &sourcePath, &missingSince, &mtime, &size, &fp)
+	`, sessionID, sessionID+"%", sessionID).Scan(&fullID, &sourcePath, &onlyCopySince, &mtime, &size, &fp)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionFreshness{Status: SessionNotFound, SessionID: sessionID}, nil
@@ -1271,7 +1286,7 @@ func CheckSessionFreshness(con *sql.DB, sessionID string) (SessionFreshness, err
 		return SessionFreshness{Status: SessionNotFound, SessionID: sessionID}, fmt.Errorf("query session watermark: %w", err)
 	}
 
-	if missingSince.Valid && missingSince.Float64 > 0 {
+	if onlyCopySince.Valid && onlyCopySince.Float64 > 0 {
 		return SessionFreshness{
 			Status:     SessionMissingBacking,
 			SessionID:  fullID,

@@ -416,7 +416,7 @@ func TestCLIJourney_AntigravityTranscriptRename(t *testing.T) {
 	}
 
 	// 5. Verify database dropped the stale transcript.jsonl watermark:
-	// exactly 1 file_index row pointing to transcript_full.jsonl and missing_since is NULL.
+	// exactly 1 file_index row pointing to transcript_full.jsonl and only_copy_since is NULL.
 	dbs, err := index.PerProjectDBs()
 	if err != nil {
 		t.Fatalf("list per-project DBs: %v", err)
@@ -446,12 +446,12 @@ func TestCLIJourney_AntigravityTranscriptRename(t *testing.T) {
 		t.Errorf("file_index path = %q, want %q", fiPath, realpathExpand(transFullPath))
 	}
 
-	var missing sql.NullFloat64
-	if err := pcon.QueryRow("SELECT missing_since FROM sessions WHERE id=?", sessID).Scan(&missing); err != nil {
-		t.Fatalf("query missing_since: %v", err)
+	var onlyCopy sql.NullFloat64
+	if err := pcon.QueryRow("SELECT only_copy_since FROM sessions WHERE id=?", sessID).Scan(&onlyCopy); err != nil {
+		t.Fatalf("query only_copy_since: %v", err)
 	}
-	if missing.Valid {
-		t.Errorf("missing_since = %v, want NULL (session is live, not missing)", missing.Float64)
+	if onlyCopy.Valid {
+		t.Errorf("only_copy_since = %v, want NULL (session is live, not only copy)", onlyCopy.Float64)
 	}
 }
 

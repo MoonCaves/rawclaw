@@ -270,7 +270,7 @@ func TestDeleteCmd_YesShortFlag(t *testing.T) {
 }
 
 // retainSession indexes a session, then removes its backing file and
-// reindexes so the store carries a RETAINED row (missing_since set) for it —
+// reindexes so the store carries a RETAINED row (only_copy_since set) for it —
 // the state durable retention leaves behind when a source tool purges a
 // transcript, and the exact state `delete` must reach.
 func retainSession(t *testing.T, root, project, id string, nLines int) {
