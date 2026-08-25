@@ -1,10 +1,14 @@
 package index
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -378,5 +382,94 @@ func TestEnsureIndexedContainers_WriteLockContention(t *testing.T) {
 	}
 	if status2 != IndexStale {
 		t.Errorf("status = %v, want IndexStale", status2)
+	}
+}
+
+type testLogRecorder struct {
+	records []slog.Record
+	mu      sync.Mutex
+}
+
+func (r *testLogRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (r *testLogRecorder) Handle(_ context.Context, rec slog.Record) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, rec)
+	return nil
+}
+func (r *testLogRecorder) WithAttrs(_ []slog.Attr) slog.Handler { return r }
+func (r *testLogRecorder) WithGroup(_ string) slog.Handler      { return r }
+
+func (r *testLogRecorder) Warns() []slog.Record {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []slog.Record
+	for _, rec := range r.records {
+		if rec.Level >= slog.LevelWarn {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// TestEnsureIndexedContainers_ReindexFailure_WrapsContextWithoutLogging proves that
+// when an internal reindex statement fails (non-busy error), EnsureIndexedContainers
+// propagates the error with session context and does NOT log locally, following Go's
+// single-handling rule.
+func TestEnsureIndexedContainers_ReindexFailure_WrapsContextWithoutLogging(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "fail.db")
+	f := filepath.Join(dir, "sess.jsonl")
+	if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := source.Container{ID: "sess-err-ctx", Path: f, CWD: "/repo"}
+	msgs := func(_ source.Container) ([]model.Message, error) {
+		return []model.Message{
+			{Role: "user", Text: "initial message", TS: 1, TSISO: "2026-08-25T00:00:00Z", UUID: "u1"},
+		}, nil
+	}
+
+	// 1. Initial index
+	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, msgs, "codex", ""); err != nil {
+		t.Fatalf("initial indexing failed: %v", err)
+	}
+
+	// 2. Install a trigger on messages to force a non-busy failure during reindex
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if _, err := con.Exec("CREATE TRIGGER fail_messages BEFORE INSERT ON messages BEGIN SELECT RAISE(FAIL, 'forced write failure'); END;"); err != nil {
+		con.Close()
+		t.Fatalf("create trigger: %v", err)
+	}
+	con.Close()
+
+	// 3. Touch backing file to force reindexContainer to run
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(f, []byte("x-mod\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Capture slog records
+	recorder := &testLogRecorder{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(origLogger)
+
+	// 5. Run EnsureIndexedContainers: must fail with non-busy error containing session ID
+	_, _, err = EnsureIndexedContainers(dbp, false, []source.Container{c}, msgs, "codex", "")
+	if err == nil {
+		t.Fatal("EnsureIndexedContainers succeeded, want error when messages table is missing")
+	}
+	if !strings.Contains(err.Error(), "sess-err-ctx") {
+		t.Errorf("error %q does not contain session ID %q", err.Error(), "sess-err-ctx")
+	}
+
+	// 6. Ensure no slog warnings were emitted inside reindexContainer/EnsureIndexedContainers
+	if got := len(recorder.Warns()); got != 0 {
+		t.Errorf("got %d slog.Warn calls, want 0 (single handling rule: errors are returned, not logged in index package)", got)
 	}
 }
