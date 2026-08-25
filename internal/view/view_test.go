@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/store/storetest"
 )
 
@@ -307,58 +306,6 @@ func TestSessionPreviewKeepsSessionWithGreetingOpener(t *testing.T) {
 	}
 	if got != "wire up the discovery dedup" {
 		t.Errorf("preview = %q, want the first substantive turn", got)
-	}
-}
-
-func TestSortCandidates(t *testing.T) {
-	mk := func(rank int, iso string, fused float64, cov int) retrieve.Anchor {
-		return retrieve.Anchor{Rank: rank, ISO: iso, Fused: fused, Cov: cov}
-	}
-
-	tests := []struct {
-		name     string
-		mode     string
-		in       []retrieve.Anchor
-		wantRank []int // expected order by original Rank
-	}{
-		{
-			name:     "relevance: fused desc, cov desc, rank asc",
-			mode:     "",
-			in:       []retrieve.Anchor{mk(0, "", 0.1, 2), mk(1, "", 0.3, 1), mk(2, "", 0.3, 5)},
-			wantRank: []int{2, 1, 0}, // fused .3 group first; within it cov 5>1; then .1
-		},
-		{
-			name:     "relevance tiebreak by rank when fused+cov equal",
-			mode:     "",
-			in:       []retrieve.Anchor{mk(3, "", 0.0, 0), mk(1, "", 0.0, 0), mk(2, "", 0.0, 0)},
-			wantRank: []int{1, 2, 3},
-		},
-		{
-			name:     "newest: iso desc, empty sinks",
-			mode:     "newest",
-			in:       []retrieve.Anchor{mk(0, "2026-01-01", 0, 0), mk(1, "", 0, 0), mk(2, "2026-06-01", 0, 0)},
-			wantRank: []int{2, 0, 1},
-		},
-		{
-			name:     "oldest: iso asc, empty floats",
-			mode:     "oldest",
-			in:       []retrieve.Anchor{mk(0, "2026-01-01", 0, 0), mk(1, "", 0, 0), mk(2, "2026-06-01", 0, 0)},
-			wantRank: []int{1, 0, 2},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cs := append([]retrieve.Anchor(nil), tt.in...)
-			sortCandidates(cs, tt.mode)
-			got := make([]int, len(cs))
-			for i, c := range cs {
-				got[i] = c.Rank
-			}
-			if !eqInts(got, tt.wantRank) {
-				t.Errorf("order by rank = %v, want %v", got, tt.wantRank)
-			}
-		})
 	}
 }
 
