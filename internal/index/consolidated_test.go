@@ -1396,3 +1396,46 @@ func TestConsolidate_PartialSessionSourcesBackfill(t *testing.T) {
 		}
 	}
 }
+
+func TestConsolidateFrom_PrunesLegacySourceAfterFullPass(t *testing.T) {
+	isolateCache(t)
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		con.Close()
+		t.Fatalf("ensure schema: %v", err)
+	}
+	for _, id := range []string{"gains-real", "legacy-only"} {
+		if _, err := con.Exec(`
+			INSERT INTO sessions (
+				id, started_at, last_ts, message_count, is_subagent, parent_id,
+				origin_machine, source_tool, source_path, missing_since, project, cwd
+			) VALUES (?, 100, 200, 1, 0, NULL, 'machine', 'claude', '/tmp/' || ? || '.jsonl', NULL, 'project', '/tmp')
+		`, id, id); err != nil {
+			con.Close()
+			t.Fatalf("seed session %s: %v", id, err)
+		}
+	}
+	con.Close()
+
+	src := seedSessionDB(t, "real.db", sessionRow{
+		id: "gains-real", project: "project", cwd: "/tmp",
+		msgs: []msgRow{{"real-1", "user", "hello", 100}},
+	})
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db='' "); got != "0" {
+		t.Errorf("legacy row for session with real source = %s, want 0", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='gains-real' AND source_db='real.db'"); got != "1" {
+		t.Errorf("real row for session with real source = %s, want 1", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_sources WHERE session_id='legacy-only' AND source_db='' "); got != "1" {
+		t.Errorf("legacy-only row = %s, want 1", got)
+	}
+}
