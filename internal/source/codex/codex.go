@@ -147,7 +147,7 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 			bad++
 			continue
 		}
-		role, text, ok := normalize(rec)
+		role, text, ok := NormalizeRecord(rec)
 		if !ok || text == "" {
 			continue
 		}
@@ -157,7 +157,7 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 			Text:  text,
 			TS:    parse.ISOToEpoch(iso),
 			TSISO: iso,
-			UUID:  mintUUID(c.ID, ordinal),
+			UUID:  MintUUID(c.ID, ordinal),
 		})
 		ordinal++
 	}
@@ -167,11 +167,11 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 	return out, nil
 }
 
-// normalize maps one rollout record to (role, flattened-text). ok=false means
+// NormalizeRecord maps one rollout record to (role, flattened-text). ok=false means
 // "not an indexable record" (a header, telemetry, or control line). Tool and
 // reasoning content is kept with the same [TOOL:…]/[THINKING] markers Claude
 // uses, so the snippet layer hides them identically.
-func normalize(rec map[string]any) (role, text string, ok bool) {
+func NormalizeRecord(rec map[string]any) (role, text string, ok bool) {
 	if t, _ := rec["type"].(string); t != "response_item" {
 		return "", "", false
 	}
@@ -308,16 +308,16 @@ func outputText(v any) string {
 	return ""
 }
 
-// mintUUID derives a stable per-message id from the session id + ordinal. Codex
+// MintUUID derives a stable per-message id from the session id + ordinal. Codex
 // message records carry no id; the ordinal is deterministic because the whole
 // file is reparsed in order on any change.
 //
-// FOOTGUN: the ordinal counts only records normalize() accepts, so adding or
+// FOOTGUN: the ordinal counts only records NormalizeRecord() accepts, so adding or
 // removing a handled record type shifts every later ordinal in a session,
 // changing its minted uuids — invalidating existing <session8>:<uuid8> refs
 // (bookmarks, --around windows, prior citations) until a full reindex. If you
-// change the normalize() switch, treat it as a ref-breaking change.
-func mintUUID(sessionID string, ordinal int) string {
+// change the NormalizeRecord() switch, treat it as a ref-breaking change.
+func MintUUID(sessionID string, ordinal int) string {
 	h := sha1.Sum([]byte(fmt.Sprintf("%s:%d", sessionID, ordinal)))
 	return hex.EncodeToString(h[:])[:16]
 }

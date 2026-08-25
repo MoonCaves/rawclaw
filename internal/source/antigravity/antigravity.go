@@ -440,7 +440,7 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 			bad++
 			continue
 		}
-		role, text, ok := normalize(rec)
+		role, text, ok := NormalizeRecord(rec)
 		if !ok || text == "" {
 			continue
 		}
@@ -456,7 +456,7 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 			Text:  text,
 			TS:    parse.ISOToEpoch(iso),
 			TSISO: iso,
-			UUID:  mintUUID(c.ID, stepIdx, ordinal),
+			UUID:  MintUUID(c.ID, stepIdx, ordinal),
 		})
 		ordinal++
 	}
@@ -468,8 +468,8 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 	return out, nil
 }
 
-// normalize maps one transcript step to (role, flattened-text, ok).
-func normalize(rec map[string]any) (role, text string, ok bool) {
+// NormalizeRecord maps one transcript step to (role, flattened-text, ok).
+func NormalizeRecord(rec map[string]any) (role, text string, ok bool) {
 	stepType, _ := rec["type"].(string)
 	sourceVal, _ := rec["source"].(string)
 
@@ -579,8 +579,8 @@ func formatToolArgs(v any) string {
 	return ""
 }
 
-// mintUUID derives a stable per-message id from the session id + step index + line ordinal.
-func mintUUID(sessionID string, stepIndex, ordinal int) string {
+// MintUUID derives a stable per-message id from the session id + step index + line ordinal.
+func MintUUID(sessionID string, stepIndex, ordinal int) string {
 	h := sha1.Sum([]byte(fmt.Sprintf("%s:%d:%d", sessionID, stepIndex, ordinal)))
 	return hex.EncodeToString(h[:])[:16]
 }
