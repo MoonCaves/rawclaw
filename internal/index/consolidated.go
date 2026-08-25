@@ -895,9 +895,9 @@ func CheckSessionFreshness(con *sql.DB, sessionID string) (SessionFreshness, err
 		FROM sessions s
 		LEFT JOIN file_index f ON (f.session_id = s.id OR f.path = s.source_path)
 		WHERE s.id = ? OR s.id LIKE ?
-		ORDER BY (s.id = ?) DESC
+		ORDER BY (s.id = ?) DESC, LENGTH(s.id) ASC
 		LIMIT 1
-	`, sessionID, sessionID+"/%", sessionID).Scan(&fullID, &sourcePath, &missingSince, &mtime, &size, &fp)
+	`, sessionID, sessionID+"%", sessionID).Scan(&fullID, &sourcePath, &missingSince, &mtime, &size, &fp)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionFreshness{Status: SessionNotFound, SessionID: sessionID}, nil
