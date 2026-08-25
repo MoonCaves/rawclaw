@@ -60,16 +60,21 @@ func readMeta(path string) (meta, bool) {
 		if !ok {
 			continue
 		}
-		m := meta{}
-		m.id, _ = p["id"].(string)
-		if m.id == "" {
+		id, _ := p["id"].(string)
+		if id == "" {
 			return meta{}, false
 		}
-		m.cwd, _ = p["cwd"].(string)
-		m.threadSource, _ = p["thread_source"].(string)
-		m.parentThreadID, _ = p["parent_thread_id"].(string) // null -> ""
-		m.forkedFromID, _ = p["forked_from_id"].(string)     // null -> ""
-		return m, true
+		cwd, _ := p["cwd"].(string)
+		threadSource, _ := p["thread_source"].(string)
+		parentThreadID, _ := p["parent_thread_id"].(string) // null -> ""
+		forkedFromID, _ := p["forked_from_id"].(string)     // null -> ""
+		return meta{
+			id:             id,
+			cwd:            cwd,
+			threadSource:   threadSource,
+			parentThreadID: parentThreadID,
+			forkedFromID:   forkedFromID,
+		}, true
 	}
 	return meta{}, false
 }
