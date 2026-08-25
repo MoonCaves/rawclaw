@@ -295,14 +295,7 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 					if tcList, ok := rec["tool_calls"].([]any); ok {
 						for _, tc := range tcList {
 							if tcMap, ok := tc.(map[string]any); ok {
-								var argsMap map[string]any
-								switch a := tcMap["args"].(type) {
-								case map[string]any:
-									argsMap = a
-								case string:
-									_ = json.Unmarshal([]byte(a), &argsMap)
-								}
-								if argsMap != nil {
+								if argsMap := decodeArgsMap(tcMap["args"]); argsMap != nil {
 									if c, ok := argsMap["Cwd"].(string); ok && c != "" {
 										c = strings.Trim(c, "\"")
 										if isAbsPath(c) {
@@ -541,6 +534,21 @@ func parseUserRequest(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// decodeArgsMap extracts a map[string]any from tool call arguments which may be
+// an already-decoded map or a JSON string.
+func decodeArgsMap(v any) map[string]any {
+	switch a := v.(type) {
+	case map[string]any:
+		return a
+	case string:
+		var m map[string]any
+		if err := json.Unmarshal([]byte(a), &m); err == nil {
+			return m
+		}
+	}
+	return nil
+}
+
 // formatToolArgs extracts clean arguments text from a tool call payload.
 func formatToolArgs(v any) string {
 	switch a := v.(type) {
@@ -551,20 +559,10 @@ func formatToolArgs(v any) string {
 		}
 		return strings.TrimSpace(a)
 	case map[string]any:
-		if cmd, ok := a["CommandLine"].(string); ok && cmd != "" {
-			return cmd
-		}
-		if q, ok := a["query"].(string); ok && q != "" {
-			return q
-		}
-		if q, ok := a["Query"].(string); ok && q != "" {
-			return q
-		}
-		if p, ok := a["AbsolutePath"].(string); ok && p != "" {
-			return p
-		}
-		if p, ok := a["TargetFile"].(string); ok && p != "" {
-			return p
+		for _, key := range []string{"CommandLine", "query", "Query", "AbsolutePath", "TargetFile"} {
+			if val, ok := a[key].(string); ok && val != "" {
+				return val
+			}
 		}
 		if b, err := json.Marshal(a); err == nil {
 			return string(b)
