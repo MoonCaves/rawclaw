@@ -1,6 +1,7 @@
 package index
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/paths"
@@ -393,6 +395,16 @@ UPDATE sessions SET message_count =
 // Sources are read through SQLite's ATTACH, so nothing is parsed twice: the
 // transcripts were already turned into rows once, and this moves those rows.
 func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) {
+	fence, err := AcquireConsolidatedFence(context.Background())
+	if err != nil {
+		return st, err
+	}
+	defer func() {
+		if unlockErr := fence.Close(); err == nil && unlockErr != nil {
+			err = fmt.Errorf("release consolidated lock: %w", unlockErr)
+		}
+	}()
+
 	dst := ConsolidatedPath()
 	prevLive := ""
 	var preserved tagState
@@ -523,6 +535,11 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if IsConsolidatedDB(srcPath) {
 		return nil
 	}
+	fence, err := AcquireConsolidatedFence(context.Background())
+	if err != nil {
+		return err
+	}
+	defer func() { _ = fence.Close() }()
 	con, err := store.ConnectRW(ConsolidatedPath())
 	if err != nil {
 		return fmt.Errorf("open consolidated store: %w", err)
@@ -593,6 +610,12 @@ func writeThroughConsolidated(dbp string, indexErr error) {
 // write it makes to a source is the additive column migration below, on its own
 // connection, before the read-only attach.
 func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
+	phase := func(name string) func() {
+		started := time.Now()
+		return func() {
+			slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "duration", time.Since(started))
+		}
+	}
 	if _, err := os.Stat(src); err != nil {
 		return 0, false, true, fmt.Errorf("source unreadable: %w", err)
 	}
@@ -601,12 +624,17 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	// source is usable — but without this step a corpus indexed before the scope
 	// migration has no project/cwd columns anywhere and the whole pass skips
 	// every source while reporting success.
+	done := phase("source-migrate")
 	if mErr := migrateSourceScope(src); mErr != nil {
 		slog.Debug("consolidate: source not migrated", "db", filepath.Base(src), "err", mErr)
 	}
+	done()
+	done = phase("attach")
 	if _, err := con.Exec("ATTACH DATABASE ? AS src", "file:"+src+"?mode=ro"); err != nil {
+		done()
 		return 0, false, true, fmt.Errorf("attach: %w", err)
 	}
+	done()
 	defer func() {
 		if _, dErr := con.Exec("DETACH DATABASE src"); dErr != nil && err == nil {
 			err = fmt.Errorf("detach: %w", dErr)
@@ -693,10 +721,15 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	}
 
 	srcID := sourceIdentity(src)
+	done = phase("prepare")
 	if err := migrateSessionSources(con); err != nil {
+		done()
 		return 0, false, true, fmt.Errorf("migrate session sources: %w", err)
 	}
+	done()
 
+	done = phase("merge")
+	defer done()
 	tx, err := con.Begin()
 	if err != nil {
 		return 0, false, true, fmt.Errorf("begin fold: %w", err)

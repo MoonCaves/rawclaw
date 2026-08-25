@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +16,6 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
-	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 )
 
@@ -244,24 +242,19 @@ func discoverAllIngestSources(regs []source.Registration) ([]tagSourceMatch, err
 // and bounded retry with backoff and jitter.
 // This guarantees that N concurrent hooks collapse safely into serialized runs,
 // preventing store creation races, corruptions, and SQLite write contention.
+// ingestContainerWithRetry no longer takes its own consolidated-store lock.
+// It used to (a separate flock.New on consolidated.lock), but that nested
+// under EnsureFreshContainer's own SyncConsolidatedFrom call, which now
+// fences the same file itself (index.AcquireConsolidatedFence). flock()
+// locks belong to the open file description, not the process, so holding
+// one here while EnsureFreshContainer tried to acquire a SECOND one on the
+// same path made every hook-triggered ingest spin for the full wait and
+// time out — reproduced live (40s+ hang under go test -race). The refresh
+// db itself is protected by its own namespacing (RefreshDBPath is unique
+// per session) plus this function's existing SQLite busy-timeout retry
+// loop; only the consolidated-store write needs the fence, and
+// EnsureFreshContainer already provides it.
 func ingestContainerWithRetry(match tagSourceMatch) (int, error) {
-	lockPath := filepath.Join(store.CacheDir(), "consolidated.lock")
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		return 0, fmt.Errorf("create store lock dir: %w", err)
-	}
-
-	fl := flock.New(lockPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	locked, err := fl.TryLockContext(ctx, 10*time.Millisecond)
-	if err != nil {
-		return 0, fmt.Errorf("acquire consolidated store lock for %s: %w", match.container.ID, err)
-	}
-	if !locked {
-		return 0, fmt.Errorf("timed out waiting for consolidated store lock for %s", match.container.ID)
-	}
-	defer func() { _ = fl.Unlock() }()
 
 	dbp := index.RefreshDBPath(
 		match.registration.ID,
