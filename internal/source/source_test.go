@@ -1,6 +1,9 @@
 package source
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 // TestResumeCommand_QuotesHostileCWD pins the property that matters: the cwd comes
 // out of a transcript and is pasted into a shell, so the emitted command must `cd`
@@ -58,3 +61,28 @@ func TestShellQuote_EmptyString(t *testing.T) {
 		t.Errorf("shellQuote(%q) = %q, want %q", "", got, "''")
 	}
 }
+
+// TestRegistry_ConcurrentSafe verifies that concurrent Register, Registered, and
+// DetectID operations do not trigger data races.
+func TestRegistry_ConcurrentSafe(t *testing.T) {
+	orig := Registered()
+	t.Cleanup(func() {
+		ResetForTesting(orig)
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			Register(Registration{
+				ID:     "concurrent-test",
+				Detect: func(p string) bool { return p == "test" },
+			})
+			_ = Registered()
+			_ = DetectID("test")
+		}(i)
+	}
+	wg.Wait()
+}
+

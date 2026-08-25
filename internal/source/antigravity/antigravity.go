@@ -192,9 +192,7 @@ func (a *Adapter) DiscoverRoot(brainDir string) ([]source.Container, error) {
 		for _, m := range mapped {
 			allCandidates = append(allCandidates, candSession{id: m.ID, path: m.Path})
 		}
-		for _, u := range unmapped {
-			allCandidates = append(allCandidates, u)
-		}
+		allCandidates = append(allCandidates, unmapped...)
 
 		for _, cand := range allCandidates {
 			children := scanSpawnedSubagents(cand.path)
