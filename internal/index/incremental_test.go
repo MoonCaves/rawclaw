@@ -11,7 +11,6 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
-	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
@@ -39,21 +38,7 @@ func TestIncrementalIngest_AppendFastPath_Claude(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		var out []model.Message
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			out = append(out, model.Message{
-				Role:  "user",
-				Text:  line,
-				TS:    100,
-				TSISO: "2026-08-20T10:00:00Z",
-				UUID:  provenance.FileFingerprint(got.Path, int64(len(line))),
-			})
-		}
-		return out, nil
+		return parseClaudeTail(data)
 	}
 
 	ResetIngestCountersForTesting()
