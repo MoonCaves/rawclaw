@@ -25,6 +25,10 @@ internal/semantic/topup.go:L120-137: shrink: sequential nested early-return guar
 
 - `internal/embed/embedtest`: Test embedder doubles (`fakeEmbedder`, `mockEmbedder`, `nullEmbedder`) are duplicated across `internal/adapters`, `internal/agentproto`, and `internal/semantic`. A shared package in `internal/embed/embedtest` (mirroring `storetest`) would centralize test embedders without cross-fence coupling.
 
+## Accepted Deviations
+
+- `internal/semantic/semantic.go:358`: `slices.SortFunc` with `cmp.Compare` for cosine similarity sorting treats NaN as ordered (NaN < non-NaN in `cmp.Compare`), whereas previous `sort.Slice` with `>` treated NaN comparisons as false. Deliberately kept per merge-gate review ruling.
+
 ## Scoring
 
 net: -52 lines possible.
