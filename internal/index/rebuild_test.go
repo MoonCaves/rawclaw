@@ -1,12 +1,48 @@
 package index
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/durable"
+	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
+
+func TestRebuildFailurePreservesExistingStore(t *testing.T) {
+	isolateCache(t)
+	rebuildBeforeSwapHook = func() error { return errors.New("injected pre-swap failure") }
+	t.Cleanup(func() { rebuildBeforeSwapHook = nil })
+	con, dbp := openTestDB(t)
+	if _, err := con.Exec("INSERT INTO sessions(id,started_at,last_ts,message_count,is_subagent) VALUES('sentinel',1,1,0,0)"); err != nil {
+		t.Fatalf("seed existing store: %v", err)
+	}
+	con.Close()
+
+	for _, id := range []string{"vault-a"} {
+		if err := durable.StoreMessages(durable.Meta{
+			ID:         id,
+			Source:     sourceClaude,
+			SourcePath: "/same/source.jsonl",
+		}, []model.Message{{Role: "user", Text: id, TSISO: "2026-08-25T00:00:00Z"}}); err != nil {
+			t.Fatalf("store vaulted session %s: %v", id, err)
+		}
+	}
+
+	if _, err := RebuildFromTranscripts(dbp); err == nil {
+		t.Fatal("RebuildFromTranscripts succeeded despite the injected pre-swap failure")
+	}
+
+	rcon, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("existing store was destroyed after failed rebuild: %v", err)
+	}
+	t.Cleanup(func() { rcon.Close() })
+	if got := scalar(t, rcon, "SELECT COUNT(*) FROM sessions WHERE id='sentinel'"); got != "1" {
+		t.Fatalf("sentinel session count = %s after failed rebuild, want 1", got)
+	}
+}
 
 func TestRestoreSession_RollbackOnFailure(t *testing.T) {
 	con, dbp := openTestDB(t)
