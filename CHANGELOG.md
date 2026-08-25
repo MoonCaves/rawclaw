@@ -4,6 +4,15 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **CI race detector gate and source registry thread-safety.** The CI test step now runs
+  `go test -race -count=1 ./...` matching the `CONTRIBUTING.md` contract, and matrices over the
+  declared Go floor (`1.24.0`) and `stable` with a `CGO_ENABLED=0` build check. Synchronized the
+  global source adapter registry with a `sync.RWMutex` to eliminate an intermittent data race during
+  concurrent test execution.
+
+
 ## [0.9.0] — 2026-08-24
 
 ### Added
