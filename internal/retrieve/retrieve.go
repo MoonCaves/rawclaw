@@ -61,6 +61,7 @@ type Hit struct {
 	IsSubagent bool
 	Parent     string
 	Snippet    string
+	Routine    bool
 }
 
 // AllHit is one cross-project cross-project result: a Hit plus the project label and
@@ -96,6 +97,7 @@ type Anchor struct {
 	Project string  // project label
 	DBP     string  // db path this anchor came from
 	Rank    int     // original keyword rank (tiebreak)
+	Routine bool    // true when the session has an effective routine verdict
 }
 
 // SearchParams groups the many optional filters shared by Search / MatchAnchors
@@ -284,15 +286,17 @@ type ScoreExplain struct {
 	Final    int      `json:"final"`     // 0-based ordinal position in the returned results
 	Method   string   `json:"method"`    // ranking regime: one of the Method* constants
 	Terms    []string `json:"terms"`     // the lowercased distinct query terms scored against
+	Tier     string   `json:"tier"`      // sort tier: "normal" or "routine"
 }
 
 // ExplainInputs are the real ranking inputs an explainer needs, captured at the
 // same point Search/MatchAnchors compute them. A caller that already ran the
 // search passes the ordered Cov values it observed.
 type ExplainInputs struct {
-	Terms []string // distinct lowercased query terms (from lowerSet)
-	Multi bool     // true when the query OR-expanded (>1 term) — gates coverage re-rank
-	Sort  string   // p.Sort: "" relevance, else "newest"/"oldest" overlay
+	Terms    []string // distinct lowercased query terms (from lowerSet)
+	Multi    bool     // true when the query OR-expanded (>1 term) — gates coverage re-rank
+	Sort     string   // p.Sort: "" relevance, else "newest"/"oldest" overlay
+	Routines []bool   // routine flag per hit, parallel to covs
 }
 
 // rankMethod returns the ranking-regime label for the given inputs — the exact
@@ -322,11 +326,16 @@ func Explain(covs []int, in ExplainInputs) []ScoreExplain {
 	terms := append([]string(nil), in.Terms...) // defensive copy; never alias the caller's slice
 	out := make([]ScoreExplain, 0, len(covs))
 	for i, cov := range covs {
+		tier := "normal"
+		if i < len(in.Routines) && in.Routines[i] {
+			tier = "routine"
+		}
 		e := ScoreExplain{
 			Coverage: cov,
 			Final:    i,
 			Method:   method,
 			Terms:    append([]string(nil), terms...), // each hit owns its own copy
+			Tier:     tier,
 		}
 		switch method {
 		case MethodSortOverlay:
@@ -372,10 +381,13 @@ func SearchExplained(dbp, q string, limit int, p SearchParams) (out []Hit, expla
 	}
 	out = make([]Hit, 0, n)
 	covs := make([]int, 0, n)
+	routines := make([]bool, 0, n)
 	for i := 0; i < n; i++ {
 		out = append(out, scored[i].Hit)
 		covs = append(covs, scored[i].cov)
+		routines = append(routines, scored[i].Routine)
 	}
+	in.Routines = routines
 	return out, Explain(covs, in)
 }
 
@@ -424,6 +436,7 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 		}
 	}
 
+	routines, _ := store.RoutineSet(con)
 	lterms := lowerSet(terms)
 	scored := make([]scoredHit, 0, len(hits))
 	for _, h := range hits {
@@ -453,16 +466,24 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 				IsSubagent: h.IsSubagent,
 				Parent:     h.Parent,
 				Snippet:    disp,
+				Routine:    routines[h.SessionID],
 			},
 			cov: cov,
 		})
 	}
 
-	// Coverage re-rank (relevance mode only): docs matching more distinct terms
-	// float up; bm25 order is the tiebreak (stable sort by original index).
-	if multi && p.Sort == "" {
+	// Coverage re-rank and stable routine partition (relevance mode only):
+	// docs matching more distinct terms float up; at equal coverage, non-routine
+	// before routine; bm25 order is the tiebreak.
+	if p.Sort == "" {
 		sort.SliceStable(scored, func(i, j int) bool {
-			return scored[i].cov > scored[j].cov
+			if scored[i].cov != scored[j].cov {
+				return scored[i].cov > scored[j].cov
+			}
+			if scored[i].Routine != scored[j].Routine {
+				return !scored[i].Routine && scored[j].Routine
+			}
+			return false
 		})
 	}
 
@@ -674,6 +695,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 		}
 	}
 
+	routines, _ := store.RoutineSet(con)
 	lterms := lowerSet(terms)
 	out := []Anchor{}
 	for _, a := range anchors {
@@ -700,12 +722,19 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			Cov:          cov,
 			MissingSince: a.MissingSince, // 0 when NULL (present)
 			Project:      a.Project,      // "" from a database that predates the scope columns
+			Routine:      routines[a.SessionID],
 		})
 	}
 
-	if multi && p.Sort == "" {
+	if p.Sort == "" {
 		sort.SliceStable(out, func(i, j int) bool {
-			return out[i].Cov > out[j].Cov
+			if out[i].Cov != out[j].Cov {
+				return out[i].Cov > out[j].Cov
+			}
+			if out[i].Routine != out[j].Routine {
+				return !out[i].Routine && out[j].Routine
+			}
+			return false
 		})
 	}
 	return out

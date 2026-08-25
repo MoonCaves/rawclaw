@@ -95,15 +95,20 @@ func bm25Field(rank int) string {
 // composite score, because RawClaw's ranking has none. The leading rank is the
 // hit's actual ordinal position (Final).
 func FmtScoreExplain(e retrieve.ScoreExplain) string {
+	tier := e.Tier
+	if tier == "" {
+		tier = "normal"
+	}
 	return fmt.Sprintf(
 		"     rank %d · %s\n"+
-			"        bm25-order=%s · coverage=%d/%d term(s) · recency-overlay=%s",
+			"        bm25-order=%s · coverage=%d/%d term(s) · recency-overlay=%s · tier=%s",
 		e.Final,
 		e.Method,
 		bm25Field(e.BM25Rank),
 		e.Coverage,
 		len(e.Terms),
 		yesNo(e.Recency != 0),
+		tier,
 	)
 }
 
@@ -133,7 +138,11 @@ func PrintDebugSearch(w io.Writer, hits []retrieve.Hit, explains []retrieve.Scor
 		if iso == "" {
 			iso = "?"
 		}
-		fmt.Fprintf(w, "━━ %s · %s ━━\n", iso, sid8(h.SessionID))
+		routine := ""
+		if h.Routine {
+			routine = " · routine"
+		}
+		fmt.Fprintf(w, "━━ %s · %s%s ━━\n", iso, sid8(h.SessionID), routine)
 		if i < len(explains) {
 			fmt.Fprintln(w, FmtScoreExplain(explains[i]))
 		} else {

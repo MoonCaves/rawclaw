@@ -1555,8 +1555,12 @@ func PrintResults(w io.Writer, res []retrieve.Hit, nSessions int) {
 		if r.IsSubagent && r.Parent != "" {
 			tag = fmt.Sprintf(" · subagent⟵%s", trunc8(r.Parent))
 		}
+		routine := ""
+		if r.Routine {
+			routine = " · routine"
+		}
 		// timefmt seam: search results are agent-parsed — marked UTC.
-		fmt.Fprintf(w, "[%s · %s · %s%s] …%s…\n\n", orQ(timefmt.UTCFromISO(r.ISO)), label, r.Role, tag, r.Snippet)
+		fmt.Fprintf(w, "[%s · %s · %s%s%s] …%s…\n\n", orQ(timefmt.UTCFromISO(r.ISO)), label, r.Role, tag, routine, r.Snippet)
 	}
 }
 

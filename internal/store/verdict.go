@@ -130,3 +130,48 @@ func IsEffectivelyRoutine(con *sql.DB, sessionID string) (bool, error) {
 	}
 	return !real, nil
 }
+
+// RoutineSet returns the set of all session IDs in con that are effectively
+// routine (verdict="routine" AND no real topic segment). A missing table or
+// read error returns an empty map (non-fatal).
+func RoutineSet(con *sql.DB) (map[string]bool, error) {
+	rows, err := con.Query(`
+SELECT session_id FROM session_verdict
+WHERE verdict = ?
+  AND session_id NOT IN (
+    SELECT DISTINCT session_id FROM topic_segment
+    WHERE topic IS NOT NULL AND topic <> ''
+  )`, VerdictRoutine)
+	if err != nil {
+		return map[string]bool{}, nil
+	}
+	defer rows.Close()
+	out := make(map[string]bool)
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return out, err
+		}
+		out[sid] = true
+	}
+	return out, rows.Err()
+}
+
+// RoutineVerdictSet returns the set of all session IDs in con that carry a
+// "routine" verdict in session_verdict.
+func RoutineVerdictSet(con *sql.DB) (map[string]bool, error) {
+	rows, err := con.Query("SELECT session_id FROM session_verdict WHERE verdict = ?", VerdictRoutine)
+	if err != nil {
+		return map[string]bool{}, nil
+	}
+	defer rows.Close()
+	out := make(map[string]bool)
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return out, err
+		}
+		out[sid] = true
+	}
+	return out, rows.Err()
+}
