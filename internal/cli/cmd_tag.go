@@ -502,8 +502,8 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 }
 
 // runTagWriteRoutine writes a session's routine verdict with the given source
-// and taggedAt timestamp, clearing any prior topic segments so the session is
-// effectively routine (a real topic segment demotes routine at read time).
+// and taggedAt timestamp. Existing topic segments are retained because a real
+// topic segment demotes routine at read time.
 func runTagWriteRoutine(con *sql.DB, fullSID, source string, taggedAt float64) error {
 	if err := store.EnsureTopicSchema(con); err != nil {
 		return fmt.Errorf("ensure topic schema: %w", err)
@@ -512,9 +512,14 @@ func runTagWriteRoutine(con *sql.DB, fullSID, source string, taggedAt float64) e
 		source = store.VerdictSourceAgent
 	}
 	if source == store.VerdictSourceFloor {
-		source, ok, err := verdictSource(con, fullSID)
+		var ok bool
+		var err error
+		source, ok, err = verdictSource(con, fullSID)
 		if err != nil {
 			return fmt.Errorf("read existing verdict: %w", err)
+		}
+		if !ok {
+			source = store.VerdictSourceFloor
 		}
 		if ok && source == store.VerdictSourceAgent {
 			return nil
@@ -531,7 +536,7 @@ func runTagWriteRoutine(con *sql.DB, fullSID, source string, taggedAt float64) e
 	if source == store.VerdictSourceFloor {
 		return nil
 	}
-	return store.ReplaceSessionSegments(con, fullSID, nil)
+	return nil
 }
 
 func verdictSource(con *sql.DB, sessionID string) (string, bool, error) {
