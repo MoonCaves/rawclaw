@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/MoonCaves/rawclaw/internal/archive"
 	"github.com/MoonCaves/rawclaw/internal/archive/archivetest"
 )
 
@@ -108,9 +107,13 @@ func TestSpawnAutosyncChild_DetachedChildRunsWithLog(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh-script fake child")
 	}
-	newArchiveHome(t)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "autosync.log")
+	oldLog := autosyncLogPath
+	autosyncLogPath = func() string { return logPath }
+	t.Cleanup(func() { autosyncLogPath = oldLog })
 
-	script := filepath.Join(t.TempDir(), "fake-rawclaw")
+	script := filepath.Join(dir, "fake-rawclaw")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"child-argv $*\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +126,7 @@ func TestSpawnAutosyncChild_DetachedChildRunsWithLog(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	want := "child-argv archive autosync --timeout " + autosyncChildTimeoutArg
 	for {
-		b, _ := os.ReadFile(archive.AutosyncLogPath())
+		b, _ := os.ReadFile(logPath)
 		if strings.Contains(string(b), want) {
 			return
 		}
@@ -137,11 +140,12 @@ func TestSpawnAutosyncChild_DetachedChildRunsWithLog(t *testing.T) {
 // TestOpenAutosyncLog_RotatesOversized: an oversized receipt log is rotated to
 // one .old generation before the next spawn appends.
 func TestOpenAutosyncLog_RotatesOversized(t *testing.T) {
-	newArchiveHome(t)
-	p := archive.AutosyncLogPath()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "autosync.log")
+	oldLog := autosyncLogPath
+	autosyncLogPath = func() string { return p }
+	t.Cleanup(func() { autosyncLogPath = oldLog })
+
 	big := strings.Repeat("x", autosyncLogMax+1)
 	if err := os.WriteFile(p, []byte(big), 0o644); err != nil {
 		t.Fatal(err)
