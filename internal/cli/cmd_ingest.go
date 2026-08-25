@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"math/rand"
@@ -15,6 +16,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 )
 
@@ -221,14 +223,27 @@ func discoverAllIngestSources(regs []source.Registration) ([]tagSourceMatch, err
 }
 
 // Contention safety choice:
-// We use SQLite's WAL mode with a 10s busy_timeout (configured in store.ConnectRW)
-// plus a bounded retry loop with exponential backoff and randomized jitter.
-// Ingest writes session messages to a private per-container database (RefreshDBPath)
-// before folding into the consolidated store via SyncConsolidatedFrom. Because each
-// session uses an isolated refresh cache, contention is limited to the final
-// consolidation merge, which SQLite's WAL single-writer queue handles seamlessly
-// with bounded retry.
+// We use a single-flight exclusive file lock (flock) keyed to the consolidated
+// store (consolidated.lock) with a 10s timeout, combined with SQLite WAL mode
+// and bounded retry with backoff and jitter.
+// This guarantees that N concurrent hooks collapse safely into serialized runs,
+// preventing store creation races, corruptions, and SQLite write contention.
 func ingestContainerWithRetry(match tagSourceMatch) (int, error) {
+	lockPath := filepath.Join(store.CacheDir(), "consolidated.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return 0, fmt.Errorf("create store lock dir: %w", err)
+	}
+
+	fl := flock.New(lockPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	locked, err := fl.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil || !locked {
+		return 0, fmt.Errorf("acquire consolidated store lock for %s: %w", match.container.ID, err)
+	}
+	defer func() { _ = fl.Unlock() }()
+
 	dbp := index.RefreshDBPath(
 		match.registration.ID,
 		match.container.ID,
