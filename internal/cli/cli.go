@@ -1635,11 +1635,9 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	)
 
 	// An explicit --reindex, explicit --dir, or --this-project refreshes the targeted
-	// project. Default search is gated by the O(1) per-project freshness check: fresh
-	// skips discovery entirely; stale or UNKNOWN refreshes the current project
-	// synchronously — search must never miss the conversation happening right now.
-	// indexStale/staleNote stay unset on this path: the answer-first stale-note
-	// machinery belongs to the other read verbs, where a targeted refresh isn't possible.
+	// project. Default search is answer-first: the O(1) per-project freshness check
+	// skips discovery entirely, and stale or UNKNOWN answers from the consolidated
+	// store while a throttled background ingest nudge repairs freshness.
 	if o.Reindex || o.DirSet || o.ThisProject {
 		refreshThisProject(o)
 	} else {
@@ -1652,10 +1650,20 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td, o.Source)
 			_ = con.Close()
 			if fErr != nil || !freshness.Fresh {
-				refreshThisProject(o)
+				indexStale = true
+				if maybeSpawnIngest("") {
+					staleNote = "sessions not yet ingested — background ingest triggered"
+				} else {
+					staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
+				}
 			}
 		} else {
-			refreshThisProject(o)
+			indexStale = true
+			if maybeSpawnIngest("") {
+				staleNote = "sessions not yet ingested — background ingest triggered"
+			} else {
+				staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
+			}
 		}
 	}
 
