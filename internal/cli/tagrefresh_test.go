@@ -628,3 +628,42 @@ func TestRunTagPrepCmd_ContentionDefersFoldAndFoldsOnNextTouch(t *testing.T) {
 		t.Fatalf("session not folded into consolidated store, count = %d, want 1", count)
 	}
 }
+
+func TestRunTagPrepCmdGooseOptedOutServesIndexedCopy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RAWCLAW_GOOSE", "")
+
+	path := filepath.Join(t.TempDir(), "goose", "sessions.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir goose path: %v", err)
+	}
+	writeTagSourceFile(t, path, "indexed")
+	const sid = "goose-optout-session-0001"
+	c := source.Container{ID: sid, Path: path}
+	src := &tagTestSource{
+		containers: []source.Container{c},
+		messages:   []model.Message{{Role: "user", Text: "indexed copy", UUID: "55555555-copy"}},
+	}
+	reg := tagTestRegistration("goose", src)
+	seedTagSession(t, reg, c)
+	src.messages = []model.Message{{Role: "user", Text: "live should not be read", UUID: "66666666-live"}}
+
+	var errOut strings.Builder
+	oldStderr := tagPrepStderr
+	tagPrepStderr = &errOut
+	defer func() { tagPrepStderr = oldStderr }()
+
+	var out strings.Builder
+	if err := runTagPrepCmdWithSources(&out, sid, nil, nil, []source.Registration{reg}); err != nil {
+		t.Fatalf("tag-prep returned error: %v", err)
+	}
+	if !strings.Contains(errOut.String(), "goose is opted out — serving indexed copy; set RAWCLAW_GOOSE=1 to refresh") {
+		t.Fatalf("stderr = %q, want goose opt-out message", errOut.String())
+	}
+	if !strings.Contains(out.String(), "55555555 [user] indexed copy") {
+		t.Fatalf("output did not serve indexed copy:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "66666666-live") {
+		t.Fatalf("output refreshed opted-out goose session:\n%s", out.String())
+	}
+}

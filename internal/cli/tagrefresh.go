@@ -10,6 +10,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
@@ -93,6 +94,10 @@ func refreshTagSession(
 	if locateErr == nil {
 		match, ok := locatedTagSource(dbp, fullSID, registrations)
 		if ok {
+			if match.registration.ID == "goose" && !scopes.GooseOptedIn("") {
+				fmt.Fprintln(tagPrepStderr, "# goose is opted out — serving indexed copy; set RAWCLAW_GOOSE=1 to refresh")
+				return dbp, fullSID, nil, nil
+			}
 			if _, err := os.Stat(match.container.Path); err == nil {
 				targetDBP, targetSID, toFold, err := refreshTagMatches([]tagSourceMatch{match}, sessionArg)
 				if err != nil {
