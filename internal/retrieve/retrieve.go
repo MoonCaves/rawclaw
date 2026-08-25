@@ -759,8 +759,5 @@ func containsAll(hay string, terms []string) bool {
 // first10 returns the first 10 bytes of an ISO timestamp (the YYYY-MM-DD prefix
 // the date bounds compare against, assuming an ASCII date).
 func first10(iso string) string {
-	if len(iso) < 10 {
-		return iso
-	}
-	return iso[:10]
+	return iso[:min(len(iso), 10)]
 }
