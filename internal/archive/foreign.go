@@ -3,12 +3,28 @@ package archive
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 )
+
+// filterForeignMachines filters foreign machines matching predicate.
+func (a *Archive) filterForeignMachines(match func(m manifest) bool) []string {
+	if !a.cloneUsable() {
+		return nil
+	}
+	var hits []string
+	for _, m := range a.foreignMachines() {
+		if match(m) {
+			hits = append(hits, m.Name)
+		}
+	}
+	return hits
+}
 
 // ForeignProjectMatches reports the foreign machine names whose dir name or
 // scope labels contain the project substring — the delete verb's guard.
@@ -27,16 +43,9 @@ func (a *Archive) ForeignProjectMatches(project string) []string {
 	if project == "" {
 		return nil
 	}
-	if _, err := os.Stat(filepath.Join(a.clone, ".git", cloneSentinel)); err != nil {
-		return nil // no usable clone: nothing foreign is reachable (or warn-worthy)
-	}
-	var hits []string
-	for _, m := range a.foreignMachines() {
-		if a.foreignMachineMatches(m, project) {
-			hits = append(hits, m.Name)
-		}
-	}
-	return hits
+	return a.filterForeignMachines(func(m manifest) bool {
+		return a.foreignMachineMatches(m, project)
+	})
 }
 
 // foreignMachineMatches reports whether one foreign machine's name or any of
@@ -80,16 +89,9 @@ func (a *Archive) ForeignSessionMatches(id string) []string {
 	if id == "" {
 		return nil
 	}
-	if _, err := os.Stat(filepath.Join(a.clone, ".git", cloneSentinel)); err != nil {
-		return nil // no usable clone: nothing foreign is reachable (or warn-worthy)
-	}
-	var hits []string
-	for _, m := range a.foreignMachines() {
-		if a.foreignMachineHasSession(m, id) {
-			hits = append(hits, m.Name)
-		}
-	}
-	return hits
+	return a.filterForeignMachines(func(m manifest) bool {
+		return a.foreignMachineHasSession(m, id)
+	})
 }
 
 // foreignMachineHasSession reports whether one foreign machine's archived
@@ -103,19 +105,17 @@ func (a *Archive) foreignMachineHasSession(m manifest, id string) bool {
 				continue
 			}
 			files, _ := filepath.Glob(filepath.Join(claudeRoot, e.Name(), "*.jsonl"))
-			for _, f := range files {
-				if lifecycle.MatchesSessionID(strings.TrimSuffix(filepath.Base(f), ".jsonl"), id) {
-					return true
-				}
+			if slices.ContainsFunc(files, func(f string) bool {
+				return lifecycle.MatchesSessionID(strings.TrimSuffix(filepath.Base(f), ".jsonl"), id)
+			}) {
+				return true
 			}
 		}
 	}
 	if containers, err := codex.New().DiscoverRoot(filepath.Join(a.clone, m.Name, "codex")); err == nil {
-		for _, c := range containers {
-			if lifecycle.MatchesSessionID(c.ID, id) {
-				return true
-			}
-		}
+		return slices.ContainsFunc(containers, func(c source.Container) bool {
+			return lifecycle.MatchesSessionID(c.ID, id)
+		})
 	}
 	return false
 }

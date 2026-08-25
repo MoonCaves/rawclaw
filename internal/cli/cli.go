@@ -5,6 +5,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -161,17 +162,11 @@ type BuildInfo struct {
 // versionString renders the one-line version banner shown by `--version` and the
 // `version` subcommand. Empty fields fall back to "dev"/"unknown".
 func (b BuildInfo) versionString() string {
-	v, c, d := b.Version, b.Commit, b.Date
-	if v == "" {
-		v = "dev"
-	}
-	if c == "" {
-		c = "unknown"
-	}
-	if d == "" {
-		d = "unknown"
-	}
-	return fmt.Sprintf("rawclaw %s (commit: %s, built: %s)", v, c, d)
+	return fmt.Sprintf("rawclaw %s (commit: %s, built: %s)",
+		cmp.Or(b.Version, "dev"),
+		cmp.Or(b.Commit, "unknown"),
+		cmp.Or(b.Date, "unknown"),
+	)
 }
 
 // NewRootCmd builds the rawclaw cobra command tree (root + the `read`, `outline`,
@@ -311,12 +306,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 		return []string{"newest", "oldest"}, cobra.ShellCompDirectiveNoFileComp
 	})
 	_ = root.RegisterFlagCompletionFunc("source", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		regs := sources.Registered()
-		out := make([]string, 0, len(regs))
-		for _, r := range regs {
-			out = append(out, r.ID)
-		}
-		return out, cobra.ShellCompDirectiveNoFileComp
+		return registeredSourceIDs(), cobra.ShellCompDirectiveNoFileComp
 	})
 	return root
 }
@@ -466,15 +456,17 @@ func isConsolidateInvocation(args []string) bool {
 // default watchdog.
 func isArchiveSyncInvocation(args []string) bool {
 	w := leadingSubcommandTokens(args, 2)
-	if len(w) >= 2 && w[0] == "setup" && w[1] == "live" {
-		return true
-	}
-	if len(w) < 2 || w[0] != "archive" {
+	if len(w) < 2 {
 		return false
 	}
-	switch w[1] {
-	case "init", "push", "pull", "autosync":
+	if w[0] == "setup" && w[1] == "live" {
 		return true
+	}
+	if w[0] == "archive" {
+		switch w[1] {
+		case "init", "push", "pull", "autosync":
+			return true
+		}
 	}
 	return false
 }
@@ -624,16 +616,7 @@ func newReadCmd() *cobra.Command {
 					sessionPrefix = sessionPrefix[:idx]
 				}
 				if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil {
-					if sf.Status == index.SessionStale {
-						isStale = true
-						if maybeSpawnIngest(sf.SessionID) {
-							sfNote = "session may be stale (transcript updated) — background ingest triggered"
-						} else {
-							sfNote = sf.Note
-						}
-					} else {
-						sfNote = sf.Note
-					}
+					isStale, sfNote = sessionStaleNote(sf)
 				}
 			}
 			if jsonOut {
@@ -716,16 +699,7 @@ func newOutlineCmd() *cobra.Command {
 				defer con.Close()
 				sessionPrefix := agentproto.NormalizeSessionArg(args[0])
 				if sf, fErr := index.CheckSessionFreshness(con, sessionPrefix); fErr == nil {
-					if sf.Status == index.SessionStale {
-						isStale = true
-						if maybeSpawnIngest(sf.SessionID) {
-							sfNote = "session may be stale (transcript updated) — background ingest triggered"
-						} else {
-							sfNote = sf.Note
-						}
-					} else {
-						sfNote = sf.Note
-					}
+					isStale, sfNote = sessionStaleNote(sf)
 				}
 			}
 			if jsonOut {
@@ -778,12 +752,7 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	// that means the previous test's value. Set unconditionally, never only in
 	// the true branch, so each invocation starts from its own flag.
 	semantic.SetNoVector(o.NoVector)
-
-	validSources := []string{}
-	for _, reg := range sources.Registered() {
-		validSources = append(validSources, reg.ID)
-	}
-	if err := validateChoice("source", o.Source, validSources...); err != nil {
+	if err := validateChoice("source", o.Source, registeredSourceIDs()...); err != nil {
 		return err
 	}
 	// --source narrows the runtime axis, so it only composes with shapes that
@@ -947,14 +916,17 @@ func runResume(w io.Writer, o *Options) error {
 	for _, h := range paths.ResolveSession(o.Resume) {
 		matches = append(matches, resumeCandidate{hit: h, src: "claude"})
 	}
-	for _, h := range codexResumeHits(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "codex"})
-	}
-	for _, h := range antigravityResumeHits(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "antigravity"})
-	}
-	for _, h := range gooseResumeHits(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "goose"})
+	for _, entry := range []struct {
+		src    string
+		scopes []view.Scope
+	}{
+		{"codex", scopes.Codex(false)},
+		{"antigravity", scopes.Antigravity(false)},
+		{"goose", scopes.Goose(false)},
+	} {
+		for _, h := range scopeResumeHits(entry.scopes, o.Resume) {
+			matches = append(matches, resumeCandidate{hit: h, src: entry.src})
+		}
 	}
 
 	if len(matches) == 0 {
@@ -1096,52 +1068,12 @@ func archiveResumeHits(prefix string) []foreignHit {
 	return out
 }
 
-// codexResumeHits resolves a session-id prefix against the Codex scope dbs. A
-// Codex session's cwd is its scope's cwd. Only top-level sessions are offered
+// scopeResumeHits resolves a session-id prefix against a slice of scope dbs.
+// A session's cwd is its scope's cwd. Only top-level sessions are offered
 // (is_subagent=0), matching ResolveSession's Claude behavior.
-func codexResumeHits(prefix string) []paths.SessionHit {
+func scopeResumeHits(scopeList []view.Scope, prefix string) []paths.SessionHit {
 	var out []paths.SessionHit
-	for _, sc := range scopes.Codex(false) {
-		con, err := store.ConnectRO(sc.DBP)
-		if err != nil {
-			continue
-		}
-		ids, qerr := store.SessionsByPrefix(con, prefix, false, 3)
-		_ = con.Close()
-		if qerr != nil {
-			continue
-		}
-		for _, id := range ids {
-			out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
-		}
-	}
-	return out
-}
-
-// antigravityResumeHits resolves a session-id prefix against the Antigravity scope dbs.
-func antigravityResumeHits(prefix string) []paths.SessionHit {
-	var out []paths.SessionHit
-	for _, sc := range scopes.Antigravity(false) {
-		con, err := store.ConnectRO(sc.DBP)
-		if err != nil {
-			continue
-		}
-		ids, qerr := store.SessionsByPrefix(con, prefix, false, 3)
-		_ = con.Close()
-		if qerr != nil {
-			continue
-		}
-		for _, id := range ids {
-			out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
-		}
-	}
-	return out
-}
-
-// gooseResumeHits resolves a session-id prefix against the Goose scope dbs.
-func gooseResumeHits(prefix string) []paths.SessionHit {
-	var out []paths.SessionHit
-	for _, sc := range scopes.Goose(false) {
+	for _, sc := range scopeList {
 		con, err := store.ConnectRO(sc.DBP)
 		if err != nil {
 			continue
@@ -1318,11 +1250,7 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 			defer con.Close()
 			if freshness, fErr := index.CheckIndexFreshness(con); fErr == nil && !freshness.Fresh {
 				indexStale = true
-				if maybeSpawnIngest("") {
-					staleNote = "sessions not yet ingested — background ingest triggered"
-				} else {
-					staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
-				}
+				staleNote = staleIngestNote()
 			}
 			if res, err := view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, []string{paths.ProjectLabel(td)}); err == nil && len(res) > 0 {
 				rows = make([]view.BrowseRow, 0, len(res))
@@ -1428,15 +1356,6 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 			if err != nil {
 				continue // an unresolvable scope can't contribute rows; others still can
 			}
-			if !checkedFreshness {
-				if db, dbErr := store.ConnectRO(dbp); dbErr == nil {
-					if f, fErr := index.CheckIndexFreshness(db); fErr == nil {
-						freshness = &f
-					}
-					_ = db.Close()
-				}
-				checkedFreshness = true
-			}
 			for _, r := range view.BrowseDB(dbp, o.Limit, o.Since, o.Before) {
 				rows = append(rows, view.BrowseAllRow{Project: sc.Project, BrowseRow: r})
 			}
@@ -1455,11 +1374,7 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 	}
 	if !o.Reindex && freshness != nil && !freshness.Fresh {
 		indexStale = true
-		if maybeSpawnIngest("") {
-			staleNote = "sessions not yet ingested — background ingest triggered"
-		} else {
-			staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
-		}
+		staleNote = staleIngestNote()
 	}
 
 	if o.JSON {
@@ -1650,24 +1565,17 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		if td != "" {
 			projLabel = paths.ProjectLabel(td)
 		}
+		stale := false
 		if con, _, err := index.OpenConsolidated(); err == nil {
 			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td, o.Source)
 			_ = con.Close()
-			if fErr != nil || !freshness.Fresh {
-				indexStale = true
-				if maybeSpawnIngest("") {
-					staleNote = "sessions not yet ingested — background ingest triggered"
-				} else {
-					staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
-				}
-			}
+			stale = fErr != nil || !freshness.Fresh
 		} else {
+			stale = true
+		}
+		if stale {
 			indexStale = true
-			if maybeSpawnIngest("") {
-				staleNote = "sessions not yet ingested — background ingest triggered"
-			} else {
-				staleNote = "sessions not yet ingested — run 'rawclaw ingest' to refresh"
-			}
+			staleNote = staleIngestNote()
 		}
 	}
 
@@ -1835,7 +1743,7 @@ func ListProjects(w io.Writer) {
 	for _, sc := range scopes.Claude() {
 		if sc.TDir != "" { // live project: count from its transcripts (unchanged)
 			matches, _ := filepath.Glob(filepath.Join(sc.TDir, "*.jsonl"))
-			rows = append(rows, row{len(matches), paths.ProjectLabel(sc.TDir), baseName(sc.TDir), false})
+			rows = append(rows, row{len(matches), paths.ProjectLabel(sc.TDir), filepath.Base(sc.TDir), false})
 			continue
 		}
 		// Orphaned source: no jsonl on disk — count retained sessions from the db.
@@ -1922,6 +1830,35 @@ func (e ExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
+// registeredSourceIDs returns the IDs of all registered source adapters.
+func registeredSourceIDs() []string {
+	regs := sources.Registered()
+	out := make([]string, len(regs))
+	for i, r := range regs {
+		out[i] = r.ID
+	}
+	return out
+}
+
+// staleIngestNote returns the status note when an index is stale, triggering a background ingest.
+func staleIngestNote() string {
+	if maybeSpawnIngest("") {
+		return "sessions not yet ingested — background ingest triggered"
+	}
+	return "sessions not yet ingested — run 'rawclaw ingest' to refresh"
+}
+
+// sessionStaleNote resolves the staleness state and note for a specific session.
+func sessionStaleNote(sf index.SessionFreshness) (bool, string) {
+	if sf.Status == index.SessionStale {
+		if maybeSpawnIngest(sf.SessionID) {
+			return true, "session may be stale (transcript updated) — background ingest triggered"
+		}
+		return true, sf.Note
+	}
+	return false, sf.Note
+}
+
 // validateChoice enforces an enum flag: empty = unset (allowed), else the value
 // must be one of opts. Returns an ExitError(2) on a bad value.
 func validateChoice(flag, val string, opts ...string) error {
@@ -1938,10 +1875,7 @@ func validateChoice(flag, val string, opts ...string) error {
 
 // orQ returns s, or "?" when s is empty.
 func orQ(s string) string {
-	if s == "" {
-		return "?"
-	}
-	return s
+	return cmp.Or(s, "?")
 }
 
 // trunc8 returns the first 8 runes of s (rune-safe truncation, no padding).

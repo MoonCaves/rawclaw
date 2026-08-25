@@ -215,12 +215,11 @@ func NormalizeRecord(rec map[string]any) (role, text string, ok bool) {
 
 // actionQuery extracts a web_search_call's query text (payload.action.query).
 func actionQuery(v any) string {
-	m, ok := v.(map[string]any)
-	if !ok {
-		return ""
+	if m, ok := v.(map[string]any); ok {
+		q, _ := m["query"].(string)
+		return q
 	}
-	q, _ := m["query"].(string)
-	return q
+	return ""
 }
 
 // argsText renders a tool call's arguments, which may be a JSON string (like
