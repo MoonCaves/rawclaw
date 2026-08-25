@@ -3,6 +3,7 @@ package semantic
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strings"
@@ -42,6 +43,18 @@ func (f fakeEmbedder) Embed(_ context.Context, text string) []float64 { return f
 type nilEmbedder struct{}
 
 func (nilEmbedder) Embed(context.Context, string) []float64 { return nil }
+
+// unpackVec decodes little-endian float32 bytes back into a float64 slice for testing.
+func unpackVec(blob []byte) []float64 {
+	if len(blob)%4 != 0 {
+		return nil
+	}
+	out := make([]float64, len(blob)/4)
+	for i := range out {
+		out[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:])))
+	}
+	return out
+}
 
 func TestPackUnpackRoundTrip(t *testing.T) {
 	cases := [][]float64{
