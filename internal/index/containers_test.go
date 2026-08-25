@@ -755,3 +755,49 @@ func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing
 		}
 	}
 }
+
+// TestEnsureIndexedContainers_StampsFreshnessWatermark pins the release-
+// blocking gap found by the final review: the freshness fix (#3) stamped
+// MetaLastIngestTime/MetaLastIngestCatalogMTime in ensureIndexedTree (the
+// Claude-only path) but not here — so Codex, Antigravity, and Goose
+// per-project dbs, which all index through EnsureIndexedContainers, never
+// got the watermark and stayed permanently "freshness unknown" instead of
+// ever reporting fresh.
+func TestEnsureIndexedContainers_StampsFreshnessWatermark(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	catDir := filepath.Join(home, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	if err := os.MkdirAll(catDir, 0o755); err != nil {
+		t.Fatalf("create catalog dir: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "codex.db")
+
+	f := filepath.Join(dir, "rollout.jsonl")
+	if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cs := []source.Container{{ID: "sess1", Path: f, CWD: "/repo"}}
+	msgs := func(source.Container) ([]model.Message, error) {
+		return []model.Message{{Role: "user", Text: "hi", TS: 1, TSISO: "2026-07-15T00:00:00Z", UUID: "u"}}, nil
+	}
+
+	if _, status, err := EnsureIndexedContainers(dbp, false, cs, msgs, "codex", ""); err != nil || status != IndexFresh {
+		t.Fatalf("EnsureIndexedContainers: status=%v err=%v", status, err)
+	}
+
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer con.Close()
+	freshness, err := CheckIndexFreshness(con)
+	if err != nil {
+		t.Fatalf("CheckIndexFreshness: %v", err)
+	}
+	if !freshness.Fresh {
+		t.Fatalf("freshness = %+v, want Fresh — the container path never stamped the watermark", freshness)
+	}
+}

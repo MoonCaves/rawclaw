@@ -280,6 +280,9 @@ func ensureIndexedContainers(dbp string, reindex bool, cs []source.Container, ms
 		}
 		return 0, IndexStatusUnknown, fmt.Errorf("update containers: %w", err)
 	}
+	if err := StampIngestWatermark(con); err != nil {
+		return 0, IndexStatusUnknown, fmt.Errorf("stamp ingest watermark: %w", err)
+	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&nSessions); err != nil {
 		if isBusy(err) {
 			return store.CountSessions(dbp), IndexStale, nil
