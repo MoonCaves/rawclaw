@@ -884,25 +884,48 @@ func hasScopeColumns(con *sql.DB) (bool, error) {
 // additive by construction, so without this a deleted session would come back
 // the moment its old rows were read out of a per-project db that had not been
 // reconciled yet. A user delete is the one absence that must propagate.
+// escapeLike makes s safe to embed as the LITERAL prefix of a LIKE pattern that
+// is evaluated with ESCAPE '\\'. Without it a session id containing _ or %
+// behaves as a wildcard and matches sibling ids.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, "_", `\_`, "%", `\%`)
+	return r.Replace(s)
+}
+
 func pruneTombstoned(con *sql.DB) error {
 	tombstoned, err := lifecycle.LoadTombstones("")
 	if err != nil || len(tombstoned) == 0 {
 		return nil // best-effort: a missing sidecar never blocks consolidation
 	}
+	ids := make([]string, 0, len(tombstoned))
 	for id := range tombstoned {
+		ids = append(ids, id)
+	}
+	return pruneTombstonedIDs(con, ids)
+}
+
+// pruneTombstonedIDs is the deletion core, split out so the wildcard-escaping
+// behaviour is testable without a tombstone sidecar on disk.
+func pruneTombstonedIDs(con *sql.DB, ids []string) error {
+	for _, id := range ids {
 		// Tombstones cover a session and the subagent threads beneath it, whose
 		// ids are "<parent>/<stem>".
-		like := id + "/%"
-		if _, err := con.Exec("DELETE FROM messages WHERE session_id = ? OR session_id LIKE ?", id, like); err != nil {
+		//
+		// The id is DATA, not a pattern: SQLite LIKE treats _ as a single-char
+		// wildcard and % as any-run, so an unescaped id containing either would
+		// match NEIGHBOURING sessions and delete their rows from all four tables
+		// on every consolidation pass. Escape the literal part, then anchor.
+		like := escapeLike(id) + "/%"
+		if _, err := con.Exec(`DELETE FROM messages WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned messages: %w", err)
 		}
-		if _, err := con.Exec("DELETE FROM sessions WHERE id = ? OR id LIKE ?", id, like); err != nil {
+		if _, err := con.Exec(`DELETE FROM sessions WHERE id = ? OR id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned sessions: %w", err)
 		}
-		if _, err := con.Exec("DELETE FROM session_sources WHERE session_id = ? OR session_id LIKE ?", id, like); err != nil {
+		if _, err := con.Exec(`DELETE FROM session_sources WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned session sources: %w", err)
 		}
-		if _, err := con.Exec("DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ?", id, like); err != nil {
+		if _, err := con.Exec(`DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned file_index: %w", err)
 		}
 	}

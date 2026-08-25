@@ -1768,3 +1768,53 @@ func TestConsolidate_RollsBackAMidFoldFailure(t *testing.T) {
 		}
 	}
 }
+
+// TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour covers issue #15: the
+// tombstone prune built a LIKE pattern by concatenating a session id, so an id
+// containing SQLite's single-char wildcard (_) matched NEIGHBOURING ids and
+// deleted their rows from messages/sessions/session_sources/file_index.
+func TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour(t *testing.T) {
+	isolateCache(t)
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	// "vic_im" is tombstoned. "vicXim" is an UNRELATED live session whose id
+	// differs only where the wildcard would match. Its subagent thread is the
+	// row that an unescaped LIKE "vic_im/%" wrongly sweeps up.
+	for _, id := range []string{"vic_im/sub", "vicXim/sub"} {
+		if _, err := con.Exec(`
+			INSERT INTO sessions (
+				id, started_at, last_ts, message_count, is_subagent, parent_id,
+				origin_machine, source_tool, source_path, missing_since, project, cwd
+			) VALUES (?, 100, 200, 1, 1, NULL, 'm', 'claude', '/tmp/x.jsonl', NULL, 'p', '/tmp')
+		`, id); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+
+	if err := pruneTombstonedIDs(con, []string{"vic_im"}); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+
+	var gone int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='vic_im/sub'").Scan(&gone); err != nil {
+		t.Fatalf("query tombstoned: %v", err)
+	}
+	if gone != 0 {
+		t.Errorf("tombstoned subagent survived = %d, want 0", gone)
+	}
+
+	var neighbour int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id='vicXim/sub'").Scan(&neighbour); err != nil {
+		t.Fatalf("query neighbour: %v", err)
+	}
+	if neighbour != 1 {
+		t.Errorf("UNRELATED neighbour session deleted: count = %d, want 1", neighbour)
+	}
+}
