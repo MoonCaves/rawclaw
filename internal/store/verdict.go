@@ -8,6 +8,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // Verdict source values. `floor` = the deterministic math floor; `agent` =
@@ -132,8 +133,8 @@ func IsEffectivelyRoutine(con *sql.DB, sessionID string) (bool, error) {
 }
 
 // RoutineSet returns the set of all session IDs in con that are effectively
-// routine (verdict="routine" AND no real topic segment). A missing table or
-// read error returns an empty map (non-fatal).
+// routine (verdict="routine" AND no real topic segment). A missing sidecar
+// table reads as no routine sessions; other database errors are propagated.
 func RoutineSet(con *sql.DB) (map[string]bool, error) {
 	rows, err := con.Query(`
 SELECT session_id FROM session_verdict
@@ -143,18 +144,24 @@ WHERE verdict = ?
     WHERE topic IS NOT NULL AND topic <> ''
   )`, VerdictRoutine)
 	if err != nil {
-		return map[string]bool{}, nil
+		if strings.Contains(err.Error(), "no such table") {
+			return map[string]bool{}, nil
+		}
+		return map[string]bool{}, fmt.Errorf("query routine sessions: %w", err)
 	}
 	defer rows.Close()
 	out := make(map[string]bool)
 	for rows.Next() {
 		var sid string
 		if err := rows.Scan(&sid); err != nil {
-			return out, err
+			return out, fmt.Errorf("scan routine session: %w", err)
 		}
 		out[sid] = true
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, fmt.Errorf("iterate routine sessions: %w", err)
+	}
+	return out, nil
 }
 
 // RoutineVerdictSet returns the set of all session IDs in con that carry a
