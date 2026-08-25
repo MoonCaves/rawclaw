@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -138,7 +139,14 @@ func verifyFreshContainer(dbp string, c source.Container) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("verify refreshed transcript %s: %w", c.Path, err)
 	}
-	if sessionID != c.ID || size != wantSize || absDiff(mtime, wantMTime) >= 0.001 || fp != wantFP {
+	watermarkMatches := size == wantSize && fp == wantFP && absDiff(mtime, wantMTime) < 0.001
+	if size > 0 && size < wantSize {
+		// An active writer may leave a final JSONL record incomplete. The
+		// incremental path intentionally keeps the watermark at the last
+		// complete newline, so verify that prefix rather than demanding EOF.
+		watermarkMatches = checkPrefixFingerprint(rawPath, size) == fp
+	}
+	if sessionID != c.ID || !watermarkMatches {
 		return 0, fmt.Errorf("live transcript %s changed or was not fully refreshed", c.Path)
 	}
 
@@ -254,17 +262,43 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		if isMember(tombstoned, c.ID) {
 			continue // user-deleted session: honor across reindex
 		}
-		if prev, found := cur[rp]; found {
+		var prev fileMeta
+		var found bool
+		if prev, found = cur[rp]; found {
 			if absDiff(prev.mtime, mtime) < 0.001 && prev.size == size {
 				if prev.fp == fp {
 					continue // genuinely unchanged
 				}
 			}
 		}
+
+		// Fast path: incremental tail ingest if file grew append-only.
+		if found && prev.size > 0 && size > prev.size {
+			headFP := checkPrefixFingerprint(rawPath, prev.size)
+			if headFP != "" && headFP == prev.fp {
+				tailMs, newOffset, ok := parseTailMessages(con, c, sourceID, rawPath, prev.size, size)
+				if ok {
+					if len(tailMs) == 0 && newOffset == prev.size {
+						continue // writer has only supplied an incomplete trailing record
+					}
+					newFP := checkPrefixFingerprint(rawPath, newOffset)
+					appendErr := appendContainer(con, c, tailMs, sourceID, origin, rp, prev.size, mtime, newOffset, newFP)
+					if errors.Is(appendErr, errAppendStale) {
+						continue // another scan committed this tail first
+					}
+					if appendErr == nil {
+						IncrementalIngestCount.Add(1)
+						continue
+					}
+				}
+			}
+		}
+
 		ms, mErr := msgs(c)
 		if mErr != nil {
 			continue // bad container: leave existing rows + watermark untouched
 		}
+		FullReindexCount.Add(1)
 		if err := reindexContainer(con, reindexContainerParams{
 			container:   c,
 			messages:    ms,
@@ -404,6 +438,73 @@ func reindexContainer(con *sql.DB, params reindexContainerParams) error {
 	return nil
 }
 
+// appendContainer atomically appends new messages to an existing session under a single
+// transaction: messages, sessions message_count/last_ts, and file_index watermark are
+// updated together. If any statement or vault write fails, the transaction is rolled back.
+var errAppendStale = errors.New("append watermark changed")
+
+func appendContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, expectedSize int64, mtime float64, size int64, fp string) error {
+	tx, err := con.Begin()
+	if err != nil {
+		return fmt.Errorf("session %s begin tx for append: %w", c.ID, err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var maxTS float64
+	for _, m := range ms {
+		if _, err := tx.Exec(
+			"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
+			c.ID, m.Role, m.Text, m.TS, m.TSISO, m.UUID,
+		); err != nil {
+			return fmt.Errorf("session %s append message: %w", c.ID, err)
+		}
+		if m.TS > maxTS {
+			maxTS = m.TS
+		}
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		SET message_count = (SELECT COUNT(*) FROM messages WHERE messages.session_id = sessions.id),
+		    last_ts = CASE WHEN ? > COALESCE(last_ts, 0) THEN ? ELSE last_ts END,
+		    missing_since = NULL
+		WHERE id = ?`,
+		maxTS, maxTS, c.ID,
+	); err != nil {
+		return fmt.Errorf("session %s update session on append: %w", c.ID, err)
+	}
+
+	if _, err := tx.Exec("DELETE FROM file_index WHERE session_id=? AND path<>?", c.ID, rp); err != nil {
+		return fmt.Errorf("delete stale file_index for %s: %w", c.ID, err)
+	}
+	result, err := tx.Exec(
+		"UPDATE file_index SET mtime=?,size=?,fp=? WHERE path=? AND session_id=? AND size=?",
+		mtime, size, fp, rp, c.ID, expectedSize,
+	)
+	if err != nil {
+		return fmt.Errorf("session %s update file_index on append: %w", c.ID, err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("session %s inspect append watermark: %w", c.ID, err)
+	} else if affected != 1 {
+		return errAppendStale
+	}
+
+	if origin == "" {
+		projectArg, cwdArg := scopeOf(c.CWD, projectScope{})
+		if err := vaultContainerAll(tx, c, sourceID, projectArg, cwdArg); err != nil {
+			return fmt.Errorf("session %s vault container on append: %w", c.ID, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("session %s commit tx for append: %w", c.ID, err)
+	}
+	return nil
+}
+
 // vaultContainer stores rawclaw's own copy of a container-sourced session.
 func vaultContainer(c source.Container, ms []model.Message, sourceID string, projectArg, cwdArg any) error {
 	m := durable.Meta{
@@ -422,6 +523,45 @@ func vaultContainer(c source.Container, ms []model.Message, sourceID string, pro
 		m.SourceFP = fp
 	}
 	return durable.StoreMessages(m, ms)
+}
+
+// vaultContainerAll vaults a complete session after append.
+func vaultContainerAll(tx *sql.Tx, c source.Container, sourceID string, projectArg, cwdArg any) error {
+	m := durable.Meta{
+		ID:         c.ID,
+		Source:     sourceID,
+		Project:    strOf(projectArg),
+		CWD:        strOf(cwdArg),
+		IsSubagent: c.IsSubagent,
+		ParentID:   c.ParentID,
+		SourcePath: realpath(c.Path),
+	}
+	rawPath := backingFilePath(c.Path)
+	if mtime, size, fp, err := backingFileState(rawPath); err == nil {
+		m.SourceMTime = mtime
+		m.SourceSize = size
+		m.SourceFP = fp
+	}
+	if sourceID == sourceClaude || sourceID == "" {
+		return durable.StoreFile(m, rawPath)
+	}
+	rows, err := tx.Query("SELECT role, content, ts, ts_iso, uuid FROM messages WHERE session_id=? ORDER BY id ASC", c.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var msgs []model.Message
+	for rows.Next() {
+		var msg model.Message
+		if err := rows.Scan(&msg.Role, &msg.Text, &msg.TS, &msg.TSISO, &msg.UUID); err != nil {
+			return err
+		}
+		msgs = append(msgs, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return durable.StoreMessages(m, msgs)
 }
 
 // b2i maps a bool to the 0/1 the is_subagent column stores.
