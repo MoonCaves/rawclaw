@@ -234,10 +234,8 @@ func ProjectLabel(tdir string) string {
 // path: a caller storing a cwd needs to tell "the sessions here ran in /x/y"
 // apart from "nothing here records where it ran."
 func DirCWD(tdir string) string {
-	for _, f := range firstTopLevelJSONL(tdir) {
-		if c := firstCWD(f); c != "" {
-			return c
-		}
+	if f := firstTopLevelJSONL(tdir); f != "" {
+		return firstCWD(f)
 	}
 	return ""
 }
@@ -443,15 +441,15 @@ func firstCWD(jsonlPath string) string {
 	return ""
 }
 
-// firstTopLevelJSONL returns the first (sorted) top-level *.jsonl in tdir, or an
-// empty slice. Used by project_label / project_cwd to sample one transcript.
-func firstTopLevelJSONL(tdir string) []string {
+// firstTopLevelJSONL returns the first (sorted) top-level *.jsonl in tdir, or
+// "". Used by project_label / project_cwd to sample one transcript.
+func firstTopLevelJSONL(tdir string) string {
 	files, _ := filepath.Glob(filepath.Join(tdir, "*.jsonl"))
 	if len(files) == 0 {
-		return nil
+		return ""
 	}
 	slices.Sort(files)
-	return files[:1]
+	return files[0]
 }
 
 // globRecursiveJSONL returns every *.jsonl at any depth under root (including
