@@ -32,39 +32,41 @@ func ResetIngestCountersForTesting() {
 
 // readTailChunk reads bytes from fromOffset to toOffset in path.
 // It verifies that fromOffset < toOffset and slices up to the last complete newline.
-func readTailChunk(path string, fromOffset, toOffset int64) ([]byte, int64, bool) {
+func readTailChunk(path string, fromOffset, toOffset int64) ([]byte, int64, bool, bool) {
 	if fromOffset < 0 || toOffset <= fromOffset {
-		return nil, fromOffset, false
+		return nil, fromOffset, false, false
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fromOffset, false
+		return nil, fromOffset, false, false
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(fromOffset, io.SeekStart); err != nil {
-		return nil, fromOffset, false
+		return nil, fromOffset, false, false
 	}
 
 	length := toOffset - fromOffset
 	buf := make([]byte, length)
 	n, err := io.ReadFull(f, buf)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return nil, fromOffset, false
+		return nil, fromOffset, false, false
 	}
 	buf = buf[:n]
 	if len(buf) == 0 {
-		return nil, fromOffset, false
+		return nil, fromOffset, false, false
 	}
 
 	lastNL := bytes.LastIndexByte(buf, '\n')
 	if lastNL < 0 {
-		return nil, fromOffset, false
+		// The writer has not completed a record yet. Keep the old watermark so
+		// the next ingest retries the whole partial line after it grows.
+		return nil, fromOffset, false, true
 	}
 
 	completeChunk := buf[:lastNL+1]
 	newOffset := fromOffset + int64(lastNL+1)
-	return completeChunk, newOffset, true
+	return completeChunk, newOffset, true, false
 }
 
 // checkPrefixFingerprint computes the FileFingerprint of path as it was at offset,
@@ -116,8 +118,11 @@ func parseTailMessages(con *sql.DB, c source.Container, sourceID, rawPath string
 	if strings.Contains(c.Path, "#") || strings.HasSuffix(rawPath, ".db") {
 		return nil, fromOffset, false
 	}
-	chunk, newOffset, ok := readTailChunk(rawPath, fromOffset, toOffset)
+	chunk, newOffset, ok, pending := readTailChunk(rawPath, fromOffset, toOffset)
 	if !ok {
+		if pending {
+			return nil, fromOffset, true
+		}
 		return nil, fromOffset, false
 	}
 

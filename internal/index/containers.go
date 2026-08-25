@@ -270,6 +270,9 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 			if headFP != "" && headFP == prev.fp {
 				tailMs, newOffset, ok := parseTailMessages(con, c, sourceID, rawPath, prev.size, size)
 				if ok {
+					if len(tailMs) == 0 && newOffset == prev.size {
+						continue // writer has only supplied an incomplete trailing record
+					}
 					newFP := provenance.FileFingerprint(rawPath, newOffset)
 					if err := appendContainer(con, c, tailMs, sourceID, origin, rp, mtime, newOffset, newFP); err == nil {
 						IncrementalIngestCount.Add(1)
