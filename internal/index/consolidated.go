@@ -97,7 +97,13 @@ func UnconsolidatedDBs(con *sql.DB) ([]string, error) {
 	}
 	var missing []string
 	for _, dbp := range dbs {
-		if _, ok := folded[filepath.Base(dbp)]; !ok {
+		if _, ok := folded[sourceIdentity(dbp)]; !ok {
+			// Accept pre-path-identity watermarks written by older builds. They
+			// remain inherently ambiguous when two paths share a basename, but
+			// new folds use the full path below so that ambiguity cannot recur.
+			if _, ok := folded[filepath.Base(dbp)]; ok {
+				continue
+			}
 			missing = append(missing, dbp)
 		}
 	}
@@ -602,7 +608,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 		return 0, false, true, fmt.Errorf("read sync watermark: %w", err)
 	}
 
-	srcBase := filepath.Base(src)
+	srcID := sourceIdentity(src)
 	if err := migrateSessionSources(con); err != nil {
 		return 0, false, true, fmt.Errorf("migrate session sources: %w", err)
 	}
@@ -619,13 +625,13 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 		SELECT session_id FROM main.session_sources
 		WHERE source_db = ?
 		  AND session_id NOT IN (SELECT id FROM src.sessions)
-	`, srcBase); err != nil {
+	`, srcID); err != nil {
 		return 0, false, true, fmt.Errorf("record deleted session sources: %w", err)
 	}
-	if _, err := con.Exec(recordSessionSourcesSQL, srcBase); err != nil {
+	if _, err := con.Exec(recordSessionSourcesSQL, srcID); err != nil {
 		return 0, false, true, fmt.Errorf("record session sources: %w", err)
 	}
-	if _, err := con.Exec("DELETE FROM main.session_sources WHERE source_db = ? AND session_id NOT IN (SELECT id FROM src.sessions)", srcBase); err != nil {
+	if _, err := con.Exec("DELETE FROM main.session_sources WHERE source_db = ? AND session_id NOT IN (SELECT id FROM src.sessions)", srcID); err != nil {
 		return 0, false, true, fmt.Errorf("prune stale session sources: %w", err)
 	}
 	if _, err := con.Exec(mergeSessionsSQL); err != nil {
@@ -724,10 +730,22 @@ func migrateSourceScope(src string) error {
 	return migrateScopeColumns(con)
 }
 
+// sourceIdentity is the stable identity of a source database. A basename is
+// not sufficient: two projects can both have a sessions.db, and treating them
+// as one source lets one project's purge delete the other's contribution.
+func sourceIdentity(src string) string {
+	abs, err := filepath.Abs(src)
+	if err != nil {
+		return filepath.Clean(src)
+	}
+	return filepath.Clean(abs)
+}
+
 // syncMarkKey names the meta row holding a source db's last-folded-in
-// watermark. Keyed by file name, so a source that is rebuilt from scratch (new
-// row ids, new counts) re-folds rather than being mistaken for unchanged.
-func syncMarkKey(src string) string { return "sync:" + filepath.Base(src) }
+// watermark. Keyed by the full path, so same-named source databases do not
+// share a watermark and a source rebuilt from scratch (new row ids, new
+// counts) re-folds rather than being mistaken for unchanged.
+func syncMarkKey(src string) string { return "sync:" + sourceIdentity(src) }
 
 // hasScopeColumns reports whether the ATTACHed source carries the project/cwd
 // columns the merge selects.
