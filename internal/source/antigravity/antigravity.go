@@ -12,7 +12,6 @@ package antigravity
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -136,9 +135,7 @@ func (a *Adapter) DiscoverRoot(brainDir string) ([]source.Container, error) {
 		path string
 	}
 
-	var mapped []source.Container
-	var unmapped []candSession
-
+	var candidates []candSession
 	for _, entry := range entries {
 		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
@@ -150,85 +147,57 @@ func (a *Adapter) DiscoverRoot(brainDir string) ([]source.Container, error) {
 		if transcriptPath == "" {
 			continue
 		}
-
-		if cwd, ok := historyMap[sessionID]; ok && cwd != "" {
-			mapped = append(mapped, source.Container{
-				ID:         sessionID,
-				Path:       transcriptPath,
-				CWD:        cwd,
-				IsSubagent: false,
-				ParentID:   "",
-				ResumeArgv: []string{"agy", "--conversation", sessionID},
-			})
-		} else {
-			unmapped = append(unmapped, candSession{id: sessionID, path: transcriptPath})
-		}
+		candidates = append(candidates, candSession{id: sessionID, path: transcriptPath})
 	}
 
-	// Fast path: if all discovered sessions have known history, zero transcript reads are needed.
-	if len(unmapped) == 0 {
-		return mapped, nil
+	if len(candidates) == 0 {
+		return nil, nil
 	}
 
-	// Process unmapped sessions (subagents or sessions lacking history.jsonl records).
 	subagentParents := map[string]string{}
-	unmappedHeaders := make(map[string]sessionHeader, len(unmapped))
-	var needsParentScan bool
+	headers := make(map[string]sessionHeader, len(candidates))
 
-	for _, u := range unmapped {
-		cwd, parentID, isSub := inspectSessionHeader(u.path)
-		unmappedHeaders[u.id] = sessionHeader{cwd: cwd, parentID: parentID, isSub: isSub}
-		if parentID != "" {
-			subagentParents[u.id] = parentID
-		} else {
-			needsParentScan = true
+	// Single pass over each candidate transcript to extract header metadata and lineage.
+	for _, c := range candidates {
+		hdr, spawned := inspectSessionHeaderAndSubagents(c.path)
+		headers[c.id] = hdr
+		if hdr.parentID != "" {
+			subagentParents[c.id] = hdr.parentID
 		}
-	}
-
-	// If any unmapped session might be a spawned subagent whose parent wasn't in its header,
-	// scan candidate transcripts for INVOKE_SUBAGENT records.
-	if needsParentScan {
-		var allCandidates []candSession
-		for _, m := range mapped {
-			allCandidates = append(allCandidates, candSession{id: m.ID, path: m.Path})
-		}
-		for _, u := range unmapped {
-			allCandidates = append(allCandidates, u)
-		}
-
-		for _, cand := range allCandidates {
-			children := scanSpawnedSubagents(cand.path)
-			for _, childID := range children {
-				if childID != "" {
-					subagentParents[childID] = cand.id
-				}
+		for _, childID := range spawned {
+			if childID != "" {
+				subagentParents[childID] = c.id
 			}
 		}
 	}
 
-	out := make([]source.Container, 0, len(mapped)+len(unmapped))
-	out = append(out, mapped...)
-
-	for _, u := range unmapped {
-		hdr := unmappedHeaders[u.id]
-		parentID := subagentParents[u.id]
+	out := make([]source.Container, 0, len(candidates))
+	for _, c := range candidates {
+		hdr := headers[c.id]
+		parentID := subagentParents[c.id]
 		if parentID == "" {
 			parentID = hdr.parentID
 		}
 		isSub := parentID != "" || hdr.isSub
 
-		cwd := hdr.cwd
+		cwd := historyMap[c.id]
+		if cwd == "" {
+			cwd = hdr.cwd
+		}
 		if cwd == "" && parentID != "" {
 			cwd = historyMap[parentID]
+			if cwd == "" {
+				cwd = headers[parentID].cwd
+			}
 		}
 
 		out = append(out, source.Container{
-			ID:         u.id,
-			Path:       u.path,
+			ID:         c.id,
+			Path:       c.path,
 			CWD:        cwd,
 			IsSubagent: isSub,
 			ParentID:   parentID,
-			ResumeArgv: []string{"agy", "--conversation", u.id},
+			ResumeArgv: []string{"agy", "--conversation", c.id},
 		})
 	}
 
@@ -284,55 +253,63 @@ type sessionHeader struct {
 	isSub    bool
 }
 
-// inspectSessionHeader reads the opening lines of a transcript to find a recorded CWD and subagent lineage.
-func inspectSessionHeader(path string) (cwd, parentID string, isSub bool) {
+// inspectSessionHeaderAndSubagents performs a single pass over a transcript to extract
+// header metadata (CWD, parentID, isSub) and all spawned subagent conversation IDs.
+func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
+	var hdr sessionHeader
+	var children []string
+
 	f, err := os.Open(path)
 	if err != nil {
-		return "", "", false
+		return hdr, nil
 	}
 	defer f.Close()
 
-	buf := make([]byte, 8192)
-	n, _ := f.Read(buf)
-	if n == 0 {
-		return "", "", false
-	}
-	headerData := buf[:n]
-
-	scanner := bufio.NewScanner(bytes.NewReader(headerData))
+	scanner := bufio.NewScanner(f)
 	count := 0
-	for scanner.Scan() && count < 10 {
-		count++
+	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		// Quick check for subagent reminder in prompt
-		if strings.Contains(line, "<subagent_reminder>") {
-			isSub = true
-			if pid := extractParentFromPrompt(line); pid != "" {
-				parentID = pid
-			}
-		}
-		// Quick check for user information CWD
-		if cwd == "" && strings.Contains(line, "<user_information>") {
-			if extracted := extractCWDFromUserInformation(line); extracted != "" {
-				cwd = extracted
-			}
-		}
-		// Quick check for tool call CWD
-		if cwd == "" && strings.Contains(line, "Cwd") {
+		count++
+
+		// Header inspection for first 10 lines
+		if count <= 10 {
 			var rec map[string]any
 			if err := json.Unmarshal([]byte(line), &rec); err == nil {
-				if tcList, ok := rec["tool_calls"].([]any); ok {
-					for _, tc := range tcList {
-						if tcMap, ok := tc.(map[string]any); ok {
-							if args, ok := tcMap["args"].(map[string]any); ok {
-								if c, ok := args["Cwd"].(string); ok && c != "" {
-									c = strings.Trim(c, "\"")
-									if isAbsPath(c) {
-										cwd = c
-										break
+				content, _ := rec["content"].(string)
+				if strings.Contains(content, "<subagent_reminder>") || strings.Contains(line, "<subagent_reminder>") {
+					hdr.isSub = true
+					target := content
+					if target == "" {
+						target = line
+					}
+					if pid := extractParentFromPrompt(target); pid != "" {
+						hdr.parentID = pid
+					}
+				}
+				if hdr.cwd == "" && strings.Contains(content, "<user_information>") {
+					if extracted := extractCWDFromUserInformation(content); extracted != "" {
+						hdr.cwd = extracted
+					}
+				}
+				if hdr.cwd == "" && strings.Contains(line, "<user_information>") {
+					if extracted := extractCWDFromUserInformation(line); extracted != "" {
+						hdr.cwd = extracted
+					}
+				}
+				if hdr.cwd == "" && strings.Contains(line, "Cwd") {
+					if tcList, ok := rec["tool_calls"].([]any); ok {
+						for _, tc := range tcList {
+							if tcMap, ok := tc.(map[string]any); ok {
+								if args, ok := tcMap["args"].(map[string]any); ok {
+									if c, ok := args["Cwd"].(string); ok && c != "" {
+										c = strings.Trim(c, "\"")
+										if isAbsPath(c) {
+											hdr.cwd = c
+											break
+										}
 									}
 								}
 							}
@@ -341,51 +318,36 @@ func inspectSessionHeader(path string) (cwd, parentID string, isSub bool) {
 				}
 			}
 		}
-		if cwd != "" && parentID != "" {
-			break
-		}
-	}
-	return cwd, parentID, isSub
-}
 
-// scanSpawnedSubagents scans a transcript for INVOKE_SUBAGENT steps using fast byte matching.
-func scanSpawnedSubagents(path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil || len(data) == 0 {
-		return nil
-	}
-	if !bytes.Contains(data, []byte("INVOKE_SUBAGENT")) {
-		return nil
-	}
-	var children []string
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if !bytes.Contains(line, []byte("INVOKE_SUBAGENT")) {
-			continue
-		}
-		var rec map[string]any
-		if err := json.Unmarshal(line, &rec); err != nil {
-			continue
-		}
-		if stepType, _ := rec["type"].(string); stepType != "INVOKE_SUBAGENT" {
-			continue
-		}
-		content, _ := rec["content"].(string)
-		if content != "" && strings.Contains(content, "conversationId") {
-			for _, l := range strings.Split(content, "\n") {
-				if strings.Contains(l, "conversationId") {
-					parts := strings.Split(l, ":")
-					if len(parts) >= 2 {
-						cid := strings.Trim(strings.TrimSpace(parts[1]), "\", \t\r")
-						if cid != "" {
-							children = append(children, cid)
+		// Lineage check for INVOKE_SUBAGENT
+		if strings.Contains(line, "INVOKE_SUBAGENT") {
+			var rec map[string]any
+			if err := json.Unmarshal([]byte(line), &rec); err == nil {
+				if stepType, _ := rec["type"].(string); stepType == "INVOKE_SUBAGENT" {
+					content, _ := rec["content"].(string)
+					if content != "" && strings.Contains(content, "conversationId") {
+						for _, l := range strings.Split(content, "\n") {
+							if strings.Contains(l, "conversationId") {
+								parts := strings.Split(l, ":")
+								if len(parts) >= 2 {
+									cid := strings.Trim(strings.TrimSpace(parts[1]), "\", \t\r")
+									if cid != "" {
+										children = append(children, cid)
+									}
+								}
+							}
 						}
 					}
 				}
 			}
 		}
 	}
+	return hdr, children
+}
+
+// scanSpawnedSubagents scans a transcript for INVOKE_SUBAGENT steps.
+func scanSpawnedSubagents(path string) []string {
+	_, children := inspectSessionHeaderAndSubagents(path)
 	return children
 }
 
@@ -405,7 +367,7 @@ func extractParentFromPrompt(s string) string {
 		if strings.Contains(line, "caller agent") || strings.Contains(line, "id:") || strings.Contains(line, "id =") {
 			if idx := strings.Index(line, "id:"); idx >= 0 {
 				val := strings.TrimSpace(line[idx+len("id:"):])
-				val = strings.Trim(val, "\", \t\r)")
+				val = strings.Trim(val, "\", \t\r\n\\)")
 				if val != "" && len(val) >= 8 {
 					return val
 				}
