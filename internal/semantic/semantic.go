@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -60,6 +61,23 @@ func packVec(vec []float64) []byte {
 func contentHash(text string) string {
 	sum := sha1.Sum([]byte(text))
 	return hex.EncodeToString(sum[:8])
+}
+
+// cleanCandidate returns the stripped prose and true if text length >= MinChars.
+// StripGenerated, not StripTools: every retrieval path scores against
+// the generated-stripped form, and the vector arm has to see the same
+// text or the two halves of the fusion are reading different corpora.
+// StripTools only drops tool runs; it leaves the runtime's own injected
+// envelopes — system reminders, task notifications, slash-command
+// plumbing, captured shell IO — which are machinery nobody said, repeat
+// near-identically across thousands of messages, and would crowd real
+// neighbours out of the cosine ranking.
+func cleanCandidate(content string) (string, bool) {
+	text := strings.TrimSpace(parse.StripGenerated(content))
+	if utf8.RuneCountInString(text) < MinChars {
+		return "", false
+	}
+	return text, true
 }
 
 // curEntry is one current (sid, hash) -> (msg_id, text) row.
@@ -106,24 +124,9 @@ func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew 
 	}
 	current := map[vecKey]curEntry{}
 	for _, m := range msgs {
-		// StripGenerated, not StripTools: every retrieval path scores against
-		// the generated-stripped form, and the vector arm has to see the same
-		// text or the two halves of the fusion are reading different corpora.
-		// StripTools only drops tool runs; it leaves the runtime's own injected
-		// envelopes — system reminders, task notifications, slash-command
-		// plumbing, captured shell IO — which are machinery nobody said, repeat
-		// near-identically across thousands of messages, and would crowd real
-		// neighbours out of the cosine ranking.
-		//
-		// This changes the content hash for any message that carried an
-		// envelope, so the prune pass below drops those stale vectors and they
-		// re-embed from the clean text. Messages that never had one hash
-		// identically and are left alone.
-		text := strings.TrimSpace(parse.StripGenerated(m.Content))
-		if len([]rune(text)) < MinChars {
-			continue
+		if text, ok := cleanCandidate(m.Content); ok {
+			current[vecKey{m.SessionID, contentHash(text)}] = curEntry{m.ID, text}
 		}
-		current[vecKey{m.SessionID, contentHash(text)}] = curEntry{m.ID, text}
 	}
 
 	// Load what we already have: (sid, hash) -> stored msg_id.
@@ -485,14 +488,12 @@ func MeasureCoverage(con *sql.DB, projects ...string) (CoverageStats, error) {
 
 	current := map[vecKey]struct{}{}
 	for _, m := range msgs {
-		text := strings.TrimSpace(parse.StripGenerated(m.Content))
-		if len([]rune(text)) < MinChars {
-			continue
+		if text, ok := cleanCandidate(m.Content); ok {
+			current[vecKey{m.SessionID, contentHash(text)}] = struct{}{}
 		}
-		current[vecKey{m.SessionID, contentHash(text)}] = struct{}{}
 	}
 	if len(current) == 0 {
-		return CoverageStats{Candidates: 0, Vectored: 0, Missing: 0}, nil
+		return CoverageStats{}, nil
 	}
 
 	keys, err := store.VecKeys(con)
