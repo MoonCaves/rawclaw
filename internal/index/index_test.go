@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -59,6 +61,151 @@ func TestEnsureSchemaMigratesPreV4DB(t *testing.T) {
 	}
 	if v == "3" {
 		t.Errorf("schema_version still '3' after migration — rebuild did not stamp the new version")
+	}
+}
+
+// TestMigrateDurabilityColumns_FailureReturned proves that a failure during the
+// provenance backfill UPDATE is returned to the caller rather than silently swallowed.
+func TestMigrateDurabilityColumns_FailureReturned(t *testing.T) {
+	dbp := filepath.Join(t.TempDir(), "durability_fail.db")
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("store.ConnectRW: %v", err)
+	}
+	t.Cleanup(func() { con.Close() })
+
+	// Pre-durability schema: sessions without durability columns
+	if _, err := con.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			started_at REAL,
+			last_ts REAL,
+			message_count INTEGER,
+			is_subagent INTEGER,
+			parent_id TEXT
+		);
+		CREATE TABLE file_index (
+			path TEXT PRIMARY KEY,
+			mtime REAL,
+			size INTEGER,
+			fp TEXT,
+			session_id TEXT
+		);
+		INSERT INTO sessions (id, started_at, last_ts, message_count, is_subagent)
+		VALUES ('sess-fail', 1.0, 2.0, 1, 0);
+		INSERT INTO file_index (path, mtime, size, fp, session_id)
+		VALUES ('/repo/sess-fail.jsonl', 100.0, 50, 'fp1', 'sess-fail');
+	`); err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+
+	// Install a trigger that causes UPDATE on sessions to fail
+	if _, err := con.Exec(`
+		CREATE TRIGGER fail_provenance_update
+		BEFORE UPDATE OF origin_machine ON sessions
+		BEGIN
+			SELECT RAISE(ABORT, 'injected backfill failure');
+		END;
+	`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	err = migrateDurabilityColumns(con, "claude")
+	if err == nil {
+		t.Fatal("migrateDurabilityColumns succeeded, want non-nil error when UPDATE fails")
+	}
+	if !strings.Contains(err.Error(), "backfill provenance") || !strings.Contains(err.Error(), "injected backfill failure") {
+		t.Errorf("error = %q, want it to contain 'backfill provenance' and 'injected backfill failure'", err.Error())
+	}
+
+	// Verify the session row's origin_machine is still NULL (backfill did not complete)
+	var origin sql.NullString
+	if err := con.QueryRow("SELECT origin_machine FROM sessions WHERE id='sess-fail'").Scan(&origin); err != nil {
+		t.Fatalf("query origin_machine: %v", err)
+	}
+	if origin.Valid {
+		t.Errorf("origin_machine = %q, want NULL after aborted backfill", origin.String)
+	}
+}
+
+// TestMigrateDurabilityColumns_Idempotent verifies that running migrateDurabilityColumns
+// adds missing columns and backfills provenance, and running it a second time (or on
+// an already-migrated db) is a clean no-op returning nil.
+func TestMigrateDurabilityColumns_Idempotent(t *testing.T) {
+	dbp := filepath.Join(t.TempDir(), "durability_idempotent.db")
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("store.ConnectRW: %v", err)
+	}
+	t.Cleanup(func() { con.Close() })
+
+	// Pre-durability schema with an unbackfilled row
+	if _, err := con.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			started_at REAL,
+			last_ts REAL,
+			message_count INTEGER,
+			is_subagent INTEGER,
+			parent_id TEXT
+		);
+		CREATE TABLE file_index (
+			path TEXT PRIMARY KEY,
+			mtime REAL,
+			size INTEGER,
+			fp TEXT,
+			session_id TEXT
+		);
+		INSERT INTO sessions (id, started_at, last_ts, message_count, is_subagent)
+		VALUES ('sess-idem', 1.0, 2.0, 1, 0);
+		INSERT INTO file_index (path, mtime, size, fp, session_id)
+		VALUES ('/repo/sess-idem.jsonl', 100.0, 50, 'fp1', 'sess-idem');
+	`); err != nil {
+		t.Fatalf("seed schema: %v", err)
+	}
+
+	// First pass: adds columns and backfills
+	if err := migrateDurabilityColumns(con, "claude"); err != nil {
+		t.Fatalf("first migrateDurabilityColumns: %v", err)
+	}
+
+	var origin, tool, path string
+	var missing sql.NullFloat64
+	if err := con.QueryRow("SELECT origin_machine, source_tool, source_path, missing_since FROM sessions WHERE id='sess-idem'").Scan(&origin, &tool, &path, &missing); err != nil {
+		t.Fatalf("scan backfilled row: %v", err)
+	}
+	if origin != provenance.MachineID() {
+		t.Errorf("origin_machine = %q, want %q", origin, provenance.MachineID())
+	}
+	if tool != "claude" {
+		t.Errorf("source_tool = %q, want claude", tool)
+	}
+	if path != "/repo/sess-idem.jsonl" {
+		t.Errorf("source_path = %q, want /repo/sess-idem.jsonl", path)
+	}
+	if missing.Valid {
+		t.Errorf("missing_since = %v, want NULL", missing.Float64)
+	}
+
+	// Second pass: idempotent clean no-op
+	if err := migrateDurabilityColumns(con, "claude"); err != nil {
+		t.Fatalf("second migrateDurabilityColumns (idempotent): %v", err)
+	}
+
+	var origin2, tool2, path2 string
+	var missing2 sql.NullFloat64
+	if err := con.QueryRow("SELECT origin_machine, source_tool, source_path, missing_since FROM sessions WHERE id='sess-idem'").Scan(&origin2, &tool2, &path2, &missing2); err != nil {
+		t.Fatalf("scan row after second run: %v", err)
+	}
+	if origin2 != origin || tool2 != tool || path2 != path || missing2.Valid != missing.Valid {
+		t.Errorf("row values mutated on second run: got (%q, %q, %q, %v), want (%q, %q, %q, %v)",
+			origin2, tool2, path2, missing2, origin, tool, path, missing)
+	}
+
+	// Also verify on an already fully ensured schema (e.g. EnsureSchema)
+	conFresh, _ := openTestDB(t)
+	if err := migrateDurabilityColumns(conFresh, "codex"); err != nil {
+		t.Fatalf("migrateDurabilityColumns on fresh schema: %v", err)
 	}
 }
 
