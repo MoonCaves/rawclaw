@@ -2004,8 +2004,11 @@ func TestConsolidateFrom_RebuildFailureLeavesLiveStoreIntact(t *testing.T) {
 	con.Close()
 
 	// Rebuild from a source path that cannot be read. The fold must fail.
+	// A missing source is a real error ("source unreadable"), so pin that
+	// contract here rather than only logging it. The survival assertions below
+	// would still catch a silent success, but this names WHICH guarantee broke.
 	if _, err := ConsolidateFrom([]string{filepath.Join(t.TempDir(), "does-not-exist.db")}, true); err == nil {
-		t.Log("rebuild returned no error; the survival assertion below is what matters")
+		t.Errorf("rebuild from a missing source returned no error, want one")
 	}
 
 	// The live store must still be there, with its session.
