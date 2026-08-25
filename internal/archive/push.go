@@ -598,9 +598,5 @@ func pushStampPath() string {
 // stampPush records a successful push sync by (re)writing the stamp file.
 // Best-effort: a failed stamp only under-reports `archive status`.
 func stampPush() {
-	p := pushStampPath()
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return
-	}
-	_ = os.WriteFile(p, nil, 0o644)
+	writeStamp(pushStampPath())
 }
