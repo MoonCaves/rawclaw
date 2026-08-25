@@ -2,6 +2,7 @@ package goose
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -394,6 +395,8 @@ func TestGooseSQLInjectionPrevention(t *testing.T) {
 		"id[",
 		"id]",
 		"id\x00",
+		"123",
+		"1abc",
 	}
 	for _, ident := range unsafeIdents {
 		if isSafeIdent(ident) {
@@ -511,5 +514,48 @@ func TestGooseMessages_RowsErr_TruncationError(t *testing.T) {
 	}
 	if msgs != nil {
 		t.Fatalf("expected nil messages on error, got %d messages", len(msgs))
+	}
+}
+
+type gooseRowsStub struct {
+	rows   [][]any
+	index  int
+	rowErr error
+}
+
+func (s *gooseRowsStub) Next() bool {
+	if s.index >= len(s.rows) {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *gooseRowsStub) Scan(dest ...any) error {
+	row := s.rows[s.index-1]
+	for i := range dest {
+		*(dest[i].(*any)) = row[i]
+	}
+	return nil
+}
+
+func (s *gooseRowsStub) Err() error { return s.rowErr }
+
+func TestSessionContainersFromRows_DoesNotFallThroughOnRowsError(t *testing.T) {
+	rowsErr := errors.New("simulated sqlite iteration failure")
+	rows := &gooseRowsStub{
+		rows:   [][]any{{"partial-session", "/workspace", "", false}},
+		rowErr: rowsErr,
+	}
+
+	containers, ok, gotErr := sessionContainersFromRows(rows, "/tmp/sessions.db")
+	if ok {
+		t.Fatal("sessionContainersFromRows returned success after rows.Err")
+	}
+	if !errors.Is(gotErr, rowsErr) {
+		t.Fatalf("sessionContainersFromRows error = %v, want %v", gotErr, rowsErr)
+	}
+	if containers != nil {
+		t.Fatalf("sessionContainersFromRows returned %d partial containers, want nil", len(containers))
 	}
 }
