@@ -6,3 +6,9 @@
 - Smallest fix: read the authoritative resolved DB and overlay it over consolidated rows for the session; deduplicate by stable segment identity and keep authoritative replacements instead of stale derived copies. No cache, new seam, persistence format, or detached publication.
 - Authorized files: `internal/cli/cmd_tag.go`, `internal/cli/tagrefresh.go`, `internal/cli/tagrefresh_test.go` (new `tagoverlay.go` only if inlining is larger).
 - Estimate: +35 test lines, +25 production lines, 0 new dependencies.
+
+## Han rival census checkpoint
+
+This report-only lane audits the named Ozzy and newer rival claims against immutable Git objects,
+patch identity, ancestry, current-base readiness, and personally observed gates. No production-code
+changes are authorized. Detailed parity results belong in `RIVAL_CENSUS.md` after this checkpoint.
