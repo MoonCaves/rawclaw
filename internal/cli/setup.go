@@ -902,7 +902,7 @@ func removeRawclawAntigravityHooks(data map[string]any) {
 // addRawclawAntigravityHooks registers rawclaw's named PreInvocation and Stop
 // hooks in Antigravity's hooks.json map. Existing rawclaw entries are stripped
 // first so the operation is idempotent.
-func addRawclawAntigravityHooks(data map[string]any, scriptPath string) error {
+func addRawclawAntigravityHooks(data map[string]any, scriptPath string) {
 	removeRawclawAntigravityHooks(data)
 	data["rawclaw"] = map[string]any{
 		"PreInvocation": []any{
@@ -918,7 +918,6 @@ func addRawclawAntigravityHooks(data map[string]any, scriptPath string) error {
 			},
 		},
 	}
-	return nil
 }
 
 // installRawclawAntigravityHook writes the Antigravity discovery script and
@@ -939,9 +938,7 @@ func installRawclawAntigravityHook(configDir string) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", configFile, err)
 	}
-	if err := addRawclawAntigravityHooks(data, scriptPath); err != nil {
-		return fmt.Errorf("register antigravity hook in %s: %w", configFile, err)
-	}
+	addRawclawAntigravityHooks(data, scriptPath)
 	if err := writeJSONFile(configFile, data); err != nil {
 		return fmt.Errorf("write %s: %w", configFile, err)
 	}
