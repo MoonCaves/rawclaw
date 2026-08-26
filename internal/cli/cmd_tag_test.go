@@ -540,13 +540,37 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, "", false); err != nil {
 		t.Fatalf("runTagWriteCmd: %v\nout: %s", err, out.String())
 	}
+	queued := strings.Contains(out.String(), "publication queued")
+	if queued {
+		project, err := store.ConnectRO(index.DBPath(dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		local, err := store.TopicsForSession(project, sid)
+		project.Close()
+		if err != nil || len(local) != 1 || local[0].Topic != "watermark" {
+			t.Fatalf("authoritative project topics = %#v, err=%v", local, err)
+		}
+	}
 
 	con, err := store.ConnectRO(index.ConsolidatedPath())
 	if err != nil {
 		t.Fatalf("open consolidated store: %v", err)
 	}
 	defer con.Close()
-	hits, err := store.MatchTopics(con, "watermark", 8, nil)
+	var hits []store.TopicHit
+	if queued {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			hits, err = store.MatchTopics(con, "watermark", 8, nil)
+			if err == nil && len(hits) == 1 {
+				break
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	} else {
+		hits, err = store.MatchTopics(con, "watermark", 8, nil)
+	}
 	if err != nil {
 		t.Fatalf("MatchTopics on the consolidated store: %v", err)
 	}
@@ -572,6 +596,18 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 	if err := runTagWriteCmd(&out, strings.NewReader(""), sid[:8], scope, nil, true, store.VerdictSourceAgent, false); err != nil {
 		t.Fatalf("runTagWriteCmd --routine: %v\nout: %s", err, out.String())
 	}
+	queued := strings.Contains(out.String(), "publication queued")
+	if queued {
+		project, err := store.ConnectRO(index.DBPath(dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		local, localOK, err := store.VerdictFor(project, sid)
+		project.Close()
+		if err != nil || !localOK {
+			t.Fatalf("authoritative project verdict missing: %#v, err=%v", local, err)
+		}
+	}
 	if !strings.Contains(out.String(), "marked "+sid[:8]+" as routine (source: agent)") {
 		t.Errorf("output missing expected confirmation: %q", out.String())
 	}
@@ -583,7 +619,20 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 	}
 	defer con.Close()
 
-	v, ok, err := store.VerdictFor(con, sid)
+	var v store.Verdict
+	var ok bool
+	if queued {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			v, ok, err = store.VerdictFor(con, sid)
+			if err == nil && ok {
+				break
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	} else {
+		v, ok, err = store.VerdictFor(con, sid)
+	}
 	if err != nil || !ok {
 		t.Fatalf("VerdictFor(%s) = (%+v, %v, %v), want ok=true", sid, v, ok, err)
 	}
