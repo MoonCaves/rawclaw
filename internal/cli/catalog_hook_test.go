@@ -1,15 +1,130 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/paths"
 )
+
+func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
+	shells := []string{"/bin/sh", "dash", "bash"}
+	templates := []struct {
+		name string
+		tmpl string
+		json bool
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
+	}
+	kinds := []string{"new", "regular", "fifo", "directory", "symlink", "socket"}
+
+	for _, shellName := range shells {
+		shell, err := exec.LookPath(shellName)
+		if err != nil {
+			t.Logf("shell %s unavailable: %v", shellName, err)
+			continue
+		}
+		for _, tc := range templates {
+			if tc.json {
+				if _, err := exec.LookPath("python3"); err != nil {
+					t.Logf("python3 unavailable; skipping %s under %s", tc.name, shellName)
+					continue
+				}
+			}
+			for _, kind := range kinds {
+				t.Run(tc.name+"/"+shellName+"/"+kind, func(t *testing.T) {
+					stubDir := t.TempDir()
+					stubRawclaw(t, stubDir)
+					catalogDir := filepath.Join(os.TempDir(), fmt.Sprintf("rawclaw-cat-%d", time.Now().UnixNano()))
+					if err := os.MkdirAll(catalogDir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.RemoveAll(catalogDir) })
+					scriptPath := filepath.Join(t.TempDir(), "prime.sh")
+					if err := os.WriteFile(scriptPath, []byte(renderHookScript(tc.tmpl, "''")), 0o755); err != nil {
+						t.Fatal(err)
+					}
+
+					sessionID := "fifo-claim-test"
+					entry := filepath.Join(catalogDir, sessionID)
+					var listener net.Listener
+					switch kind {
+					case "regular":
+						if err := os.WriteFile(entry, []byte("existing"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+					case "fifo":
+						if err := syscall.Mkfifo(entry, 0o644); err != nil {
+							t.Fatal(err)
+						}
+					case "directory":
+						if err := os.Mkdir(entry, 0o755); err != nil {
+							t.Fatal(err)
+						}
+					case "symlink":
+						target := filepath.Join(catalogDir, "target")
+						if err := os.WriteFile(target, []byte("target"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(target, entry); err != nil {
+							t.Fatal(err)
+						}
+					case "socket":
+						var err error
+						listener, err = net.Listen("unix", entry)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer listener.Close()
+					}
+
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer cancel()
+					cmd := exec.CommandContext(ctx, shell, scriptPath)
+					cmd.Env = append(os.Environ(),
+						"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+						"RAWCLAW_CATALOG_DIR="+catalogDir,
+					)
+					cmd.Stdin = strings.NewReader(`{"session_id":"` + sessionID + `"}`)
+					out, err := cmd.Output()
+					if ctx.Err() == context.DeadlineExceeded {
+						t.Fatalf("hook hung on existing %s path under %s", kind, shellName)
+					}
+					if err != nil {
+						t.Fatalf("hook failed for %s path under %s: %v; output=%q", kind, shellName, err, out)
+					}
+
+					if kind == "new" {
+						if info, err := os.Stat(entry); err != nil || !info.Mode().IsRegular() {
+							t.Fatalf("new claim entry = %v, want regular file", err)
+						}
+						if _, err := paths.ReadCatalogEntry(entry); err != nil {
+							t.Fatalf("new claim entry is not valid catalog JSON: %v", err)
+						}
+					} else if kind == "regular" {
+						got, err := os.ReadFile(entry)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if string(got) != "existing" {
+							t.Fatalf("existing regular claim changed to %q", got)
+						}
+					}
+				})
+			}
+		}
+	}
+}
 
 // TestClaudePrimeScript_CreatesSessionCatalogEntry verifies that starting a new
 // Claude session creates a catalog entry named by the full session_id, recording
