@@ -111,3 +111,35 @@ func TestPublishSessionOlderNoVerdictCannotDelete(t *testing.T) {
 		t.Fatalf("newer verdict was deleted: %v, %v", ok, err)
 	}
 }
+
+func TestPublishSessionVerdictTimestampBeatsOrigin(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "verdict-cross-origin"
+	if err := store.UpsertVerdict(con, store.Verdict{SessionID: sid, Verdict: store.VerdictRoutine, Source: store.VerdictSourceAgent, OriginMachine: "zz", TaggedAt: 10}); err != nil {
+		t.Fatal(err)
+	}
+	newer := store.Verdict{SessionID: sid, Verdict: store.VerdictRoutine, Source: store.VerdictSourceFloor, OriginMachine: "aa", TaggedAt: 20}
+	if err := publishSession(context.Background(), con, sid, nil, newer, true); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := store.VerdictFor(con, sid)
+	if err != nil || got.OriginMachine != "aa" || got.TaggedAt != 20 {
+		t.Fatalf("verdict = %#v, want newer lower-origin verdict", got)
+	}
+}
+
+func TestPublishSessionVerdictEqualTimeHigherOriginWins(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "verdict-equal-origin"
+	if err := store.UpsertVerdict(con, store.Verdict{SessionID: sid, Verdict: store.VerdictRoutine, Source: store.VerdictSourceAgent, OriginMachine: "aa", TaggedAt: 10}); err != nil {
+		t.Fatal(err)
+	}
+	higher := store.Verdict{SessionID: sid, Verdict: store.VerdictRoutine, Source: store.VerdictSourceFloor, OriginMachine: "zz", TaggedAt: 10}
+	if err := publishSession(context.Background(), con, sid, nil, higher, true); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := store.VerdictFor(con, sid)
+	if err != nil || got.OriginMachine != "zz" {
+		t.Fatalf("verdict = %#v, want equal-time higher-origin verdict", got)
+	}
+}

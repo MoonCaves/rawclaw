@@ -207,7 +207,7 @@ func publishSession(ctx context.Context, con *sql.DB, sid string, segments []sto
 		if err != nil {
 			return err
 		}
-		if !ok || (existing.OriginMachine <= verdict.OriginMachine && verdict.TaggedAt > existing.TaggedAt) {
+		if !ok || verdict.TaggedAt > existing.TaggedAt || (verdict.TaggedAt == existing.TaggedAt && verdict.OriginMachine > existing.OriginMachine) {
 			_, err = tx.ExecContext(ctx, `INSERT INTO session_verdict(session_id,verdict,source,origin_machine,tagged_at) VALUES(?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET verdict=excluded.verdict,source=excluded.source,origin_machine=excluded.origin_machine,tagged_at=excluded.tagged_at`, sid, verdict.Verdict, verdict.Source, verdict.OriginMachine, verdict.TaggedAt)
 		}
 	} else {
