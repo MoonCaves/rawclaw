@@ -54,4 +54,8 @@ Removing it reopens snapshot-then-rename lost-write risk. No production fix is
 warranted; the committed change only corrects and strengthens the regression
 test.
 
-Push receipt: pending the receipt commit and push.
+## Push receipt
+
+- `git push -u origin worker/furiosa-external-nilscope-referee-20260827`:
+  succeeded; remote branch created and tracking configured.
+- Receipt update commit: pending this final commit and push.
