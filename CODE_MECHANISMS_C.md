@@ -1,6 +1,6 @@
 # Code mechanisms C: logging, benchmarks, and review identity
 
-Scope: report-only extraction at RawClaw `5b9756b2200ff6bd670f07407407d84d9f42d84b5`. Product code was not changed.
+Scope: report-only extraction at RawClaw `5b9756b2200ff6bd670f07407407d84d9f42d84b`. Product code was not changed.
 
 ## 1. Scoped structured phase logging
 
