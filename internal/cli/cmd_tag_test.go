@@ -558,6 +558,126 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	}
 }
 
+// TestRunTagWriteForegroundFoldLatency characterizes the derived-store fold
+// latency after the authoritative topic write. The command wrapper cannot be
+// isolated at this boundary because guarded lookup itself sweeps/indexes under
+// the same fence; FOREGROUND_FOLD_AUDIT.md records that limitation.
+func TestRunTagWriteForegroundFoldLatency(t *testing.T) {
+	root := newCfgRoot(t)
+	sid := "7a3f1c20-aaaa-bbbb-cccc-0000000f0ld1"
+	dir := writeTaggableSession(t, root, "proj-fold-latency", sid,
+		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
+	dbp := index.DBPath(dir)
+	jsonIn := `[{"start_uuid":"11111111","topic":"foreground fold latency","summary":"derived publication is separately timed"}]`
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatalf("open project store: %v", err)
+	}
+	started := time.Now()
+	if _, err := runTagWrite(con, sid, strings.NewReader(jsonIn), 1, false); err != nil {
+		_ = con.Close()
+		t.Fatalf("authoritative runTagWrite: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close project store: %v", err)
+	}
+	con, err = store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("reopen project store: %v", err)
+	}
+	segments, err := store.TopicsForSession(con, sid)
+	_ = con.Close()
+	if err != nil || len(segments) != 1 || segments[0].Topic != "foreground fold latency" {
+		t.Fatalf("authoritative topic rows = %+v, err=%v", segments, err)
+	}
+
+	lock := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
+	locked, err := lock.TryLock()
+	if err != nil || !locked {
+		t.Fatalf("acquire consolidated test fence: locked=%v err=%v", locked, err)
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	type result struct {
+		err  error
+		done time.Time
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		err := index.SyncConsolidatedFrom(dbp)
+		resultCh <- result{err: err, done: time.Now()}
+	}()
+
+	var sourceDurableAt time.Time
+	var lastSourceErr error
+	deadline := time.NewTimer(2 * time.Second)
+	poll := time.NewTicker(5 * time.Millisecond)
+	defer deadline.Stop()
+	defer poll.Stop()
+	for sourceDurableAt.IsZero() {
+		select {
+		case <-deadline.C:
+			t.Fatalf("authoritative project tag row did not become readable while fold was blocked (db=%s lastErr=%v)", dbp, lastSourceErr)
+		case <-poll.C:
+			con, openErr := store.ConnectRO(dbp)
+			if openErr != nil {
+				continue
+			}
+			segments, readErr := store.TopicsForSession(con, sid)
+			lastSourceErr = readErr
+			_ = con.Close()
+			if readErr == nil && len(segments) == 1 && segments[0].Topic == "foreground fold latency" {
+				sourceDurableAt = time.Now()
+			}
+		}
+	}
+
+	con, err = store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated store while fenced: %v", err)
+	}
+	hits, err := store.MatchTopics(con, "foreground fold latency", 8, nil)
+	_ = con.Close()
+	if err != nil {
+		t.Fatalf("read consolidated store while fenced: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("consolidated hits while fold fenced = %+v, want none", hits)
+	}
+	waited := time.NewTimer(100 * time.Millisecond)
+	select {
+	case got := <-resultCh:
+		t.Fatalf("fold returned while fenced after %s: err=%v", got.done.Sub(started), got.err)
+	case <-waited.C:
+	}
+
+	releasedAt := time.Now()
+	if err := lock.Unlock(); err != nil {
+		t.Fatalf("release consolidated test fence: %v", err)
+	}
+	got := <-resultCh
+	if got.err != nil {
+		t.Fatalf("fold after releasing fence: %v", got.err)
+	}
+	if got.done.Before(releasedAt) {
+		t.Fatalf("runTagWriteCmd completed before fold fence release: done=%s release=%s", got.done, releasedAt)
+	}
+
+	con, err = store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated store after release: %v", err)
+	}
+	hits, err = store.MatchTopics(con, "foreground fold latency", 8, nil)
+	_ = con.Close()
+	if err != nil {
+		t.Fatalf("read consolidated store after release: %v", err)
+	}
+	if len(hits) != 1 || hits[0].SessionID != sid {
+		t.Fatalf("consolidated hits after fold release = %+v, want the tagged session", hits)
+	}
+	t.Logf("WITA source_durable=%s fold_release=%s command_return=%s source_to_return=%s blocked=%s release_to_return=%s", sourceDurableAt.Sub(started), releasedAt.Sub(started), got.done.Sub(started), got.done.Sub(sourceDurableAt), releasedAt.Sub(sourceDurableAt), got.done.Sub(releasedAt))
+}
+
 // TestRunTagWriteRoutine_MarksRoutineAndFolds verifies that tag-write --routine
 // writes a routine verdict with the specified or default source and folds it
 // into the consolidated store.
