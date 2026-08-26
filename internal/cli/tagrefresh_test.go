@@ -218,12 +218,6 @@ func TestTagWriteQueuesDerivedPublication(t *testing.T) {
 	sid := "5f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
 	dir := writeTaggableSession(t, root, "proj-tag-queued", sid,
 		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !os.IsNotExist(err) {
-			t.Fatalf("remove consolidated store: %v", err)
-		}
-	}
-
 	var published string
 	old := spawnTagPublish
 	spawnTagPublish = func(dbp, sessionID string) error {
@@ -251,11 +245,6 @@ func TestTagWriteAuthoritativeOverlaySurvivesDelayedPublication(t *testing.T) {
 	sid := "6f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
 	dir := writeTaggableSession(t, root, "proj-tag-delayed", sid,
 		"33333333-aaaa-bbbb-cccc-000000000001", "44444444-aaaa-bbbb-cccc-000000000002")
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !os.IsNotExist(err) {
-			t.Fatalf("remove consolidated store: %v", err)
-		}
-	}
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -326,12 +315,12 @@ func TestTagWriteAuthoritativeOverlaySurvivesDelayedPublication(t *testing.T) {
 	}
 }
 
-func TestOverlayAuthoritativeTopicsKeepsSameStartAcrossSessions(t *testing.T) {
+func TestOverlayAuthoritativeTopicsReplacesSessionSet(t *testing.T) {
 	consolidated := []store.TopicSegment{{SessionID: "session-a", StartUUID: "same", Topic: "old-a"}, {SessionID: "session-b", StartUUID: "same", Topic: "old-b"}}
 	authoritative := []store.TopicSegment{{SessionID: "session-a", StartUUID: "same", Topic: "new-a"}}
 	got := overlayAuthoritativeTopics(consolidated, authoritative)
-	if len(got) != 2 || got[0].Topic != "new-a" || got[1].Topic != "old-b" {
-		t.Fatalf("overlay = %#v, want session-scoped replacement", got)
+	if len(got) != 1 || got[0].Topic != "new-a" {
+		t.Fatalf("overlay = %#v, want authoritative replacement set", got)
 	}
 }
 
@@ -722,11 +711,19 @@ func TestRunTagPrepCmdNeverIndexedSessionEndToEnd(t *testing.T) {
 		t.Fatalf("tag-prep output missing assistant message:\n%s", out.String())
 	}
 
-	// The refreshed source DB is durable immediately; consolidated publication is
-	// detached and may complete after tag-prep returns.
-	dbp := index.RefreshDBPath(claude.Registration().ID, fullSID, transcriptPath)
-	if _, err := os.Stat(dbp); err != nil {
-		t.Fatalf("refreshed source DB %s not retained: %v", dbp, err)
+	// Verify session is now indexed in consolidated store
+	con, err := store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("connect consolidated store: %v", err)
+	}
+	defer con.Close()
+
+	var count int
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id = ?", fullSID).Scan(&count); err != nil {
+		t.Fatalf("query consolidated store: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row in consolidated store for %s, got %d", fullSID, count)
 	}
 }
 
@@ -859,7 +856,7 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 	}
 }
 
-func TestRunTagPrepCmd_ContentionSpawnsDetachedFoldAndFoldsOnNextTouch(t *testing.T) {
+func TestRunTagPrepCmd_ContentionDefersFoldAndFoldsOnNextTouch(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	t.Setenv("HOME", configDir)
@@ -894,10 +891,11 @@ func TestRunTagPrepCmd_ContentionSpawnsDetachedFoldAndFoldsOnNextTouch(t *testin
 		t.Fatalf("BEGIN IMMEDIATE on consolidated store: %v", err)
 	}
 
-	var spawned string
-	oldSpawn := spawnIngest
-	spawnIngest = func(sessionArg string) { spawned = sessionArg }
-	t.Cleanup(func() { spawnIngest = oldSpawn })
+	// Capture stderr
+	var errOut strings.Builder
+	oldStderr := tagPrepStderr
+	tagPrepStderr = &errOut
+	defer func() { tagPrepStderr = oldStderr }()
 
 	// (a) Run tag-prep while consolidated store is locked
 	var out strings.Builder
@@ -914,8 +912,10 @@ func TestRunTagPrepCmd_ContentionSpawnsDetachedFoldAndFoldsOnNextTouch(t *testin
 		t.Fatalf("dump missing assistant reply; got:\n%s", out.String())
 	}
 
-	if spawned != fullSID {
-		t.Fatalf("detached ingest session = %q, want %q", spawned, fullSID)
+	// Stderr must contain the deferred note
+	wantNote := "# fold deferred (store busy); refresh db retained, will fold on next ingest"
+	if !strings.Contains(errOut.String(), wantNote) {
+		t.Fatalf("stderr = %q, want containing %q", errOut.String(), wantNote)
 	}
 
 	// Refresh DB must be retained on disk
@@ -1011,9 +1011,12 @@ func TestRunTagPrepCmdGooseOptedOutServesIndexedCopy(t *testing.T) {
 	}
 }
 
-// TestRunTagPrepCmd_DetachedFoldDoesNotInspectConsolidatedFailures proves the
-// dump does not synchronously touch the consolidated store after refresh.
-func TestRunTagPrepCmd_DetachedFoldDoesNotInspectConsolidatedFailures(t *testing.T) {
+// TestRunTagPrepCmd_NonBusyFoldFailureIsReportedNotSwallowed proves a fold
+// error that is NOT store-contention (index.IsBusy) still surfaces on
+// stderr instead of vanishing silently — the dump itself already succeeded
+// and stdout is honest, but a genuine fold failure (as opposed to the
+// expected "try again later" busy case) must not print nothing.
+func TestRunTagPrepCmd_NonBusyFoldFailureIsReportedNotSwallowed(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	t.Setenv("HOME", configDir)
@@ -1039,10 +1042,10 @@ func TestRunTagPrepCmd_DetachedFoldDoesNotInspectConsolidatedFailures(t *testing
 		t.Fatalf("mkdir consolidatedPath (as a directory, not a file): %v", err)
 	}
 
-	var spawned string
-	oldSpawn := spawnIngest
-	spawnIngest = func(sessionArg string) { spawned = sessionArg }
-	t.Cleanup(func() { spawnIngest = oldSpawn })
+	var errOut strings.Builder
+	oldStderr := tagPrepStderr
+	tagPrepStderr = &errOut
+	defer func() { tagPrepStderr = oldStderr }()
 
 	var out strings.Builder
 	if err := runTagPrepCmd(&out, "foldfa", nil, nil); err != nil {
@@ -1053,7 +1056,10 @@ func TestRunTagPrepCmd_DetachedFoldDoesNotInspectConsolidatedFailures(t *testing
 		t.Fatalf("dump missing message; got:\n%s", out.String())
 	}
 
-	if spawned != fullSID {
-		t.Fatalf("detached ingest session = %q, want %q", spawned, fullSID)
+	if strings.Contains(errOut.String(), "fold deferred (store busy)") {
+		t.Fatalf("stderr wrongly reported a busy-deferral for a non-busy error:\n%s", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "fold failed") {
+		t.Fatalf("stderr = %q, want a non-silent \"fold failed\" note for the non-busy error", errOut.String())
 	}
 }
