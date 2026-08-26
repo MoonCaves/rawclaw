@@ -40,6 +40,8 @@ func AcquireConsolidatedFence(ctx context.Context) (*ConsolidatedFence, error) {
 	lock := flock.New(lockPath)
 	waitCtx, cancel := context.WithTimeout(ctx, consolidatedLockWait)
 	defer cancel()
+	done := beginConsolidatePhase("", "fence-acquire")
+	defer done()
 	started := time.Now()
 	reportedHolder := false
 	// One timer, reused with Reset across retries — the lock is polled every

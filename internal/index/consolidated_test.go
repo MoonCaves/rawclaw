@@ -2,6 +2,7 @@ package index
 
 import (
 	"database/sql"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +12,56 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
+
+func TestConsolidate_LogsFoldPhaseStartsAndDurations(t *testing.T) {
+	isolateCache(t)
+	src := indexProject(t, "-w-logs",
+		`{"type":"user","cwd":"/w/logs","timestamp":"2026-06-01T10:00:00Z","uuid":"u-log","message":{"role":"user","content":"log this fold"}}`)
+	recorder := &testLogRecorder{}
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(oldLogger)
+
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+
+	want := []string{"fence-acquire", "schema-heal-migrate", "source-migrate", "attach", "detach", "tombstone-prune", "watermark-stamp", "connection-close"}
+	seen := make(map[string]map[string]bool)
+	for _, rec := range recorder.records {
+		if rec.Message != "consolidate fold phase" {
+			continue
+		}
+		var phase, event string
+		var duration slog.Value
+		rec.Attrs(func(attr slog.Attr) bool {
+			switch attr.Key {
+			case "phase":
+				phase = attr.Value.String()
+			case "event":
+				event = attr.Value.String()
+			case "duration":
+				duration = attr.Value
+			}
+			return true
+		})
+		if seen[phase] == nil {
+			seen[phase] = make(map[string]bool)
+		}
+		seen[phase][event] = true
+		if event == "" && duration.Kind() != slog.KindDuration {
+			t.Errorf("phase %q completion duration kind = %s, want duration", phase, duration.Kind())
+		}
+	}
+	for _, phase := range want {
+		if !seen[phase]["start"] {
+			t.Errorf("phase %q has no start log", phase)
+		}
+		if !seen[phase][""] {
+			t.Errorf("phase %q has no completion log", phase)
+		}
+	}
+}
 
 // TestConsolidate_UnionsEveryProject is the ticket's headline: sessions from
 // separate per-project dbs land in ONE store, each keeping the project it came

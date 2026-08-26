@@ -17,6 +17,22 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
+func beginConsolidatePhase(source, name string) func() {
+	args := []any{"phase", name, "event", "start"}
+	if source != "" {
+		args = append([]any{"source", filepath.Base(source)}, args...)
+	}
+	slog.Info("consolidate fold phase", args...)
+	started := time.Now()
+	return func() {
+		args := []any{"phase", name, "duration", time.Since(started)}
+		if source != "" {
+			args = append([]any{"source", filepath.Base(source)}, args...)
+		}
+		slog.Info("consolidate fold phase", args...)
+	}
+}
+
 // ConsolidatedDBName is the one store every session and message lands in,
 // regardless of which project, source, or machine it came from. It is the shape
 // Hermes' state.db has: project is a COLUMN, not a filename.
@@ -450,11 +466,18 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	if err != nil {
 		return st, fmt.Errorf("open consolidated store: %w", err)
 	}
-	defer con.Close()
+	defer func() {
+		done := beginConsolidatePhase("", "connection-close")
+		_ = con.Close()
+		done()
+	}()
+	done := beginConsolidatePhase("", "schema-heal-migrate")
 	if err := EnsureSchema(con, sourceClaude); err != nil {
+		done()
 		return st, fmt.Errorf("ensure consolidated schema: %w", err)
 	}
 	if err := healUpgradedConsolidatedStore(con); err != nil {
+		done()
 		// Healing MUST precede backfill: do not populate session_sources if healing did not succeed.
 		return st, fmt.Errorf("heal upgraded store: %w", err)
 	}
@@ -463,16 +486,20 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	// against the one store can answer "nothing is tagged yet" instead of
 	// failing on a missing table.
 	if err := store.EnsureTopicSchema(con); err != nil {
+		done()
 		return st, fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 	if rebuild {
 		if err := restoreTagState(con, preserved); err != nil {
+			done()
 			return st, fmt.Errorf("restore consolidated tags: %w", err)
 		}
 	}
 	if err := migrateSessionSources(con); err != nil {
+		done()
 		return st, fmt.Errorf("migrate session sources: %w", err)
 	}
+	done()
 
 	for _, src := range srcPaths {
 		n, _, skipped, err := consolidateOne(con, src)
@@ -512,18 +539,23 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 			return st, fmt.Errorf("recount messages: %w", err)
 		}
 	}
+	done = beginConsolidatePhase("", "tombstone-prune")
 	if err := pruneTombstoned(con); err != nil {
+		done()
 		return st, err
 	}
+	done()
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&st.Sessions); err != nil {
 		return st, fmt.Errorf("count sessions: %w", err)
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM messages").Scan(&st.Messages); err != nil {
 		return st, fmt.Errorf("count messages: %w", err)
 	}
+	done = beginConsolidatePhase("", "watermark-stamp")
 	if err := StampIngestWatermark(con); err != nil {
 		slog.Debug("stamp ingest watermark failed", "err", err)
 	}
+	done()
 	return st, nil
 }
 
@@ -544,20 +576,30 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if err != nil {
 		return fmt.Errorf("open consolidated store: %w", err)
 	}
-	defer con.Close()
+	defer func() {
+		done := beginConsolidatePhase("", "connection-close")
+		_ = con.Close()
+		done()
+	}()
+	done := beginConsolidatePhase("", "schema-heal-migrate")
 	if err := EnsureSchema(con, sourceClaude); err != nil {
+		done()
 		return fmt.Errorf("ensure consolidated schema: %w", err)
 	}
 	if err := healUpgradedConsolidatedStore(con); err != nil {
+		done()
 		// Healing MUST precede backfill: do not populate session_sources if healing did not succeed.
 		return fmt.Errorf("heal upgraded store: %w", err)
 	}
 	if err := store.EnsureTopicSchema(con); err != nil {
+		done()
 		return fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 	if err := migrateSessionSources(con); err != nil {
+		done()
 		return fmt.Errorf("migrate session sources: %w", err)
 	}
+	done()
 	_, changed, skipped, err := consolidateOne(con, srcPath)
 	if err != nil {
 		return fmt.Errorf("consolidate %s: %w", filepath.Base(srcPath), err)
@@ -565,12 +607,17 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if skipped || !changed {
 		return nil
 	}
+	done = beginConsolidatePhase("", "tombstone-prune")
 	if err := pruneTombstoned(con); err != nil {
+		done()
 		return err
 	}
+	done()
+	done = beginConsolidatePhase("", "watermark-stamp")
 	if err := StampIngestWatermark(con); err != nil {
 		slog.Debug("stamp ingest watermark failed", "err", err)
 	}
+	done()
 	return nil
 }
 
@@ -610,12 +657,6 @@ func writeThroughConsolidated(dbp string, indexErr error) {
 // write it makes to a source is the additive column migration below, on its own
 // connection, before the read-only attach.
 func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
-	phase := func(name string) func() {
-		started := time.Now()
-		return func() {
-			slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "duration", time.Since(started))
-		}
-	}
 	if _, err := os.Stat(src); err != nil {
 		return 0, false, true, fmt.Errorf("source unreadable: %w", err)
 	}
@@ -624,21 +665,23 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	// source is usable — but without this step a corpus indexed before the scope
 	// migration has no project/cwd columns anywhere and the whole pass skips
 	// every source while reporting success.
-	done := phase("source-migrate")
+	done := beginConsolidatePhase(src, "source-migrate")
 	if mErr := migrateSourceScope(src); mErr != nil {
 		slog.Debug("consolidate: source not migrated", "db", filepath.Base(src), "err", mErr)
 	}
 	done()
-	done = phase("attach")
+	done = beginConsolidatePhase(src, "attach")
 	if _, err := con.Exec("ATTACH DATABASE ? AS src", "file:"+src+"?mode=ro"); err != nil {
 		done()
 		return 0, false, true, fmt.Errorf("attach: %w", err)
 	}
 	done()
 	defer func() {
+		detachDone := beginConsolidatePhase(src, "detach")
 		if _, dErr := con.Exec("DETACH DATABASE src"); dErr != nil && err == nil {
 			err = fmt.Errorf("detach: %w", dErr)
 		}
+		detachDone()
 	}()
 
 	// A db the migration could not bring forward — one still behind the current
@@ -721,14 +764,14 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	}
 
 	srcID := sourceIdentity(src)
-	done = phase("prepare")
+	done = beginConsolidatePhase(src, "prepare")
 	if err := migrateSessionSources(con); err != nil {
 		done()
 		return 0, false, true, fmt.Errorf("migrate session sources: %w", err)
 	}
 	done()
 
-	done = phase("merge")
+	done = beginConsolidatePhase(src, "merge")
 	defer done()
 	tx, err := con.Begin()
 	if err != nil {
