@@ -63,4 +63,3 @@ post-merge fold tail,” with the current close comment naming `2dca4d9` and
 reported #32 **CLOSED**, titled “Fault-injection repro test for the Problem B
 single-source closeout stall,” with the stale `c14e806`, `fd01a92`, and
 `479d14c` history described above.
-
