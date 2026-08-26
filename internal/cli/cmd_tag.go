@@ -478,21 +478,6 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 		return err
 	}
 
-	// A session with no surviving per-project source (retained-but-purged,
-	// or #22's carried-forward store-only history) resolves dbp to the
-	// consolidated store itself — this write then lands directly on
-	// consolidated.db with no per-project fold afterward to fence it. Same
-	// hazard as runTagFloorCmd: fence only for that case, so the common
-	// per-project write path pays no extra lock contention.
-	var fence *index.ConsolidatedFence
-	if dbp == index.ConsolidatedPath() {
-		fence, err = index.AcquireConsolidatedFence(context.Background())
-		if err != nil {
-			return fmt.Errorf("acquire consolidated store lock: %w", err)
-		}
-		defer func() { _ = fence.Close() }()
-	}
-
 	con, err := store.ConnectRW(dbp)
 	if err != nil {
 		return fmt.Errorf("open %q read-write: %w", dbp, err)
