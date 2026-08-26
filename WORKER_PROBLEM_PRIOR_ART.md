@@ -5,7 +5,7 @@ This is a report-only census. Product code and rival worktrees were not edited.
 
 ## Scope and evidence rules
 
-The live census used `tmux list-sessions`, `tmux list-panes -a -F '#{session_name}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}'`, `ps`, `git worktree list --porcelain`, branch SHA/status reads, `.codex-run.log` tails, and the four requested mailboxes. Heartbeat/watchdog/spy loops are listed as orchestration evidence but are not counted as product problems. A pane marked live means its tmux/agy process was present at census time; a completed branch means its report was visible in the pane, not that its design was accepted.
+The live census used `tmux list-sessions`, `tmux list-panes -a -F '#{session_name}\t#{pane_pid}\t#{pane_current_path}\t#{pane_current_command}'`, `ps`, `git worktree list --porcelain`, branch SHA/status reads, `.codex-run.log` tails, and repo-local mailbox receipts. Heartbeat/watchdog/spy loops are listed as orchestration evidence but are not counted as product problems. A pane marked live means its tmux/agy process was present at census time; a completed branch means its report was visible in the pane, not that its design was accepted.
 
 Graphify was queried first. Relevant graph symbols are `renderHookScript`, `catalogIngestSource`, `ResolveSession`, `refreshTagSession`, `discoverTagSources`, `EnsureFreshContainer`, `PrepareFreshContainer`, `EnsureIndexedTree`, `SyncConsolidatedFrom`, `StampIngestWatermark`, `BenchmarkFTS5Search`, `spawnIngestChild`, and `TestPrimeScript_CatalogWriteFailure_NeverFailsHook`.
 
@@ -28,8 +28,6 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 | skill-modernize | `rawclaw-lenny-skill-modernize` / `lenny/skill-modernize-20260826` @ `7bf86ec` | STALL candidate | shrink-only Go modernization |
 | skill-style | `rawclaw-lenny-skill-style` / `lenny/skill-style-20260826` @ `37e4f70` | STALL candidate | POSIX/Go style and deletion opportunities |
 
-Representative local receipts: `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T095428Z-3b6748eb-lenny-heartbeat-36-receipts-or.md`, `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T071754Z-16cf50b0-codex-elegance-review-cmd-prew.md`.
-
 ### Norm Bell supervisor
 
 | worker | worktree / branch @ SHA | state | concrete problem |
@@ -39,8 +37,6 @@ Representative local receipts: `/Users/jay-m4/code/rawclaw/.agent-mailbox/202608
 | flash-hooks | `rawclaw-norm-flash-hooks` / `norm/flash-hooks` @ `2b60e72` (dirty=2) | quota/stalled | hook claim algorithm; compare FIFO claim with temp JSON/atomic rename |
 | flash-ingest | `rawclaw-norm-flash-ingest` / `norm/flash-ingest` @ `7478bfd` (dirty=1) | quota/stalled | ingest retry/failure/status contract |
 | flash-ozzy-spy | `rawclaw-norm-ozzy-spy` / `norm/ozzy-spy` @ `3530005` | completed receipt | audit worker claims, dirty trees, and unsafe cleanup |
-
-Representative local receipt: `/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T095910Z-550573e7-norm-bell-11-ozzy-bite-through.md`.
 
 ### Ozzy Prince supervisor
 
@@ -55,23 +51,21 @@ Representative local receipt: `/Users/jay-m4/code/rawclaw-wt-instant-closeout-sp
 | flash-prune | `rawclaw-ozzy-flash-prune` / `ozzy/flash-prune-benchmark` @ `cdc063d` (dirty=1) | quota/waiting | tombstone prune performance benchmark |
 | flash-repro | `rawclaw-ozzy-flash-repro` / `ozzy/flash-repro-review` @ `cdc063d` | completed receipt | issue-32 abrupt post-merge fault reproduction |
 
-Representative local receipts: `/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T100014Z-7bbc7513-conor-correction-wire-ozzy-cle.md`, `/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T100806Z-norm-ozzy-spy-blast.md`.
-
 The live scheduler sessions observed were `lenny-spy-loop`, `lenny-spy-watchdog`, `rawclaw-norm-spy-loop`, `ozzy-spy-heartbeat-loop`, plus heartbeat/watchdog sessions. They are orchestration only and are excluded from the 23-worker product count.
 
 ## Phase 2: deduplicated problem taxonomy and local evidence
 
 There are 10 distinct problems after deduplication. Competing workers are preserved in parentheses.
 
-1. **SessionStart catalog claim and fail-soft safety** (Lenny raid-hooks; Norm flash-hooks; Ozzy flash-hook). Local contract: `internal/cli/setup.go:24-85,128-178` writes a claim with `set -C`, then upgrades it with a same-directory temp file and `mv`; `internal/cli/catalog_hook_test.go:14-95,244-260` requires exactly-once output and hook success on catalog failure. The integration base still contains the older FIFO-opening expression called out in the supervisor message; Conor’s `conor/fix-hook-fifo-claim@13966cf` is the competing temp-file/atomic-claim reference. Receipts: `/Users/jay-m4/code/rawclaw/.agent-mailbox-norm/20260826T100820Z-norm-ack-ozzy-ammunition.md` and the Lenny heartbeat above.
+1. **SessionStart catalog claim and fail-soft safety** (Lenny raid-hooks; Norm flash-hooks; Ozzy flash-hook). Local contract: `internal/cli/setup.go:24-85,128-178` writes a claim with `set -C`, then upgrades it with a same-directory temp file and `mv`; `internal/cli/catalog_hook_test.go:14-95,244-260` requires exactly-once output and hook success on catalog failure. The integration base still contains the older FIFO-opening expression called out in review; Conor’s `conor/fix-hook-fifo-claim@13966cf` is the competing temp-file/atomic-claim reference.
 
-2. **Background ingest/prewarm and child lifecycle** (Lenny raid-prewarm; Ozzy flash-hidden; Norm flash-ingest). Local symbols: `internal/cli/bg_ingest.go:59-73` (`maybeSpawnIngest`, `spawnIngestChild`), `internal/cli/cmd_ingest.go:30-46` (background-at-SessionStart contract), `internal/index/containers.go:45-105` (`PrepareFreshContainer`, `EnsureFreshContainer`). The CC review receipt identifies `internal/cli/cmd_prewarm.go` as a bespoke `.dump/.state` cache that probes consolidated resolution twice: `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T071754Z-16cf50b0-codex-elegance-review-cmd-prew.md`.
+2. **Background ingest/prewarm and child lifecycle** (Lenny raid-prewarm; Ozzy flash-hidden; Norm flash-ingest). Local symbols: `internal/cli/bg_ingest.go:59-73` (`maybeSpawnIngest`, `spawnIngestChild`), `internal/cli/cmd_ingest.go:30-46` (background-at-SessionStart contract), `internal/index/containers.go:45-105` (`PrepareFreshContainer`, `EnsureFreshContainer`). Prior review identifies `internal/cli/cmd_prewarm.go` as a bespoke `.dump/.state` cache that probes consolidated resolution twice.
 
 3. **Known-session catalog fallback and mixed-source ambiguity** (Lenny raid-locate; Norm flash-catalog; Ozzy flash-catalog). Local symbols: `internal/paths/paths.go:298-348` (`ResolveSession`, catalog direct/prefix scan), `internal/cli/tagrefresh.go:109-165` (`refreshTagSession`), `:167-264` (`stemTagSources`, `locatedTagSource`, `registrationFor`), `:267-317` (`discoverTagSources`). Exact IDs, prefixes, source detection, and fallback can disagree; catalog miss falls to stem resolution and then all-source discovery. The Graphify node “Candidate 6: Session Catalog vs Stem Resolution Duplication” points to `docs/notes/audit-verification-c3-c6.md:303-367`.
 
 4. **Incremental tag closeout and source-aware refresh** (Lenny raid-prewarm/raid-locate; Ozzy flash-hidden/flash-catalog). `refreshTagMatches` refreshes every matching source and chooses one target at `internal/cli/tagrefresh.go:319-360`; `EnsureFreshContainer` strictly verifies watermark then folds at `internal/index/containers.go:84-105`. The contract risk is a source match being fresh in a private cache while the chosen consolidated/read path is stale or ambiguous.
 
-5. **Consolidated-store atomicity, writer fencing, fault reproduction, and phase logging** (Lenny raid-fence/raid-phase/raid-containers; Norm flash-fence; Ozzy flash-cleanup/flash-repro/flash-integration). Local symbols: `internal/index/consolidated.go:553-609` (`SyncConsolidatedFrom`), `:637-647` (`beginConsolidatePhase`), `internal/index/containers.go:201-229` (`EnsureIndexedContainers`), and `internal/index/index.go:1195` (`EnsureIndexedTree`). The local Conor receipt reports `89c8a28` probes with `BEGIN IMMEDIATE` then releases before unlinking DB/WAL/SHM, a probe-to-unlink TOCTOU (`/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T100014Z-7bbc7513-conor-correction-wire-ozzy-cle.md`).
+5. **Consolidated-store atomicity, writer fencing, fault reproduction, and phase logging** (Lenny raid-fence/raid-phase/raid-containers; Norm flash-fence; Ozzy flash-cleanup/flash-repro/flash-integration). Local symbols: `internal/index/consolidated.go:553-609` (`SyncConsolidatedFrom`), `:637-647` (`beginConsolidatePhase`), `internal/index/containers.go:201-229` (`EnsureIndexedContainers`), and `internal/index/index.go:1195` (`EnsureIndexedTree`). Review evidence reports `89c8a28` probes with `BEGIN IMMEDIATE` then releases before unlinking DB/WAL/SHM, a probe-to-unlink TOCTOU.
 
 6. **Refresh DB/WAL/SHM cleanup** (Lenny raid-containers; Ozzy flash-cleanup). `RefreshDBPath` and WAL-aware fingerprinting are in `internal/index/containers.go:27-35,119-139`; deletion is the contested cleanup path. The safe contract is “hold the same serialization guard through decision and unlink, or make cleanup idempotent and retryable.”
 
@@ -152,7 +146,7 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 - **Lenny Bruce:** Ten desks reduce to the high-value substitutions above plus private refresh generations and scoped phase logging. Start with SQLite locking/atomic commit (https://www.sqlite.org/atomiccommit.html, https://www.sqlite.org/lockingv3.html), Git lock ownership (https://git-scm.com/docs/api-lockfile), and POSIX `O_EXCL` (https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html). The precise experiment is a concurrent hook test plus a cleanup test that races acquisition between probe and unlink; only a lock held across both passes.
 - **Norm Bell:** Your four quota-hit lanes should compare against SQLite’s idempotent uniqueness and explicit stale/error contract: https://www.sqlite.org/lang_upsert.html and https://go.dev/doc/articles/race_detector. Re-run catalog and ingest with exact/prefix collisions, source failure, and race count >=5; do not report quota-hit panes as green.
-- **Ozzy Prince:** The cleanup receipt’s probe-to-unlink gap is confirmed locally at the mailbox path above. Use PocketBase’s checkpoint/backup sequencing (https://github.com/pocketbase/pocketbase/blob/master/core/base_backup.go) only as a pattern, then keep RawClaw’s fence held through `os.Remove`; reproduce issue-32 with the race detector and immutable integration SHA.
+- **Ozzy Prince:** The cleanup receipt’s probe-to-unlink gap is confirmed by review evidence. Use PocketBase’s checkpoint/backup sequencing (https://github.com/pocketbase/pocketbase/blob/master/core/base_backup.go) only as a pattern, then keep RawClaw’s fence held through `os.Remove`; reproduce issue-32 with the race detector and immutable integration SHA.
 
 ### Live-worker directives
 
