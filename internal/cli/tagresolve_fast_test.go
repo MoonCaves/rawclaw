@@ -1,16 +1,79 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 	"github.com/gofrs/flock"
 )
+
+func TestRunTagWriteDefaultCatalogFastPathBeforeFence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	config := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	catalog := filepath.Join(config, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catalog)
+	target := filepath.Join(config, "projects", "default-fast")
+	os.MkdirAll(target, 0o755)
+	sid := "abc12345-0000-4000-8000-000000000001"
+	uuid := "11111111-aaaa-bbbb-cccc-000000000001"
+	writeTranscript(t, target, sid, []string{uuid})
+	dbp, _, _, err := index.EnsureIndexed(target, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := paths.WriteCatalogEntry(catalog, paths.CatalogEntry{SessionID: sid, TranscriptPath: filepath.Join(target, sid+".jsonl"), CWD: target}); err != nil {
+		t.Fatal(err)
+	}
+	lock := flock.New(filepath.Join(filepath.Dir(index.ConsolidatedPath()), "consolidated.lock"))
+	if ok, err := lock.TryLock(); err != nil || !ok {
+		t.Fatalf("lock: %v", err)
+	}
+	defer lock.Unlock()
+	old := spawnTagPublish
+	spawnTagPublish = func(string, string) error { return nil }
+	defer func() { spawnTagPublish = old }()
+	var out strings.Builder
+	if err := runTagWriteCmd(&out, strings.NewReader(`[{"start_uuid":"11111111","topic":"default-fast","summary":"x"}]`), sid[:8], nil, func() []view.Scope { t.Fatal("guarded lookup called"); return nil }, false, "", false); err != nil {
+		t.Fatal(err)
+	}
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	segs, err := store.TopicsForSession(con, sid)
+	if err != nil || len(segs) != 1 {
+		t.Fatalf("source topics=%#v err=%v", segs, err)
+	}
+}
+
+func TestLocateTagWriteFast_NilScopeAmbiguousCatalogFallsBack(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	config := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	catalog := filepath.Join(config, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catalog)
+	for _, sid := range []string{"abc99999-0000-4000-8000-000000000001", "abc99999-0000-4000-8000-000000000002"} {
+		proj := filepath.Join(config, "projects", sid)
+		os.MkdirAll(proj, 0o755)
+		path := filepath.Join(proj, sid+".jsonl")
+		writeTranscript(t, proj, sid, []string{"22222222-aaaa-bbbb-cccc-000000000001"})
+		if err := paths.WriteCatalogEntry(catalog, paths.CatalogEntry{SessionID: sid, TranscriptPath: path, CWD: proj}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if db, full, found := locateTagWriteFast("abc99999", nil); found || db != "" || full != "" {
+		t.Fatalf("ambiguous catalog fast path=(%q,%q,%v)", db, full, found)
+	}
+}
 
 func TestTagWriteFastPathAuthorsBeforeConsolidatedFence(t *testing.T) {
 	root := newCfgRoot(t)
