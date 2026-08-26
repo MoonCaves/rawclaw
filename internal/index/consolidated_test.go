@@ -508,6 +508,48 @@ func TestConsolidate_DeletesTopicsRemovedFromSource(t *testing.T) {
 	}
 }
 
+func TestConsolidate_PreservesTopicsWhenCoContributorRemains(t *testing.T) {
+	isolateCache(t)
+	sid := "shared-topic-session"
+	a := seedSessionDB(t, "a.db", sessionRow{id: sid, project: "a", cwd: "/a", msgs: []msgRow{{"u-a", "user", "a", 100}}})
+	b := seedSessionDB(t, "b.db", sessionRow{id: sid, project: "b", cwd: "/b", msgs: []msgRow{{"u-b", "user", "b", 100}}})
+	for _, dbp := range []string{a, b} {
+		con, err := store.ConnectRW(dbp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EnsureTopicSchema(con); err != nil {
+			con.Close()
+			t.Fatal(err)
+		}
+		segs := []store.TopicSegment{{SessionID: sid, StartUUID: "u-a", Topic: "A"}, {SessionID: sid, StartUUID: "u-b", Topic: "B"}}
+		if err := store.ReplaceSessionSegments(con, sid, segs); err != nil {
+			con.Close()
+			t.Fatal(err)
+		}
+		con.Close()
+	}
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+	con, err := store.ConnectRW(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceSessionSegments(con, sid, []store.TopicSegment{{SessionID: sid, StartUUID: "u-a", Topic: "A"}}); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("second consolidate: %v", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment WHERE session_id=? AND start_uuid='u-b'", sid); got != "1" {
+		t.Fatalf("co-contributor topic B was removed: %s rows, want 1", got)
+	}
+}
+
 func TestConsolidate_RebuildPreservesStoreOnlyTags(t *testing.T) {
 	isolateCache(t)
 	a := indexProject(t, "-w-ledger",
