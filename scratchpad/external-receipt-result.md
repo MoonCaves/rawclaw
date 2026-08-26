@@ -11,13 +11,20 @@ Evidence is recorded in [FURIOSA_EXTERNAL_RECEIPT_CONTRACT.md](../FURIOSA_EXTERN
 
 - candidate source lines and exact SHAs/patch-ids;
 - candidate test coverage and its missing post-`Start` mutation;
+- historical independent mutation reproduction `0b39b82a...`: 20/20 immediate
+  kills after successful `Start` yielded zero child receipt bytes, with focused
+  candidate race gate PASS in 3.022s;
 - current focused race-gate result (`real 169.63s`, unrelated pre-existing
   `TestTagWriteDefaultScopeConsolidatedOnlyDoesNotBlock` failure);
 - Graphify refresh/query failures due to the absent graph file; and
-- the final commit and push receipt, to be filled after commit/push.
+- first report commit `6f5667e` pushed successfully to
+  `origin/worker/furiosa-external-receipt-contract-20260827`; final closeout
+  commit and push receipt are added below.
 
 Disposition: keep publication best-effort and change the foreground wording to
 say authoritative write complete plus best-effort detached publication, with
 possible stale consolidated reads and absent terminal receipt. A durable pending
 record plus retry owner is required for a stronger eventual-publication
 contract; it is not a tiny safe correction.
+
+Final closeout: commit and push receipt recorded after this update.

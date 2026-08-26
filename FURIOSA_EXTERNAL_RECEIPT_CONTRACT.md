@@ -68,9 +68,23 @@ The candidate test history contains:
   sources and cancellation. None injects a post-`Start` child kill or asserts a
   receipt for that interval.
 
-Therefore the timing window is **not empirically reproduced by the candidate
-tests**; it is proven from the process API ordering and the absence of any writer
-or owner in the interval. No production code was changed.
+Therefore the candidate tests do not cover the interval, but an independent
+temporary harness did reproduce it against candidate `8c8216e`. The reproduction
+recorded 20/20 immediate-kill runs with `Start` returned, `kill_err=<nil>`, and
+`child_receipt_bytes=0`. Two 20 ms controls produced zero bytes once and a
+partial pre-receipt fence line once. This directly demonstrates child
+disappearance after `Start` and before the terminal line. No production code or
+test was changed in that reproduction.
+
+The reproduction is recorded in historical commit
+`0b39b82a5d5b87edfe4d8b9c80c16c4b1038103f`, whose focused candidate race gate
+passed in 3.022s:
+
+```text
+CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run \
+  'TestRunTagPublishChildHonorsContextTimeout|TestRunTagWriteCommandSeamIsNotIsolated'
+ok github.com/MoonCaves/rawclaw/internal/cli 3.022s
+```
 
 The current report checkout’s focused command was:
 
@@ -115,6 +129,8 @@ testing that owner is a separate feature, not a safe one-line fix.
 - Prior finding: `987c6a31186bb15615175c5198389aa0d31846f6`; patch-id
   `33c107108b0ddd123cddaea88f5119e157c392a2`.
 - Candidate: `8c8216e25e22496b2e3e919fce836be49d692e25`.
+- Independent mutation reproduction: `0b39b82a5d5b87edfe4d8b9c80c16c4b1038103f`.
+- Best-effort wording correction in prior art: `1e61f732fc3f9234dd9b94a55407d7419fe71b47`.
 - Candidate introduction: `d0d716c46f32573fee02b6e951acf76aa7a04c8f`; patch-id
   `8df42cb9ffc51473888b85bc823d23a15b713e7c`.
 - Candidate baseline publisher: `f35625beb0a2895917fdfdadc53a6923d846b3e4`; patch-id
@@ -134,5 +150,6 @@ Graphify receipts:
 - No graph answer was used as evidence; source and Git evidence were used
   instead.
 
-Push receipt: pending until this report is committed; the final scratchpad
-receipt records the actual push result.
+Push receipt for the first report commit: `6f5667e` was pushed successfully to
+`origin/worker/furiosa-external-receipt-contract-20260827`; the final commit is
+recorded in the scratchpad below.
