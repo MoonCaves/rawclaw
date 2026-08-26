@@ -1,8 +1,11 @@
-# Tag overlay findings
+# Ponytail review: 8c8216e
 
-- Authoritative seam: `runTagWriteCmd` writes the current tag rows to the resolved refresh/per-project DB, then best-effort calls `index.SyncConsolidatedFrom`; `runTagPrepCmdWithSources` reads only `consolidated.db` via `readConsolidatedTopics` before computing its window.
-- Contract: a committed tag must be visible to the next tag-prep/read even when consolidated publication is delayed or absent; unreadable authoritative data must remain an error, while derived-store staleness must not erase current topics.
-- Smallest failing test: write a topic to a session's refresh DB, leave consolidated without that row, call the tag-prep topic-read path, and assert the current topic is returned exactly once in deterministic order.
-- Smallest fix: read the authoritative resolved DB and overlay it over consolidated rows for the session; deduplicate by stable segment identity and keep authoritative replacements instead of stale derived copies. No cache, new seam, persistence format, or detached publication.
-- Authorized files: `internal/cli/cmd_tag.go`, `internal/cli/tagrefresh.go`, `internal/cli/tagrefresh_test.go` (new `tagoverlay.go` only if inlining is larger).
-- Estimate: +35 test lines, +25 production lines, 0 new dependencies.
+Immutable production fence: `internal/index/consolidated.go` only.
+
+- `internal/index/consolidated.go:L843-L859`: `delete` **DROP** — deleting the topic-prune block would restore the regression where refreshing one source removes a co-contributor's topic; the existing `consolidation_affected_sessions` set tracks session membership, not topic ownership.
+- `internal/index/consolidated.go:L843-L859`: `shrink` **DEFER** — the `NOT EXISTS` contributor predicate plus incoming `(session_id,start_uuid)` identity is the minimum local SQL that preserves co-contributor topics while removing stale sole-source anchors; no repository primitive or stdlib replacement exists.
+- `internal/index/consolidated.go:L843-L859`: `yagni` **DROP** — no new abstraction, interface, dependency, or recovery layer was added by 8c8216e; extracting this predicate would make the one call site shallower and larger.
+
+Mutation/recovery ruling: **DROP production change; DEFER any rewrite.** Existing focused tests passed on current base. A production edit is not justified without a new mutation demonstrating an equivalent, smaller predicate and a test pinning deletion of a removed source session's topic under co-contributor presence.
+
+net: +0 production lines possible; no safe shrink proven.
