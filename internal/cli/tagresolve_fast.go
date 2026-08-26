@@ -1,12 +1,95 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/provenance"
+	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
+
+// refreshTagWriteTDir refreshes only the matching top-level container inside
+// tdir. It deliberately uses the explicit directory as the discovery scope;
+// catalog and global source discovery are not part of this path.
+func refreshTagWriteTDir(tdir, session8 string) (dbp, fullSID string, ok bool) {
+	prefix := agentproto.NormalizeSessionArg(session8)
+	db := index.DBPath(tdir)
+	if match, found := locateTagWriteTDirDB(db, tdir, prefix); found {
+		return refreshTagWriteMatch(match)
+	}
+
+	dir := realpathExpand(tdir)
+	var matches []tagSourceMatch
+	for _, path := range paths.ContainedJSONL(dir) {
+		if !pathInDir(path, dir) {
+			continue
+		}
+		sid, isSubagent, parent := provenance.SessionIDFor(path, dir)
+		if isSubagent != 0 || !strings.HasPrefix(sid, prefix) {
+			continue
+		}
+		for _, reg := range sources.Registered() {
+			if reg.New == nil || reg.Detect == nil || !reg.Detect(path) {
+				continue
+			}
+			adapter := reg.New()
+			if adapter == nil {
+				continue
+			}
+			matches = append(matches, tagSourceMatch{
+				registration: reg,
+				adapter:      adapter,
+				container: source.Container{
+					ID: sid, Path: path, CWD: paths.ProjectCWD(dir),
+					IsSubagent: false, ParentID: parent,
+				},
+			})
+		}
+	}
+	if len(matches) != 1 {
+		return "", "", false
+	}
+	return refreshTagWriteMatch(matches[0])
+}
+
+func locateTagWriteTDirDB(dbp, tdir, prefix string) (tagSourceMatch, bool) {
+	if dbp == "" {
+		return tagSourceMatch{}, false
+	}
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		return tagSourceMatch{}, false
+	}
+	ids, err := store.SessionsByPrefix(con, prefix, false, 2)
+	_ = con.Close()
+	if err != nil || len(ids) != 1 {
+		return tagSourceMatch{}, false
+	}
+	match, ok := locatedTagSource(dbp, ids[0], sources.Registered())
+	if !ok || !pathInDir(match.container.Path, realpathExpand(tdir)) {
+		return tagSourceMatch{}, false
+	}
+	return match, true
+}
+
+func refreshTagWriteMatch(match tagSourceMatch) (string, string, bool) {
+	dbp := index.RefreshDBPath(match.registration.ID, match.container.ID, match.container.Path)
+	_, err := index.PrepareFreshContainer(dbp, match.container, match.adapter.Messages, match.registration.ID)
+	return dbp, match.container.ID, err == nil
+}
+
+func pathInDir(path, dir string) bool {
+	rp := realpathExpand(path)
+	rel, err := filepath.Rel(strings.TrimRight(realpathExpand(dir), string(os.PathSeparator)), rp)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel)
+}
 
 // locateTagWriteFast probes already-known scope databases without indexing or
 // consulting the derived store. A unique source hit is authoritative for the
@@ -42,10 +125,19 @@ func locateTagWriteFast(session8 string, scope []view.Scope) (dbp, fullSID strin
 	for _, sc := range scope {
 		db := sc.DBP
 		if db == "" && sc.TDir != "" {
-			db = index.DBPath(sc.TDir)
-			if _, status, err := index.EnsureIndexedTreeSource(db, sc.TDir); err != nil || status != index.IndexFresh {
+			var ok bool
+			var candidateSID string
+			db, candidateSID, ok = refreshTagWriteTDir(sc.TDir, session8)
+			if !ok {
 				continue
 			}
+			if hits > 0 && fullSID != candidateSID {
+				return "", "", false
+			}
+			hits++
+			dbp = db
+			fullSID = candidateSID
+			continue
 		}
 		if db == "" {
 			continue

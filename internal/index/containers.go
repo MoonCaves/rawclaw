@@ -77,6 +77,15 @@ func PrepareFreshContainer(
 	if status != IndexFresh {
 		return 0, fmt.Errorf("refresh cache %s is locked or stale", dbp)
 	}
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		return 0, fmt.Errorf("open refresh cache %s for topics: %w", dbp, err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		_ = con.Close()
+		return 0, fmt.Errorf("ensure refresh topic schema: %w", err)
+	}
+	_ = con.Close()
 
 	return verifyFreshContainer(dbp, c)
 }
