@@ -16,7 +16,6 @@ This is a concrete deep module with one small interface: callers still receive o
 ## Expected result
 
 - Baseline `consolidated.go`: 1,601 lines.
-- Lenny's `dd57060` source delta: 39 additions, 48 deletions (net `-9`; the receipt reported `-10` including surrounding accounting).
-- Proposed helper: remove the duplicated `if src != ""` log bodies while preserving attributes and call sites; expected net at least one line better than `dd57060`.
+- Exact `git diff --numstat 0d60b4c..dd57060 -- internal/index/consolidated.go` is 34 additions, 42 deletions (net `-8`). The commit's broader stat differs because it includes its findings artifact and a different parent accounting.
+- Proposed helper: remove the duplicated `if src != ""` log bodies while preserving attributes and call sites. Observed delta is 28 additions, 40 deletions (net `-12`), four lines better than the exact rival source delta.
 - If source or test receipts show any logging-contract drift, reject this takeover and report NO TAKEOVER.
-
