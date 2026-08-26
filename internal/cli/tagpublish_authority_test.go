@@ -37,3 +37,44 @@ func TestPublishSessionAuthorityAndRevision(t *testing.T) {
 		t.Fatalf("segments = %#v, want higher-authority replacement", got)
 	}
 }
+
+func TestPublishSessionEqualRevisionKeepsExisting(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "equal-revision"
+	first := store.TopicSegment{SessionID: sid, StartUUID: "first", EndUUID: "first", Topic: "first", TaggedAt: 10}
+	if err := store.ReplaceSessionSegments(con, sid, []store.TopicSegment{first}); err != nil {
+		t.Fatal(err)
+	}
+	second := store.TopicSegment{SessionID: sid, StartUUID: "second", EndUUID: "second", Topic: "second", TaggedAt: 10}
+	if err := publishSession(context.Background(), con, sid, []store.TopicSegment{second}, store.Verdict{}, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.TopicsForSession(con, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Topic != "first" {
+		t.Fatalf("segments = %#v, want first equal-revision set", got)
+	}
+}
+
+// Empty source state has no durable revision, so an older snapshot must not
+// silently clear a current local set. A deletion requires a recorded revision.
+func TestPublishSessionEmptyWithoutRevisionCannotClear(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "empty-no-revision"
+	current := store.TopicSegment{SessionID: sid, StartUUID: "current", EndUUID: "current", Topic: "current", TaggedAt: 10}
+	if err := store.ReplaceSessionSegments(con, sid, []store.TopicSegment{current}); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishSession(context.Background(), con, sid, nil, store.Verdict{}, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.TopicsForSession(con, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Topic != "current" {
+		t.Fatalf("segments = %#v, want current set preserved", got)
+	}
+}

@@ -129,7 +129,14 @@ func isConsolidatedSource(dbp string) bool {
 	db, de := filepath.EvalSymlinks(dbp)
 	dst, te := filepath.EvalSymlinks(index.ConsolidatedPath())
 	if de == nil && te == nil {
-		return filepath.Clean(db) == filepath.Clean(dst)
+		if filepath.Clean(db) == filepath.Clean(dst) {
+			return true
+		}
+		if a, err := os.Stat(db); err == nil {
+			if b, err := os.Stat(dst); err == nil && os.SameFile(a, b) {
+				return true
+			}
+		}
 	}
 	return filepath.Clean(dbp) == filepath.Clean(index.ConsolidatedPath())
 }
@@ -172,7 +179,7 @@ func publishSession(ctx context.Context, con *sql.DB, sid string, segments []sto
 	if err := tx.QueryRowContext(ctx, revisionQuery, args...).Scan(&currentRevision); err != nil {
 		return err
 	}
-	if !currentRevision.Valid || currentRevision.Float64 <= sourceRevision {
+	if !currentRevision.Valid || currentRevision.Float64 < sourceRevision {
 		where := "session_id=? AND (origin_machine IS NULL OR origin_machine='')"
 		if sourceOrigin != "" {
 			where = "session_id=?"
