@@ -244,6 +244,9 @@ func TestTagWriteQueuesDerivedPublication(t *testing.T) {
 	if !strings.Contains(out.String(), "publication queued") {
 		t.Fatalf("output = %q, want queued publication receipt", out.String())
 	}
+	if !strings.Contains(out.String(), "best effort; queued does not mean published") {
+		t.Fatalf("output = %q, want explicit best-effort queued-not-published semantics", out.String())
+	}
 }
 
 func TestTagWriteAuthoritativeOverlaySurvivesDelayedPublication(t *testing.T) {
