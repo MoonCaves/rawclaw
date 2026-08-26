@@ -19,6 +19,9 @@ func locateTagWriteFast(session8 string, scope []view.Scope) (dbp, fullSID strin
 		db := sc.DBP
 		if db == "" && sc.TDir != "" {
 			db = index.DBPath(sc.TDir)
+			if _, status, err := index.EnsureIndexedTreeSource(db, sc.TDir); err != nil || status != index.IndexFresh {
+				continue
+			}
 		}
 		if db == "" {
 			continue
