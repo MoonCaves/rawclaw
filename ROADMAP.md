@@ -99,14 +99,16 @@ topic-section markers). rawclaw owns the per-session recap (its domain = transcr
   summaries are baked into history, not a clean field). So a background Haiku reads the transcript (via
   rawclaw) and writes a sidecar recap. The transcript IS the context, so the background agent needs no
   live main-agent context — it can poke around fully without touching the user's convo.
-- **Trigger = out-of-band only (zero UX latency).** Never run the recap synchronously in the user's
-  flow (`Stop` fires every turn AND blocks — disqualified for the heavy work). Use:
-  (1) **SessionStart-lazy** — on start/resume, background-recap the *previous* session (non-blocking;
-  catches the common abandoned-session case on next return); plus
-  (2) **cron mtime-scan** — periodically recap sessions idle > N min (the only reliable catch for
-  abandoned/window-closed sessions — Claude fires NO event on abandonment; `SessionEnd` only fires on
-  clean `/exit`). `Stop` is reserved at most for ultra-light incremental *titling* (background-spawn +
-  exit, never synchronous work).
+- **Trigger = out-of-band only (zero UX latency).** Never run recap work inside a hook. Hook
+  contracts differ by runtime and are all too weak to own completion: Codex `SessionEnd` is
+  synchronous even when async is requested; Claude Code `SessionEnd` has a short synchronous exit
+  budget; Claude Code and Codex `Stop` fire each turn and unfinished async work may be cancelled at
+  teardown; Antigravity command hooks are synchronous. A hook may only write a tiny catalog record,
+  launch a detached RawClaw child, and exit. Correctness comes from durable local intent plus normal
+  ingest/mtime retries, not from the hook firing. Use SessionStart as an acceleration path and a
+  periodic idle-session scan as the reliable abandoned/window-closed catch. See
+  [docs/design/tag-closeout-fast-path.md](docs/design/tag-closeout-fast-path.md) for the shared
+  detached-publication contract.
 - Likely shape: a `rawclaw recap <sess>` / `rawclaw title <sess>` verb so the logic lives in the tool,
   and hooks/cron just invoke it in the background.
 

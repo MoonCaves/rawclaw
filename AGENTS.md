@@ -89,4 +89,5 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [README.md](README.md) — what RawClaw is and its full verb/flag surface, from the user's side.
 - [ROADMAP.md](ROADMAP.md) — the north-star constraints and the forward plan (planned / exploring / speculative).
 - [CONTRIBUTING.md](CONTRIBUTING.md) — clean checkout → green build: prerequisites, build, test, lint.
+- [docs/design/tag-closeout-fast-path.md](docs/design/tag-closeout-fast-path.md) — implementation contract for crash-durable, non-blocking tag prep/write and detached publication.
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
