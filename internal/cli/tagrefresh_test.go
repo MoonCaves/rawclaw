@@ -166,6 +166,47 @@ func TestRunPrewarmExternalBehaviors(t *testing.T) {
 	})
 }
 
+func TestRunTagPrepCmdReadsCommittedTagBeforeConsolidatedFold(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("HOME", configDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	projDir := filepath.Join(configDir, "projects", "-overlay-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const sid = "overlay-session-0001"
+	path := filepath.Join(projDir, sid+".jsonl")
+	writeTagSourceFile(t, path, `{"type":"user","uuid":"11112222-msg","timestamp":"2026-08-25T10:00:00Z","message":{"role":"user","content":"overlay message"}}`+"\n")
+	c := source.Container{ID: sid, Path: path, CWD: projDir}
+	src := &tagTestSource{containers: []source.Container{c}, messages: []model.Message{{Role: "user", Text: "overlay message", UUID: "11112222-msg"}}}
+	reg := tagTestRegistration("overlay-test", src)
+	dbp := index.RefreshDBPath(reg.ID, sid, path)
+	if _, err := index.PrepareFreshContainer(dbp, c, src.Messages, reg.ID); err != nil {
+		t.Fatal(err)
+	}
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertTopicSegment(con, sid, "11112222-msg", "11112222-msg", "authoritative topic", "", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	if err := runTagPrepCmdWithSources(&out, sid, nil, nil, []source.Registration{reg}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "already fully tagged") {
+		t.Fatalf("tag-prep ignored committed authoritative topic:\n%s", out.String())
+	}
+}
+
 func TestRunPrewarmRegeneratesWhenDumpMissing(t *testing.T) {
 	dump, src, c := runPrewarmTest(t, "one", []model.Message{{
 		Role: "user", Text: "one", UUID: "11111111-one",
