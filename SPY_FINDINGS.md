@@ -20,9 +20,10 @@ and live worktrees. No Go files were edited; `gofmt` was not applicable.
 - **Observed gate:** `CGO_ENABLED=0 go test -race -count=1 -run
   'TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest|TestClaudePrimeScript_ExecutesDetachedIngest|TestCodexPrimeScript_ExecutesDetachedIngest'
   ./internal/cli` passed in 3.935s, but does not cover special files.
-- **Minimal correction:** restore the explicit `claimed=0` / `set -C` /
-  `elif [ -e "$entry" ]` branch from `821b78d`; do not probe a failed
-  noclobber open with a potentially blocking `-e` path.
+- **Minimal correction:** avoid opening an existing special file at all: reject
+  an existing entry before the noclobber attempt, or use a nonblocking atomic
+  claim primitive such as `mkdir`. Restoring the older explicit branch alone
+  is insufficient because it performs the same blocking redirection first.
 - **Roast:** A three-run race green is not a safety proof when a FIFO can park
   SessionStart before the first assertion.
 
