@@ -659,6 +659,7 @@ func writeThroughConsolidated(dbp string, indexErr error) {
 func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
 	phase := func(name string) func() {
 		started := time.Now()
+		slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "event", "start")
 		return func() {
 			slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "duration", time.Since(started))
 		}

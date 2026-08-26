@@ -35,6 +35,9 @@ type ConsolidatedFence struct {
 func AcquireConsolidatedFence(ctx context.Context) (*ConsolidatedFence, error) {
 	started := time.Now()
 	slog.Info("consolidated fence phase", "phase", "acquire", "event", "start")
+	defer func() {
+		slog.Info("consolidated fence phase", "phase", "acquire", "duration", time.Since(started))
+	}()
 	lockPath := filepath.Join(store.CacheDir(), "consolidated.lock")
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create consolidated lock directory: %w", err)
@@ -58,7 +61,6 @@ func AcquireConsolidatedFence(ctx context.Context) (*ConsolidatedFence, error) {
 			return nil, fmt.Errorf("acquire consolidated lock: %w", err)
 		}
 		if locked {
-			slog.Info("consolidated fence phase", "phase", "acquire", "duration", time.Since(started))
 			return &ConsolidatedFence{lock: lock, acquiredAt: time.Now()}, nil
 		}
 		if !reportedHolder && time.Since(started) >= consolidatedLockWaitThreshold {
