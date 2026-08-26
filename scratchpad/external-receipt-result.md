@@ -27,4 +27,6 @@ possible stale consolidated reads and absent terminal receipt. A durable pending
 record plus retry owner is required for a stronger eventual-publication
 contract; it is not a tiny safe correction.
 
-Final closeout: commit and push receipt recorded after this update.
+Final report-content commit: `c7c51068147bb6068d7f95e91859d1766fb806cc`,
+pushed successfully to
+`origin/worker/furiosa-external-receipt-contract-20260827`.
