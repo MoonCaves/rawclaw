@@ -46,7 +46,10 @@ func runTagPrepCmdWithSources(
 		return fmt.Errorf("open %q read-only: %w", dbp, err)
 	}
 
-	existingSegs := readConsolidatedTopics(fullSID)
+	existingSegs := overlayAuthoritativeTopics(
+		readConsolidatedTopics(fullSID),
+		readTopicSegments(dbp, fullSID),
+	)
 	prepErr := runTagPrepWithTopics(w, con, fullSID, existingSegs)
 	_ = con.Close()
 	if prepErr != nil {
@@ -91,13 +94,44 @@ func freshPrewarmDump(session8 string) (string, bool) {
 }
 
 func readConsolidatedTopics(sessionID string) []store.TopicSegment {
-	con, err := store.ConnectRO(index.ConsolidatedPath())
+	return readTopicSegments(index.ConsolidatedPath(), sessionID)
+}
+
+func readTopicSegments(dbp, sessionID string) []store.TopicSegment {
+	con, err := store.ConnectRO(dbp)
 	if err != nil {
 		return nil
 	}
 	defer con.Close()
 	segs, _ := store.TopicsForSession(con, sessionID)
 	return segs
+}
+
+// overlayAuthoritativeTopics merges the freshly refreshed session view over the
+// consolidated view. A segment is identified by its stable session/start UUID;
+// authoritative rows replace matching consolidated rows, while consolidated-only
+// history remains visible. Existing order is retained and new authoritative rows
+// are appended in their source order.
+func overlayAuthoritativeTopics(consolidated, authoritative []store.TopicSegment) []store.TopicSegment {
+	out := append([]store.TopicSegment(nil), consolidated...)
+	positions := make(map[string]int, len(out))
+	for i, seg := range out {
+		positions[topicSegmentKey(seg)] = i
+	}
+	for _, seg := range authoritative {
+		key := topicSegmentKey(seg)
+		if i, ok := positions[key]; ok {
+			out[i] = seg
+			continue
+		}
+		positions[key] = len(out)
+		out = append(out, seg)
+	}
+	return out
+}
+
+func topicSegmentKey(seg store.TopicSegment) string {
+	return seg.SessionID + "\x00" + seg.StartUUID
 }
 
 type tagSourceMatch struct {
