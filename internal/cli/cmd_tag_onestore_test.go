@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -25,6 +27,66 @@ func writeTranscript(t *testing.T, proj, sid string, uuids []string) {
 	path := filepath.Join(proj, sid+".jsonl")
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// TestTagWriteUsesCatalogBeforeCorpusSweep reproduces a deferred fold: the
+// target is indexed in its project db and cataloged, but is absent from the
+// consolidated store while unrelated project dbs are also present.
+func TestTagWriteUsesCatalogBeforeCorpusSweep(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	catalogDir := filepath.Join(configDir, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catalogDir)
+
+	projectsRoot := filepath.Join(configDir, "projects")
+	target := filepath.Join(projectsRoot, "target-project")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target project: %v", err)
+	}
+	const sid = "7b2c4d6e-0000-4000-8000-0000000000aa"
+	const firstUUID = "44444444-aaaa-bbbb-cccc-000000000031"
+	writeTranscript(t, target, sid, []string{firstUUID})
+	_, _, _, err := index.EnsureIndexed(target, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed target: %v", err)
+	}
+	if err := paths.WriteCatalogEntry(catalogDir, paths.CatalogEntry{
+		SessionID:      sid,
+		TranscriptPath: filepath.Join(target, sid+".jsonl"),
+		CWD:            target,
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+	for i := 0; i < 12; i++ {
+		proj := filepath.Join(projectsRoot, "unrelated-"+string(rune('a'+i)))
+		if err := os.MkdirAll(proj, 0o755); err != nil {
+			t.Fatalf("mkdir unrelated project: %v", err)
+		}
+		writeTranscript(t, proj, "aaaaaaaa-0000-4000-8000-0000000000aa", []string{"55555555-aaaa-bbbb-cccc-000000000031"})
+		if _, _, _, err := index.EnsureIndexed(proj, false); err != nil {
+			t.Fatalf("EnsureIndexed unrelated %d: %v", i, err)
+		}
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove consolidated store: %v", err)
+		}
+	}
+
+	called := false
+	more := func() []view.Scope {
+		called = true
+		return scopes.All(context.Background(), "claude", false)
+	}
+	jsonIn := `[{"start_uuid":"` + firstUUID[:8] + `","topic":"catalog guard","summary":"deferred fold"}]`
+	var out strings.Builder
+	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], nil, more, false, "", false); err != nil {
+		t.Fatalf("runTagWriteCmd: %v", err)
+	}
+	if called {
+		t.Fatal("tag-write built the eager all-project scope list despite a catalog hit")
 	}
 }
 
