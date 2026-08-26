@@ -92,10 +92,8 @@ func readConsolidatedTopics(sessionID string) []store.TopicSegment {
 	return segs
 }
 
-// readAuthoritativeTagTopics overlays the current per-session DB over the
-// derived consolidated copy. The source DB is authoritative because a fold may
-// be delayed; matching start UUIDs replace stale derived rows and new rows are
-// appended in source order.
+// readAuthoritativeTagTopics reads the current per-session DB. The source DB
+// is authoritative because a fold may be delayed.
 func readAuthoritativeTagTopics(authoritativeDB, sessionID string) ([]store.TopicSegment, error) {
 	auth, err := store.ConnectRO(authoritativeDB)
 	if err != nil {
@@ -109,14 +107,7 @@ func readAuthoritativeTagTopics(authoritativeDB, sessionID string) ([]store.Topi
 	if authoritativeDB == index.ConsolidatedPath() {
 		return authSegs, nil
 	}
-	derived := readConsolidatedTopics(sessionID)
-	return overlayAuthoritativeTopics(derived, authSegs), nil
-}
-
-func overlayAuthoritativeTopics(derived, authSegs []store.TopicSegment) []store.TopicSegment {
-	// The authoritative per-session database is a complete replacement set.
-	// Returning it directly also drops derived rows deleted by a retag.
-	return append([]store.TopicSegment(nil), authSegs...)
+	return append([]store.TopicSegment(nil), authSegs...), nil
 }
 
 type tagSourceMatch struct {
