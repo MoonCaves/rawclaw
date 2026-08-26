@@ -345,7 +345,9 @@ func newTagWriteCmd() *cobra.Command {
 			"Pass --routine to mark the session with a routine verdict (trivial / low-signal; sorts down, never hidden). " +
 			"Use the tag-floor alias with no session argument to sweep the consolidated corpus using the " +
 			"deterministic math floor; it makes no LLM or API calls. rawclaw calls NO LLM — a tagging subagent " +
-			"decides the segments or routine verdict and pipes/flags them here.",
+			"decides the segments or routine verdict and pipes/flags them here. Publication to the consolidated " +
+			"store is detached best effort: a queued receipt does not mean published, and a terminal child receipt " +
+			"may be absent if the process environment disappears before the publisher starts.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if cmd.CalledAs() == "tag-floor" {
 				return cobra.NoArgs(cmd, args)
@@ -520,7 +522,7 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 		if err := spawnTagPublish(dbp); err != nil {
 			fmt.Fprintf(w, "tag-write: publication deferred (authoritative write succeeded): %v\n", err)
 		} else {
-			fmt.Fprintln(w, "tag-write: publication queued (read-after-write is eventual)")
+			fmt.Fprintln(w, "tag-write: publication queued (best effort; queued does not mean published; read-after-write is eventual)")
 		}
 	}
 	return nil

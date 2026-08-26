@@ -244,6 +244,16 @@ func TestTagWriteQueuesDerivedPublication(t *testing.T) {
 	if !strings.Contains(out.String(), "publication queued") {
 		t.Fatalf("output = %q, want queued publication receipt", out.String())
 	}
+	if !strings.Contains(out.String(), "best effort; queued does not mean published") {
+		t.Fatalf("output = %q, want explicit best-effort queued-not-published semantics", out.String())
+	}
+}
+
+func TestTagWriteHelpStatesDetachedPublicationIsBestEffort(t *testing.T) {
+	if got := newTagWriteCmd().Long; !strings.Contains(got, "detached best effort") ||
+		!strings.Contains(got, "queued receipt does not mean published") {
+		t.Fatalf("tag-write help omits detached best-effort contract: %q", got)
+	}
 }
 
 func TestTagWriteAuthoritativeOverlaySurvivesDelayedPublication(t *testing.T) {
