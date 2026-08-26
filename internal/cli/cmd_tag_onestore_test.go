@@ -123,6 +123,71 @@ func TestGuardedSessionLookupDoesNotTreatForeignCatalogPathAsClaude(t *testing.T
 	}
 }
 
+func TestGuardedSessionLookupUsesForeignPreResolvedScope(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	catalogDir := filepath.Join(configDir, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catalogDir)
+
+	foreignDir := t.TempDir()
+	const sid = "9d4e6f80-0000-4000-8000-0000000000cc"
+	transcriptPath := filepath.Join(foreignDir, sid+".jsonl")
+	writeTranscript(t, foreignDir, sid, []string{"77777777-aaaa-bbbb-cccc-000000000051"})
+	if err := paths.WriteCatalogEntry(catalogDir, paths.CatalogEntry{
+		SessionID:      sid,
+		TranscriptPath: transcriptPath,
+		CWD:            foreignDir,
+		Source:         "codex",
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	// Seed the source-aware fallback's pre-resolved Codex scope. If catalog
+	// narrowing incorrectly treats the foreign path as Claude, it will resolve
+	// a different db from foreignDir before this scope is consulted.
+	wantDBP := index.DBPath("codex-pre-resolved")
+	con, err := store.ConnectRW(wantDBP)
+	if err != nil {
+		t.Fatalf("ConnectRW: %v", err)
+	}
+	if err := index.EnsureSchema(con, "codex"); err != nil {
+		con.Close()
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	if _, err := con.Exec(
+		`INSERT INTO sessions(id,message_count,is_subagent,source_tool,project,cwd)
+		 VALUES(?,1,0,'codex',?,?)`, sid, filepath.Base(foreignDir), foreignDir,
+	); err != nil {
+		con.Close()
+		t.Fatalf("seed Codex session: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close Codex db: %v", err)
+	}
+
+	called := false
+	more := func() []view.Scope {
+		called = true
+		return []view.Scope{{
+			Project: filepath.Base(foreignDir),
+			DBP:     wantDBP,
+			CWD:     foreignDir,
+			Source:  "codex",
+		}}
+	}
+	gotDBP, gotSID, err := agentproto.LocateSessionGuarded(sid[:8], nil, more)
+	if err != nil {
+		t.Fatalf("LocateSessionGuarded: %v", err)
+	}
+	if !called {
+		t.Fatal("foreign catalog path did not reach the source-aware fallback")
+	}
+	if gotDBP != wantDBP || gotSID != sid {
+		t.Fatalf("LocateSessionGuarded = (%q, %q), want (%q, %q)", gotDBP, gotSID, wantDBP, sid)
+	}
+}
+
 // TestTagWriteLandsInTheOneStoreAndReadsBack walks the whole tag round trip the
 // way a user does: write a tag with `tag-write`, then read it back through the
 // normal read path (`outline`). Both ends resolve the session the same way, so
