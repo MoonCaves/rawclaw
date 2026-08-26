@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/claude"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
 type tagTestSource struct {
@@ -164,6 +167,172 @@ func TestRunPrewarmExternalBehaviors(t *testing.T) {
 			t.Fatalf("grown dump mtime did not advance: %v -> %v", first.ModTime(), second.ModTime())
 		}
 	})
+}
+
+func TestRunTagPrepCmdReadsCommittedTagBeforeConsolidatedFold(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("HOME", configDir)
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	projDir := filepath.Join(configDir, "projects", "-overlay-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const sid = "overlay-session-0001"
+	path := filepath.Join(projDir, sid+".jsonl")
+	writeTagSourceFile(t, path, `{"type":"user","uuid":"11112222-msg","timestamp":"2026-08-25T10:00:00Z","message":{"role":"user","content":"overlay message"}}`+"\n")
+	c := source.Container{ID: sid, Path: path, CWD: projDir}
+	src := &tagTestSource{containers: []source.Container{c}, messages: []model.Message{{Role: "user", Text: "overlay message", UUID: "11112222-msg"}}}
+	reg := tagTestRegistration("overlay-test", src)
+	dbp := index.RefreshDBPath(reg.ID, sid, path)
+	if _, err := index.PrepareFreshContainer(dbp, c, src.Messages, reg.ID); err != nil {
+		t.Fatal(err)
+	}
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertTopicSegment(con, sid, "11112222-msg", "11112222-msg", "authoritative topic", "", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	if err := runTagPrepCmdWithSources(&out, sid, nil, nil, []source.Registration{reg}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "already fully tagged") {
+		t.Fatalf("tag-prep ignored committed authoritative topic:\n%s", out.String())
+	}
+}
+
+// TestTagWriteQueuesDerivedPublication proves the foreground command can finish
+// after the authoritative project-db write without waiting for consolidated
+// publication. The publisher seam is replaced so this remains deterministic.
+func TestTagWriteQueuesDerivedPublication(t *testing.T) {
+	root := newCfgRoot(t)
+	sid := "5f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
+	dir := writeTaggableSession(t, root, "proj-tag-queued", sid,
+		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove consolidated store: %v", err)
+		}
+	}
+
+	var published string
+	old := spawnTagPublish
+	spawnTagPublish = func(dbp string) error {
+		published = dbp
+		return nil
+	}
+	t.Cleanup(func() { spawnTagPublish = old })
+
+	var out strings.Builder
+	err := runTagWriteCmd(&out, strings.NewReader(`[{"start_uuid":"11111111","topic":"queued","summary":"deferred publication"}]`),
+		sid[:8], []view.Scope{{Project: "proj-tag-queued", TDir: dir}}, nil, false, "", false)
+	if err != nil {
+		t.Fatalf("runTagWriteCmd: %v", err)
+	}
+	if published == "" {
+		t.Fatal("tag-write did not request detached derived publication")
+	}
+	if !strings.Contains(out.String(), "publication queued") {
+		t.Fatalf("output = %q, want queued publication receipt", out.String())
+	}
+}
+
+func TestTagWriteAuthoritativeOverlaySurvivesDelayedPublication(t *testing.T) {
+	root := newCfgRoot(t)
+	sid := "6f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
+	dir := writeTaggableSession(t, root, "proj-tag-delayed", sid,
+		"33333333-aaaa-bbbb-cccc-000000000001", "44444444-aaaa-bbbb-cccc-000000000002")
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove consolidated store: %v", err)
+		}
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	finished := false
+	var published string
+	old := spawnTagPublish
+	spawnTagPublish = func(dbp string) error {
+		published = dbp
+		close(started)
+		go func() {
+			<-release
+			done <- runTagPublishChild(context.Background(), io.Discard, dbp)
+		}()
+		return nil
+	}
+	t.Cleanup(func() {
+		spawnTagPublish = old
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		if !finished {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("delayed publisher did not finish")
+			}
+		}
+	})
+
+	var out strings.Builder
+	if err := runTagWriteCmd(&out, strings.NewReader(`[{
+"start_uuid":"33333333","topic":"delayed authoritative","summary":"pending fold"
+}]`), sid[:8], []view.Scope{{Project: "proj-tag-delayed", TDir: dir}}, nil, false, "", false); err != nil {
+		t.Fatalf("runTagWriteCmd: %v", err)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("publisher was not delayed")
+	}
+	auth, err := readAuthoritativeTagTopics(published, sid)
+	if err != nil {
+		t.Fatalf("read authoritative topics: %v", err)
+	}
+	if len(auth) != 1 || auth[0].Topic != "delayed authoritative" {
+		t.Fatalf("authoritative topics while child blocked = %#v, want committed tag", auth)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("publish after release: %v", err)
+	}
+	finished = true
+	con, err := store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated after release: %v", err)
+	}
+	defer con.Close()
+	segs, err := store.TopicsForSession(con, sid)
+	if err != nil {
+		t.Fatalf("read consolidated topics after release: %v", err)
+	}
+	if len(segs) != 1 || segs[0].Topic != "delayed authoritative" {
+		t.Fatalf("consolidated topics after release = %#v, want eventual publication", segs)
+	}
+}
+
+func TestOverlayAuthoritativeTopicsKeepsSameStartAcrossSessions(t *testing.T) {
+	consolidated := []store.TopicSegment{{SessionID: "session-a", StartUUID: "same", Topic: "old-a"}, {SessionID: "session-b", StartUUID: "same", Topic: "old-b"}}
+	authoritative := []store.TopicSegment{{SessionID: "session-a", StartUUID: "same", Topic: "new-a"}}
+	got := overlayAuthoritativeTopics(consolidated, authoritative)
+	if len(got) != 2 || got[0].Topic != "new-a" || got[1].Topic != "old-b" {
+		t.Fatalf("overlay = %#v, want session-scoped replacement", got)
+	}
 }
 
 func TestRunPrewarmRegeneratesWhenDumpMissing(t *testing.T) {
