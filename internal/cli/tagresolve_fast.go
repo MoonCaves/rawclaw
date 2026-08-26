@@ -2,6 +2,7 @@ package cli
 
 import (
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -12,7 +13,28 @@ import (
 // ambiguity rendering remains unchanged.
 func locateTagWriteFast(session8 string, scope []view.Scope) (dbp, fullSID string, found bool) {
 	if len(scope) == 0 {
-		return "", "", false
+		hits := paths.ResolveSession(session8)
+		if len(hits) != 1 || hits[0].Path == "" || hits[0].CWD == "" {
+			return "", "", false
+		}
+		tdir := paths.ProjectDirOf(hits[0].Path)
+		if tdir == "" {
+			return "", "", false
+		}
+		db := index.DBPath(tdir)
+		if _, status, err := index.EnsureIndexedTreeSource(db, tdir); err != nil || status != index.IndexFresh {
+			return "", "", false
+		}
+		con, err := store.ConnectRO(db)
+		if err != nil {
+			return "", "", false
+		}
+		ids, err := store.SessionsByPrefix(con, session8, false, 2)
+		con.Close()
+		if err != nil || len(ids) != 1 || ids[0] != hits[0].SessionID {
+			return "", "", false
+		}
+		return db, ids[0], true
 	}
 	var hits int
 	for _, sc := range scope {
