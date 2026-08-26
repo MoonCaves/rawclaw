@@ -1097,7 +1097,25 @@ func pruneTombstoned(con *sql.DB) error {
 // pruneTombstonedIDs is the deletion core, split out so the wildcard-escaping
 // behaviour is testable without a tombstone sidecar on disk.
 func pruneTombstonedIDs(con *sql.DB, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := con.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tombstone prune: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+
 	for _, id := range ids {
+		var exists int
+		err := tx.QueryRow("SELECT 1 FROM sessions WHERE id=?", id).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("check tombstoned session: %w", err)
+		}
+
 		// Tombstones cover a session and the subagent threads beneath it, whose
 		// ids are "<parent>/<stem>".
 		//
@@ -1106,28 +1124,31 @@ func pruneTombstonedIDs(con *sql.DB, ids []string) error {
 		// match NEIGHBOURING sessions and delete their rows from all four tables
 		// on every consolidation pass. Escape the literal part, then anchor.
 		like := escapeLike(id) + "/%"
-		if _, err := con.Exec(`DELETE FROM messages WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
+		if _, err := tx.Exec(`DELETE FROM messages WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned messages: %w", err)
 		}
-		if _, err := con.Exec(`DELETE FROM sessions WHERE id = ? OR id LIKE ? ESCAPE '\'`, id, like); err != nil {
+		if _, err := tx.Exec(`DELETE FROM sessions WHERE id = ? OR id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned sessions: %w", err)
 		}
-		if _, err := con.Exec(`DELETE FROM session_sources WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
+		if _, err := tx.Exec(`DELETE FROM session_sources WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned session sources: %w", err)
 		}
-		if _, err := con.Exec(`DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
+		if _, err := tx.Exec(`DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned file_index: %w", err)
 		}
 		// The tagging sidecars hold summaries OF the conversation — a user
 		// delete that leaves them behind keeps exactly the content the delete
 		// was meant to remove. They are created on demand, so tolerate their
 		// absence rather than requiring the topic schema to exist.
-		if _, err := con.Exec(`DELETE FROM topic_segment WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
+		if _, err := tx.Exec(`DELETE FROM topic_segment WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
 			return fmt.Errorf("prune tombstoned topic segments: %w", err)
 		}
-		if _, err := con.Exec(`DELETE FROM session_verdict WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
+		if _, err := tx.Exec(`DELETE FROM session_verdict WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
 			return fmt.Errorf("prune tombstoned session verdicts: %w", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tombstone prune: %w", err)
 	}
 	return nil
 }

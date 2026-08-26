@@ -2,11 +2,13 @@ package index
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/store"
@@ -1742,7 +1744,7 @@ func TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour(t *testing.T) {
 	// "vic_im" is tombstoned. "vicXim" is an UNRELATED live session whose id
 	// differs only where the wildcard would match. Its subagent thread is the
 	// row that an unescaped LIKE "vic_im/%" wrongly sweeps up.
-	for _, id := range []string{"vic_im/sub", "vicXim/sub"} {
+	for _, id := range []string{"vic_im", "vic_im/sub", "vicXim/sub"} {
 		if _, err := con.Exec(`
 			INSERT INTO sessions (
 				id, started_at, last_ts, message_count, is_subagent, parent_id,
@@ -1771,6 +1773,83 @@ func TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour(t *testing.T) {
 	}
 	if neighbour != 1 {
 		t.Errorf("UNRELATED neighbour session deleted: count = %d, want 1", neighbour)
+	}
+}
+
+func TestPruneTombstonedIDs_SkipsMissingIDsQuicklyAndPrunesExistingThreads(t *testing.T) {
+	isolateCache(t)
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("ensure topic schema: %v", err)
+	}
+
+	for _, id := range []string{"victim", "victim/agent-1"} {
+		if _, err := con.Exec(`INSERT INTO sessions (id) VALUES (?)`, id); err != nil {
+			t.Fatalf("seed session %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO messages (session_id, uuid) VALUES (?, ?)`, id, id+"-u"); err != nil {
+			t.Fatalf("seed message %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO session_sources (session_id, source_db) VALUES (?, ?)`, id, "source.db"); err != nil {
+			t.Fatalf("seed source %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO file_index (path, session_id) VALUES (?, ?)`, "/tmp/"+id, id); err != nil {
+			t.Fatalf("seed file %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO topic_segment (session_id, start_uuid) VALUES (?, ?)`, id, id+"-u"); err != nil {
+			t.Fatalf("seed topic %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO session_verdict (session_id, verdict, source) VALUES (?, 'routine', 'floor')`, id); err != nil {
+			t.Fatalf("seed verdict %s: %v", id, err)
+		}
+	}
+
+	bulk, err := con.Begin()
+	if err != nil {
+		t.Fatalf("begin bulk seed: %v", err)
+	}
+	for i := 0; i < 20000; i++ {
+		id := fmt.Sprintf("unrelated-%d", i)
+		if _, err := bulk.Exec(`INSERT INTO messages (session_id, uuid) VALUES (?, ?)`, id, id+"-u"); err != nil {
+			bulk.Rollback()
+			t.Fatalf("seed unrelated message: %v", err)
+		}
+	}
+	if err := bulk.Commit(); err != nil {
+		t.Fatalf("commit bulk seed: %v", err)
+	}
+
+	ids := make([]string, 2000)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("missing-%d", i)
+	}
+	ids = append(ids, "victim")
+	started := time.Now()
+	if err := pruneTombstonedIDs(con, ids); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("pruning mostly missing IDs took %s", elapsed)
+	}
+
+	for _, query := range []string{
+		"SELECT COUNT(*) FROM messages WHERE session_id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM sessions WHERE id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM session_sources WHERE session_id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM file_index WHERE session_id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM topic_segment WHERE session_id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM session_verdict WHERE session_id LIKE 'victim%'",
+	} {
+		if got := scalar(t, con, query); got != "0" {
+			t.Errorf("rows survived query %q: %s", query, got)
+		}
 	}
 }
 
