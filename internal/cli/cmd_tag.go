@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -510,15 +508,6 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 		return writeErr
 	}
 
-	// Fold the new topic rows into the consolidated store, the same write-through
-	// an indexing run does. Without it a tag written today stays invisible to the
-	// one-store readers until the next `rawclaw consolidate`. Advisory: the
-	// consolidated store is a derived artifact, so a failed fold is a stale cache,
-	// never a failed tag-write.
-	if err := index.SyncConsolidatedFrom(dbp); err != nil {
-		slog.Debug("tag-write: consolidated write-through failed", "db", filepath.Base(dbp), "err", err)
-	}
-
 	if routine {
 		if source == "" {
 			source = store.VerdictSourceAgent
@@ -526,6 +515,13 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 		fmt.Fprintf(w, "marked %s as routine (source: %s)\n", lastSlice8(fullSID), source)
 	} else {
 		fmt.Fprintf(w, "wrote %d topic segments for %s\n", n, lastSlice8(fullSID))
+	}
+	if dbp != index.ConsolidatedPath() {
+		if err := spawnTagPublish(dbp); err != nil {
+			fmt.Fprintf(w, "tag-write: publication deferred (authoritative write succeeded): %v\n", err)
+		} else {
+			fmt.Fprintln(w, "tag-write: publication queued (read-after-write is eventual)")
+		}
 	}
 	return nil
 }
