@@ -1804,6 +1804,13 @@ func TestConsolidate_FaultInjectionHelper(t *testing.T) {
 	if src == "" {
 		t.Fatal("missing RAWCLAW_CONSOLIDATE_FAULT_SOURCE")
 	}
+	home := os.Getenv("RAWCLAW_CONSOLIDATE_FAULT_HOME")
+	if home == "" {
+		t.Fatal("missing RAWCLAW_CONSOLIDATE_FAULT_HOME")
+	}
+	// TestMain gives every test process its own HOME. Restore the parent's
+	// isolated home here so the child and parent truly share one store.
+	t.Setenv("HOME", home)
 	consolidateAfterMergeHook = func() { os.Exit(124) }
 	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
 		t.Fatalf("fault-injected consolidation: %v", err)
@@ -1815,7 +1822,7 @@ func TestConsolidate_FaultInjectionHelper(t *testing.T) {
 // retry sequence. The child exits after the merge timing log and before the
 // DETACH defer; the parent then folds the same source and records the timing.
 func TestConsolidate_RetryAfterAbruptPostMergeExit(t *testing.T) {
-	isolateCache(t)
+	home := isolateCache(t)
 	src := seedSessionDB(t, "fault-repro.db", sessionRow{
 		id: "fault-repro-session", project: "ledger", cwd: "/w/ledger",
 		msgs: []msgRow{{"fault-repro-message", "user", "reproduce the retry", 100}},
@@ -1825,6 +1832,7 @@ func TestConsolidate_RetryAfterAbruptPostMergeExit(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"RAWCLAW_CONSOLIDATE_FAULT_CHILD=1",
 		"RAWCLAW_CONSOLIDATE_FAULT_SOURCE="+src,
+		"RAWCLAW_CONSOLIDATE_FAULT_HOME="+home,
 	)
 	childOutput, childErr := cmd.CombinedOutput()
 	if childErr == nil {
@@ -1841,10 +1849,60 @@ func TestConsolidate_RetryAfterAbruptPostMergeExit(t *testing.T) {
 		t.Fatalf("fault child ran DETACH after forced exit:\n%s", childOutput)
 	}
 	t.Logf("fault child output:\n%s", childOutput)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		path := ConsolidatedPath() + suffix
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Logf("post-exit artifact %s: absent (%v)", filepath.Base(path), statErr)
+			continue
+		}
+		t.Logf("post-exit artifact %s: present size=%d", filepath.Base(path), info.Size())
+	}
+	lockPath := filepath.Join(store.CacheDir(), "consolidated.lock")
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("post-exit consolidated lock artifact missing: %v", err)
+	}
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id='fault-repro-session'"); got != "1" {
+		t.Fatalf("post-exit committed session count = %s, want 1", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM meta WHERE key LIKE 'sync:%'"); got != "1" {
+		t.Fatalf("post-exit sync watermark count = %s, want 1", got)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close post-exit assertion connection: %v", err)
+	}
+
+	// Change the same source after the child committed. An unchanged source
+	// would be a watermark no-op and would make the retry timing meaningless.
+	sourceCon, err := store.ConnectRW(src)
+	if err != nil {
+		t.Fatalf("open source for retry mutation: %v", err)
+	}
+	if _, err := sourceCon.Exec(
+		"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
+		"fault-repro-session", "assistant", "retry must fold this new row", 200, "", "fault-repro-retry-message",
+	); err != nil {
+		sourceCon.Close()
+		t.Fatalf("append source message: %v", err)
+	}
+	if _, err := sourceCon.Exec(
+		"UPDATE sessions SET last_ts=200, message_count=2 WHERE id=?", "fault-repro-session",
+	); err != nil {
+		sourceCon.Close()
+		t.Fatalf("update source message count: %v", err)
+	}
+	if err := sourceCon.Close(); err != nil {
+		t.Fatalf("close mutated source: %v", err)
+	}
 
 	started := time.Now()
-	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+	st, err := ConsolidateFrom([]string{src}, false)
+	if err != nil {
 		t.Fatalf("retry consolidation: %v", err)
+	}
+	if st.Messages != 2 {
+		t.Fatalf("retry consolidated messages = %d, want 2; retry may have been a watermark no-op", st.Messages)
 	}
 	t.Logf("retry after post-merge exit completed in %s", time.Since(started))
 }
