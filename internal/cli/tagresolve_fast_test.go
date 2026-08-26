@@ -169,3 +169,90 @@ func TestLocateTagWriteFast_ExplicitEmptyScopeDoesNotUseCatalog(t *testing.T) {
 		t.Fatalf("explicit empty scope fast path = (%q, %q, %v), want no lookup", db, sid, found)
 	}
 }
+
+func TestLocateTagWriteFast_ExplicitDirectoryDoesNotNeedGlobalDiscovery(t *testing.T) {
+	newCfgRoot(t)
+	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(t.TempDir(), "missing-catalog"))
+
+	tdir := filepath.Join(t.TempDir(), "arbitrary-transcripts")
+	if err := os.MkdirAll(tdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := "arbitrary1-aaaa-bbbb-cccc-000000000001"
+	writeTranscript(t, tdir, sid, []string{"aaaaaaaa-aaaa-bbbb-cccc-000000000001"})
+	dbp, _, _, err := index.EnsureIndexed(tdir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotDB, gotSID, found := locateTagWriteFast(sid[:8], []view.Scope{{Project: "arbitrary", TDir: tdir}}); !found || gotDB != dbp || gotSID != sid {
+		t.Fatalf("explicit arbitrary scope = (%q, %q, %v), want (%q, %q, true)", gotDB, gotSID, found, dbp, sid)
+	}
+}
+
+func TestLocateTagWriteFast_ExplicitSymlinkAliasDoesNotNeedGlobalDiscovery(t *testing.T) {
+	newCfgRoot(t)
+	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(t.TempDir(), "empty-catalog"))
+
+	target := filepath.Join(t.TempDir(), "target-transcripts")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sid := "symlink01-aaaa-bbbb-cccc-000000000001"
+	writeTranscript(t, target, sid, []string{"bbbbbbbb-bbbb-cccc-dddd-000000000001"})
+	if _, _, _, err := index.EnsureIndexed(target, false); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "project-alias")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	if gotDB, gotSID, found := locateTagWriteFast(sid[:8], []view.Scope{{Project: "alias", TDir: alias}}); !found || gotDB != index.DBPath(alias) || gotSID != sid {
+		t.Fatalf("explicit symlink scope = (%q, %q, %v), want (%q, %q, true)", gotDB, gotSID, found, index.DBPath(alias), sid)
+	}
+}
+
+func TestLocateTagWriteFast_MissingOrEmptyCatalogFallsBackToProjectDiscovery(t *testing.T) {
+	for _, catalogState := range []string{"missing", "empty"} {
+		t.Run(catalogState, func(t *testing.T) {
+			root := newCfgRoot(t)
+			catalog := filepath.Join(t.TempDir(), "catalog")
+			t.Setenv("RAWCLAW_CATALOG_DIR", catalog)
+			if catalogState == "empty" {
+				if err := os.MkdirAll(catalog, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sid := "fallback1-aaaa-bbbb-cccc-000000000001"
+			tdir := filepath.Join(root, "fallback-project")
+			if err := os.MkdirAll(tdir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeTranscript(t, tdir, sid, []string{"cccccccc-aaaa-bbbb-cccc-000000000001"})
+			dbp, _, _, err := index.EnsureIndexed(tdir, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if gotDB, gotSID, found := locateTagWriteFast(sid[:8], nil); !found || gotDB != dbp || gotSID != sid {
+				t.Fatalf("%s catalog scope = (%q, %q, %v), want (%q, %q, true)", catalogState, gotDB, gotSID, found, dbp, sid)
+			}
+		})
+	}
+}
+
+func TestLocateTagWriteFast_DistinctSourceAndProjectIdentityIsAmbiguous(t *testing.T) {
+	root := newCfgRoot(t)
+	sid := "collision-aaaa-bbbb-cccc-000000000001"
+	dirA := writeTaggableSession(t, root, "collision-claude", sid, "dddddddd-aaaa-bbbb-cccc-000000000001")
+	dirB := writeTaggableSession(t, root, "collision-codex", sid, "eeeeeeee-aaaa-bbbb-cccc-000000000001")
+
+	scope := []view.Scope{
+		{Project: "collision-claude", DBP: index.DBPath(dirA), Source: "claude"},
+		{Project: "collision-codex", DBP: index.DBPath(dirB), Source: "codex"},
+	}
+	if db, fullSID, found := locateTagWriteFast(sid[:8], scope); found {
+		t.Fatalf("same session id across source/project scopes = (%q, %q, %v), want ambiguous fallback", db, fullSID, found)
+	}
+}

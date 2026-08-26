@@ -17,6 +17,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/gofrs/flock"
 )
 
 // TestEnsureIndexedContainers proves the source-agnostic ingestion path: two
@@ -702,6 +703,41 @@ func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing
 				t.Errorf("session already in consolidated store after PrepareFreshContainer: %d", consCount)
 			}
 		}
+	}
+}
+
+func TestPrepareFreshContainer_DoesNotWaitForConsolidatedFence(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	t.Setenv("HOME", cfg)
+
+	f := filepath.Join(cfg, "held-fence.jsonl")
+	if err := os.WriteFile(f, []byte("msg\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := source.Container{ID: "sess-held-fence", Path: f, CWD: "/work"}
+	dbp := RefreshDBPath("claude", c.ID, c.Path)
+	lock := flock.New(filepath.Join(filepath.Dir(ConsolidatedPath()), "consolidated.lock"))
+	locked, err := lock.TryLock()
+	if err != nil || !locked {
+		t.Fatalf("hold consolidated fence: locked=%t err=%v", locked, err)
+	}
+	defer lock.Unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := PrepareFreshContainer(dbp, c, func(source.Container) ([]model.Message, error) {
+			return []model.Message{{Role: "user", Text: "prepared", TS: 1, TSISO: "2026-08-25T00:00:00Z", UUID: "u1"}}, nil
+		}, "claude")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PrepareFreshContainer: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("PrepareFreshContainer waited for consolidated fence")
 	}
 }
 
