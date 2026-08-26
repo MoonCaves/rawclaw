@@ -58,4 +58,4 @@ test.
 
 - `git push -u origin worker/furiosa-external-nilscope-referee-20260827`:
   succeeded; remote branch created and tracking configured.
-- Receipt update commit: pending this final commit and push.
+- Receipt update commit: `a0496fa3ec174cf98604764236e02250b7774d45`.
