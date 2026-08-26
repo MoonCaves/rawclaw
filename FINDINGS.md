@@ -118,41 +118,44 @@ The tree also preserves the absolute binary preamble, PATH fallback, POSIX
 `sh`, Claude `Stop`/Codex `Stop`, and separate Claude/Codex SessionStart
 envelopes. **RULING: RESTORE-EXACTLY / ADOPT.**
 
-### 2. Confirmed regression — `d9474fb` — REJECT
+### 2. Confirmed regression — all three variants — REJECT AS FINAL WINNER
 
-`d9474fb` replaces the explicit `claimed` state with
+`d9474fb` compresses the state gate to
 `if (set -C; : > "$entry") 2>/dev/null || [ ! -e "$entry" ]; then`.
-That is shorter, but it makes the fallback predicate carry both meanings:
-missing entry and persistence failure. It remains dependent on a second
-filesystem observation after the atomic create fails, and removes the explicit
-fail-soft branch that documents the catalog-unreachable case. The requested
-contract is correctness-first under concurrent hooks and I/O failure, so the
-shorter form is not an acceptable simplification. **RULING: REJECT; do not
-restore.**
+That is shorter, but the redirection opens the target before the fallback test.
+The same target-opening operation remains in `7a78884` and `10a7c19`.
+With an existing FIFO and no reader, the hook can block before it reaches its
+duplicate check; directories and other special paths are likewise unsafe or
+implementation-dependent. The requested contract is correctness-first under
+concurrent hooks and arbitrary stale catalog paths. **RULING: REJECT all three
+as the final implementation; retain only their useful contract tests and
+replace the target-opening claim.**
 
 ### 3. Accepted correction — `10a7c19` — ADOPT IF NEEDED
 
 `10a7c19` restores an explicit `else` branch after the existing-entry exit and
-sets `claimed=1` when the catalog cannot be reached. This is source-clear and
-preserves the same winner/duplicate/fail-soft behavior as `7a78884`, at a cost
-of six production lines across the two intentionally parallel templates.
-**RULING: ACCEPTED-DEVIATION from 7a78884 only if the reviewer requires the
-explicit `else`; otherwise keep 7a78884 because it is shorter and already
-tests the contract.**
+sets `claimed=1` when the catalog cannot be reached. This is source-clear for
+the ordinary-file case, but it does not repair the FIFO target-open hang.
+**RULING: REJECT as incomplete; preserve its fail-soft intent in the new
+non-opening claim.**
 
 ### 4. `ponytail-review` result — SHRINK only where semantics hold
 
 `shrink:` `d9474fb` removes 14 state-management lines, but the resulting
-predicate is less explicit at the failure boundary; no deletion is safe without
-weakening the documented fail-soft contract. `10a7c19` adds six explanatory
-lines without changing behavior. **RULING: retain 7a78884's tested form; no
-new abstraction or helper.**
+predicate is unsafe for an existing FIFO. `10a7c19` adds six explanatory lines
+without fixing that target-open behavior. **RULING: use a same-directory
+temporary regular file plus `ln`; no Go abstraction or new dependency.**
 
 ### Final bounded verdict
 
-**7a78884 is the shortest compared implementation that is source-backed and
-test-pinned for atomic single-winner ingest, duplicate exit, and catalog-failure
-ingest.** `d9474fb` is rejected as an over-compressed variant. `10a7c19` is a
-valid explicit-branch alternative, but its extra lines are not required by the
-observed contract. SessionStart, SessionEnd/Stop behavior, absolute resolution,
-and POSIX-shell constraints remain intact in the adopted tree.
+**None of the three compared implementations is safe as the final winner**:
+each can open an existing FIFO during the claim. The adopted correction writes a
+complete JSON record to a same-directory temporary regular file and atomically
+claims the session with `ln`; a failed link exits on any existing regular or
+special path, and ingests when the catalog is absent or unreachable.
+SessionStart, SessionEnd/Stop behavior, absolute resolution, and POSIX-shell
+constraints remain intact.
+
+**RULING: RESTORE-EXACTLY** the non-opening claim in both Claude and Codex
+templates, plus regression tests for concurrent winner, duplicate exit,
+catalog-unavailable ingest, FIFO, directory, symlink, and socket targets.
