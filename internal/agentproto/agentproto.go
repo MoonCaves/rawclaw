@@ -1811,8 +1811,9 @@ func catalogCands(scope []view.Scope, session8 string) []sessionCand {
 		if tdir == "" {
 			// SessionHit does not retain the catalog source. A path outside
 			// Claude's project tree cannot safely be reconstructed as a Claude
-			// scope; let the source-aware fallback resolve it instead.
-			continue
+			// scope. Abandon catalog narrowing entirely so a mixed Claude/foreign
+			// prefix stays ambiguous in the source-aware fallback.
+			return nil
 		}
 		narrowed = append(narrowed, view.Scope{Project: hit.Project, TDir: tdir})
 	}

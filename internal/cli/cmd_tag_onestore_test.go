@@ -123,6 +123,54 @@ func TestGuardedSessionLookupDoesNotTreatForeignCatalogPathAsClaude(t *testing.T
 	}
 }
 
+func TestGuardedSessionLookupPreservesMixedSourceAmbiguity(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	catalogDir := filepath.Join(configDir, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catalogDir)
+
+	const prefix = "8c3d5e7f"
+	claudeDir := filepath.Join(configDir, "projects", "mixed-source")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudeSID := prefix + "-0000-4000-8000-0000000000aa"
+	writeTranscript(t, claudeDir, claudeSID, []string{"66666666-aaaa-bbbb-cccc-000000000042"})
+	if err := paths.WriteCatalogEntry(catalogDir, paths.CatalogEntry{
+		SessionID:      claudeSID,
+		TranscriptPath: filepath.Join(claudeDir, claudeSID+".jsonl"),
+		CWD:            claudeDir,
+		Source:         "claude",
+	}); err != nil {
+		t.Fatalf("write Claude catalog entry: %v", err)
+	}
+
+	foreignDir := t.TempDir()
+	foreignSID := prefix + "-0000-4000-8000-0000000000bb"
+	writeTranscript(t, foreignDir, foreignSID, []string{"66666666-aaaa-bbbb-cccc-000000000043"})
+	if err := paths.WriteCatalogEntry(catalogDir, paths.CatalogEntry{
+		SessionID:      foreignSID,
+		TranscriptPath: filepath.Join(foreignDir, foreignSID+".jsonl"),
+		CWD:            foreignDir,
+		Source:         "codex",
+	}); err != nil {
+		t.Fatalf("write Codex catalog entry: %v", err)
+	}
+
+	called := false
+	more := func() []view.Scope {
+		called = true
+		return nil
+	}
+	if _, _, err := agentproto.LocateSessionGuarded(prefix, nil, more); err == nil {
+		t.Fatal("mixed-source prefix resolved by silently discarding the foreign hit")
+	}
+	if !called {
+		t.Fatal("mixed-source prefix bypassed the source-aware fallback")
+	}
+}
+
 func TestGuardedSessionLookupUsesForeignPreResolvedScope(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	configDir := t.TempDir()
