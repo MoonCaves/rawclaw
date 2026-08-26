@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -65,6 +66,114 @@ func seedTagSession(
 	); err != nil {
 		t.Fatalf("seed stale session: %v", err)
 	}
+}
+
+func runPrewarmTest(t *testing.T, sourceBody string, messages []model.Message) (string, *tagTestSource, source.Container) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	writeTagSourceFile(t, path, sourceBody)
+	sid := "prewarm-session-0001"
+	c := source.Container{ID: sid, Path: path, CWD: t.TempDir()}
+	src := &tagTestSource{containers: []source.Container{c}, messages: messages}
+	reg := tagTestRegistration("prewarm-test", src)
+	var out strings.Builder
+	if err := runPrewarmCmd(&out, sid, nil, nil, []source.Registration{reg}); err != nil {
+		t.Fatalf("runPrewarmCmd: %v", err)
+	}
+	return index.PrewarmDumpPath(sid), src, c
+}
+
+func TestRunPrewarmExternalBehaviors(t *testing.T) {
+	t.Run("folds absent session", func(t *testing.T) {
+		dump, _, c := runPrewarmTest(t, "one", []model.Message{{Role: "user", Text: "one", UUID: "11111111-one"}})
+		if _, err := os.Stat(dump); err != nil {
+			t.Fatalf("dump missing: %v", err)
+		}
+		con, err := store.ConnectRO(index.ConsolidatedPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer con.Close()
+		var n int
+		if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id=?", c.ID).Scan(&n); err != nil || n != 1 {
+			t.Fatalf("consolidated session count = %d, err=%v", n, err)
+		}
+	})
+
+	t.Run("present session is not refolded", func(t *testing.T) {
+		dump, src, c := runPrewarmTest(t, "one", []model.Message{{Role: "user", Text: "one", UUID: "11111111-one"}})
+		before, err := os.ReadFile(dump)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeTagSourceFile(t, c.Path, "one\ntwo")
+		src.messages = append(src.messages, model.Message{Role: "assistant", Text: "two", UUID: "22222222-two"})
+		var out strings.Builder
+		reg := tagTestRegistration("prewarm-test", src)
+		if err := runPrewarmCmd(&out, c.ID, nil, nil, []source.Registration{reg}); err != nil {
+			t.Fatal(err)
+		}
+		con, err := store.ConnectRO(index.ConsolidatedPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		_ = con.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id=?", c.ID).Scan(&n)
+		_ = con.Close()
+		if n != 1 {
+			t.Fatalf("consolidated message count = %d, want unchanged 1", n)
+		}
+		if string(before) == string(mustReadFile(t, dump)) {
+			t.Fatalf("dump did not refresh private cache after transcript growth")
+		}
+	})
+
+	t.Run("unchanged transcript keeps dump mtime", func(t *testing.T) {
+		dump, src, c := runPrewarmTest(t, "one", []model.Message{{Role: "user", Text: "one", UUID: "11111111-one"}})
+		_ = src
+		first, err := os.Stat(dump)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out strings.Builder
+		reg := tagTestRegistration("prewarm-test", src)
+		if err := runPrewarmCmd(&out, c.ID, nil, nil, []source.Registration{reg}); err != nil {
+			t.Fatal(err)
+		}
+		second, _ := os.Stat(dump)
+		if !second.ModTime().Equal(first.ModTime()) {
+			t.Fatalf("unchanged dump mtime changed: %v -> %v", first.ModTime(), second.ModTime())
+		}
+	})
+
+	t.Run("grown transcript regenerates dump", func(t *testing.T) {
+		dump, src, c := runPrewarmTest(t, "one", []model.Message{{Role: "user", Text: "one", UUID: "11111111-one"}})
+		first, err := os.Stat(dump)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeTagSourceFile(t, c.Path, "one\ntwo")
+		_ = os.Chtimes(c.Path, time.Now().Add(2*time.Second), time.Now().Add(2*time.Second))
+		src.messages = append(src.messages, model.Message{Role: "assistant", Text: "two", UUID: "22222222-two"})
+		var out strings.Builder
+		if err := runPrewarmCmd(&out, c.ID, nil, nil, []source.Registration{tagTestRegistration("prewarm-test", src)}); err != nil {
+			t.Fatal(err)
+		}
+		second, _ := os.Stat(dump)
+		if !second.ModTime().After(first.ModTime()) {
+			t.Fatalf("grown dump mtime did not advance: %v -> %v", first.ModTime(), second.ModTime())
+		}
+	})
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func TestRunTagPrepCmdRefreshesRegisteredSourceWithoutCWD(t *testing.T) {
