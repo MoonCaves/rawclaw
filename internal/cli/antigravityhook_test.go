@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestInstallAntigravity_WritesInjectStepsScript verifies that the Antigravity
@@ -55,6 +56,49 @@ func TestInstallAntigravity_WritesInjectStepsScript(t *testing.T) {
 			t.Errorf("Antigravity script missing approved closeout wording %q", want)
 		}
 	}
+}
+
+func TestAntigravityStopScript_DispatchesPrewarmDetached(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+	root := t.TempDir()
+	marker := filepath.Join(root, "args")
+	stubDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := "#!/bin/sh\nprintf '%s %s' \"$1\" \"$2\" > \"" + marker + "\"\n"
+	if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := renderAntigravityPrimeScript("''")
+	if err != nil {
+		t.Fatalf("renderAntigravityPrimeScript: %v", err)
+	}
+	scriptPath := filepath.Join(root, "stop.sh")
+	if err := os.WriteFile(scriptPath, []byte(rendered), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(sh, scriptPath)
+	cmd.Env = append(os.Environ(), "PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Stdin = strings.NewReader(`{"conversationId":"test-conversation","terminationReason":"model_stop"}`)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("run stop hook: %v (out=%q)", err, out)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got, err := os.ReadFile(marker); err == nil {
+			if string(got) != "prewarm test-conversation" {
+				t.Fatalf("rawclaw args = %q, want prewarm test-conversation", got)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("detached prewarm command did not run")
 }
 
 // TestAntigravityPrimeScript_InvocationNum0 verifies that when invocationNum is 0,
