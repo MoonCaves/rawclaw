@@ -102,3 +102,57 @@
 - **Reproducible Evidence:**
   `TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest` spins up 2 parallel goroutines executing the prime script simultaneously on the same session ID and verifies that exactly 1 call to `ingest <session_id>` is recorded in `calls.log`.
 - **Ruling:** **ADAPT_TO_CURRENT** (Adopt the `(set -C; : > "$entry")` POSIX atomic claim and concurrency test in `setup.go`, `catalog_hook_test.go`, and `cmd_ingest_test.go`, on top of unified helpers and `rawclawBanner` interpolation).
+
+---
+
+## Bounded comparison: 7a78884 vs d9474fb vs 10a7c19
+
+### 1. Confirmed correctness contract — ADOPT 7a78884
+
+`7a78884` is the first compared tree that combines the atomic POSIX claim with
+the required fail-soft fallback and executable tests. In both Claude and Codex
+templates, `(set -C; : > "$entry")` elects one creator; an observed existing
+entry exits before `ingest`; when the catalog cannot be created and no entry is
+observable, the `elif [ ! -e "$entry" ]` branch still launches `ingest`.
+The tree also preserves the absolute binary preamble, PATH fallback, POSIX
+`sh`, Claude `Stop`/Codex `Stop`, and separate Claude/Codex SessionStart
+envelopes. **RULING: RESTORE-EXACTLY / ADOPT.**
+
+### 2. Confirmed regression — `d9474fb` — REJECT
+
+`d9474fb` replaces the explicit `claimed` state with
+`if (set -C; : > "$entry") 2>/dev/null || [ ! -e "$entry" ]; then`.
+That is shorter, but it makes the fallback predicate carry both meanings:
+missing entry and persistence failure. It remains dependent on a second
+filesystem observation after the atomic create fails, and removes the explicit
+fail-soft branch that documents the catalog-unreachable case. The requested
+contract is correctness-first under concurrent hooks and I/O failure, so the
+shorter form is not an acceptable simplification. **RULING: REJECT; do not
+restore.**
+
+### 3. Accepted correction — `10a7c19` — ADOPT IF NEEDED
+
+`10a7c19` restores an explicit `else` branch after the existing-entry exit and
+sets `claimed=1` when the catalog cannot be reached. This is source-clear and
+preserves the same winner/duplicate/fail-soft behavior as `7a78884`, at a cost
+of six production lines across the two intentionally parallel templates.
+**RULING: ACCEPTED-DEVIATION from 7a78884 only if the reviewer requires the
+explicit `else`; otherwise keep 7a78884 because it is shorter and already
+tests the contract.**
+
+### 4. `ponytail-review` result — SHRINK only where semantics hold
+
+`shrink:` `d9474fb` removes 14 state-management lines, but the resulting
+predicate is less explicit at the failure boundary; no deletion is safe without
+weakening the documented fail-soft contract. `10a7c19` adds six explanatory
+lines without changing behavior. **RULING: retain 7a78884's tested form; no
+new abstraction or helper.**
+
+### Final bounded verdict
+
+**7a78884 is the shortest compared implementation that is source-backed and
+test-pinned for atomic single-winner ingest, duplicate exit, and catalog-failure
+ingest.** `d9474fb` is rejected as an over-compressed variant. `10a7c19` is a
+valid explicit-branch alternative, but its extra lines are not required by the
+observed contract. SessionStart, SessionEnd/Stop behavior, absolute resolution,
+and POSIX-shell constraints remain intact in the adopted tree.
