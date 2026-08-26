@@ -126,326 +126,93 @@ func connectFullTunedRO(dbp string) (*sql.DB, error) {
 	return con, nil
 }
 
+type benchConnector struct {
+	name    string
+	connect func(string) (*sql.DB, error)
+}
+
+var benchConnectors = []benchConnector{
+	{name: "Baseline", connect: connectBaselineRO},
+	{name: "MmapOnly", connect: connectMmapRO},
+	{name: "MmapQueryOnly", connect: connectMmapQueryOnlyRO},
+	{name: "FullTuned", connect: connectFullTunedRO},
+}
+
+func runConnectionBench[T any](b *testing.B, dbp string, connector benchConnector, cold bool, operation, empty string, query func(*sql.DB) (T, error), nonEmpty func(T) bool) {
+	b.Helper()
+	if cold {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for b.Loop() {
+			con, err := connector.connect(dbp)
+			if err != nil {
+				b.Fatal(err)
+			}
+			result, err := query(con)
+			if err != nil {
+				con.Close()
+				b.Fatalf("%s: %v", operation, err)
+			}
+			if !nonEmpty(result) {
+				con.Close()
+				b.Fatal(operation + empty)
+			}
+			con.Close()
+		}
+		return
+	}
+
+	con, err := connector.connect(dbp)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer con.Close()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for b.Loop() {
+		result, err := query(con)
+		if err != nil {
+			b.Fatalf("%s: %v", operation, err)
+		}
+		if !nonEmpty(result) {
+			b.Fatal(operation + empty)
+		}
+	}
+}
+
 func BenchmarkConnectionPragmas(b *testing.B) {
 	dbp := seedRealisticBenchStore(b, 500)
+	search := func(con *sql.DB) ([]store.SearchHit, error) {
+		return store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
+	}
+	browse := func(con *sql.DB) ([]store.BrowseSession, error) {
+		return store.BrowseSessions(con, "", "", 50)
+	}
 
-	b.Run("Search/Baseline/Warm", func(b *testing.B) {
-		con, err := connectBaselineRO(dbp)
-		if err != nil {
-			b.Fatal(err)
+	for _, cold := range []bool{false, true} {
+		for _, connector := range benchConnectors {
+			mode := "Warm"
+			if cold {
+				mode = "Cold"
+			}
+			b.Run("Search/"+connector.name+"/"+mode, func(b *testing.B) {
+				runConnectionBench(b, dbp, connector, cold, "SearchHits", ": 0 hits returned", search, func(hits []store.SearchHit) bool {
+					return len(hits) > 0
+				})
+			})
 		}
-		defer con.Close()
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil {
-				b.Fatalf("SearchHits: %v", err)
+	}
+	for _, cold := range []bool{false, true} {
+		for _, connector := range benchConnectors {
+			mode := "Warm"
+			if cold {
+				mode = "Cold"
 			}
-			if len(hits) == 0 {
-				b.Fatal("SearchHits: 0 hits returned")
-			}
+			b.Run("Browse/"+connector.name+"/"+mode, func(b *testing.B) {
+				runConnectionBench(b, dbp, connector, cold, "BrowseSessions", ": 0 sessions returned", browse, func(sessions []store.BrowseSession) bool {
+					return len(sessions) > 0
+				})
+			})
 		}
-	})
-
-	b.Run("Search/MmapOnly/Warm", func(b *testing.B) {
-		con, err := connectMmapRO(dbp)
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer con.Close()
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil {
-				b.Fatalf("SearchHits: %v", err)
-			}
-			if len(hits) == 0 {
-				b.Fatal("SearchHits: 0 hits returned")
-			}
-		}
-	})
-
-	b.Run("Search/MmapQueryOnly/Warm", func(b *testing.B) {
-		con, err := connectMmapQueryOnlyRO(dbp)
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer con.Close()
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil {
-				b.Fatalf("SearchHits: %v", err)
-			}
-			if len(hits) == 0 {
-				b.Fatal("SearchHits: 0 hits returned")
-			}
-		}
-	})
-
-	b.Run("Search/FullTuned/Warm", func(b *testing.B) {
-		con, err := connectFullTunedRO(dbp)
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer con.Close()
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil {
-				b.Fatalf("SearchHits: %v", err)
-			}
-			if len(hits) == 0 {
-				b.Fatal("SearchHits: 0 hits returned")
-			}
-		}
-	})
-
-	b.Run("Search/Baseline/Cold", func(b *testing.B) {
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			con, err := connectBaselineRO(dbp)
-			if err != nil {
-				b.Fatal(err)
-			}
-			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil {
-				con.Close()
-				b.Fatalf("SearchHits: %v", err)
-			}
-			if len(hits) == 0 {
-				con.Close()
-				b.Fatal("SearchHits: 0 hits returned")
-			}
-			con.Close()
-		}
-	})
-
-	b.Run("Search/MmapOnly/Cold", func(b *testing.B) {
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			con, err := connectMmapRO(dbp)
-			if err != nil {
-				b.Fatal(err)
-			}
-			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil {
-				con.Close()
-				b.Fatalf("SearchHits: %v", err)
-			}
-			if len(hits) == 0 {
-				con.Close()
-				b.Fatal("SearchHits: 0 hits returned")
-			}
-			con.Close()
-		}
-	})
-
-	b.Run("Search/MmapQueryOnly/Cold", func(b *testing.B) {
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			con, err := connectMmapQueryOnlyRO(dbp)
-			if err != nil {
-				b.Fatal(err)
-			}
-			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil {
-				con.Close()
-				b.Fatalf("SearchHits: %v", err)
-			}
-			if len(hits) == 0 {
-				con.Close()
-				b.Fatal("SearchHits: 0 hits returned")
-			}
-			con.Close()
-		}
-	})
-
-	b.Run("Search/FullTuned/Cold", func(b *testing.B) {
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			con, err := connectFullTunedRO(dbp)
-			if err != nil {
-				b.Fatal(err)
-			}
-			hits, err := store.SearchHits(con, "optimization", store.Filter{}, store.SortRelevance, 20)
-			if err != nil {
-				con.Close()
-				b.Fatalf("SearchHits: %v", err)
-			}
-			if len(hits) == 0 {
-				con.Close()
-				b.Fatal("SearchHits: 0 hits returned")
-			}
-			con.Close()
-		}
-	})
-
-	b.Run("Browse/Baseline/Warm", func(b *testing.B) {
-		con, err := connectBaselineRO(dbp)
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer con.Close()
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil {
-				b.Fatalf("BrowseSessions: %v", err)
-			}
-			if len(sessions) == 0 {
-				b.Fatal("BrowseSessions: 0 sessions returned")
-			}
-		}
-	})
-
-	b.Run("Browse/MmapOnly/Warm", func(b *testing.B) {
-		con, err := connectMmapRO(dbp)
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer con.Close()
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil {
-				b.Fatalf("BrowseSessions: %v", err)
-			}
-			if len(sessions) == 0 {
-				b.Fatal("BrowseSessions: 0 sessions returned")
-			}
-		}
-	})
-
-	b.Run("Browse/MmapQueryOnly/Warm", func(b *testing.B) {
-		con, err := connectMmapQueryOnlyRO(dbp)
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer con.Close()
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil {
-				b.Fatalf("BrowseSessions: %v", err)
-			}
-			if len(sessions) == 0 {
-				b.Fatal("BrowseSessions: 0 sessions returned")
-			}
-		}
-	})
-
-	b.Run("Browse/FullTuned/Warm", func(b *testing.B) {
-		con, err := connectFullTunedRO(dbp)
-		if err != nil {
-			b.Fatal(err)
-		}
-		defer con.Close()
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil {
-				b.Fatalf("BrowseSessions: %v", err)
-			}
-			if len(sessions) == 0 {
-				b.Fatal("BrowseSessions: 0 sessions returned")
-			}
-		}
-	})
-
-	b.Run("Browse/Baseline/Cold", func(b *testing.B) {
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			con, err := connectBaselineRO(dbp)
-			if err != nil {
-				b.Fatal(err)
-			}
-			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil {
-				con.Close()
-				b.Fatalf("BrowseSessions: %v", err)
-			}
-			if len(sessions) == 0 {
-				con.Close()
-				b.Fatal("BrowseSessions: 0 sessions returned")
-			}
-			con.Close()
-		}
-	})
-
-	b.Run("Browse/MmapOnly/Cold", func(b *testing.B) {
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			con, err := connectMmapRO(dbp)
-			if err != nil {
-				b.Fatal(err)
-			}
-			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil {
-				con.Close()
-				b.Fatalf("BrowseSessions: %v", err)
-			}
-			if len(sessions) == 0 {
-				con.Close()
-				b.Fatal("BrowseSessions: 0 sessions returned")
-			}
-			con.Close()
-		}
-	})
-
-	b.Run("Browse/MmapQueryOnly/Cold", func(b *testing.B) {
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			con, err := connectMmapQueryOnlyRO(dbp)
-			if err != nil {
-				b.Fatal(err)
-			}
-			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil {
-				con.Close()
-				b.Fatalf("BrowseSessions: %v", err)
-			}
-			if len(sessions) == 0 {
-				con.Close()
-				b.Fatal("BrowseSessions: 0 sessions returned")
-			}
-			con.Close()
-		}
-	})
-
-	b.Run("Browse/FullTuned/Cold", func(b *testing.B) {
-		b.ResetTimer()
-		b.ReportAllocs()
-		for b.Loop() {
-			con, err := connectFullTunedRO(dbp)
-			if err != nil {
-				b.Fatal(err)
-			}
-			sessions, err := store.BrowseSessions(con, "", "", 50)
-			if err != nil {
-				con.Close()
-				b.Fatalf("BrowseSessions: %v", err)
-			}
-			if len(sessions) == 0 {
-				con.Close()
-				b.Fatal("BrowseSessions: 0 sessions returned")
-			}
-			con.Close()
-		}
-	})
+	}
 }
