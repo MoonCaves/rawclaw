@@ -59,7 +59,7 @@ func TestTagWriteUsesCatalogBeforeCorpusSweep(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteCatalogEntry: %v", err)
 	}
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		proj := filepath.Join(projectsRoot, "unrelated-"+string(rune('a'+i)))
 		if err := os.MkdirAll(proj, 0o755); err != nil {
 			t.Fatalf("mkdir unrelated project: %v", err)

@@ -1815,7 +1815,7 @@ func TestPruneTombstonedIDs_SkipsMissingIDsQuicklyAndPrunesExistingThreads(t *te
 	if err != nil {
 		t.Fatalf("begin bulk seed: %v", err)
 	}
-	for i := 0; i < 20000; i++ {
+	for i := range 20000 {
 		id := fmt.Sprintf("unrelated-%d", i)
 		if _, err := bulk.Exec(`INSERT INTO messages (session_id, uuid) VALUES (?, ?)`, id, id+"-u"); err != nil {
 			bulk.Rollback()

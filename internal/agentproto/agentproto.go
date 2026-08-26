@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1800,12 +1801,7 @@ func catalogCands(scope []view.Scope, session8 string) []sessionCand {
 		if projects == nil {
 			return true
 		}
-		for _, want := range projects {
-			if project == want {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(projects, project)
 	}
 	var narrowed []view.Scope
 	for _, hit := range hits {
