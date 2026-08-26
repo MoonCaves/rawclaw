@@ -70,7 +70,7 @@ func runTagPublishChild(ctx context.Context, w io.Writer, dbp string) error {
 		tagPublishLogLine(w, "tag-publish: skipped invalid/self source %q", dbp)
 		return nil
 	}
-	if err := index.SyncConsolidatedFrom(dbp); err != nil {
+	if err := index.SyncConsolidatedFromContext(ctx, dbp); err != nil {
 		tagPublishLogLine(w, "tag-publish: %s: %v", dbp, err)
 		return err
 	}
