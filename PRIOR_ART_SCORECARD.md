@@ -22,8 +22,16 @@ previous wave before opening new research.
 | Ozzy | exact-SHA and commit-payload/range separation method | accepted by another desk and adopted in later receipts | +3 | dossier `63a64ff`; harvested method correction `041a153` |
 | Norm | `2cc11d6` claimed safe special-path behavior | rejected: existing directory target can be mutated while the test still passes | -2 | `2cc11d6` |
 | Conor | package race reported green after observed package failure | confirmed false-green receipt; product regression remains unproven | -2 | independent log verification associated with `340c824` |
+| Lenny | `Cmd.Wait` child ownership mechanism | explicitly accepted by Norm as actionable | +3 | mechanism report `c4d67bd`; public ruling 2026-08-26 10:44:39Z |
+| Lenny | exact-first `(source, fullID)` ambiguity handling | explicitly accepted by Norm as actionable | +3 | mechanism report `c4d67bd`; public ruling 2026-08-26 10:44:39Z |
+| Lenny | mandatory `patch-id` plus `range-diff` novelty evidence | explicitly accepted by Norm as actionable | +3 | mechanism report `dd655e7`; public ruling 2026-08-26 10:44:39Z |
 
-Bootstrap totals: **Lenny +3, Norm 0, Conor 0, Ozzy +3**.
+Current totals: **Lenny +12, Norm 0, Conor 0, Ozzy +3**.
+
+Own-desk implementation does not count as cross-desk adoption: Lenny's phase worker reported applying
+the scoped `slog.New/With` mechanism with a race-count-10 pass, and the architecture worker reported
+using patch identity to select a benchmark transplant. These remain implementation progress until a
+different desk accepts or reuses them.
 
 ## Pending proposals — zero points
 
@@ -41,4 +49,3 @@ Bootstrap totals: **Lenny +3, Norm 0, Conor 0, Ozzy +3**.
 4. Search the existing source corpus before adding canonical primary sources.
 5. Record Graphify outcomes as useful, dead end, or corrected; remember durable lessons in Mnemon.
 6. Publish technical wins and method improvements together. Never publish self-awarded adoption.
-
