@@ -49,7 +49,7 @@ full launch-contract satisfaction is falsified by the missing durable cadence ev
 | `78b6a4fe5a90771d9de7a1e3e83e0c046ed834a8` | `internal/cli/cmd_tag.go`, +1/-7. Stable patch ID is recorded by the harvest report as identical to Conor `fb893ed` and Norm `a317766`. | **DUPLICATE** — real one-line production shrink, but not a new adoption claim. |
 | harvest candidates `847426c`, `539de03`, `b944d08`, `37ec96b` | The immutable harvest report records stable duplicate IDs or inherited/competing mechanism payloads. `37ec96b` has +32 production, +157 tests; it is older-lineage and its hostile tests were not run here. | **DUPLICATE** — mechanism-family or patch-equivalent duplication defeats novelty; fixed-base safety remains a separate unrun question. |
 | Ozzy prior-art tip `a829b1b22aacc5ed64b5624d112e10eb27f67df3` and reported seed `00d1783` | Documentation-only research chain. The report distinguishes post-seed research from a stale product-tree delta and claims 90 canonical sources. | **ADOPT** — adopt only the ordered research constraints that alter implementation gates; URL quantity and report size score zero. |
-| `7f139f0d3e8bd3cdb109febd857336f82a7da76a` (`ozzy/speed-proof-20260827`) | Adds 112 test lines claiming durable tag authoring before publication wait. It is a clean child of fixed base, but no branch-specific test was run. | **UNSUPPORTED** — test payload exists, yet “prove” is not personally observed evidence. |
+| `7f139f0d3e8bd3cdb109febd857336f82a7da76a` (`ozzy/speed-proof-20260827`) | Adds 112 test lines claiming durable tag authoring before publication wait. The exact focused test has a recorded failure after five seconds: no `topic_segment` becomes visible in the per-project DB while the consolidated fence is held. | **FALSE_GREEN** — the commit message says “prove”, but its focused proof currently fails; this is evidence against the claimed behavior, not a green gate. |
 | `386ec9d03bc4b4ae77ef8238d06e0f8b0782de21` (`ozzy/speed-prune-20260827`) | +76 production and +77 benchmark lines (net +76/+77 across files). It batches tombstone IDs through a temp table and changes the pruning query shape. No benchmark or full gate was run on this tip. | **UNSUPPORTED** — performance/adoption claim lacks observed benchmark evidence; fixed-base green tests do not test this payload. |
 | `2ad239c776b143a3b18ca686ad1bcc5c908f735f` (`ozzy/speed-publish-20260827`) | +10 production, +30 tests; parent is current detached-publication commit `3170b19`, not fixed base directly. It normalizes path comparison and checks context cancellation, with narrow self-skip tests. `git show --check` passes; branch-specific tests unrun. | **UNSUPPORTED** — plausible targeted hardening, but no personally observed gate establishes behavior or adoption. |
 | `cda693dc9b118de310dbb2f7d1cdecf86a5a0ef9` (`ozzy/pressure-luna-20260827`) | +137 shell production, +25 docs. It hardens persisted pressure-auditor state and mailbox receipt writes, but its own changes include many lifecycle branches and no observed live harness run here. | **UNSUPPORTED** — implementation payload is accessible, but live behavior and gates are unobserved. |
@@ -65,13 +65,14 @@ branch-specific benchmark and fixed-base race suite, then compare against the pr
 the same seeded workload. Until that produces an observed delta and confirms all six sidecar/table
 deletions, the `perf(index)` commit is **UNSUPPORTED**. A green fixed-base suite or a quoted worker
 receipt cannot falsify this challenge because neither executes the changed code.
+Separately, `7f139f0` is already challenged by its failing focused durability test and cannot be
+presented as green until the setup or implementation is fixed and rerun.
 
 ## Summary
 
 - Han: prior-art and corrected candidate-ancestry research can be adopted as constraints; the
   original harness-inactive report is stale; ticker activation is unsupported.
 - Ozzy: `78b6a4f` and the harvested code candidates are duplicates; `a829b1b`/`00d1783` research
-  is adoptable only as ordered constraints; all three current speed-worker implementation claims
-  remain unsupported without branch-specific gates.
+  is adoptable only as ordered constraints; `7f139f0` is FALSE_GREEN, while the other current
+  speed-worker implementation claims remain unsupported without branch-specific gates.
 - No claim earns credit for branch existence, URL counts, report volume, or quoted tests.
-
