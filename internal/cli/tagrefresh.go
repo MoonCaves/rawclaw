@@ -126,25 +126,9 @@ func readAuthoritativeTagTopics(authoritativeDB, sessionID string) ([]store.Topi
 }
 
 func overlayAuthoritativeTopics(derived, authSegs []store.TopicSegment) []store.TopicSegment {
-	derived = append([]store.TopicSegment(nil), derived...)
-	positions := make(map[string]int, len(derived))
-	for i, seg := range derived {
-		positions[topicSegmentKey(seg)] = i
-	}
-	for _, seg := range authSegs {
-		key := topicSegmentKey(seg)
-		if i, ok := positions[key]; ok {
-			derived[i] = seg
-			continue
-		}
-		positions[key] = len(derived)
-		derived = append(derived, seg)
-	}
-	return derived
-}
-
-func topicSegmentKey(seg store.TopicSegment) string {
-	return seg.SessionID + "\x00" + seg.StartUUID
+	// The authoritative per-session database is a complete replacement set.
+	// Returning it directly also drops derived rows deleted by a retag.
+	return append([]store.TopicSegment(nil), authSegs...)
 }
 
 type tagSourceMatch struct {
