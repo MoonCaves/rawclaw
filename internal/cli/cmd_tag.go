@@ -471,7 +471,11 @@ func applyFloorRoutine(con *sql.DB, sessionID string, isRoutine bool, taggedAt f
 // writing the routine verdict) with a now() timestamp. Thin wrapper around the
 // testable runTagWrite / runTagWriteRoutine core.
 func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scope, more agentproto.ScopeFn, routine bool, source string, retagAll bool) error {
-	dbp, fullSID, err := agentproto.LocateSessionGuarded(session8, scope, more)
+	dbp, fullSID, found := locateTagWriteFast(session8, scope)
+	var err error
+	if !found {
+		dbp, fullSID, err = agentproto.LocateSessionGuarded(session8, scope, more)
+	}
 	if err != nil {
 		return err
 	}
