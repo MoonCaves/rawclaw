@@ -23,9 +23,9 @@ func TestConsolidate_LogsPhaseStartsAndDurations(t *testing.T) {
 		msgs: []msgRow{{"phase-log-message", "user", "log this fold", 100}},
 	})
 	recorder := &testLogRecorder{}
-	original := slog.Default()
-	slog.SetDefault(slog.New(recorder))
-	defer slog.SetDefault(original)
+	oldLogger := consolidatePhaseLogger
+	consolidatePhaseLogger = func() *slog.Logger { return slog.New(recorder) }
+	defer func() { consolidatePhaseLogger = oldLogger }()
 
 	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
 		t.Fatalf("ConsolidateFrom: %v", err)

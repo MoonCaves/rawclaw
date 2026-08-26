@@ -636,17 +636,26 @@ func writeThroughConsolidated(dbp string, indexErr error) {
 	fireVectorTopup(ConsolidatedPath())
 }
 
-func beginConsolidatePhase(src, name string) func() {
-	started := time.Now()
-	if src != "" {
-		slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "event", "start")
-		return func() {
-			slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "duration", time.Since(started))
+var consolidatePhaseLogger func() *slog.Logger
+
+func currentPhaseLogger() *slog.Logger {
+	if consolidatePhaseLogger != nil {
+		if l := consolidatePhaseLogger(); l != nil {
+			return l
 		}
 	}
-	slog.Info("consolidate fold phase", "phase", name, "event", "start")
+	return slog.Default()
+}
+
+func beginConsolidatePhase(src, name string) func() {
+	started := time.Now()
+	log := currentPhaseLogger()
+	if src != "" {
+		log = log.With("source", filepath.Base(src))
+	}
+	log.Info("consolidate fold phase", "phase", name, "event", "start")
 	return func() {
-		slog.Info("consolidate fold phase", "phase", name, "duration", time.Since(started))
+		log.Info("consolidate fold phase", "phase", name, "duration", time.Since(started))
 	}
 }
 
