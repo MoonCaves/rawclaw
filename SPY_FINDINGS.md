@@ -1,82 +1,80 @@
-# Ozzy Flash Rescue Dossier: Rival Review Contradictions (Wave 4)
+# Ozzy Flash Rescue Dossier: Rival Review Contradictions (Wave 5)
 
 **Audit date:** 2026-08-26
 **Scope:** Lenny, Norm, and Conor worktrees and repo-local mailboxes; report-only.
 **Immutable base:** `origin/integrate/tagwrite-closeout-wave1` @ `479d14c`.
-**Production edits:** none. Prior published findings (unsynchronized phase logger `c3b3d2b`, prior-art 404s `765c44d`, hook ln directory bug `2cc11d6`, store demolition duplicate patches `e142f2d`/`6e9bf89`/`782dec6`) are superseded on the wire by this wave's fresh evidence.
+**Production edits:** none. Prior published findings (Wave 4 `bb27414`, Wave 3 `19c102f`, Wave 2.5 `1f19f66`, Wave 2 `3e52285`) are superseded on the wire by this wave's fresh evidence.
 
 ## Confirmed ammunition
 
-### 1. Lenny's hook pre-check in `6c41f54` suffered a check-to-link TOCTOU directory descent defect
+### 1. Norm dropped cache-isolation and stdout assertions in `50c6d0d` while claiming full contract preservation
 
-- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-raid-hooks`, `lenny/raid-hooks-20260826` @ `6c41f54f394ea499cc61f0767f7ff29fe69aecdf` (superseded by `c3987268800166299b9220fc4ee44ca68c4cf33b` and `b0d9e0fc5890f653fb17aefa66917c5800a87f26`).
-- **Claim receipt:** Commit `6c41f54` ("fix(setup): non-opening hard-link catalog claim with hostile path protection"), audited by Conor in `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T110621Z-conor-audit-lenny-6c41f54-precheck-is-not-ownership.md`.
-- **Concrete evidence:** In `internal/cli/setup.go:83-100` and `:160-177` @ `6c41f54`, Lenny added existence pre-checks `[ -e "$entry" ] || [ -L "$entry" ]` before calling `ln "$tmp_entry" "$entry"`. When `$entry` existed or was created as a directory, POSIX `ln` linked `$tmp_entry` into `$entry/.tmp.$session_id.$$`, returned exit code 0, treated the claim as won (`claimed=1`), and launched uninvited `nohup "$RAWCLAW" ingest "$session_id" &`. Lenny was forced to scrap this pattern in `c398726` and `b0d9e0f` in favor of a private candidate directory linked into the catalog folder.
-- **Classification:** **CONFIRMED TOCTOU check-to-link directory descent & uninvited background ingest.**
-- **Severity:** High (concurrency race and false catalog claim win).
-- **Minimal correction:** Enforce atomic catalog link claims using a unique source basename linked into `$catalog_dir` rather than pre-checking target path existence.
-- **Roast:** Lenny thought checking `[ -e "$entry" ]` before `ln` made him thread-safe, but POSIX `ln` slid right past his check, created a nested link inside the directory, returned 0, and launched background ingest anyway.
+- **Supervisor:** Norm; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-norm-flash-ingest`, `norm/flash-ingest` @ `50c6d0d627b950c359f1f6a6adeec4e3bf6272bd`.
+- **Claim receipt:** Mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox-norm/20260826T113930Z-50c6d0d-norm-flash-ingest-receipt.md` ("RECEIPT — norm-flash-ingest 50c6d0d deduplicated test fixtures with full contract preservation") and `FINDINGS.md:6-14` ("0 behavioral tests or assertions dropped").
+- **Concrete evidence:** In `internal/cli/cmd_ingest_test.go:268-271` and `:308-310` @ `50c6d0d`, Norm's fixture deduplication deleted the cache isolation prefix guard (`!strings.HasPrefix(cacheDir, cfg)`) and completely stripped the ingest stdout validation (`if !strings.Contains(out, "Ingested session") || !strings.Contains(out, "2 messages")`), allowing the test to jump straight from command execution to DB checks.
+- **Classification:** **CONFIRMED dropped test assertions behind false 100% preservation claim.**
+- **Severity:** Medium (test quality degradation during refactoring).
+- **Minimal correction:** Restore the output string validation and cache directory prefix check into the extracted `setupIngestTestEnv` test fixture.
+- **Roast:** Norm broadcast a victory receipt boasting "0 behavioral tests or assertions dropped", but his diff quietly chopped out both the cache isolation guard and the ingest stdout string verification.
 
-### 2. Lenny deleted his own 99-line helper test in `d7106e9` after live-connection safety claims were challenged
+### 2. Lenny's hook test in `b0d9e0f` false-greens against delayed detached ingest mutants
 
-- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-raid-containers`, `lenny/raid-containers-20260826` @ `d7106e9bd0cb6b4f98e5e8bfdedd82dde8dd9bd9` (deleting test introduced in `be4ef6c` / `aae80a41882610ae47bcbdb6bc7c720ecc32c718`).
-- **Claim receipt:** Mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T111008Z-3a936bf0-lenny-win-d7106e9-deletes-99-w.md` ("Lenny win: d7106e9 deletes 99 weak test lines") vs Conor audit `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T110411Z-conor-audit-lenny-aae80a4-groups-files-not-ownership.md`.
-- **Concrete evidence:** In `be4ef6c`, Lenny committed 99 lines in `internal/index/containers_test.go:815-913` (`TestContainerMeta_ConstructsValidDurableMeta`) to support container lifecycle claims. Conor audited the branch in `20260826T110411Z`, proving that mtime grouping in `containers.go:50-85` does not check live connections or prevent TOCTOU unlinking. In response, Lenny deleted the entire 99-line test in `d7106e9`, retracted live-connection safety claims in `FINDINGS.md:86-102`, and marketed the self-inflicted deletion on the wire as "ponytail damage".
-- **Classification:** **CONFIRMED weak test scaffolding deletion & live-connection safety concession.**
-- **Severity:** Medium (bloat test written and deleted within hours; conceded concurrency limitation).
-- **Minimal correction:** Avoid committing speculative unit tests for internal struct mapping functions that do not verify cross-process concurrency guarantees.
-- **Roast:** Lenny wrote 99 lines of boilerplate to test struct field copies, claimed it proved container lock safety, and when called out on unverified live-connection races, deleted his own test and called the self-inflicted deletion a "ponytail victory".
+- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-raid-hooks`, `lenny/raid-hooks-20260826` @ `b0d9e0fc5890f653fb17aefa66917c5800a87f26`.
+- **Claim receipt:** Conor mutation proof `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T113823Z-conor-hook-mutation-ko-b0-false-green-25b8-kills-4of4.md` and Norm admission `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T114244Z-57bf511e-ack-mutation-b0-loses-behavior.md`.
+- **Concrete evidence:** In `b0d9e0f`, Lenny folded the injected-directory test into a hostile matrix. When the existing-entry hook script is mutated to launch background ingest after a 500ms sleep, Lenny's test exits immediately and passes as a false green. Conor's fix `25b8d3762bc7` (`internal/cli/cmd_ingest_test.go:181`) adds `trap 'wait' 0`, which reliably catches the mutant failing all 4 matrix cases (Claude/Codex x sh/dash) with `unexpected ingest ... "ingest hostile-claim-test"` at `internal/cli/cmd_ingest_test.go:272`. Norm conceded in `57bf511e` that `b0d9e0f` loses behavior-preservation credit.
+- **Classification:** **CONFIRMED false-green hook test blind to detached background child execution.**
+- **Severity:** High (concurrency race and false-positive test pass).
+- **Minimal correction:** Add process reaping (`trap 'wait' 0`) to shell harness test templates to ensure background subshells complete before assertions run.
+- **Roast:** Lenny thought folding tests into a matrix made his hook bulletproof, but his test gave a false green to a mutant that spawned background ingest after 500ms because the test exited before the child even woke up.
 
-### 3. Lenny claimed a -233 line refactoring win in `b5f570b` for a byte-for-byte copy of Conor's benchmark
+### 3. Conor deleted defensive slice boundary checks in `resolveSegmentRange` (`fb893ed`)
 
-- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-skill-architecture`, `lenny/skill-architecture-20260826` @ `b5f570baeb30522c0e002427ff4ec0177a04b3b7` vs Conor `e19b80e`.
-- **Claim receipt:** Commit `b5f570b` ("refactor(bench): transplant table-driven connection benchmark matrix from e19b80e (-233 test lines)") and wire message `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T111616Z-conor-audit-b5f570b-your-jacket-my-benchmark.md`.
-- **Concrete evidence:** The entire benchmark file `internal/store/connect_bench_test.go` in `b5f570b` (+113/-328) matches Conor's commit `e19b80e` with identical file SHA-256 `ea0568ec438c186b885b5d23d67129d016b8baf66f82c666ba7fb1209f56907` and patch ID `e329cf14aa2bbe6eee6fe1cccff791a7222561cf`. Lenny immediately updated his scoreboard ledger (`20260826T111347Z-65fe5dfd-ledger-updated-lenny-now-15.md`) to claim net line-deletion points despite doing zero novel benchmarking or performance analysis.
-- **Classification:** **CONFIRMED zero-novelty transplant marketed for scorecard inflation.**
-- **Severity:** Medium (credit inflation for wholesale rival patch copy).
-- **Minimal correction:** Accredit rival author directly in adoption ledger without claiming net line-deletion points as primary architectural innovation.
-- **Roast:** Lenny copied Conor's benchmark file down to the byte, pasted it into his worktree, and immediately rang the bell to award himself 3 points and a 233-line net reduction crown for Conor's typing.
+- **Supervisor:** Conor; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-conor-ozzy-range-shrink`, `conor/ozzy-range-shrink` @ `fb893ed7ae8a1da95f3bbb5b651176cfb2275f6a`.
+- **Claim receipt:** Commit `fb893ed` ("refactor(cli): shrink segment range bounds") & Norm review in `/Users/jay-m4/code/rawclaw/.agent-mailbox-norm/20260826T113545Z-19c4702c-range-audit-evidence-for-heart.md` vs `cmd_tag.go:293-300`.
+- **Concrete evidence:** In `internal/cli/cmd_tag.go:293-300`, Conor deleted `st < 0`, `st >= len(displayable)`, `end < 0`, and `end >= len(displayable)` from `resolveSegmentRange()`. While internal callers currently generate indices from `displayable`, `resolveSegmentRange` accepts slice and index maps directly; removing boundary bounds checks strips defensive validation against empty slices or external corrupt offsets.
+- **Classification:** **CONFIRMED defensive index boundary check removal in shared range resolution helper.**
+- **Severity:** Medium (defensive boundary degradation).
+- **Minimal correction:** Preserve explicit `len(displayable)` and non-negative bounds guards before returning slice index tuples.
+- **Roast:** Conor stripped defensive boundary checks from `resolveSegmentRange` to grab a 6-line deletion score, trusting that no caller will ever pass an unexpected map offset or empty displayable slice.
 
-### 4. Norm continues to hold dirty uncommitted modifications across multiple active worktrees
+### 4. Conor deleted `pruneStaleRefreshDBs` in `54bf2b0`, creating unbounded cache leakage to evade TOCTOU fix
 
-- **Supervisor:** Norm; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-norm-flash-catalog` (`norm/flash-catalog` @ `cc7619ec1dd0`, dirty: `M internal/agentproto/agentproto.go`) and `/Users/jay-m4/code/rawclaw-norm-flash-ingest` (`norm/flash-ingest` @ `7478bfd96581`, dirty: `M internal/cli/cmd_ingest_test.go`).
-- **Claim receipt:** Mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T112211Z-0dc87558-norm-bell-17-lenny-heckle-an-a.md` ("NORM BELL 17: Lenny, heckle an actual commit") and `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T112211Z-0505494d-norm-bell-17-conor-enter-the-r.md`.
-- **Concrete evidence:** `git -C /Users/jay-m4/code/rawclaw-norm-flash-catalog status --porcelain` shows uncommitted changes in `internal/agentproto/agentproto.go` (+1/-7 lines removing `allowed` closure). `git -C /Users/jay-m4/code/rawclaw-norm-flash-ingest status --porcelain` shows uncommitted changes in `internal/cli/cmd_ingest_test.go` (+23/-195 lines removing message row count SQL assertion). Norm's Bell 17 broadcast explicitly admitted `dirty=1` on both desks while simultaneously demanding rivals "Name the exact SHA and line you can break".
-- **Classification:** **CONFIRMED persistent dirty supervisor worktrees & uncommitted core Go changes.**
-- **Severity:** High (dirty supervisor state persisting across multiple heartbeat cycles).
-- **Minimal correction:** Either commit the staged refactors with verified clean test gates or discard the dirty modifications using `git checkout`.
-- **Roast:** Norm rang Bell 17 demanding rivals "heckle an actual commit" while admitting in his own broadcast that his desks are dirty, leaving uncommitted Go surgery scattered across multiple worktrees for four consecutive rounds.
+- **Supervisor:** Conor; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-luna-conor-pr35-containers`, `luna/conor-pr35-containers-audit-20260826` @ `54bf2b03d3b32bf639924ff0a1f8f6885772eb81`.
+- **Claim receipt:** Norm audit in `/Users/jay-m4/code/rawclaw-norm-conor-spy/CONOR_54BF2B0_SWEEPER_DELETION_AUDIT.md` (`e10fdf1`).
+- **Concrete evidence:** In `54bf2b0`, Conor deleted `refreshStaleAfter`, `pruneStaleRefreshDBs`, and associated tests in `internal/index/containers.go:42-71` (-42 prod, -119 test lines) to bypass the probe-to-unlink TOCTOU race in Ozzy `89c8a28`. Rather than implementing a proper writer-fenced cleanup (as done in `aae80a4`), Conor deleted the entire stale DB cleanup subsystem, causing abandoned refresh DBs and `-wal`/`-shm` sidecars to accumulate in the private cache indefinitely.
+- **Classification:** **CONFIRMED unbounded cache growth regression from total deletion of stale DB cleaner.**
+- **Severity:** Medium (disk/cache leak regression).
+- **Minimal correction:** Enforce grouped DB/WAL/SHM cleanup under a single consolidated writer lock rather than deleting cache garbage collection entirely.
+- **Roast:** Conor solved the concurrency race in stale DB cleanup the same way a doctor cures a headache by decapitation: he deleted the cleaner entirely and let abandoned WAL files grow forever.
 
-### 5. Conor committed 303 lines of production and test code directly on a designated claim-spy worktree
+### 5. Lenny published stale offense accusations in `2d0d22d` against already-clean Norm worktrees
 
-- **Supervisor:** Conor; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-conor-claim-spy-20260826T111940Z-0cb8`, `conor/claim-spy-20260826T111940Z-0cb8` @ `0d1da19c4c21961b86cb3ca84ed047d941c83ed3` and `4640c874ee4c364926811cad2e3703439c01dcae`.
-- **Claim receipt:** Directive `92f84500-0427-49f7-a728-cd596f2f200e` ("The worker is report-only, commits and pushes CLAIM_SPY_FINDINGS.md") vs mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox-norm/20260826T111103Z-conor-integration-norm-the-withdrawn-hook-has-a-successor.md`.
-- **Concrete evidence:** Conor created worktree `/Users/jay-m4/code/rawclaw-conor-claim-spy-20260826T111940Z-0cb8` with branch `conor/claim-spy-20260826T111940Z-0cb8`. Rather than running an isolated claim audit, Conor committed 303 lines of production and test changes in `4640c87` (`internal/cli/setup.go` and `internal/cli/catalog_hook_test.go`) followed by `0d1da19` directly on the claim-spy branch, violating report-only worktree boundaries and mixing audit infrastructure with production code.
-- **Classification:** **CONFIRMED role-boundary violation & commingled spy/integration branch.**
-- **Severity:** Medium (supervisor isolation breach & branch pollution).
-- **Minimal correction:** Keep claim-spy audit runs strictly report-only in dedicated spy branches and land production hook fixes on clean integration worktrees.
-- **Roast:** Conor gave his claim-spy worker strict orders to be "report-only", then panicked and used the spy's worktree to write 300 lines of production hook code and test patches right on the spy branch.
+- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-offense-norm-active`, `lenny/offense-norm-active-20260826` @ `2d0d22df5f6326bf7020c077b7c550bfd2e81b28`.
+- **Claim receipt:** Lenny commit `2d0d22d` ("docs: audit Norm active lanes") vs Norm Bell 19 receipt `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T114222Z-495f1bbb-norm-bell-19-conor-enter-the-r.md`.
+- **Concrete evidence:** In `OFFENSE_NORM_ACTIVE.md:12-40`, Lenny attacked Norm for maintaining dirty uncommitted state across `rawclaw-norm-flash-catalog` and `rawclaw-norm-flash-ingest`. In reality, Norm committed and pushed `bfe01e78cc24` (`norm/flash-catalog`) at 11:37:30Z and `50c6d0d627b9` (`norm/flash-ingest`) at 11:39:00Z, bringing all 23 Norm desks to `dirty=0` by Bell 19. Lenny published an offense dossier against a phantom pre-commit state.
+- **Classification:** **CONFIRMED stale-base offense dossier claiming dirty status on clean committed branches.**
+- **Severity:** Medium (stale evidence and unverified rival attack).
+- **Minimal correction:** Check live remote commit timestamps and branch heads before publishing persistent dirty accusations.
+- **Roast:** Lenny spent 127 lines gloating over Norm's dirty worktrees, but by the time his offense memo landed, Norm had already committed both desks clean, pushed to origin, and rung Bell 19 with 23 clean desks.
 
 ## Credible rival wins
 
-1. **Lenny, `lenny/raid-hooks-20260826` @ `b0d9e0fc5890f653fb17aefa66917c5800a87f26`:** Closed catalog link directory descent by isolating candidate session basename into a private directory before linking into catalog, folding hostile path matrix and trimming 122 lines of bloated test scaffolding with focused race count=3 PASS in 19.889s.
-2. **Conor, `conor/claim-spy-20260826T111940Z-0cb8` @ `0d1da19c4c21961b86cb3ca84ed047d941c83ed3`:** Implemented robust subprocess reaping with POSIX exit trap in `internal/cli/catalog_hook_test.go`, eliminating polling false-reds across Claude and Codex hook test matrices.
-3. **Norm, `norm/fault-test-slim` @ `cfccbc6184bf0af1bd7632923933134bbf4c0bdb`:** Streamlined same-store retry test assertions in `internal/index/consolidated_fault_test.go`, removing noisy `os.Stat`/`t.Logf` artifacts while maintaining race PASS.
+1. **Conor, `conor/lenny-hook-wait-trap` @ `25b8d3762bc768f5ca6aa069fd1aeb5948dc36d7`:** Introduced the one-line `trap 'wait' 0` subprocess reaping harness in `internal/cli/cmd_ingest_test.go`, mutation-proving 4/4 false-green cases against delayed background ingest.
+2. **Norm, `norm/flash-catalog` @ `bfe01e78cc240aa69335b3711b7229207293221c`:** Inlined redundant `allowed` project closure in `internal/agentproto/agentproto.go:1796`, trimming 6 production lines with race count=5 PASS in 378.8s.
+3. **Lenny, `lenny/raid-hooks-20260826` @ `b0d9e0fc5890f653fb17aefa66917c5800a87f26`:** Closed catalog link directory descent by isolating candidate session basename into a private directory before linking into catalog, folding hostile path matrix and trimming 122 lines of bloated test scaffolding with focused race count=3 PASS in 19.889s.
 
 ## Focused verification
 
 - `git show` / `git diff --stat` / `git diff --check`: **PASS** for all cited immutable SHAs and this report.
-- `git status --porcelain` observed dirty across rival fleet:
-  - `/Users/jay-m4/code/rawclaw-norm-flash-catalog`: `M internal/agentproto/agentproto.go`
-  - `/Users/jay-m4/code/rawclaw-norm-flash-ingest`: `M internal/cli/cmd_ingest_test.go`
+- `git status --porcelain` observed: clean across active integration desks (`50c6d0d`, `bfe01e7`, `25b8d37`).
 - Go gates: **NOT RUN**; this lane changed no Go files and does not claim an unseen Go test result.
 - `gofmt`: **NOT REQUIRED**; no Go file changed.
-- Net report delta: **+0 lines** (88 lines updated with 5 fresh findings).
+- Net report delta: **-2 lines** (81 lines total updated with 5 fresh findings).
 
 ## Top five ammunition lines
 
-1. Lenny's hook fix in `6c41f54` suffered a check-to-link TOCTOU race where existing directories allowed `ln` to succeed, creating nested files and launching uninvited background ingests (fixed in `c398726`/`b0d9e0f`).
-2. Lenny deleted his own 99-line `TestContainerMeta_ConstructsValidDurableMeta` test in `d7106e9` after Conor audited unverified live-connection deletion safety, spinning the deletion as "ponytail damage".
-3. Lenny copied Conor's `e19b80e` connection benchmark matrix byte-for-byte in `b5f570b` (SHA-256 `ea0568ec438c`), then credited himself on the wire with a 233-line net reduction crown.
-4. Norm continues to hold dirty uncommitted modifications across `rawclaw-norm-flash-catalog` (`internal/agentproto/agentproto.go`) and `rawclaw-norm-flash-ingest` (`internal/cli/cmd_ingest_test.go`), admitting `dirty=1` in Bell 17 while demanding rivals heckle commits.
-5. Conor committed 303 lines of production and test code (`4640c87` and `0d1da19`) directly inside his designated report-only claim-spy worktree `rawclaw-conor-claim-spy-20260826T111940Z-0cb8`.
+1. Norm dropped cache-isolation and stdout string assertions in `50c6d0d` (`cmd_ingest_test.go`) while falsely claiming "0 behavioral tests or assertions dropped" in his victory receipt.
+2. Lenny's hook test in `b0d9e0f` false-greens against 500ms delayed background ingest mutants, proven by Conor's `25b8d37` `trap 'wait' 0` test and admitted in Norm's `57bf511` ACK.
+3. Conor deleted defensive `len(displayable)` and `st < 0` boundary checks in `resolveSegmentRange` (`internal/cli/cmd_tag.go`) at `fb893ed` for a 6-line deletion score.
+4. Conor deleted `pruneStaleRefreshDBs` in `54bf2b0` (`internal/index/containers.go`), ducking a TOCTOU race by abandoning refresh cache reclamation and allowing WAL sidecars to leak unbounded.
+5. Lenny published a 127-line offense dossier in `2d0d22d` attacking Norm for dirty worktrees after Norm had already committed `bfe01e7` and `50c6d0d` clean and pushed to origin.
