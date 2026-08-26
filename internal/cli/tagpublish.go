@@ -135,23 +135,53 @@ func isConsolidatedSource(dbp string) bool {
 }
 
 func publishSession(ctx context.Context, con *sql.DB, sid string, segments []store.TopicSegment, verdict store.Verdict, hasVerdict bool) error {
+	var sourceRevision float64
+	for _, s := range segments {
+		if s.TaggedAt > sourceRevision {
+			sourceRevision = s.TaggedAt
+		}
+	}
+	if hasVerdict && verdict.TaggedAt > sourceRevision {
+		sourceRevision = verdict.TaggedAt
+	}
 	tx, err := con.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, "DELETE FROM topic_segment WHERE session_id=?", sid); err != nil {
+	var currentRevision sql.NullFloat64
+	if err := tx.QueryRowContext(ctx, "SELECT MAX(tagged_at) FROM topic_segment WHERE session_id=? AND (origin_machine IS NULL OR origin_machine='')", sid).Scan(&currentRevision); err != nil {
 		return err
 	}
-	for _, s := range segments {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO topic_segment(session_id,start_uuid,end_uuid,topic,summary,tagged_at,origin_machine) VALUES(?,?,?,?,?,?,NULLIF(?,''))`, sid, s.StartUUID, s.EndUUID, s.Topic, s.Summary, s.TaggedAt, s.OriginMachine); err != nil {
+	if !currentRevision.Valid || currentRevision.Float64 <= sourceRevision {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM topic_segment WHERE session_id=? AND (origin_machine IS NULL OR origin_machine='')", sid); err != nil {
 			return err
+		}
+		for _, s := range segments {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO topic_segment(session_id,start_uuid,end_uuid,topic,summary,tagged_at,origin_machine) VALUES(?,?,?,?,?,?,NULLIF(?,''))`, sid, s.StartUUID, s.EndUUID, s.Topic, s.Summary, s.TaggedAt, s.OriginMachine); err != nil {
+				return err
+			}
 		}
 	}
 	if hasVerdict {
-		_, err = tx.ExecContext(ctx, `INSERT INTO session_verdict(session_id,verdict,source,origin_machine,tagged_at) VALUES(?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET verdict=excluded.verdict,source=excluded.source,origin_machine=excluded.origin_machine,tagged_at=excluded.tagged_at`, sid, verdict.Verdict, verdict.Source, verdict.OriginMachine, verdict.TaggedAt)
+		var existing store.Verdict
+		var ok bool
+		var src string
+		var at sql.NullFloat64
+		err = tx.QueryRowContext(ctx, "SELECT source, tagged_at, origin_machine FROM session_verdict WHERE session_id=?", sid).Scan(&src, &at, &existing.OriginMachine)
+		if err == sql.ErrNoRows {
+			err = nil
+		} else if err == nil {
+			existing.Source, existing.TaggedAt, ok = src, at.Float64, true
+		}
+		if err != nil {
+			return err
+		}
+		if !ok || existing.OriginMachine == "" || verdict.TaggedAt >= existing.TaggedAt {
+			_, err = tx.ExecContext(ctx, `INSERT INTO session_verdict(session_id,verdict,source,origin_machine,tagged_at) VALUES(?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET verdict=excluded.verdict,source=excluded.source,origin_machine=excluded.origin_machine,tagged_at=excluded.tagged_at`, sid, verdict.Verdict, verdict.Source, verdict.OriginMachine, verdict.TaggedAt)
+		}
 	} else {
-		_, err = tx.ExecContext(ctx, "DELETE FROM session_verdict WHERE session_id=?", sid)
+		_, err = tx.ExecContext(ctx, "DELETE FROM session_verdict WHERE session_id=? AND (origin_machine IS NULL OR origin_machine='')", sid)
 	}
 	if err != nil {
 		return err
