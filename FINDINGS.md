@@ -66,13 +66,15 @@
 
 ---
 
-### 6. `internal/cli/tagrefresh.go`, `internal/index/containers.go` — General Refactoring
-- **Candidates Evaluated:** Replacing explicit closes with defers in tight loops, merging container resolution helpers.
-- **Reproducible Evidence:** Existing implementations in `tagrefresh.go` and `containers.go` are already minimal and behavior-preserving. No safe net-negative reduction exists without violating lifecycle and freshness contracts.
-- **RULING:** `CLEAN` / `NO CHANGE`
+### 6. Prior Art Audit: Prep-Revision CAS vs. Prewarm Cache Freshness
+- **Analysis:**
+  - True prep-revision CAS (comparing expected old revision in `runTagWrite` and rejecting mutation between prep and write) requires modifying `internal/cli/cmd_tag.go` and `internal/store/topics.go`, which are outside this lane's file fence.
+  - The owned prewarm files (`internal/cli/cmd_prewarm.go`, `internal/cli/tagrefresh.go`) implement prewarm dump cache freshness (`prewarmFresh` verifying `.state` sidecar mtime/size against transcript before serving via `freshPrewarmDump`), but do not perform write-side CAS.
+  - Calling pre-existing cache freshness a new CAS adoption was an overclaim. We retract the overclaim: no new CAS code was added in this lane.
+- **RULING:** `NO CHANGE` on `cmd_prewarm.go` / `tagrefresh.go`.
 
 ---
 
 ## Final Delta Summary
 - **Transplanted:** Commit `fa485c8` (`refactor(cli): remove impossible antigravity hook error`).
-- **Net Source Lines (excluding FINDINGS.md):** `-9` lines (5 insertions, 14 deletions).
+- **Net Source Lines (excluding FINDINGS.md):** `-9` lines (5 insertions, 14 deletions in `internal/cli/setup.go` and `setup_test.go`).
