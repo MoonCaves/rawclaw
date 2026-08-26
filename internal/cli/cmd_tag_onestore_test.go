@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/store/storetest"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
@@ -158,13 +160,43 @@ func TestGuardedSessionLookupPreservesMixedSourceAmbiguity(t *testing.T) {
 		t.Fatalf("write Codex catalog entry: %v", err)
 	}
 
+	claudeDB, claudeDBP := storetest.NewDB(t)
+	storetest.InsertSession(t, claudeDB, storetest.Session{
+		ID:         claudeSID,
+		Project:    "mixed-source-claude",
+		SourceTool: "claude",
+	})
+	codexDB, codexDBP := storetest.NewDB(t)
+	storetest.InsertSession(t, codexDB, storetest.Session{
+		ID:         foreignSID,
+		Project:    "mixed-source-codex",
+		SourceTool: "codex",
+	})
+
 	called := false
 	more := func() []view.Scope {
 		called = true
-		return nil
+		return []view.Scope{
+			{Project: "mixed-source-claude", DBP: claudeDBP, Source: "claude"},
+			{Project: "mixed-source-codex", DBP: codexDBP, Source: "codex"},
+		}
 	}
-	if _, _, err := agentproto.LocateSessionGuarded(prefix, nil, more); err == nil {
-		t.Fatal("mixed-source prefix resolved by silently discarding the foreign hit")
+	_, _, err := agentproto.LocateSessionGuarded(prefix, nil, more)
+	var ambiguous *agentproto.ErrAmbiguousSession
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("LocateSessionGuarded error = %v, want ErrAmbiguousSession", err)
+	}
+	if len(ambiguous.Candidates) != 2 {
+		t.Fatalf("ambiguous candidates = %d, want 2: %v", len(ambiguous.Candidates), ambiguous.Candidates)
+	}
+	gotIDs := map[string]bool{}
+	for _, candidate := range ambiguous.Candidates {
+		gotIDs[candidate.SessionID] = true
+	}
+	for _, wantID := range []string{claudeSID, foreignSID} {
+		if !gotIDs[wantID] {
+			t.Errorf("ambiguous candidates = %v, missing %q", gotIDs, wantID)
+		}
 	}
 	if !called {
 		t.Fatal("mixed-source prefix bypassed the source-aware fallback")
