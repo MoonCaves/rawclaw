@@ -61,16 +61,7 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
-	claimed=0
-	if (set -C; : > "$entry") 2>/dev/null; then
-		claimed=1
-	elif [ -e "$entry" ]; then
-		exit 0
-	else
-		# If the catalog cannot be reached, do not silently suppress this ingest.
-		claimed=1
-	fi
-	if [ "$claimed" -eq 1 ]; then
+	if (set -C; : > "$entry") 2>/dev/null || [ ! -e "$entry" ]; then
 		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
 		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
@@ -88,6 +79,8 @@ if [ -n "$session_id" ]; then
 			printf '}\n'
 		} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || true
 		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	else
+		exit 0
 	fi
 fi
 
@@ -155,16 +148,7 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
-	claimed=0
-	if (set -C; : > "$entry") 2>/dev/null; then
-		claimed=1
-	elif [ -e "$entry" ]; then
-		exit 0
-	else
-		# If the catalog cannot be reached, do not silently suppress this ingest.
-		claimed=1
-	fi
-	if [ "$claimed" -eq 1 ]; then
+	if (set -C; : > "$entry") 2>/dev/null || [ ! -e "$entry" ]; then
 		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
 		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
@@ -182,6 +166,8 @@ if [ -n "$session_id" ]; then
 			printf '}\n'
 		} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || true
 		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	else
+		exit 0
 	fi
 fi
 
