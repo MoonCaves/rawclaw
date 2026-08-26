@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -281,7 +282,7 @@ func resolveSegmentRange(
 	end, endOK := uuidToDispIdx[endUUID]
 	if !endOK {
 		if id, hasID := uuidToMsgID[endUUID]; hasID {
-			for i := len(displayable) - 1; i >= 0; i-- {
+			for i := range slices.Backward(displayable) {
 				if displayable[i].ID <= id {
 					end = i
 					endOK = true
