@@ -1839,6 +1839,13 @@ func oneStoreCands(scope []view.Scope, session8 string) []sessionCand {
 	return cands
 }
 
+// LocateConsolidatedSession resolves a session using only the consolidated
+// store, without falling back to per-project indexes.
+func LocateConsolidatedSession(session8 string) (dbp, fullSID string, err error) {
+	dbp, fullSID, _, err = decideSession(oneStoreCands(nil, session8), session8)
+	return dbp, fullSID, err
+}
+
 // scopeProjects lists the project labels a scope narrows to — the one store's
 // equivalent of "which project databases would the sweep have opened". A scope
 // carrying no label cannot be expressed as a label filter, so one such scope

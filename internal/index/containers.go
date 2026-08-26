@@ -39,6 +39,14 @@ func RefreshDBPath(sourceID, sessionID, sourcePath string) string {
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".db")
 }
 
+// PrewarmDumpPath returns the session-specific closeout dump cache path.
+func PrewarmDumpPath(sessionID string) string {
+	sum := sha1.Sum([]byte(sessionID))
+	dir := filepath.Join(store.CacheDir(), "prewarm")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, hex.EncodeToString(sum[:])+".dump")
+}
+
 func pruneStaleRefreshDBs() {
 	dir := filepath.Join(store.CacheDir(), "refresh")
 	entries, err := os.ReadDir(dir)
