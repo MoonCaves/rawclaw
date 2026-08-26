@@ -122,19 +122,29 @@ func readAuthoritativeTagTopics(authoritativeDB, sessionID string) ([]store.Topi
 		return authSegs, nil
 	}
 	derived := readConsolidatedTopics(sessionID)
+	return overlayAuthoritativeTopics(derived, authSegs), nil
+}
+
+func overlayAuthoritativeTopics(derived, authSegs []store.TopicSegment) []store.TopicSegment {
+	derived = append([]store.TopicSegment(nil), derived...)
 	positions := make(map[string]int, len(derived))
 	for i, seg := range derived {
-		positions[seg.StartUUID] = i
+		positions[topicSegmentKey(seg)] = i
 	}
 	for _, seg := range authSegs {
-		if i, ok := positions[seg.StartUUID]; ok {
+		key := topicSegmentKey(seg)
+		if i, ok := positions[key]; ok {
 			derived[i] = seg
 			continue
 		}
-		positions[seg.StartUUID] = len(derived)
+		positions[key] = len(derived)
 		derived = append(derived, seg)
 	}
-	return derived, nil
+	return derived
+}
+
+func topicSegmentKey(seg store.TopicSegment) string {
+	return seg.SessionID + "\x00" + seg.StartUUID
 }
 
 type tagSourceMatch struct {
