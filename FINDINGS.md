@@ -73,7 +73,10 @@ were not attributed to this composite.
 
 **Claim:** Ozzy's receipt `/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T220519Z-3f29764e-ozzy-heartbeat-no-fold-race-li.md:L8`
    says sidecar commit `96aa522` is “CLEAN under mutations/full index race/canary.”
-   Receipt SHA-256: `77f8f8e44806935f5b338433de1fe2989615fde0094b1dddfe91a4944f11d2bf`.
+   Receipt SHA-256: `9a9dbc604148483c08c164f77ebf9d84431646785e01ece125335c5965287bc7`.
+   The previously reported `77f8f8e44806935f5b338433de1fe2989615fde0094b1dddfe91a4944f11d2bf`
+   belongs to `/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T222826Z-19014c27-fresh-luna-no-fold-race-comple.md`,
+   not this Ozzy receipt.
 
 **Verdict: UNCERTAIN.** The immutable object is
 `96aa522611fdcb78e281db31634144e40222de91`, parent
