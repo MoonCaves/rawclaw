@@ -1,15 +1,18 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -130,6 +133,130 @@ func TestPrimeScripts_StopLaunchDetachedPrewarm(t *testing.T) {
 	}
 }
 
+func TestPrimeScripts_SessionStartHostilePathMatrix(t *testing.T) {
+	shells := []string{"sh"}
+	if _, err := exec.LookPath("dash"); err == nil {
+		shells = append(shells, "dash")
+	}
+	templates := []struct {
+		name string
+		tmpl string
+		json bool
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript, json: false},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
+	}
+	kinds := []string{"new", "regular", "fifo", "directory", "symlink", "dangling-symlink", "socket", "missing-parent"}
+
+	for _, shellName := range shells {
+		shell, err := exec.LookPath(shellName)
+		if err != nil {
+			continue
+		}
+		for _, tc := range templates {
+			if tc.json {
+				if _, err := exec.LookPath("python3"); err != nil {
+					continue
+				}
+			}
+			for _, kind := range kinds {
+				t.Run(tc.name+"/"+shellName+"/"+kind, func(t *testing.T) {
+					stubDir := t.TempDir()
+					logPath := filepath.Join(stubDir, "calls.log")
+					stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
+					if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					catalogDir, err := os.MkdirTemp("/tmp", "rc-cat")
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.RemoveAll(catalogDir) })
+					if kind == "missing-parent" {
+						_ = os.RemoveAll(catalogDir)
+						if err := os.WriteFile(catalogDir, []byte("blocking-file"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+					}
+					scriptPath := filepath.Join(t.TempDir(), "prime.sh")
+					if err := os.WriteFile(scriptPath, []byte(renderHookScript(tc.tmpl, "''")), 0o755); err != nil {
+						t.Fatal(err)
+					}
+
+					sessionID := "hostile-claim-test"
+					entry := filepath.Join(catalogDir, sessionID)
+					var listener net.Listener
+					switch kind {
+					case "regular":
+						if err := os.WriteFile(entry, []byte("existing"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+					case "fifo":
+						if err := syscall.Mkfifo(entry, 0o644); err != nil {
+							t.Fatal(err)
+						}
+					case "directory":
+						if err := os.Mkdir(entry, 0o755); err != nil {
+							t.Fatal(err)
+						}
+					case "symlink":
+						target := filepath.Join(catalogDir, "target")
+						if err := os.WriteFile(target, []byte("target"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(target, entry); err != nil {
+							t.Fatal(err)
+						}
+					case "dangling-symlink":
+						target := filepath.Join(catalogDir, "nonexistent-target")
+						if err := os.Symlink(target, entry); err != nil {
+							t.Fatal(err)
+						}
+					case "socket":
+						var err error
+						listener, err = net.Listen("unix", entry)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer listener.Close()
+					}
+
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					cmd := exec.CommandContext(ctx, shell, scriptPath)
+					cmd.Env = append(os.Environ(),
+						"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+						"RAWCLAW_TEST_LOG="+logPath,
+						"RAWCLAW_CATALOG_DIR="+catalogDir,
+					)
+					cmd.Stdin = strings.NewReader(`{"session_id":"` + sessionID + `"}`)
+					out, err := cmd.Output()
+					if ctx.Err() == context.DeadlineExceeded {
+						t.Fatalf("hook hung on %s path under %s", kind, shellName)
+					}
+					if err != nil {
+						t.Fatalf("hook failed for %s path under %s: %v; output=%q", kind, shellName, err, out)
+					}
+
+					if kind == "new" {
+						if info, err := os.Stat(entry); err != nil || !info.Mode().IsRegular() {
+							t.Fatalf("new claim entry = %v, want regular file", err)
+						}
+					} else if kind == "regular" {
+						got, err := os.ReadFile(entry)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if string(got) != "existing" {
+							t.Fatalf("existing regular claim overwritten to %q", got)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -159,7 +286,8 @@ func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			const sessionID = "dedup-session-123"
+			const concurrency = 20
+			const sessionID = "dedup-session-20way"
 			env := append(os.Environ(),
 				"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"RAWCLAW_TEST_LOG="+logPath,
@@ -168,9 +296,9 @@ func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
 			)
 			payload := `{"session_id":"` + sessionID + `"}`
 			start := make(chan struct{})
-			errs := make(chan error, 2)
+			errs := make(chan error, concurrency)
 			var wg sync.WaitGroup
-			for range 2 {
+			for range concurrency {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
