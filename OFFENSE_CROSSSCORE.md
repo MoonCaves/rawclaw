@@ -11,13 +11,18 @@ report-only audit. No product or test source was changed.
 The current desks do not provide one independent code contribution per
 advertised head. The accounting must collapse:
 
-1. `norm/integration-wave1`, `norm/prewarm-ponytail`, and
-   `ozzy/harvest-wave1-20260826` for the same setup patch (stable patch ID
-   `e6322da4...`). The integration and harvest tips are documentation or
-   integration wrappers around already-attributed movement, not independent
-   implementation wins.
+1. `norm/integration-wave1`, `norm/prewarm-ponytail`, and the `847426c`
+   ancestor of `ozzy/harvest-wave1-20260826` for the same path-scoped setup
+   patch (stable patch ID `e6322da4...`). Their whole-commit patch IDs differ
+   because the worker and harvest commits also carry report or test files;
+   this is shared product/test movement, not three implementation wins.
 2. Ozzy's four catalog/hidden/prune/repro refs, all pointing at
    `cdc063d058cc...`, which is already an ancestor of the base.
+
+The current Ozzy harvest tip `539de03` is also whole-commit patch-identical
+to Norm `cfccbc6` (`7addd4ca...`). This is one nine-line test deletion and must
+be counted once as adoption/cherry-pick evidence, not as two independent
+implementations.
 
 Three worker worktrees are dirty at audit time. Their uncommitted payloads are
 not attributable to their advertised commits: Norm catalog (`+1/-7`), Norm
@@ -36,6 +41,8 @@ All comparisons used immutable object IDs, not branch names or report prose:
 ```sh
 git rev-parse <ref>
 git show <sha> --pretty=format: | git patch-id --stable
+git diff <sha>^ <sha> -- internal/cli/setup.go internal/cli/setup_test.go \
+  | git patch-id --stable
 git diff --numstat <sha>^ <sha>
 git merge-base --is-ancestor <sha> 5b9756b2200ff6bd670f07407407d84d9f42d84b
 git range-diff 5b9756b..A 5b9756b..B
@@ -77,7 +84,7 @@ range-diff are required for multi-commit claims.
 | Ozzy catalog/hidden/prune/repro | `cdc063d058cc775ec2ee45a4231d8458ad3e9d43` | `502a0b9b39d3b6121fdec252dc479256e6a6e271` | four refs, all clean except prune |
 | Ozzy `flash-refresh-cleanup` | `89c8a284d20e4f6adba72accb3c0b34831a3b422` | `7e3d7d4981316e4cfb2b11f6a8eacbb71b314bdc` | clean |
 | Ozzy `flash-spy-20260826` | `1f19f66f2a61c76c453cb1a2195e0df4b494823b` | `f1f21359fe7fb88dbc79a95dc2c686e8f04b1af9` | clean |
-| Ozzy `harvest-wave1-20260826` | `847426c25d4051252691aca6e2da90488fe419f5` | `e6322da4ca5faaa5b3b596fdbb33409bf376a4e5` | clean, one commit ahead of origin |
+| Ozzy `harvest-wave1-20260826` | `539de03d46e4c3f251f123a261045d5ceea7eb0c` | `7addd4ca88dd31164e993883d4b57a4852e8e5b8` | clean, two commits ahead of origin; setup ancestor `847426c` is the scoped comparison |
 
 The `conor/bench-demolition` worktree is checked out on the
 `conor/raid-lenny-modularity` branch, so its directory name is not a reliable
@@ -100,11 +107,26 @@ checked-out `conor/bench-demolition` ref. Any status claim made from that path
 without reading `git status --branch` would be stale. This is a receipt-boundary
 deduction only; it does not accuse either commit of a product defect.
 
-### 2. Norm integration, Norm prewarm, and Ozzy harvest share one tip patch
+### 2. Norm integration, Norm prewarm, and Ozzy harvest ancestor share one path-scoped setup patch
+
+Whole-commit stable patch IDs are not equal:
+
+```text
+for c in f026d6a 7d5a6a5 847426c 539de03; do
+  git show "$c" --pretty=format: | git patch-id --stable
+done
+e6322da4ca5faaa5b3b596fdbb33409bf376a4e5 0000000000000000000000000000000000000000
+fd7364068e7849f1c5b81da27a369f8a73a509ba 0000000000000000000000000000000000000000
+e6322da4ca5faaa5b3b596fdbb33409bf376a4e5 0000000000000000000000000000000000000000
+7addd4ca88dd31164e993883d4b57a4852e8e5b8 0000000000000000000000000000000000000000
+```
+
+The correctly scoped product/test comparison is:
 
 ```text
 for c in f026d6a 7d5a6a5 847426c; do
-  git show "$c" --pretty=format: | git patch-id --stable
+  git diff "$c^" "$c" -- internal/cli/setup.go internal/cli/setup_test.go \
+    | git patch-id --stable
 done
 e6322da4ca5faaa5b3b596fdbb33409bf376a4e5 0000000000000000000000000000000000000000
 e6322da4ca5faaa5b3b596fdbb33409bf376a4e5 0000000000000000000000000000000000000000
@@ -119,9 +141,29 @@ git diff --numstat f026d6a^ f026d6a -- internal/cli/setup.go internal/cli/setup_
 3  9  internal/cli/setup_test.go
 ```
 
-The stable patch proves one normalized change, not three. The exact ancestry
-of the larger integration range must still be used for other commits; the
-shared tip alone cannot justify a second implementation credit.
+The path-scoped patch proves one normalized setup change, not three. The
+current Ozzy harvest tip is `539de03`, two commits ahead of origin; only its
+`847426c` ancestor is included in this duplicate comparison. The exact
+ancestry of the larger integration range must still be used for other commits;
+the scoped patch alone cannot justify a second implementation credit.
+
+The current harvest tip has a separate whole-commit duplicate with Norm's
+`cfccbc6` test-slimming commit:
+
+```text
+git show cfccbc6 --pretty=format: | git patch-id --stable
+git show 539de03 --pretty=format: | git patch-id --stable
+7addd4ca88dd31164e993883d4b57a4852e8e5b8 0000000000000000000000000000000000000000
+7addd4ca88dd31164e993883d4b57a4852e8e5 0000000000000000000000000000000000000000
+git diff --numstat cfccbc6^ cfccbc6
+0  9  internal/index/consolidated_test.go
+git diff --numstat 539de03^ 539de03
+0  9  internal/index/consolidated_test.go
+```
+
+The subject and author timestamp match; Ozzy's commit timestamp is later.
+That supports adoption/cherry-pick attribution, not a second nine-line test
+movement.
 
 ### 3. Four Ozzy names point at one base ancestor
 
@@ -217,7 +259,8 @@ uncommitted payloads from committed attribution.
 | Norm catalog dirty payload | 1 | 7 | -6 | uncommitted; not attributable |
 | Norm ingest dirty payload | 50 | 238 | -188 | uncommitted; not attributable |
 | Ozzy prune dirty payload | 29 | 0 | +29 | uncommitted and `diff --check` fails |
-| **committed attributable setup movement** | **5** | **14** | **-9** | **deduplicated total** |
+| Norm `cfccbc6` / Ozzy `539de03` shared test deletion | 0 | 9 | -9 | one nine-line patch; adoption/cherry-pick counted once, not twice |
+| **committed attributable movement** | **5** | **23** | **-18** | **deduplicated total: setup patch plus one shared nine-line test deletion** |
 
 For completeness, the three dirty payloads together are `+80/-245` (net
 `-165`) but remain outside the committed total. Adding them to the committed
@@ -228,10 +271,11 @@ score would turn unfinished work into a false receipt.
 | subject | classification | reason |
 |---|---|---|
 | Conor bench worktree label | CONFIRMED DEDUCTION | `git status --branch` shows `raid-lenny-modularity`, not the directory label |
-| Norm integration/prewarm/Ozzy harvest setup patch | CONFIRMED DEDUCTION | identical stable patch ID; one movement, three attributions |
+| Norm integration/prewarm/Ozzy harvest setup movement | CONFIRMED DEDUCTION | identical path-scoped stable patch ID; one movement, three attributions |
 | Ozzy catalog/hidden/prune/repro refs | CONFIRMED DEDUCTION | common tip already ancestor of base |
 | Norm catalog and ingest workers | CONFIRMED DEDUCTION | uncommitted payloads absent from advertised heads |
 | Ozzy prune worker | CONFIRMED DEDUCTION | uncommitted payload plus `diff --check` failure |
 | Ozzy refresh cleanup mechanism | CONFIRMED, single finding | source-backed TOCTOU at `containers.go:78-114`; not recounted per report |
+| Ozzy harvest `539de03` vs Norm `cfccbc6` | CONFIRMED DEDUCTION | whole-commit patch-identical nine-line test deletion; count once |
 | report-only heads | NARROWED | useful evidence, zero product/test lines |
 | equal identity without semantic claim | NO DEDUCTION | no bug inferred from bookkeeping alone |
