@@ -239,6 +239,18 @@ set -eu
 input=$(cat)
 inv_num=$(printf '%s' "$input" | sed -n 's/.*"invocationNum"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
 
+# Stop invokes this same script with terminationReason and without invocationNum.
+# Pre-warm the session closeout data in the background and keep Stop synchronous
+# work empty.
+termination_reason=$(printf '%s' "$input" | sed -n 's/.*"terminationReason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+if [ -n "$termination_reason" ] && [ -z "$inv_num" ]; then
+	session_id=$(printf '%s' "$input" | sed -n 's/.*"conversationId"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
+	if [ -n "$session_id" ]; then
+		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
+	exit 0
+fi
+
 # Gated to invocationNum 0 (first invocation in conversation). If unparseable, fall back to emitting.
 if [ -n "$inv_num" ] && [ "$inv_num" -ne 0 ]; then
 	exit 0
@@ -882,13 +894,19 @@ func removeRawclawAntigravityHooks(data map[string]any) {
 	}
 }
 
-// addRawclawAntigravityHooks registers rawclaw's named PreInvocation group in
-// Antigravity's hooks.json map. Existing rawclaw entries are stripped first
-// so the operation is idempotent.
+// addRawclawAntigravityHooks registers rawclaw's named PreInvocation and Stop
+// hooks in Antigravity's hooks.json map. Existing rawclaw entries are stripped
+// first so the operation is idempotent.
 func addRawclawAntigravityHooks(data map[string]any, scriptPath string) error {
 	removeRawclawAntigravityHooks(data)
 	data["rawclaw"] = map[string]any{
 		"PreInvocation": []any{
+			map[string]any{
+				"type":    "command",
+				"command": scriptPath,
+			},
+		},
+		"Stop": []any{
 			map[string]any{
 				"type":    "command",
 				"command": scriptPath,
@@ -911,7 +929,6 @@ func installRawclawAntigravityHook(configDir string) error {
 	if err := writeHookScript(scriptPath, scriptContent); err != nil {
 		return fmt.Errorf("install antigravity hook script: %w", err)
 	}
-
 	configFile := antigravityHooksPath(configDir)
 	data, err := readJSONFile(configFile)
 	if err != nil {
