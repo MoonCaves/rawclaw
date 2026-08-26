@@ -291,14 +291,8 @@ func resolveSegmentRange(
 		}
 	}
 
-	if !stOK || !endOK || st > end || st >= len(displayable) || end < 0 {
+	if !stOK || !endOK || st > end {
 		return 0, 0, false
-	}
-	if st < 0 {
-		st = 0
-	}
-	if end >= len(displayable) {
-		end = len(displayable) - 1
 	}
 	return st, end, true
 }
