@@ -89,6 +89,7 @@ If the user seems to want to pick up a past session, offering to resume/fork it 
 Session closeout: whenever the user signals that the current session is ending or should be
 closed out, immediately delegate tagging to a background subagent so the main agent stays
 available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + `, chooses a few topic segments,
+and tag-prep is already fast when pre-warming ran; no extra instruction is needed.
 then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
 what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
 systems own current truth. RawClaw only points to where something was discussed.
@@ -175,6 +176,7 @@ If the user seems to want to pick up a past session, offering to resume/fork it 
 Session closeout: whenever the user signals that the current session is ending or should be
 closed out, immediately delegate tagging to a background subagent so the main agent stays
 available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + `, chooses a few topic segments,
+and tag-prep is already fast when pre-warming ran; no extra instruction is needed.
 then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
 what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
 systems own current truth. RawClaw only points to where something was discussed.
@@ -196,6 +198,7 @@ If the user seems to want to pick up a past session, offering to resume/fork it 
 Session closeout: whenever the user signals that the current session is ending or should be
 closed out, immediately delegate tagging to a background subagent so the main agent stays
 available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + `, chooses a few topic segments,
+and tag-prep is already fast when pre-warming ran; no extra instruction is needed.
 then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
 what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
 systems own current truth. RawClaw only points to where something was discussed.`
