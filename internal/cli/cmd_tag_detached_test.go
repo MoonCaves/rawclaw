@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +13,51 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/view"
 	"github.com/gofrs/flock"
 )
+
+// TestRunTagPublishChildHonorsContextTimeout is an immutable red proof for
+// detached publication cancellation. Holding the real consolidated fence
+// makes the child wait at the actual publication seam; a bounded context must
+// return a terminal deadline error instead of waiting on Background forever.
+func TestRunTagPublishChildHonorsContextTimeout(t *testing.T) {
+	root := newCfgRoot(t)
+	dbp := filepath.Join(root, "source.db")
+	lock := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
+	locked, err := lock.TryLock()
+	if err != nil {
+		t.Fatalf("lock consolidated store: %v", err)
+	}
+	if !locked {
+		t.Fatal("consolidated store lock was already held")
+	}
+	defer lock.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	var out strings.Builder
+	done := make(chan error, 1)
+	go func() { done <- runTagPublishChild(ctx, &out, dbp) }()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("runTagPublishChild error = %v, want context deadline exceeded", err)
+		}
+		if !strings.Contains(out.String(), "context deadline exceeded") {
+			t.Fatalf("terminal publication receipt = %q, want deadline evidence", out.String())
+		}
+	case <-time.After(500 * time.Millisecond):
+		// Release the real fence so an implementation that ignored ctx cannot
+		// outlive this test process; its non-contextual path then reports the
+		// missing source and is the expected red result.
+		_ = lock.Unlock()
+		select {
+		case err := <-done:
+			t.Fatalf("runTagPublishChild ignored context deadline: %v; receipt=%q", err, out.String())
+		case <-time.After(2 * time.Second):
+			t.Fatal("runTagPublishChild remained blocked after releasing consolidated lock")
+		}
+	}
+}
 
 // TestRunTagWriteCommandSeamIsNotIsolated records why command-level latency
 // cannot prove detached publication: guarded lookup refreshes the project
