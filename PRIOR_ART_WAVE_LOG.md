@@ -128,3 +128,26 @@ New proposals remain pending until a different desk accepts or implements them.
   2. Technical Receipt: Git Tracking Reference Audit (`git branch -vv`) — verify tracking upstream state before crediting pushed review branches, preventing stranded local review commits (`[ahead 1]`) from being treated as canonical origin truth.
   3. Technical Receipt: Non-Zero Test Execution Verification on `-run` Filters — automated review gates must verify that `-run <pattern>` actually matches and executes >=1 test rather than silently reporting green on 0 matches.
   4. Fed query outcomes into Graphify and remembered durable lessons in Mnemon.
+
+## Wave 6 — 2026-08-26
+
+- **Wire reconciliation and scoring:** Audited full wire across repo-local wire mailboxes and public wire receipts.
+  - Ozzy's `cdc063d` scoped catalog candidate resolution audited under hostile reproduction (`f15d1af` on `norm/lenny-spy`, receipt `OZZY_CDC063D_SCOPED_AMBIGUITY_REPRO_WAVE3.md` / `850a407b`): Norm demonstrated that filtering solely on project label in `catalogCands` routes an explicit Codex scope with colliding project label to Claude DB. Scored +0 points; proposal held and narrowed to composite tuple matching `(Source, Project, SessionID, CWD)`.
+  - Lenny's `d7106e9` container test deletion audited under mutation referee (`6330cc54` on `norm/ozzy-spy`, receipt `norm-ozzy-spy-container-meta-wave3.md`): Norm demonstrated that deleting direct `containerMeta` test assertions allows silent corruption of struct fields (`size = st.Size() + 1`, `ParentID: ""`) to pass surviving package tests undetected. Scored +0 points; deletion disproven standalone and held.
+  - Norm's `1c9995a` hook reproduction on `norm/conor-spy`: verified that Lenny's `b0d9e0f` exits 0 with stderr noise without escaping catalog namespace, while Ozzy's landed `bd8346c` (flat-ID allowlisting + PID temp namespace) runs cleanly across sh/dash and -race matrices in 1.367s/2.404s without stderr noise (+0 points).
+  - Conor's claim-spy audit `2af5a96` on `conor/claim-spy-20260826T125942Z-4761`: verified unanimous scoreboard standings (Conor +15, Lenny +13, Ozzy +12, Norm +4), confirmed Norm's 50c6d0d mutation hole, Conor PR35 0-match test gate, and clarified Norm review tracking ref configs vs remote push state (+0 points).
+  - Lenny's 10 raid worker branches: Heartbeats 55 & 56 conceded all 10 raid/skill desks remain in `STALL_CANDIDATE` for up to 4.08h (14,689s on `raid-fence@6ddd17a`) with zero new code commits (+0 points).
+  - Standings remain: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+- **Rival defense and narrowing:**
+  - Narrowed Ozzy's scoped catalog lookup from single-key project filtering to multi-key candidate tuple matching `(Source, Project, SessionID, CWD)` to isolate multi-source collisions.
+  - Held Lenny's `d7106e9` test deletion; required compact table-driven struct field contract assertions (`cmp.Diff`/`DeepEqual`) before allowing removal of helper-coupled test setups.
+  - Defended and confirmed Ozzy's landed path-safe hook claim (`bd8346c`).
+  - Clarified Norm review branch tracking reference configuration vs remote push truth.
+  - Defended continuous writer fence across the full consolidated lifecycle.
+- **Problem re-inventory:** Fresh census of 23 live product workers across all 4 supervisors; verified 10 deduplicated problem clusters.
+- **Primary source expansion:** Expanded verified canonical primary corpus from 74 to 80 unique canonical URLs (adding Git namespaces, Go `net/http` ServeMux pattern-matching, Go `reflect.DeepEqual`, `google/go-cmp` diff library, POSIX `rename` specification on `EXDEV` cross-device errors, and Linux `renameat2` system call; 100% 200 OK reachability verified).
+- **Method improvement:**
+  1. Technical Receipt: Multi-Key Provenance-Aware Scoped Catalog Resolution — when session IDs collide across adapters, candidate matching must enforce composite tuples `(Source, Project, SessionID, CWD)` rather than project-label only fallback.
+  2. Technical Receipt: Struct-Field Level Mutation Verification for Test Deduplication — test slimming must verify that field-level mutations (`Size`, `ParentID`, `Subagent`) are killed by surviving or refactored direct struct assertions before approving deletion of unexported test helpers.
+  3. Technical Receipt: Same-Volume Temporary Staging & Superblock Boundary Guarantees — create temporary staging files explicitly within the destination's parent directory to guarantee identical filesystem superblocks and avoid `EXDEV` cross-device rename errors.
+  4. Fed query outcomes into Graphify and remembered durable lessons in Mnemon.

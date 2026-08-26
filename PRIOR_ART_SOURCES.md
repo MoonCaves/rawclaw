@@ -350,10 +350,41 @@ zero-match `-run` filtering (e.g. Conor's PR35 `TestEnsureFreshContainer_PruneSt
   demonstrates avoiding synthetic lookup-only biases and measuring real write/delete cycles under realistic
   transaction loads.
 
-Ruling: **COPY** `benchstat` baseline comparisons and mixed live/tombstone datasets for prune benchmarking;
-**REJECT** single-run synthetic missing-ID-only benchmarks without comparative baselines.
+## 23. Multi-key composite namespace matching and ref resolution
 
-## Top twenty-two mechanisms to carry forward
+* [Git Namespaces Specification](https://git-scm.com/docs/gitnamespaces):
+  defines namespace isolation where identical ref names in different namespaces (e.g. `refs/namespaces/a/refs/heads/main`
+  vs `refs/namespaces/b/refs/heads/main`) are completely partitioned, preventing cross-tenant ref pollution.
+* [Go `net/http` ServeMux Routing & Pattern Matching](https://pkg.go.dev/net/http#ServeMux):
+  specifies exact host/method/path matching rules where more specific composite patterns take precedence over generic
+  wildcard fallbacks.
+
+Ruling: **COPY** composite candidate tuple matching `(Source, Project, SessionID, CWD)` for catalog lookups; **REJECT**
+single-field project-label fallback that causes cross-source transcript misrouting.
+
+## 24. Struct field equivalence and exhaustive mutation testing
+
+* [Go `reflect.DeepEqual` Specification](https://pkg.go.dev/reflect#DeepEqual):
+  defines recursive struct field comparison semantics, ensuring every exported and unexported struct member matches.
+* [`google/go-cmp` Diff & Struct Equality Library](https://github.com/google/go-cmp):
+  provides exhaustive struct comparison with detailed field diffs (`cmp.Diff`), ensuring mutations to unexported fields
+  are pinned without sprawling custom assertion helpers.
+
+Ruling: **COPY** compact table-driven struct field equivalence assertions (`wantMeta == gotMeta` / `cmp.Diff`);
+**REJECT** deleting unexported helper tests without verifying 100% struct-field mutation kill rates.
+
+## 25. Same-volume directory staging and superblock boundary guarantees
+
+* [POSIX `rename` Specification on `EXDEV` Cross-Device Operations](https://pubs.opengroup.org/onlinepubs/9699919799/functions/rename.html):
+  specifies that `rename()` fails with `EXDEV` when the source and target reside on different mounted filesystems.
+* [Linux `renameat2` System Call](https://man7.org/linux/man-pages/man2/renameat2.2.html):
+  specifies atomic filesystem-level swap (`RENAME_EXCHANGE`) and non-replacing rename (`RENAME_NOREPLACE`) constraints
+  within identical directory trees.
+
+Ruling: **COPY** same-volume parent directory temporary staging (`filepath.Dir(target)`) to guarantee identical filesystem
+superblocks and avoid `EXDEV` failures during atomic rebuild swap-renames.
+
+## Top twenty-five mechanisms to carry forward
 
 1. `O_CREAT|O_EXCL` plus no-follow/type validation for regular marker creation.
 2. Same-directory temp + atomic rename, with cleanup tied to ownership.
@@ -377,11 +408,14 @@ Ruling: **COPY** `benchstat` baseline comparisons and mixed live/tombstone datas
 20. Disposable mutation testing to verify test assertion sensitivity and reject false-green test deletions.
 21. Non-zero test execution verification for `-run` filter gates in CI and review scripts.
 22. Comparative `benchstat` statistical analysis with mixed live/tombstone datasets for storage benchmarks.
+23. Composite candidate key matching `(Source, Project, SessionID, CWD)` for collision-free scoped catalog resolution.
+24. Compact table-driven struct field contract assertions (`cmp.Diff`/`DeepEqual`) to pin struct invariants under mutation.
+25. Same-volume parent directory staging (`filepath.Dir(target)`) to eliminate `EXDEV` cross-device rename failures.
 
 ## Source and ruling count
 
-58 primary source citations with **74 unique canonical primary URLs** across the complete corpus
-are verified. Of the mechanisms: 25 are `COPY`, 24 are `ADAPT`, 13 are `STUDY`, and 11 are `REJECT`
+64 primary source citations with **80 unique canonical primary URLs** across the complete corpus
+are verified. Of the mechanisms: 28 are `COPY`, 25 are `ADAPT`, 14 are `STUDY`, and 12 are `REJECT`
 guardrails (a source can receive more than one ruling where its mechanism and dependency have
 different implications). All recommended defaults remain POSIX/Go stdlib/SQLite/Git compatible;
 no external runtime, daemon, LLM, or cgo dependency is proposed.
