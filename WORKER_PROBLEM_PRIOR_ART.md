@@ -1,6 +1,6 @@
 # RawClaw worker problem and prior-art map
 
-Snapshot taken 2026-08-26 Wave 3 from integration head `a317766` / `5d1422a` / `00d1783` (with tips `37ec96b`, `78b6a4f`, `fb893ed`, `bfe01e7`, `50c6d0d`).
+Snapshot taken 2026-08-26 Wave 4 from integration head `bd8346c` / `61b7957` / `34e9c9e` / `b203354` / `0bbc06a` / `37a2012`.
 This is a report-only census. Product code and rival worktrees were not edited.
 
 ## Scope and evidence rules
@@ -32,9 +32,9 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | branch @ SHA | patch ID | state | concrete problem / mechanism |
 |---|---|---|---|
+| `origin/conor/claim-spy-20260826T120941Z-0bb2` @ `34e9c9e` | `34e9c9e` | active receipt | wire audit 11:44:41Z-12:09:41Z (90 messages verified) |
 | `origin/conor/ozzy-range-shrink` @ `fb893ed` | `cea8cc66c09632db4cd9980063e2e69a3646260c` | adopted / active | segment range bounds shrink (dead clamping elimination, net -6) |
 | `origin/conor/lenny-hook-wait-trap` @ `25b8d37` | `25b8d37` | candidate / proof | test wrapper child reaping (`trap 'wait' 0`) |
-| `origin/conor/claim-spy-20260826T114440Z-554e` @ `c2fc90a` | `c2fc90a` | completed receipt | wire audit 11:19:40Z-11:44:41Z (64 messages verified) |
 | `origin/conor/ambiguity-contract` @ `c8618ff` | `c8618ff` | candidate | mixed-source session ambiguity tests |
 | `origin/conor/fix-hook-fifo-claim` @ `13966cf` | `13966cf` | candidate | non-opening atomic catalog claim |
 
@@ -42,13 +42,14 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | worker | worktree / branch @ SHA | state | concrete problem |
 |---|---|---|---|
+| integration-wave2 | `norm/integration-wave2` @ `bd8346c` | landed tip | landed path-safe hook `bd8346c`, shared bench matrix `61b7957`, bounds shrink `a317766` |
+| lenny-spy | `rawclaw-norm-lenny-spy` / `norm/lenny-spy` @ `b203354` | completed receipt | audit invalid-ID reachability advisory on `37ec96b` (ACCEPT WITH ADVISORY) |
+| ozzy-spy | `rawclaw-norm-ozzy-spy` / `norm/ozzy-spy` @ `0bbc06a` | completed receipt | audit benchmark duplicate successor `61b7957` (SAFE TO ADOPT) |
+| conor-spy | `rawclaw-norm-conor-spy` / `norm/conor-spy` @ `c5e1330` | completed receipt | issue #31/#32 correction draft verification |
 | flash-catalog | `rawclaw-norm-flash-catalog` / `norm/flash-catalog` @ `bfe01e7` | completed receipt | inline redundant containment closure in `catalogCands` (net -6) |
 | flash-fence | `rawclaw-norm-flash-fence` / `norm/flash-fence` @ `6ac7f1a` | completed receipt | adversarial writer-fence/race review (clean test shrink) |
 | flash-hooks | `rawclaw-norm-flash-hooks` / `norm/flash-hooks` @ `2cc11d6` | rejected receipt | hook claim algorithm (rejected: directory descent defect) |
 | flash-ingest | `rawclaw-norm-flash-ingest` / `norm/flash-ingest` @ `50c6d0d` | held receipt | ingest fixture deduplication (rebutted -2: assertion deletion overclaim) |
-| flash-ozzy-spy | `rawclaw-norm-ozzy-spy` / `norm/ozzy-spy` @ `3777424` | completed receipt | audit Conor range resolver cleanup |
-| conor-spy | `rawclaw-norm-conor-spy` / `norm/conor-spy` @ `5d1422a` | completed receipt | audit Ozzy `37ec96b` hook safety (ACCEPTED WITH ADVISORIES) |
-| integration-wave2 | `norm/integration-wave2` @ `a317766` | active branch | adopted Conor `fb893ed` (`a317766`) and Lenny `fc1a075` (`b2ff61c`) |
 
 ### Ozzy Prince supervisor
 
@@ -63,6 +64,7 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 | flash-prune | `rawclaw-ozzy-flash-prune` / `ozzy/flash-prune-benchmark` @ `cdc063d` (dirty=1) | quota/waiting | tombstone prune performance benchmark |
 | flash-repro | `rawclaw-ozzy-flash-repro` / `ozzy/flash-repro-review` @ `cdc063d` | completed receipt | issue-32 abrupt post-merge fault reproduction |
 | harvest-wave1 | `rawclaw-ozzy-harvest` / `ozzy/harvest-wave1-20260826` @ `78b6a4f` / `37ec96b` | pushed tip | path-safe hook `37ec96b` and bounds shrink `78b6a4f` |
+
 
 The live scheduler sessions observed were `lenny-spy-loop`, `lenny-spy-watchdog`, `rawclaw-norm-spy-loop`, `ozzy-spy-heartbeat-loop`, plus heartbeat/watchdog sessions. They are orchestration only and are excluded from the 23-worker product count.
 

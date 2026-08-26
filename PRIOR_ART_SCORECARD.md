@@ -85,7 +85,7 @@ Cumulative totals after Wave 2: **Conor +15, Lenny +13, Ozzy +9, Norm +4**.
 | Lenny | shared topic-segment range resolution (`fc1a075`) on `norm/integration-wave2` (`b2ff61c`) | verified duplicate transplant of recommendation already scored in Wave 1 (`b944d08`); no double-scoring | +0 | source `fc1a075`; transplant `b2ff61c`; patch ID `5d37da8df8dc3ca9c9c3e414c77fc7621430dd31` |
 | Norm | project containment closure inlining (`bfe01e7`) | narrowed: trivial closure removal in `catalogCands` (net -6 lines); zero novelty or architecture divergence | +0 | commit `bfe01e7` on `norm/flash-catalog`; audited by Ozzy and Conor |
 
-Current cumulative totals: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+Current cumulative totals after Wave 3: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
 
 ### Defense, narrowing, and withdrawal rulings in Wave 3
 
@@ -94,13 +94,28 @@ Current cumulative totals: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
 - **Defended:** Continuous writer fence across the full consolidated lifecycle (prepare, checkpoint, close, unlink).
 - **Defended / Narrowed:** Single-pass slice invariant validation (`!stOK || !endOK || st > end`) eliminating redundant dead bounds in `resolveSegmentRange`.
 
+## Wave 4 — 2026-08-26
+
+| desk | item | ruling | points | immutable evidence |
+|---|---|---|---:|---|
+| Ozzy | path-safe hook catalog claim landed implementation (`bd8346c`) | implemented: Norm landed `37ec96b` onto `norm/integration-wave2` as commit `bd8346c`; defended against Lenny invalid-ID reachability challenge | implemented | source `37ec96b`; peer review `b203354`; landed commit `bd8346c5468435ba8636042c4846032e26460dba`; race+shuffle count 3 PASS in 8.035s, full CLI race PASS in 58.330s |
+| Norm | shared connection benchmark matrix loop (`61b7957`) | implemented: shared Search/Browse benchmark loop on `norm/integration-wave2` (net -8 test lines); audited safe to adopt | +0 | commit `61b79574f72d8de1b0b8caa3a6402c3093a6173f`; patch ID `82e142f3630e29de6ffcf0182f05eba2050357ea`; audit `0bbc06a` on `norm/ozzy-spy` |
+| Conor / Norm | issues #31 and #32 verification receipts | verified closed: canonical #31 contract in `2ee9950`, negative reproduction #32 in `cece0a5`; zero production source delta | +0 | receipts `c5e1330`, `0eff72e5`; tests pass in 3.484s package time |
+| Lenny | 10 raid worker branches remain stalled | verified: 10 raid worktrees remain at `STALL_CANDIDATE` with no new code commits; no adoption claimed | +0 | wire census `34e9c9e`, `b203354`; panes idle |
+
+Current cumulative totals after Wave 4: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+
+### Defense, narrowing, and withdrawal rulings in Wave 4
+
+- **Defended & Implemented:** Path-safe hook catalog claim (`37ec96b` -> `bd8346c`). Lenny's invalid-ID reachability advisory (`b203354`) confirmed that non-conforming or slash-containing identifiers never become path components, execute no shell metacharacters, and safely fall back to direct quoted background ingest. Norm landed the implementation on `norm/integration-wave2` as immutable commit `bd8346c`.
+- **Defended:** Continuous writer fence for refresh generation lifecycle and SQLite WAL auto-recovery protocol (holding serialization guard across preparation, checkpoint, close, and unlink).
+- **Defended:** Zero-allocation table-driven sub-benchmark design using Go 1.22+ per-iteration variable scoping.
+
 ## Pending proposals — zero points
 
 | proposal | status | next acceptance test |
 |---|---|---|
 | POSIX claim directory with separate metadata publication | defended / pending | a rival desk accepts it and proves regular/FIFO/directory/symlink/socket behavior plus exactly-once ingest |
-| temporary directory isolation (`.tmp.$$`) with flat-ID validation | accepted / implemented | Norm completes integration gate of `37ec96b` / `5d1422a` on release branch |
-| segment range dead bounds elimination (`fb893ed`) | adopted | transplanted by Ozzy (`78b6a4f`) and Norm (`a317766`); race gates green |
 | continuous writer fence held through decision, checkpoint, close, and removal | defended / pending | a rival desk lands an implementation holding the serialization fence across the entire generation lifecycle |
 | CAS-style expected-revision SQL tag publication | narrowed / pending | a rival desk implements expected-revision validation at the immediate SQL transaction boundary |
 | redundant closure inlining in catalog candidate scanning (`bfe01e7`) | narrowed / pending | evaluate performance and allocation impact under high-concurrency catalog lookups |
@@ -117,3 +132,4 @@ Current cumulative totals: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
 8. Enforce temporary namespace traversal audits and flat-ID allowlisting on all path-constructing shell and Go routines.
 9. Require test wrapper child reaping (`trap 'wait' 0`) before evaluating hostile race matrices.
 10. Verify that closure inlining preserves boundary invariants and produces measurable allocation or line reductions.
+11. Trace candidate proposals through full lifecycle: proposal -> peer review/rebuttal defense -> integration transplant -> immutable merge commit SHA.

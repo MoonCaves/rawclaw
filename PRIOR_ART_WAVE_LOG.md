@@ -88,3 +88,22 @@ New proposals remain pending until a different desk accepts or implements them.
   1. Technical Receipt: Path sanitization via flat identifier allowlisting (`[A-Za-z0-9._-]` + rejecting empty/dot-prefixed IDs) combined with session-independent PID directories (`.tmp.$$`) prevents path traversal attacks (`x/../../outside`) during atomic filesystem claims without requiring complex path canonicalization.
   2. Technical Receipt: Multi-desk patch-ID reconciliation (`git patch-id --stable`) reliably identifies concurrent transplants across competing integration trees, preventing double-scoring of identical code diffs across multiple adopting worktrees.
   3. Reflected durable learnings into Graphify and Mnemon.
+
+## Wave 4 — 2026-08-26
+
+- **Wire reconciliation and scoring:** Audited full wire across repo-local wire mailboxes and public wire receipts.
+  - Ozzy's `37ec96b` path-safe hook catalog claim landed on the integration tree `norm/integration-wave2` as immutable commit `bd8346c5468435ba8636042c4846032e26460dba` (`bd8346c`). Lenny's invalid session-ID reachability challenge (`b203354`) was fully addressed: invalid/slash-containing identifiers never become path components, execute no shell metacharacters, and safely bypass catalog deduplication via quoted background ingest. Observed gates: hostile path/dedup/Stop matrix race+shuffle count 3 passed in 8.035s; full internal/cli race passed in 58.330s. Implemented state confirmed (+0 new points to avoid double-counting Wave 3's +3).
+  - Norm landed `61b7957` (`61b79574f72d8de1b0b8caa3a6402c3093a6173f`) on `norm/integration-wave2`, sharing the Search/Browse connection benchmark matrix loop (patch ID `82e142f3630e29de6ffcf0182f05eba2050357ea`, net -8 test lines). Ozzy's spy desk audited the commit as safe in `0bbc06a` (`BENCH_DUPL_SUCCESSOR_AUDIT.md`). Scored +0 to prevent duplicate scoring of Conor's Wave 1 benchmark matrix.
+  - Issues #31 and #32 verification receipts audited across all desks (`c5e1330`, `0eff72e5`): canonical behavior contract for #31 remains `2ee9950` with zero production source delta, and #32 negative reproduction `cece0a5` passed in 3.484s package time (observed retry 143.49ms).
+  - Lenny's 10 raid worker branches (`lenny-raid-phase`, `lenny-raid-fence`, `lenny-raid-hooks`, `lenny-raid-locate`, `lenny-raid-prewarm`, `lenny-raid-containers`, `lenny-skill-architecture`, `lenny-skill-interfaces`, `lenny-skill-modernize`, `lenny-skill-style`) remain at `STALL_CANDIDATE` with no active commits or new adoptions.
+  - Standings remain: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+- **Rival defense and narrowing:**
+  - Defended and implemented path-safe hook catalog claims (`bd8346c`) with PID temp namespace and flat-ID allowlisting.
+  - Defended SQLite WAL auto-recovery protocol on connection open after abrupt exit (Issues #31 / #32), proving no additional production complexity is required.
+  - Defended zero-allocation table-driven sub-benchmark matrix structures using Go 1.22+ per-iteration variable scoping.
+- **Problem re-inventory:** Fresh census of 23 live product workers across all 4 supervisors; verified 10 deduplicated problem clusters.
+- **Primary source expansion:** Expanded verified canonical primary corpus from 60 to 68 unique canonical URLs (adding SQLite database corruption guide, Go `database/sql/driver`, Go Wiki Table Driven Tests, Dave Cheney benchmarking guide, Go Spec for clause, OpenSSH identifier matching, Git argument quoting, and POSIX shell pattern matching; 100% 200 OK reachability verified).
+- **Method improvement:**
+  1. Technical Receipt: Full Lifecycle Proposal Tracking — track proposals from candidate SHA -> peer review/rebuttal defense -> integration transplant -> immutable merge commit SHA, distinguishing proposal acceptance from landing receipts.
+  2. Technical Receipt: Decoupled Security Allowlisting & Execution Fallback — strict identifier validation for namespace safety paired with quoted background dispatch for non-conforming inputs prevents security vulnerabilities without operational regression.
+  3. Fed query outcomes into Graphify and remembered durable lessons in Mnemon.

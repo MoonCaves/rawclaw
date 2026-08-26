@@ -273,7 +273,47 @@ before constructing filesystem path targets; **ADAPT** invalid IDs to bypass cat
 Ruling: **ADAPT** closure inlining where boundary checks are already enforced by callers;
 **REJECT** speculative micro-optimizations that remove essential security or path invariants.
 
-## Top sixteen mechanisms to carry forward
+## 17. SQLite WAL crash recovery and connection lifecycle after abrupt process exit
+
+* SQLite's [How To Corrupt An SQLite Database File](https://sqlite.org/howtocorrupt.html):
+  documents that abrupt termination, power loss, or SIGKILL during transactions does not corrupt SQLite
+  databases if WAL/journal files remain intact and same-filesystem atomicity is respected.
+* Go [`database/sql/driver`](https://pkg.go.dev/database/sql/driver) specification:
+  defines connection pool lifecycle and driver-level transaction boundaries.
+* SQLite [WAL Mode Recovery](https://sqlite.org/wal.html#recovery):
+  explains that the first reader/writer opening a database after an abrupt exit automatically runs
+  WAL recovery and replays committed transactions.
+
+Ruling: **STUDY/COPY** SQLite auto-recovery invariants on connection open; **REJECT** adding complex
+custom transaction recovery code in Go when SQLite WAL mode handles post-merge crash recovery natively.
+
+## 18. Table-driven sub-benchmark matrix flattening and allocation prevention
+
+* [Go Wiki: Table-Driven Tests](https://go.dev/wiki/TableDrivenTests):
+  establishes standard table-driven test and benchmark structuring patterns across dimensions.
+* [Dave Cheney: High Performance Go Workshop — Benchmarking](https://dave.cheney.net/high-performance-go-workshop/dotgo-paris.html#benchmarking):
+  recommends isolating setup allocations outside `b.ResetTimer()`, avoiding loop-nested allocations,
+  and testing cold vs warm states explicitly.
+* [Go Language Specification — For statements with range clause](https://go.dev/ref/spec#For_clause):
+  defines per-iteration loop variable semantics (Go 1.22+), allowing shared outer loops over benchmark
+  dimensions without closure variable shadowing.
+
+Ruling: **COPY** shared outer loop dimensions for Search/Browse connection benchmarks; **ADAPT**
+setup routines to run outside `b.ResetTimer()`.
+
+## 19. Posix argument quoting and detached background process dispatch
+
+* OpenSSH portable [`misc.c`](https://github.com/openssh/openssh-portable/blob/master/misc.c):
+  demonstrates strict character allowlisting and string validation routines before command composition.
+* Git upstream [`quote.c`](https://github.com/git/git/blob/master/quote.c):
+  defines `sq_quote_argv` for safe POSIX single-quoted shell argument formatting.
+* [POSIX Shell Command Language Pattern Matching](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_13):
+  specifies portable wildcard and character-class matching in POSIX `case` constructs.
+
+Ruling: **COPY** flat alphanumeric allowlisting for path targets and strict single-quoting
+for arguments passed to background subprocesses (`nohup "$RAWCLAW" ingest "$session_id" ... &`).
+
+## Top nineteen mechanisms to carry forward
 
 1. `O_CREAT|O_EXCL` plus no-follow/type validation for regular marker creation.
 2. Same-directory temp + atomic rename, with cleanup tied to ownership.
@@ -291,11 +331,14 @@ Ruling: **ADAPT** closure inlining where boundary checks are already enforced by
 14. Atomic `ln` hard-link publication without overwrite for conflict-free catalog claims.
 15. Portable flat-ID allowlisting (`[A-Za-z0-9._-]`) to prevent path traversal in shell hooks.
 16. Direct closure inlining in candidate filters when parent invariants are established.
+17. SQLite native WAL crash auto-recovery on connection open without custom Go recovery code.
+18. Shared table-driven benchmark outer loops with setup isolated outside `b.ResetTimer()`.
+19. Strict single-argument quoting for background child process dispatch.
 
 ## Source and ruling count
 
-44 primary source citations with **60 unique canonical primary URLs** across the complete corpus
-are verified. Of the mechanisms: 19 are `COPY`, 20 are `ADAPT`, 10 are `STUDY`, and 8 are `REJECT`
+52 primary source citations with **68 unique canonical primary URLs** across the complete corpus
+are verified. Of the mechanisms: 22 are `COPY`, 22 are `ADAPT`, 12 are `STUDY`, and 9 are `REJECT`
 guardrails (a source can receive more than one ruling where its mechanism and dependency have
 different implications). All recommended defaults remain POSIX/Go stdlib/SQLite/Git compatible;
 no external runtime, daemon, LLM, or cgo dependency is proposed.
