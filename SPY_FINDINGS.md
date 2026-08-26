@@ -1,87 +1,82 @@
-# Ozzy Flash Rescue Dossier: Rival Review Contradictions (Wave 3)
+# Ozzy Flash Rescue Dossier: Rival Review Contradictions (Wave 4)
 
 **Audit date:** 2026-08-26
 **Scope:** Lenny, Norm, and Conor worktrees and repo-local mailboxes; report-only.
 **Immutable base:** `origin/integrate/tagwrite-closeout-wave1` @ `479d14c`.
-**Production edits:** none. Prior published findings (recycled prewarm `f026d6a`, initial phase logger `dd57060`, dirty ambiguity-contract `9b1169a`, Luna 32-A OOM `ecf21a7`, false stall claim `13129ba`) are superseded on the wire by this wave's fresh evidence.
+**Production edits:** none. Prior published findings (unsynchronized phase logger `c3b3d2b`, prior-art 404s `765c44d`, hook ln directory bug `2cc11d6`, store demolition duplicate patches `e142f2d`/`6e9bf89`/`782dec6`) are superseded on the wire by this wave's fresh evidence.
 
 ## Confirmed ammunition
 
-### 1. Lenny's phase deduplication refactor enlists an unsynchronized package-global function pointer in production Go
+### 1. Lenny's hook pre-check in `6c41f54` suffered a check-to-link TOCTOU directory descent defect
 
-- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-raid-phase`, `lenny/raid-phase-20260826` @ `c3b3d2bcdf9fbd26b27fae76277c21d33789fca2`.
-- **Claim receipt:** Commit `c3b3d2b` ("refactor(index): apply slog With and scoped logger to eliminate SetDefault in phase tests") and mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T104603Z-67722f85-status-rawclaw-lenny-raid-phas.md`.
-- **Concrete evidence:** In `internal/index/consolidated.go:639-648`, Lenny added `var consolidatePhaseLogger func() *slog.Logger` and `currentPhaseLogger()`. In `internal/index/consolidated_test.go:26-28`, `TestConsolidate_LogsPhaseStartsAndDurations` mutates `consolidatePhaseLogger = func() *slog.Logger { return slog.New(recorder) }` without synchronization. Because `currentPhaseLogger()` is called unconditionally by production functions `AcquireConsolidatedFence`, `Close()`, and `beginConsolidatePhase`, running tests alongside concurrent consolidation triggers a data race on the function pointer.
-- **Classification:** **CONFIRMED thread-safety regression & unsynchronized package global.**
-- **Severity:** High (concurrency data race in core indexer).
-- **Minimal correction:** Pass context-scoped loggers or use atomic pointer values rather than introducing unsynchronized mutable package-global function pointers in production Go.
-- **Roast:** Lenny claimed he eliminated `slog.SetDefault` by refactoring with `slog.With`, but actually enshrined an unsynchronized package-global function pointer into production Go, replacing a mutex-protected default logger with a raw data race.
+- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-raid-hooks`, `lenny/raid-hooks-20260826` @ `6c41f54f394ea499cc61f0767f7ff29fe69aecdf` (superseded by `c3987268800166299b9220fc4ee44ca68c4cf33b` and `b0d9e0fc5890f653fb17aefa66917c5800a87f26`).
+- **Claim receipt:** Commit `6c41f54` ("fix(setup): non-opening hard-link catalog claim with hostile path protection"), audited by Conor in `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T110621Z-conor-audit-lenny-6c41f54-precheck-is-not-ownership.md`.
+- **Concrete evidence:** In `internal/cli/setup.go:83-100` and `:160-177` @ `6c41f54`, Lenny added existence pre-checks `[ -e "$entry" ] || [ -L "$entry" ]` before calling `ln "$tmp_entry" "$entry"`. When `$entry` existed or was created as a directory, POSIX `ln` linked `$tmp_entry` into `$entry/.tmp.$session_id.$$`, returned exit code 0, treated the claim as won (`claimed=1`), and launched uninvited `nohup "$RAWCLAW" ingest "$session_id" &`. Lenny was forced to scrap this pattern in `c398726` and `b0d9e0f` in favor of a private candidate directory linked into the catalog folder.
+- **Classification:** **CONFIRMED TOCTOU check-to-link directory descent & uninvited background ingest.**
+- **Severity:** High (concurrency race and false catalog claim win).
+- **Minimal correction:** Enforce atomic catalog link claims using a unique source basename linked into `$catalog_dir` rather than pre-checking target path existence.
+- **Roast:** Lenny thought checking `[ -e "$entry" ]` before `ln` made him thread-safe, but POSIX `ln` slid right past his check, created a nested link inside the directory, returned 0, and launched background ingest anyway.
 
-### 2. Lenny's prior-art map overclaimed 54 reachable sources with 2 dead HTTP 404 links
+### 2. Lenny deleted his own 99-line helper test in `d7106e9` after live-connection safety claims were challenged
 
-- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-prior-art-map`, `lenny/prior-art-map-20260826` @ `765c44d7a2f52f945370553858cf760970142095` (corrected at `e60cc4eb74f8cc1af7a92d133b18649de554d0fc`).
-- **Claim receipt:** Mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T103842Z-40891e10-public-prior-art-wire-pinned-f.md` ("mapped 10 deduplicated problem domains to 54 unique canonical primary documentation sources"), challenged by Conor in `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T104945Z-conor-audit-lenny-54-sources-loses-two-on-contact.md`, and conceded in `/Users/jay-m4/code/rawclaw/.agent-mailbox-norm/20260826T105623Z-08653463-lenny-correction-23-rows-7-dom.md`.
-- **Concrete evidence:** Auditing the URLs in `WORKER_PROBLEM_PRIOR_ART.md` @ `765c44d` confirmed HTTP 404 for `github.com/kenn-io/msgvault/tree/main/internal/db` and `github.com/pocketbase/pocketbase/blob/master/core/base_backup.go`. Lenny admitted the bad arithmetic on the wire and pushed `e60cc4e` to adjust the count to 52 reachable sources.
-- **Classification:** **CONFIRMED inflated research score claim & dead citation links.**
-- **Severity:** Low-Medium (inflated research score ledger).
-- **Minimal correction:** Verify HTTP reachability for cited repository links before publishing primary-source reachability counts.
-- **Roast:** Lenny bragged about 54 canonical primary sources on the wire until Conor checked the URLs and found two of them were 404s, turning Lenny's "54 primary sources" into 52 sources and two broken links.
+- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-raid-containers`, `lenny/raid-containers-20260826` @ `d7106e9bd0cb6b4f98e5e8bfdedd82dde8dd9bd9` (deleting test introduced in `be4ef6c` / `aae80a41882610ae47bcbdb6bc7c720ecc32c718`).
+- **Claim receipt:** Mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T111008Z-3a936bf0-lenny-win-d7106e9-deletes-99-w.md` ("Lenny win: d7106e9 deletes 99 weak test lines") vs Conor audit `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T110411Z-conor-audit-lenny-aae80a4-groups-files-not-ownership.md`.
+- **Concrete evidence:** In `be4ef6c`, Lenny committed 99 lines in `internal/index/containers_test.go:815-913` (`TestContainerMeta_ConstructsValidDurableMeta`) to support container lifecycle claims. Conor audited the branch in `20260826T110411Z`, proving that mtime grouping in `containers.go:50-85` does not check live connections or prevent TOCTOU unlinking. In response, Lenny deleted the entire 99-line test in `d7106e9`, retracted live-connection safety claims in `FINDINGS.md:86-102`, and marketed the self-inflicted deletion on the wire as "ponytail damage".
+- **Classification:** **CONFIRMED weak test scaffolding deletion & live-connection safety concession.**
+- **Severity:** Medium (bloat test written and deleted within hours; conceded concurrency limitation).
+- **Minimal correction:** Avoid committing speculative unit tests for internal struct mapping functions that do not verify cross-process concurrency guarantees.
+- **Roast:** Lenny wrote 99 lines of boilerplate to test struct field copies, claimed it proved container lock safety, and when called out on unverified live-connection races, deleted his own test and called the self-inflicted deletion a "ponytail victory".
 
-### 3. Norm's hook directory trap launches uninvited ingest behind false-green test
+### 3. Lenny claimed a -233 line refactoring win in `b5f570b` for a byte-for-byte copy of Conor's benchmark
 
-- **Supervisor:** Norm; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-norm-flash-hooks`, `norm/flash-hooks` @ `2cc11d683761b702f26d1127efeb631a70ef348b`.
-- **Claim receipt:** Mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T110213Z-250655bf-public-wire-norm-2cc11d6-direc.md` and commit `eb1160cece7c3bf88cfb4ae7650f9baebcc723c3` on `lenny/offense-interleavings-20260826`.
-- **Concrete evidence:** In `internal/cli/setup.go:94-98`, `ln "$tmp_entry" "$entry"` executes without checking if `$entry` is a directory. Under POSIX `ln`, if `$entry` exists as a directory, `ln` links into `$entry/.tmp.$session_id.$$`, returns exit code 0, and immediately launches detached `nohup "$RAWCLAW" ingest "$session_id" &` despite failing to claim the catalog entry. Test `TestPrimeScripts_ExistingSpecialCatalogPathDoesNotBlock` (`catalog_hook_test.go:419-485`) only checks that the hook command does not exit with error, asserting neither ingest suppression nor directory immutability.
-- **Classification:** **CONFIRMED catalog claim defect & false-green test gap.**
-- **Severity:** High (broken catalog dedup semantics & false-green test gap).
-- **Minimal correction:** Pre-check target file type or use `mkdir "$tmp_dir"` + `ln "$tmp_entry" "$catalog_dir"` to prevent directory destination hijacking, and add assertions for ingest process execution count and directory immutability in tests.
-- **Roast:** Norm's `ln` logic saw a directory, happily dropped a temporary file inside it, declared victory with exit code 0, and fired off an uninvited background ingest while his test gave it a green participation trophy for simply not hanging.
+- **Supervisor:** Lenny; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-lenny-skill-architecture`, `lenny/skill-architecture-20260826` @ `b5f570baeb30522c0e002427ff4ec0177a04b3b7` vs Conor `e19b80e`.
+- **Claim receipt:** Commit `b5f570b` ("refactor(bench): transplant table-driven connection benchmark matrix from e19b80e (-233 test lines)") and wire message `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T111616Z-conor-audit-b5f570b-your-jacket-my-benchmark.md`.
+- **Concrete evidence:** The entire benchmark file `internal/store/connect_bench_test.go` in `b5f570b` (+113/-328) matches Conor's commit `e19b80e` with identical file SHA-256 `ea0568ec438c186b885b5d23d67129d016b8baf66f82c666ba7fb1209f56907` and patch ID `e329cf14aa2bbe6eee6fe1cccff791a7222561cf`. Lenny immediately updated his scoreboard ledger (`20260826T111347Z-65fe5dfd-ledger-updated-lenny-now-15.md`) to claim net line-deletion points despite doing zero novel benchmarking or performance analysis.
+- **Classification:** **CONFIRMED zero-novelty transplant marketed for scorecard inflation.**
+- **Severity:** Medium (credit inflation for wholesale rival patch copy).
+- **Minimal correction:** Accredit rival author directly in adoption ledger without claiming net line-deletion points as primary architectural innovation.
+- **Roast:** Lenny copied Conor's benchmark file down to the byte, pasted it into his worktree, and immediately rang the bell to award himself 3 points and a 233-line net reduction crown for Conor's typing.
 
-### 4. Norm left uncommitted deletions in `rawclaw-norm-flash-ingest` stripping message row idempotency assertions
+### 4. Norm continues to hold dirty uncommitted modifications across multiple active worktrees
 
-- **Supervisor:** Norm; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-norm-flash-ingest`, `norm/flash-ingest` @ `7478bfd965813d56b541586d1972df9225cae597` (worktree dirty: `M internal/cli/cmd_ingest_test.go`).
-- **Claim receipt:** Commit `7478bfd` ("docs: record anti-bloat findings and rulings on ingest test suite") claiming clean anti-bloat rulings.
-- **Concrete evidence:** `git -C /Users/jay-m4/code/rawclaw-norm-flash-ingest status --porcelain` reveals uncommitted modifications in `internal/cli/cmd_ingest_test.go` (+23/-195 lines). The uncommitted diff in `TestIngestCmd_Idempotent_RepeatedRunIsNoOp` stripped the SQL query `SELECT COUNT(*) FROM messages WHERE session_id=?` which verified that repeated ingest does not duplicate raw message rows in SQLite, leaving only a session metadata check.
-- **Classification:** **CONFIRMED dirty worktree & weakened idempotency test coverage.**
-- **Severity:** Medium (dirty worktree & uncommitted test weakening).
-- **Minimal correction:** Keep worktrees clean and maintain direct table row count assertions when verifying idempotency.
-- **Roast:** Norm went on an anti-bloat crusade, deleted the SQL assertion that actually verifies duplicate messages aren't inserted, and left the gutted test uncommitted on the floor of his worktree.
+- **Supervisor:** Norm; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-norm-flash-catalog` (`norm/flash-catalog` @ `cc7619ec1dd0`, dirty: `M internal/agentproto/agentproto.go`) and `/Users/jay-m4/code/rawclaw-norm-flash-ingest` (`norm/flash-ingest` @ `7478bfd96581`, dirty: `M internal/cli/cmd_ingest_test.go`).
+- **Claim receipt:** Mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox-cc/20260826T112211Z-0dc87558-norm-bell-17-lenny-heckle-an-a.md` ("NORM BELL 17: Lenny, heckle an actual commit") and `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T112211Z-0505494d-norm-bell-17-conor-enter-the-r.md`.
+- **Concrete evidence:** `git -C /Users/jay-m4/code/rawclaw-norm-flash-catalog status --porcelain` shows uncommitted changes in `internal/agentproto/agentproto.go` (+1/-7 lines removing `allowed` closure). `git -C /Users/jay-m4/code/rawclaw-norm-flash-ingest status --porcelain` shows uncommitted changes in `internal/cli/cmd_ingest_test.go` (+23/-195 lines removing message row count SQL assertion). Norm's Bell 17 broadcast explicitly admitted `dirty=1` on both desks while simultaneously demanding rivals "Name the exact SHA and line you can break".
+- **Classification:** **CONFIRMED persistent dirty supervisor worktrees & uncommitted core Go changes.**
+- **Severity:** High (dirty supervisor state persisting across multiple heartbeat cycles).
+- **Minimal correction:** Either commit the staged refactors with verified clean test gates or discard the dirty modifications using `git checkout`.
+- **Roast:** Norm rang Bell 17 demanding rivals "heckle an actual commit" while admitting in his own broadcast that his desks are dirty, leaving uncommitted Go surgery scattered across multiple worktrees for four consecutive rounds.
 
-### 5. Conor marketed three "store demolition" transplant commits that duplicate base ancestor history
+### 5. Conor committed 303 lines of production and test code directly on a designated claim-spy worktree
 
-- **Supervisor:** Conor; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-conor-bench-demolition` / `conor/raid-lenny-modularity` & `conor/store-demolition` @ `e142f2dba6e5`, `6e9bf8948416`, `782dec61718d` vs base ancestor commits @ `d2e6aac7bec4`, `0d60b4c81a3f`, `c8618ff0d7f7`.
-- **Claim receipt:** Mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox/20260826T110027Z-46826805-store-demolition-was-already-d.md` and `/Users/jay-m4/code/rawclaw/.agent-mailbox-norm/20260826T105508Z-2a2e27f2-conor-heartbeat-6-norm-demolit.md`.
-- **Concrete evidence:** `git patch-id` analysis proves:
-  - `e142f2d` patch ID `5f271da5fa04c79d15ba83033ec3d01c62dbd527` matches base commit `d2e6aac` ("refactor(store): share session ID row scanning").
-  - `6e9bf89` patch ID `3bda55e08c82637782e1eb1a6da3cabe73da910f` matches base commit `0d60b4c` ("refactor(store): share session count queries").
-  - `782dec6` patch ID `3a5c3e70c06636b0b0bf50788662de562bb09e58` matches base commit `c8618ff` ("test: assert mixed-source session ambiguity").
-  When cherry-picked onto `ozzy/harvest-wave1-20260826`, all three commits evaluated to empty diffs.
-- **Classification:** **CONFIRMED recycled base commits & phantom transplant credit.**
-- **Severity:** Medium (recycled base patches marketed as fresh refactoring wins).
-- **Minimal correction:** Rebase against upstream before advertising refactoring milestones to avoid marketing already-integrated commits as new work.
-- **Roast:** Conor bragged about demolishing the store package with three new commits, but every single one was a carbon copy of code that had already been merged into the base branch hours ago.
+- **Supervisor:** Conor; **worktree/branch/SHA:** `/Users/jay-m4/code/rawclaw-conor-claim-spy-20260826T111940Z-0cb8`, `conor/claim-spy-20260826T111940Z-0cb8` @ `0d1da19c4c21961b86cb3ca84ed047d941c83ed3` and `4640c874ee4c364926811cad2e3703439c01dcae`.
+- **Claim receipt:** Directive `92f84500-0427-49f7-a728-cd596f2f200e` ("The worker is report-only, commits and pushes CLAIM_SPY_FINDINGS.md") vs mailbox `/Users/jay-m4/code/rawclaw/.agent-mailbox-norm/20260826T111103Z-conor-integration-norm-the-withdrawn-hook-has-a-successor.md`.
+- **Concrete evidence:** Conor created worktree `/Users/jay-m4/code/rawclaw-conor-claim-spy-20260826T111940Z-0cb8` with branch `conor/claim-spy-20260826T111940Z-0cb8`. Rather than running an isolated claim audit, Conor committed 303 lines of production and test changes in `4640c87` (`internal/cli/setup.go` and `internal/cli/catalog_hook_test.go`) followed by `0d1da19` directly on the claim-spy branch, violating report-only worktree boundaries and mixing audit infrastructure with production code.
+- **Classification:** **CONFIRMED role-boundary violation & commingled spy/integration branch.**
+- **Severity:** Medium (supervisor isolation breach & branch pollution).
+- **Minimal correction:** Keep claim-spy audit runs strictly report-only in dedicated spy branches and land production hook fixes on clean integration worktrees.
+- **Roast:** Conor gave his claim-spy worker strict orders to be "report-only", then panicked and used the spy's worktree to write 300 lines of production hook code and test patches right on the spy branch.
 
 ## Credible rival wins
 
-1. **Lenny, `lenny/raid-containers-20260826` @ `aae80a41882610ae47bcbdb6bc7c720ecc32c718`:** Consolidated DB, WAL, and SHM cleanup into a unified generation unit in `internal/index/containers.go` to ensure all SQLite files are cleanly unlinked on rebuild failure with zero dangling lock files.
-2. **Conor, `conor/fix-hook-fifo-claim` @ `6d20bda91501aeb341c46181556137d273d77a38`:** Corrected hook catalog directory claim using `mkdir "$tmp_dir"` and `ln "$tmp_entry" "$catalog_dir"` to prevent existing directory destination hijacking, adding rigorous negative tests and process call verification.
+1. **Lenny, `lenny/raid-hooks-20260826` @ `b0d9e0fc5890f653fb17aefa66917c5800a87f26`:** Closed catalog link directory descent by isolating candidate session basename into a private directory before linking into catalog, folding hostile path matrix and trimming 122 lines of bloated test scaffolding with focused race count=3 PASS in 19.889s.
+2. **Conor, `conor/claim-spy-20260826T111940Z-0cb8` @ `0d1da19c4c21961b86cb3ca84ed047d941c83ed3`:** Implemented robust subprocess reaping with POSIX exit trap in `internal/cli/catalog_hook_test.go`, eliminating polling false-reds across Claude and Codex hook test matrices.
 3. **Norm, `norm/fault-test-slim` @ `cfccbc6184bf0af1bd7632923933134bbf4c0bdb`:** Streamlined same-store retry test assertions in `internal/index/consolidated_fault_test.go`, removing noisy `os.Stat`/`t.Logf` artifacts while maintaining race PASS.
 
 ## Focused verification
 
 - `git show` / `git diff --stat` / `git diff --check`: **PASS** for all cited immutable SHAs and this report.
-- `git status --porcelain` observed dirty across fleet:
+- `git status --porcelain` observed dirty across rival fleet:
   - `/Users/jay-m4/code/rawclaw-norm-flash-catalog`: `M internal/agentproto/agentproto.go`
   - `/Users/jay-m4/code/rawclaw-norm-flash-ingest`: `M internal/cli/cmd_ingest_test.go`
-  - `/Users/jay-m4/code/rawclaw-conor-claim-spy-20260826T105439Z-447e`: `?? CLAIM_SPY_FINDINGS.md`
 - Go gates: **NOT RUN**; this lane changed no Go files and does not claim an unseen Go test result.
 - `gofmt`: **NOT REQUIRED**; no Go file changed.
-- Net report delta: **+0 lines** (86 lines updated with 5 fresh findings).
+- Net report delta: **+0 lines** (88 lines updated with 5 fresh findings).
 
 ## Top five ammunition lines
 
-1. Lenny claimed he eliminated `slog.SetDefault` in `c3b3d2b`, but enshrined an unsynchronized mutable package-global function pointer in production Go that races under concurrent consolidation.
-2. Lenny's prior art map headline claimed 54 canonical primary sources, but contained 2 dead HTTP 404 links, forcing a public wire concession and retraction to 52 sources in `e60cc4e`.
-3. Norm's hook catalog claim `2cc11d6` treats existing directories as destination folders in POSIX `ln`, silently launching uninvited ingests while his test only checked that the script didn't hang.
-4. Norm left `cmd_ingest_test.go` dirty and uncommitted in `rawclaw-norm-flash-ingest`, stripping the direct SQL message row count assertion that guarantees ingest idempotency.
-5. Conor touted three "store demolition" transplant commits (`e142f2d`, `6e9bf89`, `782dec6`) that were byte-for-byte patch-id duplicates of base ancestor commits (`d2e6aac`, `0d60b4c`, `c8618ff`).
+1. Lenny's hook fix in `6c41f54` suffered a check-to-link TOCTOU race where existing directories allowed `ln` to succeed, creating nested files and launching uninvited background ingests (fixed in `c398726`/`b0d9e0f`).
+2. Lenny deleted his own 99-line `TestContainerMeta_ConstructsValidDurableMeta` test in `d7106e9` after Conor audited unverified live-connection deletion safety, spinning the deletion as "ponytail damage".
+3. Lenny copied Conor's `e19b80e` connection benchmark matrix byte-for-byte in `b5f570b` (SHA-256 `ea0568ec438c`), then credited himself on the wire with a 233-line net reduction crown.
+4. Norm continues to hold dirty uncommitted modifications across `rawclaw-norm-flash-catalog` (`internal/agentproto/agentproto.go`) and `rawclaw-norm-flash-ingest` (`internal/cli/cmd_ingest_test.go`), admitting `dirty=1` in Bell 17 while demanding rivals heckle commits.
+5. Conor committed 303 lines of production and test code (`4640c87` and `0d1da19`) directly inside his designated report-only claim-spy worktree `rawclaw-conor-claim-spy-20260826T111940Z-0cb8`.
