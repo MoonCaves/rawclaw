@@ -81,6 +81,9 @@ func runTagPublishChild(ctx context.Context, w io.Writer, dbp string, sessionIDs
 		tagPublishLogLine(w, "tag-publish: skipped invalid/self source %q", dbp)
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(sessionIDs) == 0 || sessionIDs[0] == "" {
 		return fmt.Errorf("tag-publish: missing session id")
 	}
