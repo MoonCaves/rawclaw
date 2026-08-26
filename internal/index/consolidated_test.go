@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1724,6 +1725,62 @@ func TestConsolidate_RollsBackAMidFoldFailure(t *testing.T) {
 			t.Errorf("%s after failed fold = %s, want 0", tc.name, got)
 		}
 	}
+}
+
+// TestConsolidate_FaultInjectionHelper is the child half of
+// TestConsolidate_RetryAfterAbruptPostMergeExit. It must exit from the merge
+// phase defer so the enclosing DETACH and connection cleanup defers do not run.
+func TestConsolidate_FaultInjectionHelper(t *testing.T) {
+	if os.Getenv("RAWCLAW_CONSOLIDATE_FAULT_CHILD") != "1" {
+		return
+	}
+	src := os.Getenv("RAWCLAW_CONSOLIDATE_FAULT_SOURCE")
+	if src == "" {
+		t.Fatal("missing RAWCLAW_CONSOLIDATE_FAULT_SOURCE")
+	}
+	consolidateAfterMergeHook = func() { os.Exit(124) }
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("fault-injected consolidation: %v", err)
+	}
+	t.Fatal("fault injection did not exit")
+}
+
+// TestConsolidate_RetryAfterAbruptPostMergeExit models issue #32's kill-then-
+// retry sequence. The child exits after the merge timing log and before the
+// DETACH defer; the parent then folds the same source and records the timing.
+func TestConsolidate_RetryAfterAbruptPostMergeExit(t *testing.T) {
+	isolateCache(t)
+	src := seedSessionDB(t, "fault-repro.db", sessionRow{
+		id: "fault-repro-session", project: "ledger", cwd: "/w/ledger",
+		msgs: []msgRow{{"fault-repro-message", "user", "reproduce the retry", 100}},
+	})
+
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestConsolidate_FaultInjectionHelper$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"RAWCLAW_CONSOLIDATE_FAULT_CHILD=1",
+		"RAWCLAW_CONSOLIDATE_FAULT_SOURCE="+src,
+	)
+	childOutput, childErr := cmd.CombinedOutput()
+	if childErr == nil {
+		t.Fatalf("fault child exited successfully; output:\n%s", childOutput)
+	}
+	exitErr, ok := childErr.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 124 {
+		t.Fatalf("fault child error = %v, want exit status 124; output:\n%s", childErr, childOutput)
+	}
+	if !strings.Contains(string(childOutput), "phase=merge duration=") {
+		t.Fatalf("fault child output has no merge completion log:\n%s", childOutput)
+	}
+	if strings.Contains(string(childOutput), "phase=detach") {
+		t.Fatalf("fault child ran DETACH after forced exit:\n%s", childOutput)
+	}
+	t.Logf("fault child output:\n%s", childOutput)
+
+	started := time.Now()
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("retry consolidation: %v", err)
+	}
+	t.Logf("retry after post-merge exit completed in %s", time.Since(started))
 }
 
 // TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour covers issue #15: the
