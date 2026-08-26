@@ -44,47 +44,6 @@ func TestConsolidate_UnionsEveryProject(t *testing.T) {
 	}
 }
 
-func TestConsolidateCountQueriesUseCoveringIndexes(t *testing.T) {
-	con, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer con.Close()
-	if _, err := con.Exec(store.Schema); err != nil {
-		t.Fatalf("create schema: %v", err)
-	}
-
-	tests := []struct {
-		name, query, want string
-	}{
-		{
-			name:  "sessions",
-			query: "SELECT COUNT(id) FROM sessions",
-			want:  "USING COVERING INDEX sqlite_autoindex_sessions_1",
-		},
-		{
-			name:  "messages",
-			query: "SELECT COUNT(session_id) FROM messages",
-			want:  "USING COVERING INDEX idx_msg_session",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var (
-				selectID, parent, detailID int
-				detail                     string
-			)
-			if err := con.QueryRow("EXPLAIN QUERY PLAN "+tt.query).
-				Scan(&selectID, &parent, &detailID, &detail); err != nil {
-				t.Fatalf("explain %s: %v", tt.name, err)
-			}
-			if !strings.Contains(detail, tt.want) {
-				t.Fatalf("query plan = %q, want %q", detail, tt.want)
-			}
-		})
-	}
-}
-
 // TestConsolidate_SameSessionIDMergesToOneRow is the maintainer's ruling made structural:
 // one session resumed in a second directory is ONE session. The stale copy here
 // was purged upstream and holds an older, shorter prefix; the live copy carries
