@@ -90,6 +90,39 @@ func TestTagWriteUsesCatalogBeforeCorpusSweep(t *testing.T) {
 	}
 }
 
+func TestGuardedSessionLookupDoesNotTreatForeignCatalogPathAsClaude(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	catalogDir := filepath.Join(configDir, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catalogDir)
+
+	foreignDir := t.TempDir()
+	const sid = "8c3d5e7f-0000-4000-8000-0000000000bb"
+	transcriptPath := filepath.Join(foreignDir, sid+".jsonl")
+	writeTranscript(t, foreignDir, sid, []string{"66666666-aaaa-bbbb-cccc-000000000041"})
+	if err := paths.WriteCatalogEntry(catalogDir, paths.CatalogEntry{
+		SessionID:      sid,
+		TranscriptPath: transcriptPath,
+		CWD:            foreignDir,
+		Source:         "codex",
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	called := false
+	more := func() []view.Scope {
+		called = true
+		return nil
+	}
+	if _, _, err := agentproto.LocateSessionGuarded(sid[:8], nil, more); err == nil {
+		t.Fatal("foreign catalog path resolved through the Claude scope")
+	}
+	if !called {
+		t.Fatal("foreign catalog path bypassed the source-aware fallback")
+	}
+}
+
 // TestTagWriteLandsInTheOneStoreAndReadsBack walks the whole tag round trip the
 // way a user does: write a tag with `tag-write`, then read it back through the
 // normal read path (`outline`). Both ends resolve the session the same way, so

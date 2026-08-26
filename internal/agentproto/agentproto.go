@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -1810,7 +1809,10 @@ func catalogCands(scope []view.Scope, session8 string) []sessionCand {
 		}
 		tdir := paths.ProjectDirOf(hit.Path)
 		if tdir == "" {
-			tdir = filepath.Dir(hit.Path)
+			// SessionHit does not retain the catalog source. A path outside
+			// Claude's project tree cannot safely be reconstructed as a Claude
+			// scope; let the source-aware fallback resolve it instead.
+			continue
 		}
 		narrowed = append(narrowed, view.Scope{Project: hit.Project, TDir: tdir})
 	}
