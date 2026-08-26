@@ -24,6 +24,9 @@ No production seam or interface is justified: this is one benchmark file with fo
 ## Estimate
 
 - Baseline: 451 lines total.
-- Expected refactor: approximately 290-320 lines, deleting 130-160 test lines (estimated net `-130` to `-160`).
-- Acceptance floor: reject if the final file does not save at least 60 lines or if the table/helper interface makes the benchmark matrix harder to audit.
+- Final refactor: 218 lines total, deleting 298 and adding 65 test lines (net `-233`).
+- Acceptance floor: exceeded; the final file saves 233 lines and keeps the matrix explicit at the benchmark call sites.
 
+## Rival-history check
+
+`git log --all -- internal/store/connect_bench_test.go` found only the original tuning commits (`f5dacf7`, `c95f9a1`) and the later error-message split (`d31a9e3` / `665ee23`). None table-drove the matrix. The strongest rival was `d31a9e3` because it preserved distinct error and empty-result diagnostics, but it left all 16 bodies duplicated; the weakest was the original `f5dacf7`, which introduced the 395-line matrix without a local seam. This refactor retains both diagnostic contracts while removing the clone groups.
