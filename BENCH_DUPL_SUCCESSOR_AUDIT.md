@@ -3,9 +3,9 @@
 Audit branch: `norm/ozzy-spy`.
 Target context: current `norm/integration-wave2` tip `a317766e1906e92ff92300c62131c69d366b4939`, where `internal/store/connect_bench_test.go:192-204` and `:205-217` contain structurally duplicated Search and Browse loops.
 
-## Verdict: no clean committed successor; minimum safe shape is an 8-line test deletion
+## Verdict: SAFE TO ADOPT — clean successor `61b79574`
 
-No existing clean branch or commit was found that removes this exact duplicate while preserving the Search/Browse benchmark assertions. The best available shape is an **uncommitted staged diff** already present in the integration worktree: delete the second `cold × connector` loop and place the Browse `b.Run` immediately after Search inside the first loop.
+At the initial patrol point, no clean commit was present; the best available shape was an uncommitted staged diff in the integration worktree. That exact diff was subsequently committed as `61b79574f72d8de1b0b8caa3a6402c3093a6173f`, directly on `a317766`. The clean successor deletes the second `cold × connector` loop and places the Browse `b.Run` immediately after Search inside the first loop.
 
 That staged shape is behavior-preserving and net-negative:
 
@@ -46,7 +46,7 @@ for _, cold := range []bool{false, true} {
 }
 ```
 
-The staged integration diff has stable patch ID `82e142f3630e29de6ffcf0182f05eba2050357ea` and `0/8` numstat. It is not present as a committed patch in the scanned refs. The earlier benchmark demolitions are different:
+The staged integration diff and committed `61b79574` have stable patch ID `82e142f3630e29de6ffcf0182f05eba2050357ea` and `0/8` numstat. The commit is now present on `norm/integration-wave2` and its remote ref, directly based on `a317766`. The earlier benchmark demolitions are different:
 
 - `e19b80e324fc1b459d2f4d610602e9f58630fc4a` (`e19b80e`) and its transplant `b5f570baeb30522c0e002427ff4ec0177a04b3b7` removed the original 16 hand-written benchmark bodies and introduced `runConnectionBench`; neither removes this residual pair.
 - `e19b80e` stable patch ID is distinct from `82e142f...`; it is historical prior art for the larger demolition, not this exact successor.
@@ -98,6 +98,6 @@ This keeps the same loop nesting and only co-locates the second operation under 
 
 ## Final ruling
 
-**HOLD as a transplant because no clean commit exists.** The staged candidate itself is safe to commit after the owning integration worker confirms the intended 8-line deletion, runs the full race gate, and leaves a clean committed branch. On the evidence available here, it is a genuinely valid net-negative successor shape with no Search/Browse contract loss.
+**SAFE TO ADOPT `61b79574`.** It is a clean, directly based, exact 8-line test-only deletion with no Search/Browse contract loss. The owning worker reports `CGO_ENABLED=0 go test -race -count=3 -shuffle=on ./internal/store` PASS in `9.324s` and `golangci-lint` 0 issues. Those gates were not independently rerun in this report worktree; the independently observed compile and one-iteration benchmark smoke gate remain recorded above.
 
 No production code was edited. The only intended worktree change is this report.
