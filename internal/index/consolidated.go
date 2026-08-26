@@ -841,18 +841,21 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 		return 0, false, true, fmt.Errorf("prune stale session sources: %w", err)
 	}
 	if hasTopics {
-		staleTopicsSQL := `DELETE FROM main.topic_segment
-			WHERE session_id IN (SELECT id FROM src.sessions)
-			  AND (NOT EXISTS (SELECT 1 FROM main.session_sources other
-				WHERE other.session_id = main.topic_segment.session_id AND other.source_db <> ?)
-				OR ({{owned}}))`
-		owned := "0"
-		if srcOrigin {
-			owned = `NULLIF(main.topic_segment.origin_machine, '') =
-				(SELECT NULLIF(origin_machine, '') FROM src.sessions WHERE id = main.topic_segment.session_id)`
-		}
-		staleTopicsSQL = strings.Replace(staleTopicsSQL, "{{owned}}", owned, 1)
-		if _, err := tx.Exec(staleTopicsSQL, srcID); err != nil {
+		if _, err := tx.Exec(`DELETE FROM main.topic_segment
+			WHERE session_id IN (
+				SELECT ss.session_id FROM main.session_sources ss
+				WHERE ss.source_db = ?
+				  AND ss.session_id IN (SELECT id FROM src.sessions)
+				  AND NOT EXISTS (
+					SELECT 1 FROM main.session_sources other
+					WHERE other.session_id = ss.session_id AND other.source_db <> ss.source_db
+				  )
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM src.topic_segment incoming
+				WHERE incoming.session_id = main.topic_segment.session_id
+				  AND incoming.start_uuid = main.topic_segment.start_uuid
+			)`, srcID); err != nil {
 			return 0, false, true, fmt.Errorf("prune stale source topics: %w", err)
 		}
 	}
