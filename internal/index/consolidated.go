@@ -515,10 +515,12 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	if err := pruneTombstoned(con); err != nil {
 		return st, err
 	}
-	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&st.Sessions); err != nil {
+	// These totals are row counts, so scan the narrow existing key indexes rather
+	// than the wider tables. INDEXED BY makes the index-only plan contractual.
+	if err := con.QueryRow("SELECT COUNT(*) FROM sessions INDEXED BY sqlite_autoindex_sessions_1").Scan(&st.Sessions); err != nil {
 		return st, fmt.Errorf("count sessions: %w", err)
 	}
-	if err := con.QueryRow("SELECT COUNT(*) FROM messages").Scan(&st.Messages); err != nil {
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages INDEXED BY idx_msg_session").Scan(&st.Messages); err != nil {
 		return st, fmt.Errorf("count messages: %w", err)
 	}
 	if err := StampIngestWatermark(con); err != nil {
