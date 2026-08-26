@@ -679,9 +679,7 @@ func TestAddRawclawAntigravityHooksReplacesExistingAndKeepsSibling(t *testing.T)
 		"rawclaw":    staleRawclaw,
 	}
 
-	if err := addRawclawAntigravityHooks(data, "/new/path/hooks/rawclaw/prime.sh"); err != nil {
-		t.Fatalf("addRawclawAntigravityHooks: %v", err)
-	}
+	addRawclawAntigravityHooks(data, "/new/path/hooks/rawclaw/prime.sh")
 
 	// other-tool must be preserved
 	if _, ok := data["other-tool"]; !ok {
@@ -718,12 +716,8 @@ func TestAddRawclawAntigravityHooksReplacesExistingAndKeepsSibling(t *testing.T)
 // twice leaves exactly one rawclaw entry.
 func TestAddRawclawAntigravityHooksIdempotent(t *testing.T) {
 	data := map[string]any{}
-	if err := addRawclawAntigravityHooks(data, "/x/hooks/rawclaw/prime.sh"); err != nil {
-		t.Fatal(err)
-	}
-	if err := addRawclawAntigravityHooks(data, "/x/hooks/rawclaw/prime.sh"); err != nil {
-		t.Fatal(err)
-	}
+	addRawclawAntigravityHooks(data, "/x/hooks/rawclaw/prime.sh")
+	addRawclawAntigravityHooks(data, "/x/hooks/rawclaw/prime.sh")
 
 	if len(data) != 1 {
 		t.Fatalf("data len = %d, want 1 (rawclaw only)", len(data))
