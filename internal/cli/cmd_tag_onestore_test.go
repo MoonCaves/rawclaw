@@ -369,9 +369,24 @@ func TestLocalTagExportIncludesTheOneStore(t *testing.T) {
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
 	jsonIn := `[{"start_uuid":"` + firstUUID[:8] + `","topic":"archive round trip","summary":"exported or lost"}]`
+	publishDone := make(chan error, 1)
+	oldPublish := spawnTagPublish
+	spawnTagPublish = func(dbp, sessionID string) error {
+		go func() { publishDone <- runTagPublishChild(context.Background(), io.Discard, dbp, sessionID) }()
+		return nil
+	}
+	t.Cleanup(func() { spawnTagPublish = oldPublish })
 	var out strings.Builder
 	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, "", false); err != nil {
 		t.Fatalf("runTagWriteCmd: %v", err)
+	}
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("tag publication: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("tag publication did not finish")
 	}
 
 	files, err := localTagExporter()()

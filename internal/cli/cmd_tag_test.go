@@ -550,7 +550,7 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	if !strings.Contains(out.String(), "publication queued") {
 		t.Fatalf("output = %q, want eventual publication receipt", out.String())
 	}
-	auth, err := store.ConnectRO(index.DBPath(dir))
+	auth, err := store.ConnectRO(index.RefreshDBPath("claude", sid, filepath.Join(dir, sid+".jsonl")))
 	if err != nil {
 		t.Fatalf("open authoritative store: %v", err)
 	}
@@ -604,9 +604,9 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 		t.Errorf("output missing expected confirmation: %q", out.String())
 	}
 
-	// The authoritative project DB is synchronous; consolidated visibility is
+	// The authoritative refresh DB is synchronous; consolidated visibility is
 	// eventual because publication is detached.
-	auth, err := store.ConnectRO(index.DBPath(dir))
+	auth, err := store.ConnectRO(index.RefreshDBPath("claude", sid, filepath.Join(dir, sid+".jsonl")))
 	if err != nil {
 		t.Fatalf("open authoritative store: %v", err)
 	}
