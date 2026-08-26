@@ -19,6 +19,7 @@ Standing gate to advertise: focused red proofs on the exact base, then focused r
 - `14610b217bef91b5ae3f9147cf71f7a16f531cd8` (`14610b2`, patch-id `c0947c7d15d024c9c8dbe012023611d36f823c42`) records the red fixture `test-mailbox-clock.sh` on base `fb613c364c48709968276d4911b36bbd85643b76`: future top-level messages, already-poisoned cursors, explicit future targets, and poisoned-guard handling fail; normal ordering and no-content-loss pass.
 - `914c527d2efc334fb3812fc53b1125d206ab545c` (patch-id `10cb762b575702cb95e78eb947e117e4d06d38bf`) adds UTC timestamp guards to `agent-mailbox-guard.sh` and `agent-mailbox-mark-read.sh`, preserving future files and refusing future cursor advancement.
 - Adoption gate: run the actual fixture from `git show --name-only 14610b2` five times, run `bash -n` on both scripts, and report `shellcheck` as `UNCERTAIN` if unavailable. Do not install this helper into a live shared tree without explicit authorization.
+- Personally observed on the hardening branch: `bash builds/steering-kit/tests/test-mailbox-clock.sh` passed all seven fixtures on each of five runs; `bash -n` passed for both scripts; `shellcheck` was `UNCERTAIN` because unavailable. The corrected evidence receipt to Ozzy is `20260826T200201Z-43fb25d9-independent-cursor-hardening-g.md`.
 
 ## Four-phase, 14-skill cadence
 
