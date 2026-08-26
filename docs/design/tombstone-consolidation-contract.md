@@ -33,8 +33,8 @@ We evaluate two design shapes for resolving this defect:
 - **Cost Analysis**:
   - In pruneTombstoned(con), lifecycle.LoadTombstones("") opens and reads the .deleted sidecar file.
   - If .deleted does not exist or is empty (the standard state when no sessions have been deleted), LoadTombstones returns an empty map (len(tombstoned) == 0) and returns nil immediately. Exactly zero SQL statements are issued. The overhead is a single file-system stat/open (microseconds).
-  - If tombstones exist (typically a few session IDs), pruneTombstoned executes targeted DELETE statements on sessions (indexed by primary key id) and messages (indexed by idx_msg_session). These B-Tree index lookups and deletes execute in sub-millisecond time.
-  - Consolidation is invoked during explicit CLI commands (rawclaw consolidate) or post-indexing syncs. An unconditional tombstone check has zero perceptible performance impact.
+  - If tombstones exist, pruneTombstoned first performs an indexed primary-key existence check (`SELECT 1 FROM sessions WHERE id=?`) for each ID. A missing ID skips the six-table delete entirely. For an ID that exists, six `DELETE ... LIKE` statements still run, now inside one transaction instead of six separate autocommits.
+  - Consolidation is invoked during explicit CLI commands (rawclaw consolidate) or post-indexing syncs. The unconditional tombstone check therefore runs on each pass, while the existence check avoids unnecessary delete work for IDs absent from the destination.
 
 - **State & Invariants**:
   - Requires no additional state or schema changes.
@@ -61,7 +61,7 @@ We choose Candidate (a).
 Rationale:
 1. Decoupled Responsibilities: Source-change detection determines whether source databases need to be re-read; tombstone pruning determines whether the consolidated store satisfies the deletion invariant ("A user delete is the one absence that must propagate"). Gating destination hygiene on source file modification was a category error.
 2. Minimal Complexity & Zero State: Candidate (a) introduces no watermark tracking for tombstones in SQLite meta, avoiding state drift and synchronization bugs.
-3. Negligible Cost: With no tombstones present, (a) issues 0 SQL queries. With tombstones present, indexed deletion across a handful of IDs is sub-millisecond.
+3. Bounded Cost: With no tombstones present, (a) issues 0 SQL queries. Missing tombstoned IDs avoid the six-table delete; existing IDs use one transaction for the six targeted deletes.
 
 ## 4. Implementation Plan
 
