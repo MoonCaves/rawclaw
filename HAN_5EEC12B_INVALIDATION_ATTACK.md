@@ -59,3 +59,29 @@ only on these two intentional red proofs (the package reported about 101 s).
 
 No production files were changed. New red fixture only:
 `internal/cli/invalidation_attack_test.go`.
+
+## Comparison: `00e587d`
+
+A fresh detached comparison worktree was created at `00e587d`. The existing
+filters passed under race:
+
+```text
+go test -race -count=1 ./internal/cli -run 'TestOverlayAuthoritativeTopics(ReplacesSessionSet|RemovesDeletedTopics)|TestRunTagPublishChildHonorsCanceledContext'
+go test -race -count=1 ./internal/index -run '^TestSyncConsolidatedFromContext$'
+go test -race -count=1 ./internal/index -run '^TestConsolidate_OriginAuthorityWinsForConflictingTopicSegments$'
+```
+
+These prove the CLI deletion/cancellation fixes and preserve legitimate
+multi-source co-contributor authority. Applying Ozzy's test-only
+`bfc2fbd7f257800cfa3a33154fbd381441a33b9c` to a fresh comparison worktree and
+then cherry-picking the `00e587d` production fix produced a stable red:
+
+```text
+go test -race -count=1 ./internal/index -run '^TestConsolidate_DeletesTopicsRemovedFromSource$'
+FAIL: removed topic B remains in consolidated store: 1 rows
+```
+
+Therefore `00e587d` kills `9c845ed` and the CLI half of `fab3c3d`, but does not
+kill `bfc2fbd7`: publication still leaves a deleted topic ghost. Verdict:
+partial correction, BLOCKED. Transaction and watermark-query cancellation
+remain UNCERTAIN and were not broadened here.
