@@ -335,6 +335,26 @@ func TestOverlayAuthoritativeTopicsKeepsSameStartAcrossSessions(t *testing.T) {
 	}
 }
 
+func TestOverlayAuthoritativeTopicsRemovesDeletedTopics(t *testing.T) {
+	consolidated := []store.TopicSegment{{SessionID: "session-a", StartUUID: "gone", Topic: "deleted"}}
+	if got := overlayAuthoritativeTopics(consolidated, nil); len(got) != 0 {
+		t.Fatalf("overlay retained deleted topic: %#v", got)
+	}
+}
+
+func TestRunTagPublishChildHonorsCanceledContext(t *testing.T) {
+	root := newCfgRoot(t)
+	sid := "7f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
+	dir := writeTaggableSession(t, root, "proj-tag-cancel", sid,
+		"55555555-aaaa-bbbb-cccc-000000000001", "66666666-aaaa-bbbb-cccc-000000000002")
+	dbPath := filepath.Join(dir, "tags.db")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := runTagPublishChild(ctx, io.Discard, dbPath); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runTagPublishChild canceled error = %v, want context.Canceled", err)
+	}
+}
+
 func TestRunPrewarmRegeneratesWhenDumpMissing(t *testing.T) {
 	dump, src, c := runPrewarmTest(t, "one", []model.Message{{
 		Role: "user", Text: "one", UUID: "11111111-one",
