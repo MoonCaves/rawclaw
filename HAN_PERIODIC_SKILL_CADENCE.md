@@ -13,7 +13,7 @@ The two supervisors should keep the method skills below always available in thei
 
 | Boundary | Supervisor action | Exact receipt |
 |---|---|---|
-| Every ~15-minute tick | Claim spy, mailbox cursor check, status of every lane | A dated mailbox note with CONFIRMED, REBUTTED, UNCERTAIN, or NO SCORE CLAIM; include commit, source path, and next action. A blocked command is not a green result. |
+| Every 10-minute scheduler tick | Claim spy, mailbox cursor check, status of every lane | A dated mailbox note with CONFIRMED, REBUTTED, UNCERTAIN, or NO SCORE CLAIM; include commit, source path, and next action. A blocked command is not a green result. |
 | Start of each phase | Use the phase’s 2–4 skills below; do not run unrelated audits | Phase note naming skill, command, input commit, and output path. |
 | Every commit | Re-read status, run the requested focused gate, and record the commit SHA | git status --short --branch, exact gate output, SHA, upstream state, and mailbox receipt. |
 | Daily boundary | Rotate the deeper architecture, harness, and performance audits | A dated scorecard listing findings, false positives, accepted deviations, and deferred lanes. |
@@ -70,7 +70,7 @@ Exact receipt: in the phase note, state the first ladder rung that held, files t
 
 Source: /Users/jay-m4/.claude/plugins/cache/ponytail/ponytail/4.9.0/skills/ponytail-review/SKILL.md.
 
-Trigger/frequency: after a candidate commit and once per daily mutation sweep, scoped to that diff. Do not run on every fifteen-minute tick.
+Trigger/frequency: after a candidate commit and once per daily mutation sweep, scoped to that diff. Do not run on every 10-minute scheduler tick.
 
 Exact receipt:
 
@@ -143,7 +143,7 @@ Source: /Users/jay-m4/org/skills-upstream/shared/parallel-feature-development/SK
 
 Trigger/frequency: launch and harvest phases; daily integration review when branches diverge. Apply the cardinal rule of explicit file ownership and interface contracts.
 
-Exact receipt: branch/worktree path, base SHA, owned-file list, integration strategy, commit SHAs, and clean/upstream-equal status. Furiosa’s explicit adoption of the direct-collaboration Luna launch mechanism is concrete evidence that this boundary can be used operationally; record it as adoption, not as a claim of product correctness.
+Exact receipt: branch/worktree path, base SHA, owned-file list, integration strategy, commit SHAs, and clean/upstream-equal status. Furiosa’s explicit adoption of the direct-collaboration Luna launch mechanism is recorded by immutable receipt 20260826T192710Z-74df1457-class-a-confirmed-han-plus-3-d.md: Han +3 for launch-mechanism adoption only, not product correctness. The later score-entry SHA is pending until received.
 
 False-positive trap: separate worktrees do not prevent overlapping ownership of generated/index files or uncommitted changes. Adoption value: makes races cheap and recoverable while protecting the shared checkout and keeping integration auditable.
 
@@ -194,4 +194,4 @@ Report the total per supervisor, the three weakest skills, and one concrete chan
 
 ## Evidence boundary
 
-Graphify orientation plus saved-outcome feedback is the largest demonstrated adoption win in this cadence. The mailbox PreToolUse denial demonstrates that enforcement can make a required read/action happen, but it is not evidence that every hook or scheduler is healthy. Furiosa’s direct-collaboration Luna launch adoption demonstrates mechanism uptake, but not product correctness. Stop/SubagentStop remains UNCERTAIN. No product files are changed by this document.
+Graphify orientation plus saved-outcome feedback is the largest demonstrated adoption win in this cadence. The mailbox PreToolUse denial demonstrates that enforcement can make a required read/action happen, but it is not evidence that every hook or scheduler is healthy. Furiosa’s direct-collaboration Luna launch adoption is backed by immutable receipt 20260826T192710Z-74df1457-class-a-confirmed-han-plus-3-d.md and scores Han +3 for launch-mechanism adoption only, not product correctness; the later score-entry SHA is pending until received. Stop/SubagentStop remains UNCERTAIN. No product files are changed by this document.
