@@ -24,7 +24,7 @@ type prewarmFingerprint struct {
 
 // newPrewarmCmd wires the internal closeout prewarm command.
 func newPrewarmCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:           "prewarm <session8>",
 		Short:         "Prepare a session closeout dump",
 		Hidden:        true,
@@ -35,7 +35,6 @@ func newPrewarmCmd() *cobra.Command {
 			return runPrewarmCmd(cmd.OutOrStdout(), args[0], nil, nil, sources.Registered())
 		},
 	}
-	return cmd
 }
 
 func runPrewarmCmd(
@@ -45,9 +44,8 @@ func runPrewarmCmd(
 	more agentproto.ScopeFn,
 	registrations []source.Registration,
 ) error {
-	// An explicitly empty scope makes LocateSession use only its consolidated
-	// store probe; it cannot fall through to the per-project sweep.
-	_, _, locateErr := locatePrewarmStore(sessionArg)
+	// Only a one-store miss requires folding the targeted refresh result.
+	_, _, locateErr := agentproto.LocateConsolidatedSession(sessionArg)
 	dbPath, fullSID, toFold, err := refreshTagSession(sessionArg, scope, more, registrations)
 	if err != nil {
 		return err
@@ -70,29 +68,25 @@ func runPrewarmCmd(
 	if err != nil {
 		return fmt.Errorf("open %q read-only: %w", dbPath, err)
 	}
-	segs := readConsolidatedTopics(fullSID)
-	var dump struct {
-		Fingerprint prewarmFingerprint
-		Content     string
-	}
+	defer con.Close()
+
 	var content bytes.Buffer
-	if err := runTagPrepWithTopics(&content, con, fullSID, segs); err != nil {
-		_ = con.Close()
+	if err := runTagPrepWithTopics(&content, con, fullSID, readConsolidatedTopics(fullSID)); err != nil {
 		return err
 	}
-	_ = con.Close()
-	dump.Content = content.String()
+
+	var fp prewarmFingerprint
 	if sourcePath != "" {
 		st, err := os.Stat(sourcePath)
 		if err != nil {
 			return fmt.Errorf("stat transcript %s: %w", sourcePath, err)
 		}
-		dump.Fingerprint = prewarmFingerprint{MTime: st.ModTime().UnixNano(), Size: st.Size()}
+		fp = prewarmFingerprint{MTime: st.ModTime().UnixNano(), Size: st.Size()}
 	}
-	if err := durable.WriteAtomic(dumpPath, []byte(dump.Content)); err != nil {
+	if err := durable.WriteAtomic(dumpPath, content.Bytes()); err != nil {
 		return fmt.Errorf("write prewarm dump: %w", err)
 	}
-	state, err := json.Marshal(dump.Fingerprint)
+	state, err := json.Marshal(fp)
 	if err != nil {
 		return err
 	}
@@ -101,10 +95,6 @@ func runPrewarmCmd(
 	}
 	_, _ = io.WriteString(w, dumpPath+"\n")
 	return nil
-}
-
-func locatePrewarmStore(sessionArg string) (string, string, error) {
-	return agentproto.LocateConsolidatedSession(sessionArg)
 }
 
 func prewarmSourcePath(dbPath, sessionID string) string {
