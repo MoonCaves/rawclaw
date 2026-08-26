@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -127,6 +129,161 @@ func TestPrimeScripts_StopLaunchDetachedPrewarm(t *testing.T) {
 			}
 			t.Fatal("detached prewarm did not run")
 		})
+	}
+}
+
+func TestPrimeScripts_SessionStartCatalogClaimIsPathSafe(t *testing.T) {
+	shells := []struct {
+		name string
+		path string
+	}{{name: "sh", path: "sh"}}
+	if _, err := exec.LookPath("dash"); err == nil {
+		shells = append(shells, struct {
+			name string
+			path string
+		}{name: "dash", path: "dash"})
+	}
+	templates := []struct {
+		name string
+		tmpl string
+		json bool
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
+	}
+	tests := []struct {
+		name       string
+		sessionID  string
+		kind       string
+		wantIngest bool
+	}{
+		{name: "fifo", sessionID: "claim-session-123", kind: "fifo"},
+		{name: "directory", sessionID: "claim-session-123", kind: "directory"},
+		{name: "traversal", sessionID: "x/../../outside", kind: "invalid-traversal", wantIngest: true},
+	}
+
+	for _, shell := range shells {
+		shellPath, err := exec.LookPath(shell.path)
+		if err != nil {
+			continue
+		}
+		for _, tmpl := range templates {
+			if tmpl.json {
+				if _, err := exec.LookPath("python3"); err != nil {
+					continue
+				}
+			}
+			for _, tt := range tests {
+				t.Run(tmpl.name+"/"+shell.name+"/"+tt.name, func(t *testing.T) {
+					root := t.TempDir()
+					catalogDir := filepath.Join(root, "catalog")
+					if err := os.Mkdir(catalogDir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+
+					entry := filepath.Join(catalogDir, tt.sessionID)
+					var beforeMode os.FileMode
+					switch tt.kind {
+					case "fifo":
+						if err := syscall.Mkfifo(entry, 0o644); err != nil {
+							t.Fatal(err)
+						}
+					case "directory":
+						if err := os.Mkdir(entry, 0o755); err != nil {
+							t.Fatal(err)
+						}
+					case "invalid-traversal":
+						if err := os.Mkdir(filepath.Join(catalogDir, ".tmp.x"), 0o755); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if tt.kind == "fifo" || tt.kind == "directory" {
+						info, err := os.Lstat(entry)
+						if err != nil {
+							t.Fatal(err)
+						}
+						beforeMode = info.Mode()
+					}
+
+					stubDir := t.TempDir()
+					logPath := filepath.Join(t.TempDir(), "calls.log")
+					stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
+					if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					script := strings.Replace(renderHookScript(tmpl.tmpl, "''"), "set -eu\n", "set -eu\ntrap 'wait' 0\n", 1)
+					scriptPath := filepath.Join(t.TempDir(), "prime.sh")
+					if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+						t.Fatal(err)
+					}
+
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					cmd := exec.CommandContext(ctx, shellPath, scriptPath)
+					cmd.Env = append(os.Environ(),
+						"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+						"RAWCLAW_TEST_LOG="+logPath,
+						"RAWCLAW_CATALOG_DIR="+catalogDir,
+					)
+					cmd.Stdin = strings.NewReader(`{"session_id":"` + tt.sessionID + `"}`)
+					out, err := cmd.Output()
+					if ctx.Err() == context.DeadlineExceeded {
+						t.Fatalf("hook hung on %s", tt.kind)
+					}
+					if err != nil {
+						t.Fatalf("hook failed: %v; output=%q", err, out)
+					}
+
+					calls, err := os.ReadFile(logPath)
+					if err != nil && !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
+					gotCall := strings.TrimSpace(string(calls))
+					if tt.wantIngest {
+						if want := "ingest " + tt.sessionID; gotCall != want {
+							t.Fatalf("rawclaw call = %q, want %q", gotCall, want)
+						}
+					} else if gotCall != "" {
+						t.Fatalf("unexpected rawclaw call: %q", gotCall)
+					}
+
+					switch tt.kind {
+					case "fifo", "directory":
+						after, err := os.Lstat(entry)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if after.Mode() != beforeMode {
+							t.Fatalf("existing path mode changed from %v to %v", beforeMode, after.Mode())
+						}
+						if tt.kind == "directory" {
+							entries, err := os.ReadDir(entry)
+							if err != nil || len(entries) != 0 {
+								t.Fatalf("existing directory mutated: %v, %v", entries, err)
+							}
+						}
+					}
+					if tt.kind == "invalid-traversal" {
+						rootEntries, err := os.ReadDir(root)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if len(rootEntries) != 1 || rootEntries[0].Name() != "catalog" {
+							t.Fatalf("unsafe session id escaped catalog: %v", rootEntries)
+						}
+					}
+					catalogEntries, err := os.ReadDir(catalogDir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, catalogEntry := range catalogEntries {
+						if strings.HasPrefix(catalogEntry.Name(), ".tmp.") && catalogEntry.Name() != ".tmp.x" {
+							t.Fatalf("temporary claim leaked: %s", catalogEntry.Name())
+						}
+					}
+				})
+			}
+		}
 	}
 }
 
