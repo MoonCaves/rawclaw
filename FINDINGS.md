@@ -18,6 +18,7 @@
 | 5 | **Prewarm Refresh & SQL Simplification** | `cc40455` | `internal/cli/cmd_prewarm.go:40-75,100-115` | Branching in `runPrewarmCmd` duplicated `refreshTagSession` calls. Streamlining with `agentproto.LocateConsolidatedSession` and collapsing `prewarmSourcePath` into a single `COALESCE` query avoids redundant code and queries. | **ADAPT_TO_CURRENT** |
 | 6 | **Collapse `antigravityHooksPath` into `codexHooksPath`** | `ee187c2` | `internal/cli/setup.go:860` | Proposal to alias `antigravityHooksPath` to `codexHooksPath` because both point to `hooks.json`. | **REJECT** (Distinct target seam documentation should remain explicit; sharing across disparate tool namespaces creates accidental coupling). |
 | 7 | **Replace `prewarmSourcePath` with `store.SessionBackingFor`** | `ee187c2` | `internal/cli/cmd_prewarm.go:100` | Proposal to replace direct query with `store.SessionBackingFor`. | **REJECT** (`prewarmSourcePath` intentionally falls back to `file_index` for unindexed legacy sessions, which `SessionBackingFor` does not cover). |
+| 8 | **Atomic POSIX `noclobber` Catalog Claim** | `92d0067` | `internal/cli/setup.go:64-88`, `internal/cli/cmd_ingest_test.go:131-205` | Using subshell `(set -C; : > "$entry") 2>/dev/null` provides kernel-level atomic `O_CREAT | O_EXCL` single-winner election across concurrent SessionStart triggers, preventing race windows between file check and write. | **ADAPT_TO_CURRENT** |
 
 ---
 
@@ -90,3 +91,14 @@
 - **File & Line:** `internal/cli/cmd_prewarm.go:100`
 - **Mechanism:** Proposal to replace `prewarmSourcePath` with `store.SessionBackingFor`.
 - **Ruling:** **REJECT** (`prewarmSourcePath` intentionally falls back to `file_index` for unindexed legacy sessions, which `SessionBackingFor` does not cover).
+
+---
+
+### Finding 8: Atomic POSIX `noclobber` Catalog Claim
+- **Unowned SHA:** `92d0067`
+- **File & Line:** `internal/cli/setup.go:64-88,155-179`, `internal/cli/cmd_ingest_test.go:131-205`
+- **Mechanism:**
+  The subshell command `(set -C; : > "$entry") 2>/dev/null` uses the standard POSIX `noclobber` option (`O_CREAT | O_EXCL`) to guarantee atomic single-winner file creation across concurrent `SessionStart` hooks. The winner (`claimed=1`) creates rich JSON in a temporary file, moves it into place, and launches detached `rawclaw ingest "$session_id"`. Non-winners (`claimed=0`) detect `elif [ -e "$entry" ]; then exit 0; fi` and exit immediately without spawning duplicate ingest.
+- **Reproducible Evidence:**
+  `TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest` spins up 2 parallel goroutines executing the prime script simultaneously on the same session ID and verifies that exactly 1 call to `ingest <session_id>` is recorded in `calls.log`.
+- **Ruling:** **ADAPT_TO_CURRENT** (Adopt the `(set -C; : > "$entry")` POSIX atomic claim and concurrency test in `setup.go`, `catalog_hook_test.go`, and `cmd_ingest_test.go`, on top of unified helpers and `rawclawBanner` interpolation).

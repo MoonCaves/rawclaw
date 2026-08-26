@@ -251,8 +251,12 @@ func TestPrimeScript_CatalogWriteFailure_NeverFailsHook(t *testing.T) {
 		t.Skip("no sh available")
 	}
 
+	logPath := filepath.Join(t.TempDir(), "calls.log")
 	stubDir := t.TempDir()
-	stubRawclaw(t, stubDir)
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
+	if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	scriptPath := filepath.Join(t.TempDir(), "prime.sh")
 	if err := os.WriteFile(scriptPath, []byte(renderHookScript(rawclawPrimeScript, "''")), 0o755); err != nil {
@@ -268,6 +272,7 @@ func TestPrimeScript_CatalogWriteFailure_NeverFailsHook(t *testing.T) {
 	cmd := exec.Command(sh, scriptPath)
 	cmd.Env = append(os.Environ(),
 		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"RAWCLAW_TEST_LOG="+logPath,
 		"RAWCLAW_CATALOG_DIR="+badCatalogDir,
 	)
 	cmd.Stdin = strings.NewReader(`{"session_id":"fail-test-sess","cwd":"/test"}`)
@@ -278,6 +283,17 @@ func TestPrimeScript_CatalogWriteFailure_NeverFailsHook(t *testing.T) {
 	if !strings.Contains(string(out), "[rawclaw] Raw transcript history") {
 		t.Errorf("banner should still print despite catalog write failure; got: %q", string(out))
 	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(logPath); err == nil {
+			if got := strings.TrimSpace(string(b)); got == "ingest fail-test-sess" {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("detached ingest did not run on catalog write failure")
 }
 
 // TestSetupCmd_UpgradesLegacyPrimeScript verifies that re-running `rawclaw setup`

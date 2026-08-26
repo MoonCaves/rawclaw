@@ -114,17 +114,106 @@ func TestPrimeScripts_StopLaunchDetachedPrewarm(t *testing.T) {
 				t.Fatalf("Stop hook failed: %v, out: %s", err, out)
 			}
 
-			deadline := time.Now().Add(time.Second)
+			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
 				if b, err := os.ReadFile(logPath); err == nil {
-					if got := strings.TrimSpace(string(b)); got != "prewarm session-stop-123456" {
+					if got := strings.TrimSpace(string(b)); got == "prewarm session-stop-123456" {
+						return
+					} else if got != "" {
 						t.Fatalf("prewarm args = %q", got)
 					}
-					return
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
 			t.Fatal("detached prewarm did not run")
+		})
+	}
+}
+
+func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+
+	for _, tc := range []struct {
+		name string
+		tmpl string
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			stubDir := filepath.Join(root, "bin")
+			if err := os.MkdirAll(stubDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			logPath := filepath.Join(root, "calls.log")
+			stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
+			if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			scriptPath := filepath.Join(root, "prime.sh")
+			if err := os.WriteFile(scriptPath, []byte(renderHookScript(tc.tmpl, "''")), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			const sessionID = "dedup-session-123"
+			env := append(os.Environ(),
+				"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"RAWCLAW_TEST_LOG="+logPath,
+				"RAWCLAW_CATALOG_DIR="+filepath.Join(root, "catalog"),
+				"HOME="+root,
+			)
+			payload := `{"session_id":"` + sessionID + `"}`
+			start := make(chan struct{})
+			errs := make(chan error, 2)
+			var wg sync.WaitGroup
+			for range 2 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					cmd := exec.Command(sh, scriptPath)
+					cmd.Env = env
+					cmd.Stdin = strings.NewReader(payload)
+					if out, err := cmd.CombinedOutput(); err != nil {
+						errs <- fmt.Errorf("SessionStart failed: %w (out=%q)", err, out)
+					}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				t.Fatal(err)
+			}
+
+			deadline := time.Now().Add(5 * time.Second)
+			seen := false
+			for time.Now().Before(deadline) {
+				if b, err := os.ReadFile(logPath); err == nil {
+					if got := strings.TrimSpace(string(b)); got == "ingest "+sessionID {
+						seen = true
+						break
+					} else if got != "" {
+						t.Fatalf("ingest calls = %q, want exactly one call", got)
+					}
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if !seen {
+				t.Fatal("detached ingest did not run")
+			}
+			time.Sleep(100 * time.Millisecond)
+			b, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatalf("read ingest log: %v", err)
+			}
+			if got := strings.TrimSpace(string(b)); got != "ingest "+sessionID {
+				t.Fatalf("ingest calls = %q, want exactly one call", got)
+			}
 		})
 	}
 }

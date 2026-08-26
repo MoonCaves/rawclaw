@@ -21,6 +21,25 @@ import (
 // identity check holds on Windows too.
 const rawclawMarker = "hooks/rawclaw/"
 
+const rawclawBanner = `[rawclaw] Raw transcript history for context — the receipts + thought process behind past
+sessions, across every project on this machine (not just this one's native session folder).
+Fast FTS5/BM25 search: cheaper than grepping your own agent's session folders (Claude Code
+projects/, Codex sessions/) — use rawclaw instead and save tokens + greps. Memory providers
+hold the superseding current truth; rawclaw is the dated raw record underneath it.
+  rawclaw "query"              search every session  (--this-project / --include-path <re> to scope; --sort newest)
+  rawclaw read <ref>           the matched message whole, with context  (--more / --around to expand)
+  rawclaw outline <sess8>      a session's goal -> resolution arc
+--json for structured output; --help for the rest.
+If the user seems to want to pick up a past session, offering to resume/fork it can help.
+
+Session closeout: whenever the user signals that the current session is ending or should be
+closed out, immediately delegate tagging to a background subagent so the main agent stays
+available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + ` (already fast if pre-warming
+ran, no extra step needed there), chooses a few topic segments, then runs
+` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
+what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
+systems own current truth. RawClaw only points to where something was discussed.`
+
 // rawclawPrimeScript is the TEMPLATE installed at <configDir>/hooks/rawclaw/
 // prime.sh (via renderHookScript) and registered as a Claude Code SessionStart
 // hook. POSIX sh only — a SessionStart or Stop hook runs with no guaranteed
@@ -61,47 +80,38 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
-	if [ -f "$entry" ]; then
+	claimed=0
+	if (set -C; : > "$entry") 2>/dev/null; then
+		claimed=1
+	elif [ -e "$entry" ]; then
 		exit 0
 	fi
-	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
-	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
-	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
-	# Fallback ladder uses 'true >' not ': >': ':' is a POSIX special builtin, so
-	# its redirection failure exits dash (Linux /bin/sh) despite the '|| true'.
-	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
-	{
-		printf '{\n'
-		printf '  "session_id": "%s",\n' "$esc_session_id"
-		printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
-		printf '  "cwd": "%s",\n' "$esc_cwd"
-		printf '  "source": "claude"\n'
-		printf '}\n'
-	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	if [ "$claimed" -eq 1 ]; then
+		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
+		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
+		cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+		# The empty claim is already a valid dedup marker. Replace it atomically
+		# with rich JSON when possible; a crash before mv still suppresses repeats.
+		tmp_entry="$catalog_dir/.tmp.$session_id.$$"
+		{
+			printf '{\n'
+			printf '  "session_id": "%s",\n' "$esc_session_id"
+			printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+			printf '  "cwd": "%s",\n' "$esc_cwd"
+			printf '  "source": "claude"\n'
+			printf '}\n'
+		} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || true
+		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	elif [ ! -e "$entry" ]; then
+		# Fail-soft: if catalog persistence failed due to permissions or I/O, ingest still launches.
+		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
 fi
 
 cat <<'BANNER'
-[rawclaw] Raw transcript history for context — the receipts + thought process behind past
-sessions, across every project on this machine (not just this one's native session folder).
-Fast FTS5/BM25 search: cheaper than grepping your own agent's session folders (Claude Code
-projects/, Codex sessions/) — use rawclaw instead and save tokens + greps. Memory providers
-hold the superseding current truth; rawclaw is the dated raw record underneath it.
-  rawclaw "query"              search every session  (--this-project / --include-path <re> to scope; --sort newest)
-  rawclaw read <ref>           the matched message whole, with context  (--more / --around to expand)
-  rawclaw outline <sess8>      a session's goal -> resolution arc
---json for structured output; --help for the rest.
-If the user seems to want to pick up a past session, offering to resume/fork it can help.
-
-Session closeout: whenever the user signals that the current session is ending or should be
-closed out, immediately delegate tagging to a background subagent so the main agent stays
-available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + ` (already fast if pre-warming
-ran, no extra step needed there), chooses a few topic segments, then runs
-` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
-what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
-systems own current truth. RawClaw only points to where something was discussed.
+` + rawclawBanner + `
 BANNER
 `
 
@@ -147,26 +157,34 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
-	if [ -f "$entry" ]; then
+	claimed=0
+	if (set -C; : > "$entry") 2>/dev/null; then
+		claimed=1
+	elif [ -e "$entry" ]; then
 		exit 0
 	fi
-	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
-	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
-	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
-	# Fallback ladder uses 'true >' not ': >': ':' is a POSIX special builtin, so
-	# its redirection failure exits dash (Linux /bin/sh) despite the '|| true'.
-	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
-	{
-		printf '{\n'
-		printf '  "session_id": "%s",\n' "$esc_session_id"
-		printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
-		printf '  "cwd": "%s",\n' "$esc_cwd"
-		printf '  "source": "codex"\n'
-		printf '}\n'
-	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	if [ "$claimed" -eq 1 ]; then
+		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
+		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
+		cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+		# The empty claim is already a valid dedup marker. Replace it atomically
+		# with rich JSON when possible; a crash before mv still suppresses repeats.
+		tmp_entry="$catalog_dir/.tmp.$session_id.$$"
+		{
+			printf '{\n'
+			printf '  "session_id": "%s",\n' "$esc_session_id"
+			printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+			printf '  "cwd": "%s",\n' "$esc_cwd"
+			printf '  "source": "codex"\n'
+			printf '}\n'
+		} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || true
+		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	elif [ ! -e "$entry" ]; then
+		# Fail-soft: if catalog persistence failed due to permissions or I/O, ingest still launches.
+		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
 fi
 
 # No python3 for JSON encoding — silent no-op rather than a hook error (a
@@ -179,46 +197,10 @@ command -v python3 >/dev/null 2>&1 || exit 0
 # additionalContext instead of rejecting it.
 {
 cat <<'BANNER'
-[rawclaw] Raw transcript history for context — the receipts + thought process behind past
-sessions, across every project on this machine (not just this one's native session folder).
-Fast FTS5/BM25 search: cheaper than grepping your own agent's session folders (Claude Code
-projects/, Codex sessions/) — use rawclaw instead and save tokens + greps. Memory providers
-hold the superseding current truth; rawclaw is the dated raw record underneath it.
-  rawclaw "query"              search every session  (--this-project / --include-path <re> to scope; --sort newest)
-  rawclaw read <ref>           the matched message whole, with context  (--more / --around to expand)
-  rawclaw outline <sess8>      a session's goal -> resolution arc
---json for structured output; --help for the rest.
-If the user seems to want to pick up a past session, offering to resume/fork it can help.
-
-Session closeout: whenever the user signals that the current session is ending or should be
-closed out, immediately delegate tagging to a background subagent so the main agent stays
-available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + ` (already fast if pre-warming
-ran, no extra step needed there), chooses a few topic segments, then runs
-` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
-what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
-systems own current truth. RawClaw only points to where something was discussed.
+` + rawclawBanner + `
 BANNER
 } | python3 -c 'import json,sys; sys.stdout.write(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": sys.stdin.buffer.read().decode("utf-8","replace")}}))'
 `
-
-const rawclawBanner = `[rawclaw] Raw transcript history for context — the receipts + thought process behind past
-sessions, across every project on this machine (not just this one's native session folder).
-Fast FTS5/BM25 search: cheaper than grepping your own agent's session folders (Claude Code
-projects/, Codex sessions/) — use rawclaw instead and save tokens + greps. Memory providers
-hold the superseding current truth; rawclaw is the dated raw record underneath it.
-  rawclaw "query"              search every session  (--this-project / --include-path <re> to scope; --sort newest)
-  rawclaw read <ref>           the matched message whole, with context  (--more / --around to expand)
-  rawclaw outline <sess8>      a session's goal -> resolution arc
---json for structured output; --help for the rest.
-If the user seems to want to pick up a past session, offering to resume/fork it can help.
-
-Session closeout: whenever the user signals that the current session is ending or should be
-closed out, immediately delegate tagging to a background subagent so the main agent stays
-available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + ` (already fast if pre-warming
-ran, no extra step needed there), chooses a few topic segments, then runs
-` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
-what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
-systems own current truth. RawClaw only points to where something was discussed.`
 
 // rawclawAntigravityPrimeScriptTemplate is the Antigravity variant of the
 // discovery script (installed at <configDir>/hooks/rawclaw/prime.sh for the
