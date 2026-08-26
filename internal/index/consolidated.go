@@ -450,11 +450,26 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	if err != nil {
 		return st, fmt.Errorf("open consolidated store: %w", err)
 	}
-	defer con.Close()
+	defer func() {
+		started := time.Now()
+		slog.Info("consolidate fold phase", "phase", "connection-close", "event", "start")
+		_ = con.Close()
+		slog.Info("consolidate fold phase", "phase", "connection-close", "duration", time.Since(started))
+	}()
+	phase := func(name string) func() {
+		started := time.Now()
+		slog.Info("consolidate fold phase", "phase", name, "event", "start")
+		return func() {
+			slog.Info("consolidate fold phase", "phase", name, "duration", time.Since(started))
+		}
+	}
+	done := phase("schema-migrate")
 	if err := EnsureSchema(con, sourceClaude); err != nil {
+		done()
 		return st, fmt.Errorf("ensure consolidated schema: %w", err)
 	}
 	if err := healUpgradedConsolidatedStore(con); err != nil {
+		done()
 		// Healing MUST precede backfill: do not populate session_sources if healing did not succeed.
 		return st, fmt.Errorf("heal upgraded store: %w", err)
 	}
@@ -463,16 +478,20 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	// against the one store can answer "nothing is tagged yet" instead of
 	// failing on a missing table.
 	if err := store.EnsureTopicSchema(con); err != nil {
+		done()
 		return st, fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 	if rebuild {
 		if err := restoreTagState(con, preserved); err != nil {
+			done()
 			return st, fmt.Errorf("restore consolidated tags: %w", err)
 		}
 	}
 	if err := migrateSessionSources(con); err != nil {
+		done()
 		return st, fmt.Errorf("migrate session sources: %w", err)
 	}
+	done()
 
 	for _, src := range srcPaths {
 		n, _, skipped, err := consolidateOne(con, src)
@@ -512,18 +531,23 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 			return st, fmt.Errorf("recount messages: %w", err)
 		}
 	}
+	done = phase("tombstone-prune")
 	if err := pruneTombstoned(con); err != nil {
+		done()
 		return st, err
 	}
+	done()
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&st.Sessions); err != nil {
 		return st, fmt.Errorf("count sessions: %w", err)
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM messages").Scan(&st.Messages); err != nil {
 		return st, fmt.Errorf("count messages: %w", err)
 	}
+	done = phase("watermark-stamp")
 	if err := StampIngestWatermark(con); err != nil {
 		slog.Debug("stamp ingest watermark failed", "err", err)
 	}
+	done()
 	return st, nil
 }
 
@@ -544,20 +568,38 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if err != nil {
 		return fmt.Errorf("open consolidated store: %w", err)
 	}
-	defer con.Close()
+	defer func() {
+		started := time.Now()
+		slog.Info("consolidate fold phase", "source", filepath.Base(srcPath), "phase", "connection-close", "event", "start")
+		_ = con.Close()
+		slog.Info("consolidate fold phase", "source", filepath.Base(srcPath), "phase", "connection-close", "duration", time.Since(started))
+	}()
+	phase := func(name string) func() {
+		started := time.Now()
+		slog.Info("consolidate fold phase", "source", filepath.Base(srcPath), "phase", name, "event", "start")
+		return func() {
+			slog.Info("consolidate fold phase", "source", filepath.Base(srcPath), "phase", name, "duration", time.Since(started))
+		}
+	}
+	done := phase("schema-migrate")
 	if err := EnsureSchema(con, sourceClaude); err != nil {
+		done()
 		return fmt.Errorf("ensure consolidated schema: %w", err)
 	}
 	if err := healUpgradedConsolidatedStore(con); err != nil {
+		done()
 		// Healing MUST precede backfill: do not populate session_sources if healing did not succeed.
 		return fmt.Errorf("heal upgraded store: %w", err)
 	}
 	if err := store.EnsureTopicSchema(con); err != nil {
+		done()
 		return fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 	if err := migrateSessionSources(con); err != nil {
+		done()
 		return fmt.Errorf("migrate session sources: %w", err)
 	}
+	done()
 	_, changed, skipped, err := consolidateOne(con, srcPath)
 	if err != nil {
 		return fmt.Errorf("consolidate %s: %w", filepath.Base(srcPath), err)
@@ -565,12 +607,17 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if skipped || !changed {
 		return nil
 	}
+	done = phase("tombstone-prune")
 	if err := pruneTombstoned(con); err != nil {
+		done()
 		return err
 	}
+	done()
+	done = phase("watermark-stamp")
 	if err := StampIngestWatermark(con); err != nil {
 		slog.Debug("stamp ingest watermark failed", "err", err)
 	}
+	done()
 	return nil
 }
 
@@ -636,7 +683,11 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	}
 	done()
 	defer func() {
-		if _, dErr := con.Exec("DETACH DATABASE src"); dErr != nil && err == nil {
+		started := time.Now()
+		slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", "detach", "event", "start")
+		_, dErr := con.Exec("DETACH DATABASE src")
+		slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", "detach", "duration", time.Since(started))
+		if dErr != nil && err == nil {
 			err = fmt.Errorf("detach: %w", dErr)
 		}
 	}()
