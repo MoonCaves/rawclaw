@@ -41,10 +41,12 @@ different desk accepts or reuses them.
 | Norm | fault-slim informational test cleanup | accepted and transplanted by Ozzy (`539de03`) | +3 | `cfccbc6`, patch ID `7addd4ca88dd31164e993883d4b57a4852e8e5b8` |
 | Conor | stop on `6c41f54` check-to-link directory descent defect | accepted: `ln` into existing directory succeeds with rc=0 and creates nested link | +2 | `6c41f54`; direct probe audit receipt 2026-08-26 11:06:21Z; Lenny acknowledgment `022d07e3` |
 | Conor | stop on `aae80a4` un-fenced live generation deletion | accepted: un-fenced snapshot-then-unlink TOCTOU; plain file test omitted open connection race | +2 | `aae80a4`; audit receipt 2026-08-26 11:04:11Z; Lenny acknowledgment `022d07e3` |
+| Conor | session-basename hard-link claim mechanism | accepted and implemented by Lenny in the corrected hook successor | +3 | source `6d20bda`; implementation `c398726`; Lenny/Norm acceptance receipts 2026-08-26 11:12:01Z and 11:13:57Z |
+| Conor | table-driven connection benchmark matrix | accepted and transplanted byte-for-byte on the benchmark path by Lenny (`b5f570b`) | +3 | source `e19b80e`; transplant `b5f570b`; path patch ID `e329cf14aa2bbe6eee6fe1cccff791a7222561cf`; Norm acceptance 2026-08-26 11:17:41Z |
 | Ozzy | stop on `be4ef6c` 99-line helper-coupled test bloat | accepted: unexported `containerMeta` mass deleted in `d7106e9` | +2 | `be4ef6c`; rejection ruling 2026-08-26 11:04:31Z; Lenny deletion commit `d7106e9` |
 | Lenny | shared topic-segment range resolution | accepted and implemented by Ozzy as a fenced one-file salvage | +3 | source `fc1a075`; implementation `b944d08`; pushed harvest head `b944d082e9b8d02611b018a25ce9a049066629fc` |
 
-Current cumulative totals: **Lenny +15, Norm +6, Ozzy +5, Conor +4**.
+Current cumulative totals: **Lenny +15, Conor +10, Norm +6, Ozzy +5**.
 
 ### Defense, narrowing, and withdrawal rulings in Wave 1
 

@@ -28,10 +28,11 @@ New proposals remain pending until a different desk accepts or implements them.
 - **Wire reconciliation and scoring:** Scored cross-desk adoption and stops from the full wire across `.agent-mailbox`, `.agent-mailbox-cc`, and `.agent-mailbox-norm`.
   - Norm earned +6 (+3 for hook cleanup `f026d6a` transplanted by Ozzy `847426c` and Lenny `fa485c8`; +3 for fault-slim test cleanup `cfccbc6` transplanted by Ozzy `539de03`).
   - Conor earned +4 (+2 for stop on Lenny `6c41f54` check-to-link directory descent defect; +2 for stop on Lenny `aae80a4` un-fenced live generation deletion).
+  - Conor earned +6 more when Lenny implemented the `6d20bda` session-basename hard-link claim in `c398726` and transplanted the `e19b80e` benchmark matrix byte-for-byte on the benchmark path in `b5f570b`; Norm independently accepted both adoption rulings.
   - Ozzy earned +2 (+2 for stop on Lenny `be4ef6c` 99-line helper-coupled test bloat, cleanly deleted in `d7106e9`).
   - Lenny earned +3 when Ozzy implemented the isolated `resolveSegmentRange` reuse from `fc1a075` as pushed harvest commit `b944d08`; locator, source-path, and unrelated routine changes were excluded.
   - Lenny accepted rulings, retracted live-generation safety claims on un-fenced prune, and deleted the 99-line test mass in `d7106e9`.
-  - Cumulative totals: Lenny +15, Norm +6, Ozzy +5, Conor +4.
+  - Cumulative totals: Lenny +15, Conor +10, Norm +6, Ozzy +5.
 - **Rival defense and narrowing:**
   - Defended POSIX directory claim (`mkdir` / `O_CREAT|O_EXCL` zero-descent) against hard-link precheck vulnerability where `ln` into an existing directory returns rc=0 and mutates targets.
   - Defended continuous writer fence for refresh generation lifecycle against un-fenced prune TOCTOU where concurrent openers recreate sidecars.
