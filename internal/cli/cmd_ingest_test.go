@@ -238,21 +238,151 @@ func TestPrimeScripts_SessionStartHostilePathMatrix(t *testing.T) {
 						t.Fatalf("hook failed for %s path under %s: %v; output=%q", kind, shellName, err, out)
 					}
 
-					if kind == "new" {
-						if info, err := os.Stat(entry); err != nil || !info.Mode().IsRegular() {
-							t.Fatalf("new claim entry = %v, want regular file", err)
+					if kind == "new" || kind == "missing-parent" {
+						deadline := time.Now().Add(3 * time.Second)
+						seen := false
+						for time.Now().Before(deadline) {
+							if b, err := os.ReadFile(logPath); err == nil {
+								if got := strings.TrimSpace(string(b)); got == "ingest "+sessionID {
+									seen = true
+									break
+								}
+							}
+							time.Sleep(10 * time.Millisecond)
 						}
-					} else if kind == "regular" {
-						got, err := os.ReadFile(entry)
-						if err != nil {
-							t.Fatal(err)
+						if !seen {
+							t.Fatalf("expected ingest call for %s under %s", kind, shellName)
 						}
-						if string(got) != "existing" {
-							t.Fatalf("existing regular claim overwritten to %q", got)
+						if kind == "new" {
+							if info, err := os.Stat(entry); err != nil || !info.Mode().IsRegular() {
+								t.Fatalf("new claim entry = %v, want regular file", err)
+							}
+						}
+					} else {
+						if b, err := os.ReadFile(logPath); err == nil && strings.TrimSpace(string(b)) != "" {
+							t.Fatalf("unexpected ingest call for existing %s under %s: %q", kind, shellName, string(b))
+						}
+						switch kind {
+						case "directory":
+							entries, err := os.ReadDir(entry)
+							if err != nil {
+								t.Fatalf("read existing directory: %v", err)
+							}
+							if len(entries) != 0 {
+								t.Fatalf("existing directory received nested artifacts: %v", entries)
+							}
+						case "regular":
+							got, err := os.ReadFile(entry)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if string(got) != "existing" {
+								t.Fatalf("existing regular claim overwritten to %q", got)
+							}
+						}
+					}
+					catalogEntries, err := os.ReadDir(catalogDir)
+					if err == nil {
+						for _, centry := range catalogEntries {
+							if strings.HasPrefix(centry.Name(), ".tmp.") {
+								t.Fatalf("temporary claim directory leaked: %s", centry.Name())
+							}
 						}
 					}
 				})
 			}
+		}
+	}
+}
+
+// TestPrimeScripts_SessionStartDirectoryInjectedBeforeLinkDeduplicatesWithoutNesting
+// deterministically tests the check-to-link race where a directory is created
+// at catalog/<session_id> right after the pre-check and before the link attempt.
+func TestPrimeScripts_SessionStartDirectoryInjectedBeforeLinkDeduplicatesWithoutNesting(t *testing.T) {
+	shells := []string{"sh"}
+	if _, err := exec.LookPath("dash"); err == nil {
+		shells = append(shells, "dash")
+	}
+	templates := []struct {
+		name string
+		tmpl string
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript},
+	}
+
+	for _, shellName := range shells {
+		shell, err := exec.LookPath(shellName)
+		if err != nil {
+			continue
+		}
+		for _, tc := range templates {
+			t.Run(tc.name+"/"+shellName, func(t *testing.T) {
+				stubDir := t.TempDir()
+				logPath := filepath.Join(stubDir, "calls.log")
+				stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
+				if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				catalogDir, err := os.MkdirTemp("/tmp", "rc-cat-race")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.RemoveAll(catalogDir) })
+
+				// Inject directory creation right before `ln "$tmp_entry" "$catalog_dir"`
+				injectedScript := renderHookScript(tc.tmpl, "''")
+				injectedScript = strings.Replace(
+					injectedScript,
+					`if ln "$tmp_entry" "$catalog_dir"`,
+					"mkdir -p \"$catalog_dir/$session_id\"\n\t\tif ln \"$tmp_entry\" \"$catalog_dir\"",
+					1,
+				)
+
+				scriptPath := filepath.Join(t.TempDir(), "prime-race.sh")
+				if err := os.WriteFile(scriptPath, []byte(injectedScript), 0o755); err != nil {
+					t.Fatal(err)
+				}
+
+				sessionID := "injected-dir-race-sess"
+				cmd := exec.Command(shell, scriptPath)
+				cmd.Env = append(os.Environ(),
+					"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+					"RAWCLAW_TEST_LOG="+logPath,
+					"RAWCLAW_CATALOG_DIR="+catalogDir,
+				)
+				cmd.Stdin = strings.NewReader(`{"session_id":"` + sessionID + `"}`)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("hook script failed: %v (out=%q)", err, out)
+				}
+
+				// Assert zero ingest calls
+				time.Sleep(100 * time.Millisecond)
+				if b, err := os.ReadFile(logPath); err == nil && strings.TrimSpace(string(b)) != "" {
+					t.Fatalf("ingest was launched despite injected directory: %q", string(b))
+				}
+
+				// Assert no nested artifacts in the injected directory
+				dirEntries, err := os.ReadDir(filepath.Join(catalogDir, sessionID))
+				if err != nil {
+					t.Fatalf("read injected directory: %v", err)
+				}
+				if len(dirEntries) != 0 {
+					t.Fatalf("nested artifacts leaked inside injected directory: %v", dirEntries)
+				}
+
+				// Assert no .tmp.* directories leaked
+				catEntries, err := os.ReadDir(catalogDir)
+				if err != nil {
+					t.Fatalf("read catalog directory: %v", err)
+				}
+				for _, ce := range catEntries {
+					if strings.HasPrefix(ce.Name(), ".tmp.") {
+						t.Fatalf("temporary claim directory leaked: %s", ce.Name())
+					}
+				}
+			})
 		}
 	}
 }
