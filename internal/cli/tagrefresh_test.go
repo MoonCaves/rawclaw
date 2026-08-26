@@ -175,6 +175,11 @@ func TestTagWriteQueuesDerivedPublication(t *testing.T) {
 	sid := "5f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
 	dir := writeTaggableSession(t, root, "proj-tag-queued", sid,
 		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove consolidated store: %v", err)
+		}
+	}
 
 	var published string
 	old := spawnTagPublish
