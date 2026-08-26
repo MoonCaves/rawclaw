@@ -226,7 +226,7 @@ func TestTagWriteQueuesDerivedPublication(t *testing.T) {
 
 	var published string
 	old := spawnTagPublish
-	spawnTagPublish = func(dbp string) error {
+	spawnTagPublish = func(dbp, sessionID string) error {
 		published = dbp
 		return nil
 	}
@@ -263,12 +263,12 @@ func TestTagWriteAuthoritativeOverlaySurvivesDelayedPublication(t *testing.T) {
 	finished := false
 	var published string
 	old := spawnTagPublish
-	spawnTagPublish = func(dbp string) error {
+	spawnTagPublish = func(dbp, sessionID string) error {
 		published = dbp
 		close(started)
 		go func() {
 			<-release
-			done <- runTagPublishChild(context.Background(), io.Discard, dbp)
+			done <- runTagPublishChild(context.Background(), io.Discard, dbp, sessionID)
 		}()
 		return nil
 	}
@@ -350,7 +350,7 @@ func TestRunTagPublishChildHonorsCanceledContext(t *testing.T) {
 	dbPath := filepath.Join(dir, "tags.db")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := runTagPublishChild(ctx, io.Discard, dbPath); !errors.Is(err, context.Canceled) {
+	if err := runTagPublishChild(ctx, io.Discard, dbPath, sid); !errors.Is(err, context.Canceled) {
 		t.Fatalf("runTagPublishChild canceled error = %v, want context.Canceled", err)
 	}
 }

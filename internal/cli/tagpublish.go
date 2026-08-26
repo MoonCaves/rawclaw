@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
@@ -24,9 +23,7 @@ var tagPublishLogPath = func() string {
 	return filepath.Join(filepath.Dir(index.ConsolidatedPath()), "tag-publish.log")
 }
 
-var tagPublishSessionID string
-var tagPublishMu sync.Mutex
-var spawnTagPublish = func(dbp string) error { return spawnTagPublishChild(dbp, tagPublishSessionID) }
+var spawnTagPublish = spawnTagPublishChild
 
 func newTagPublishCmd() *cobra.Command {
 	var dbp, sessionID string
@@ -46,7 +43,7 @@ func newTagPublishCmd() *cobra.Command {
 	return cmd
 }
 
-func spawnTagPublishChild(dbp string, sessionID ...string) error {
+func spawnTagPublishChild(dbp, sessionID string) error {
 	if isConsolidatedSource(dbp) {
 		return nil
 	}
@@ -59,10 +56,7 @@ func spawnTagPublishChild(dbp string, sessionID ...string) error {
 		return err
 	}
 	defer logf.Close()
-	args := []string{"tag-publish", "--dbp", dbp, "--session", ""}
-	if len(sessionID) > 0 {
-		args[4] = sessionID[0]
-	}
+	args := []string{"tag-publish", "--dbp", dbp, "--session", sessionID}
 	args = append(args, "--timeout", tagPublishChildTimeoutArg)
 	cmd := exec.Command(exe, args...)
 	detach(cmd)
@@ -76,7 +70,7 @@ func spawnTagPublishChild(dbp string, sessionID ...string) error {
 	return nil
 }
 
-func runTagPublishChild(ctx context.Context, w io.Writer, dbp string, sessionIDs ...string) error {
+func runTagPublishChild(ctx context.Context, w io.Writer, dbp, sessionID string) error {
 	if isConsolidatedSource(dbp) {
 		tagPublishLogLine(w, "tag-publish: skipped invalid/self source %q", dbp)
 		return nil
@@ -84,10 +78,10 @@ func runTagPublishChild(ctx context.Context, w io.Writer, dbp string, sessionIDs
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(sessionIDs) == 0 || sessionIDs[0] == "" {
+	if sessionID == "" {
 		return fmt.Errorf("tag-publish: missing session id")
 	}
-	sid := sessionIDs[0]
+	sid := sessionID
 	if err := ctx.Err(); err != nil {
 		return err
 	}

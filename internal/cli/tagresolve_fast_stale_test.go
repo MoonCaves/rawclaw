@@ -26,7 +26,7 @@ func TestRunTagWriteFastPathRefreshesStaleTDirSource(t *testing.T) {
 	f.Close()
 
 	old := spawnTagPublish
-	spawnTagPublish = func(string) error { return nil }
+	spawnTagPublish = func(string, string) error { return nil }
 	t.Cleanup(func() { spawnTagPublish = old })
 	var out strings.Builder
 	err = runTagWriteCmd(&out, strings.NewReader(`[{"start_uuid":"`+second[:8]+`","topic":"new","summary":"new"}]`), sid[:8], []view.Scope{{Project: "proj-stale-fast", TDir: dir}}, nil, false, "", false)

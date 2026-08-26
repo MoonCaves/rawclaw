@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -533,6 +535,13 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
 
 	scope := []view.Scope{{Project: "proj-tag", TDir: dir}}
+	publishDone := make(chan error, 1)
+	oldPublish := spawnTagPublish
+	spawnTagPublish = func(dbp, sid string) error {
+		go func() { publishDone <- runTagPublishChild(context.Background(), io.Discard, dbp, sid) }()
+		return nil
+	}
+	t.Cleanup(func() { spawnTagPublish = oldPublish })
 	jsonIn := `[{"start_uuid":"11111111","topic":"watermark","summary":"how the watermark is advanced"}]`
 	var out strings.Builder
 	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, "", false); err != nil {
@@ -551,22 +560,22 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 		t.Fatalf("authoritative topics = %#v, err=%v", segs, err)
 	}
 
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	for {
-		con, openErr := store.ConnectRO(index.ConsolidatedPath())
-		if openErr == nil {
-			hits, readErr := store.MatchTopics(con, "watermark", 8, nil)
-			_ = con.Close()
-			if readErr == nil && len(hits) == 1 && hits[0].Project == "proj-tag" {
-				return
-			}
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("tag publication: %v", err)
 		}
-		select {
-		case <-deadline.C:
-			t.Fatal("consolidated store did not receive queued watermark tag")
-		case <-time.After(10 * time.Millisecond):
-		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("consolidated publisher did not finish")
+	}
+	con, err := store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated store: %v", err)
+	}
+	defer con.Close()
+	hits, err := store.MatchTopics(con, "watermark", 8, nil)
+	if err != nil || len(hits) != 1 || hits[0].Project != "proj-tag" {
+		t.Fatalf("consolidated store topic hits = %+v, err=%v", hits, err)
 	}
 }
 
@@ -580,6 +589,13 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
 
 	scope := []view.Scope{{Project: "proj-routine", TDir: dir}}
+	publishDone := make(chan error, 1)
+	oldPublish := spawnTagPublish
+	spawnTagPublish = func(dbp, sid string) error {
+		go func() { publishDone <- runTagPublishChild(context.Background(), io.Discard, dbp, sid) }()
+		return nil
+	}
+	t.Cleanup(func() { spawnTagPublish = oldPublish })
 	var out strings.Builder
 	if err := runTagWriteCmd(&out, strings.NewReader(""), sid[:8], scope, nil, true, store.VerdictSourceAgent, false); err != nil {
 		t.Fatalf("runTagWriteCmd --routine: %v\nout: %s", err, out.String())
@@ -606,22 +622,22 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 		t.Fatalf("output = %q, want eventual publication receipt", out.String())
 	}
 
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	for {
-		con, openErr := store.ConnectRO(index.ConsolidatedPath())
-		if openErr == nil {
-			eff, readErr := store.IsEffectivelyRoutine(con, sid)
-			_ = con.Close()
-			if readErr == nil && eff {
-				return
-			}
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("routine publication: %v", err)
 		}
-		select {
-		case <-deadline.C:
-			t.Fatal("consolidated store did not receive queued routine verdict")
-		case <-time.After(10 * time.Millisecond):
-		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("consolidated routine publisher did not finish")
+	}
+	con, err := store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated store: %v", err)
+	}
+	defer con.Close()
+	eff, err := store.IsEffectivelyRoutine(con, sid)
+	if err != nil || !eff {
+		t.Errorf("IsEffectivelyRoutine = %v, %v, want true, nil", eff, err)
 	}
 }
 

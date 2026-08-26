@@ -29,7 +29,7 @@ func TestTagWriteFastPathAuthorsBeforeConsolidatedFence(t *testing.T) {
 	}
 	defer lock.Unlock()
 	oldPublish := spawnTagPublish
-	spawnTagPublish = func(string) error { return nil }
+	spawnTagPublish = func(string, string) error { return nil }
 	defer func() { spawnTagPublish = oldPublish }()
 
 	done := make(chan error, 1)
@@ -73,7 +73,7 @@ func TestTagWriteTDirFastPathAuthorsBeforeConsolidatedFence(t *testing.T) {
 	}
 	defer lock.Unlock()
 	oldPublish := spawnTagPublish
-	spawnTagPublish = func(string) error { return nil }
+	spawnTagPublish = func(string, string) error { return nil }
 	defer func() { spawnTagPublish = oldPublish }()
 
 	done := make(chan error, 1)
