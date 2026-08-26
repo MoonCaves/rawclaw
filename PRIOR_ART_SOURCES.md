@@ -313,7 +313,47 @@ setup routines to run outside `b.ResetTimer()`.
 Ruling: **COPY** flat alphanumeric allowlisting for path targets and strict single-quoting
 for arguments passed to background subprocesses (`nohup "$RAWCLAW" ingest "$session_id" ... &`).
 
-## Top nineteen mechanisms to carry forward
+## 20. Mutation testing and assertion sensitivity verification
+
+* [`go-mutesting` source and documentation](https://github.com/zimmski/go-mutesting):
+  demonstrates systematic AST mutation testing for Go programs (mutating branch conditions, return
+  values, and path targets) to ensure test suites detect logic faults and reject false greens.
+* [PostgreSQL Regression Testing and Result Evaluation](https://www.postgresql.org/docs/current/regress-evaluation.html):
+  establishes standards for distinguishing valid test suite reductions from regressions where critical
+  contract assertions are silently deleted.
+
+Ruling: **COPY/ADAPT** disposable mutation injection in review/audit workflows to ensure test deletions
+(e.g. `50c6d0d` and `d5d036b`) do not falsely pass when critical invariant assertions are removed;
+**REJECT** test reduction claims that cannot survive contract mutation testing.
+
+## 21. Test execution harness pattern matching and non-zero execution validation
+
+* Go [`testing.M`](https://pkg.go.dev/testing#M) standard library documentation:
+  specifies `TestMain` orchestration, test execution filtering, and process exit code semantics.
+* Go Standard Library [`testing/testing.go` implementation](https://cs.opensource.google/go/go/+/refs/tags/go1.24.6:src/testing/testing.go):
+  demonstrates how `-run` regex filtering matches test names, counts executed tests, and issues warnings
+  when zero tests match the given pattern.
+* Go [`cmd/go` Testing Flags](https://pkg.go.dev/cmd/go#hdr-Testing_flags):
+  defines exact regular expression matching rules for `-run` and package test filtering.
+
+Ruling: **COPY** non-zero execution checks in automated review and gate scripts; **REJECT** treating
+zero-match `-run` filtering (e.g. Conor's PR35 `TestEnsureFreshContainer_PruneStaleLeftovers`) as passing test evidence.
+
+## 22. Statistical benchmark comparison with benchstat and mixed-workload fixtures
+
+* Go [`golang.org/x/perf/cmd/benchstat`](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat):
+  the standard Go performance tool for calculating p-values and confidence intervals across multiple
+  benchmark iterations (`-count=5` or `-count=10`).
+* Go `perf` repository [`benchstat/doc.go`](https://github.com/golang/perf/blob/master/cmd/benchstat/doc.go):
+  documents statistical comparison criteria, delta percentage thresholds, and noise reduction.
+* SQLite [Speed Comparison & Benchmark Methodology](https://www.sqlite.org/speed.html):
+  demonstrates avoiding synthetic lookup-only biases and measuring real write/delete cycles under realistic
+  transaction loads.
+
+Ruling: **COPY** `benchstat` baseline comparisons and mixed live/tombstone datasets for prune benchmarking;
+**REJECT** single-run synthetic missing-ID-only benchmarks without comparative baselines.
+
+## Top twenty-two mechanisms to carry forward
 
 1. `O_CREAT|O_EXCL` plus no-follow/type validation for regular marker creation.
 2. Same-directory temp + atomic rename, with cleanup tied to ownership.
@@ -334,11 +374,14 @@ for arguments passed to background subprocesses (`nohup "$RAWCLAW" ingest "$sess
 17. SQLite native WAL crash auto-recovery on connection open without custom Go recovery code.
 18. Shared table-driven benchmark outer loops with setup isolated outside `b.ResetTimer()`.
 19. Strict single-argument quoting for background child process dispatch.
+20. Disposable mutation testing to verify test assertion sensitivity and reject false-green test deletions.
+21. Non-zero test execution verification for `-run` filter gates in CI and review scripts.
+22. Comparative `benchstat` statistical analysis with mixed live/tombstone datasets for storage benchmarks.
 
 ## Source and ruling count
 
-52 primary source citations with **68 unique canonical primary URLs** across the complete corpus
-are verified. Of the mechanisms: 22 are `COPY`, 22 are `ADAPT`, 12 are `STUDY`, and 9 are `REJECT`
+58 primary source citations with **74 unique canonical primary URLs** across the complete corpus
+are verified. Of the mechanisms: 25 are `COPY`, 24 are `ADAPT`, 13 are `STUDY`, and 11 are `REJECT`
 guardrails (a source can receive more than one ruling where its mechanism and dependency have
 different implications). All recommended defaults remain POSIX/Go stdlib/SQLite/Git compatible;
 no external runtime, daemon, LLM, or cgo dependency is proposed.

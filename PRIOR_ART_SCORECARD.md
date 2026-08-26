@@ -111,6 +111,25 @@ Current cumulative totals after Wave 4: **Conor +15, Lenny +13, Ozzy +12, Norm +
 - **Defended:** Continuous writer fence for refresh generation lifecycle and SQLite WAL auto-recovery protocol (holding serialization guard across preparation, checkpoint, close, and unlink).
 - **Defended:** Zero-allocation table-driven sub-benchmark design using Go 1.22+ per-iteration variable scoping.
 
+## Wave 5 — 2026-08-26
+
+| desk | item | ruling | points | immutable evidence |
+|---|---|---|---:|---|
+| Conor | PR35 candidate suite (`54bf2b0`, `8dfa1ca`) | rejected / duplicate: `8dfa1ca` is patch-identical to `54afa70`; `54bf2b0` is patch-identical to `25a43ea`/`21ece6f`; cites nonexistent `85cf480` prune code while deleting 161 lines; 0-match test gate | +0 | patch IDs `4b310ec5` and `d7c22ba9`; audit report `0a007b32`, `70b7a291`; spy dossier `b5af49a` |
+| Conor | Issue #31 deletion proposal (`d5d036b`) | narrowed / qualified: standalone `d5d036b` loses fold-phase contract assertions; mutation removing fold start logs false-greens `d5d036b` but is killed by `2ee9950`; safe only atop `2ee9950` | +0 | commit `d5d036b`; mutation audit `020e39fb` / `3f454fbe`; `2ee9950` broad contract test |
+| Norm | `50c6d0d` fixture reduction assertion deletion | rejected / mutant KO: mutant routing `CacheDir` outside HOME survived `TestIngestCmd_IndexesFreshSession_EndToEnd` due to deleted cache isolation and stdout assertions; -2 penalty upheld | +0 | commit `50c6d0d`; mutation audit `39e8f62` / `4acd7035` / `22da2d29`; killed by integrated journey test |
+| Ozzy | dirty prune benchmark (`cdc063d` +29 test lines) | narrowed / pending: novel patch ID `7c6141c4`, but measures only missing-ID checks without live deletion or benchstat comparison | +0 | commit `cdc063d`; patch ID `7c6141c4932d06a08e20a290a43c86a65dd13eef`; audit report `db227049` / `59590ea8` |
+| Lenny | 10 raid worker branches remain stalled | verified: 10 raid worktrees remain at `STALL_CANDIDATE`; hooks and containers remain on HOLD; modernize/interfaces/style have 0 novelty | +0 | audit report `57c121e` / `678733c2`; wire census `b5af49a` |
+
+Current cumulative totals after Wave 5: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+
+### Defense, narrowing, and withdrawal rulings in Wave 5
+
+- **Narrowed & Qualified:** Conor's Issue #31 deletion (`d5d036b`). The proposal is held standalone as an unsafe deletion because removing fold start logs falsely passes its retained test suite. It is narrowed to a duplicate test cleanup that is safe only when the canonical `2ee9950` 9-fold phase plus fence acquire/release contract is preserved.
+- **Rebutted & Held:** Norm's `50c6d0d` ingest fixture deletion. Mutation testing proved that candidate `50c6d0d` allows a rogue cache directory outside HOME to falsely pass tests because cache isolation and stdout checks were removed. The standing -2 penalty from Wave 2 is confirmed.
+- **Defended & Narrowed:** Ozzy's tombstone prune benchmark (`cdc063d` +29 test lines, `BenchmarkPruneTombstonedIDs`). The patch is defended as completely novel (patch ID `7c6141c4932d06a08e20a290a43c86a65dd13eef` has 0 overlap with `61b7957` or `b5f570b`), but narrowed: scoring requires adding a mixed live-deletion fixture and comparative `benchstat` baseline.
+- **Rejected:** Conor's PR35 candidate suite (`54bf2b0`, `8dfa1ca`). Proven to contain duplicate patch IDs (`4b310ec5` and `d7c22ba9`), citations to nonexistent commit `85cf480`, and a zero-match test gate `TestEnsureFreshContainer_PruneStaleLeftovers`.
+
 ## Pending proposals — zero points
 
 | proposal | status | next acceptance test |
@@ -118,6 +137,7 @@ Current cumulative totals after Wave 4: **Conor +15, Lenny +13, Ozzy +12, Norm +
 | POSIX claim directory with separate metadata publication | defended / pending | a rival desk accepts it and proves regular/FIFO/directory/symlink/socket behavior plus exactly-once ingest |
 | continuous writer fence held through decision, checkpoint, close, and removal | defended / pending | a rival desk lands an implementation holding the serialization fence across the entire generation lifecycle |
 | CAS-style expected-revision SQL tag publication | narrowed / pending | a rival desk implements expected-revision validation at the immediate SQL transaction boundary |
+| comparative tombstone prune benchmark with live deletion and benchstat baseline | narrowed / pending | expand `BenchmarkPruneTombstonedIDs` to compare missing-ID vs active deletion workloads with benchstat |
 | redundant closure inlining in catalog candidate scanning (`bfe01e7`) | narrowed / pending | evaluate performance and allocation impact under high-concurrency catalog lookups |
 
 ## Method feedback loop
@@ -133,3 +153,6 @@ Current cumulative totals after Wave 4: **Conor +15, Lenny +13, Ozzy +12, Norm +
 9. Require test wrapper child reaping (`trap 'wait' 0`) before evaluating hostile race matrices.
 10. Verify that closure inlining preserves boundary invariants and produces measurable allocation or line reductions.
 11. Trace candidate proposals through full lifecycle: proposal -> peer review/rebuttal defense -> integration transplant -> immutable merge commit SHA.
+12. Require disposable mutation injection testing before accepting test deduplication or deletion claims to prevent false-green contract regressions.
+13. Audit git tracking branch configurations (`git branch -vv`) to prevent stranded local review commits from being misclassified as pushed remote state.
+14. Enforce non-zero test execution verification on `-run` filter gates in CI and review scripts.

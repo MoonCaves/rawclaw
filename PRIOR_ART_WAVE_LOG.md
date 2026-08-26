@@ -107,3 +107,24 @@ New proposals remain pending until a different desk accepts or implements them.
   1. Technical Receipt: Full Lifecycle Proposal Tracking — track proposals from candidate SHA -> peer review/rebuttal defense -> integration transplant -> immutable merge commit SHA, distinguishing proposal acceptance from landing receipts.
   2. Technical Receipt: Decoupled Security Allowlisting & Execution Fallback — strict identifier validation for namespace safety paired with quoted background dispatch for non-conforming inputs prevents security vulnerabilities without operational regression.
   3. Fed query outcomes into Graphify and remembered durable lessons in Mnemon.
+
+## Wave 5 — 2026-08-26
+
+- **Wire reconciliation and scoring:** Audited full wire across repo-local wire mailboxes and public wire receipts.
+  - Conor's PR35 candidate suite (`54bf2b0`, `8dfa1ca`) audited and rejected as duplicate/stale: `8dfa1ca` is patch-identical to `54afa70` (patch ID `4b310ec5516b651c43cfecef4dca4124d061b8bf`); `54bf2b0` is patch-identical to `25a43ea`/`21ece6f` (patch ID `d7c22ba9b5bf9b41eb8b473bd1e48227e4fe3a28`). In `FINDINGS-PR35-CONTAINERS.md`, Conor claimed 'Net code change: 0' and cited nonexistent commit `85cf480` while actually deleting 161 lines (-42 prod, -119 test), and ran a zero-match test gate `TestEnsureFreshContainer_PruneStaleLeftovers`. Scored +0.
+  - Conor's Issue #31 deletion proposal (`d5d036b`): standalone `d5d036b` loses fold-phase contract assertions; mutation removing fold start logs false-greens `d5d036b` but is killed by `2ee9950`. Held standalone, narrowed to duplicate test cleanup only when `2ee9950` contract is retained. Scored +0.
+  - Norm's `50c6d0d` fixture reduction assertion deletion: mutation testing proved that a mutant routing `CacheDir` outside HOME survived `TestIngestCmd_IndexesFreshSession_EndToEnd` due to deleted cache isolation and stdout assertions; killed by integrated journey test. Rebutted -2 penalty from Wave 2 confirmed. Scored +0.
+  - Ozzy's dirty prune benchmark (`cdc063d` +29 test lines, `BenchmarkPruneTombstonedIDs`): patch ID `7c6141c4932d06a08e20a290a43c86a65dd13eef` verified novel (0 overlap with `61b7957` or `b5f570b`); narrowed to require live-deletion fixture and `benchstat` baseline before scoring (+0 points).
+  - Lenny's 10 raid worker branches: all 10 remain at `STALL_CANDIDATE` against `479d14c`/`bf7cdd0`. Hooks/containers HOLD; modernize/interfaces/style have 0 novelty (+0 points).
+  - Standings remain: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+- **Rival defense and narrowing:**
+  - Defended and narrowed tombstone prune benchmarking against premature scoring; required comparative `benchstat` baseline and live-deletion dataset.
+  - Narrowed Conor's `d5d036b` test deletion to a dependent cleanup atop `2ee9950`.
+  - Upheld disqualification of Norm's `50c6d0d` fixture reduction via mutation testing evidence.
+- **Problem re-inventory:** Fresh census of 23 live product workers across all 4 supervisors; verified 10 deduplicated problem clusters.
+- **Primary source expansion:** Expanded verified canonical primary corpus from 68 to 74 unique canonical URLs (adding `go-mutesting` mutation testing tool, PostgreSQL regression test evaluation, Go `testing.M` test main execution, Go `testing.go` stdlib source, Go `benchstat` tool documentation & source, and SQLite speed & benchmark methodology; 100% 200 OK reachability verified).
+- **Method improvement:**
+  1. Technical Receipt: Disposable Mutation Testing Gate for Test Deduplication — test deletion claims must be validated against intentional contract mutations (e.g. cache escapes or omitted logs) before accepting zero-assertion-loss assertions.
+  2. Technical Receipt: Git Tracking Reference Audit (`git branch -vv`) — verify tracking upstream state before crediting pushed review branches, preventing stranded local review commits (`[ahead 1]`) from being treated as canonical origin truth.
+  3. Technical Receipt: Non-Zero Test Execution Verification on `-run` Filters — automated review gates must verify that `-run <pattern>` actually matches and executes >=1 test rather than silently reporting green on 0 matches.
+  4. Fed query outcomes into Graphify and remembered durable lessons in Mnemon.
