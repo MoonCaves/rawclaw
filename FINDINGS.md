@@ -53,37 +53,49 @@
 
 ---
 
-## 2. Hostile Penalties & Rejections
+## 2. Targeted Prior Art, Patch-ID & Range-Diff Attack
 
-### Penalty 1: Clever Iterator Rewrite (`21b8011`)
-- **SHA:** `21b80115067267a8ce8070bca6db2c1e177607b5` (on `norm/locate-theft`)
-- **Location:** `internal/cli/cmd_tag.go:284`
-- **Candidate:** Replace `for i := len(displayable) - 1; i >= 0; i--` with `for i := range slices.Backward(displayable)`.
-- **Verdict:** **REJECTED (Penalty)**
-- **Rationale:** The loop body immediately accesses `displayable[i].ID`, discarding the element yield of `slices.Backward`. It saves 0 lines, adds iterator runtime machinery, and provides zero readability or algorithmic benefit. Ceremonial modernization for its own sake.
-
-### Penalty 2: Anti-Modernization Range Regression (`d82d9de`)
-- **SHA:** `d82d9de0d7f65b5fc9a5efec972c5857501884d5`
-- **Location:** `internal/cli/cmd_tag_onestore_test.go`
-- **Candidate:** Regressing `for i := range 12` (Go 1.22+ range-over-int) back to `for i := 0; i < 12; i++`.
-- **Verdict:** **REJECTED (Penalty)**
-- **Rationale:** Violates Go 1.22+ idiom without fixing any defect; adds unnecessary boilerplate.
-
-### Penalty 3: Unapproved Test Deletion (`d82d9de`)
-- **SHA:** `d82d9de0d7f65b5fc9a5efec972c5857501884d5`
-- **Location:** `internal/cli/tagrefresh_test.go`
-- **Candidate:** Deleting `TestRunPrewarmRegeneratesWhenDumpMissing`.
-- **Verdict:** **REJECTED (Penalty)**
-- **Rationale:** Deleting behavioral regression tests is strictly prohibited. Refactoring must preserve the test guard intact.
+### Patch-ID Identity & Provenance Verification
+```
+git patch-id --stable:
+3d1bc22c4cb710989c61d89b854103387424bda6  da0bda88a50e5c1f15f186f4cdb4b50415aa8be9
+3d1bc22c4cb710989c61d89b854103387424bda6  10572cff0d2933a7263cc41de3fc2d9f08f93bdc
+```
+- **Finding:** `da0bda8` and `10572cf` have the exact same stable patch ID (`3d1bc22c4...`). `da0bda8` is an exact transplant onto integration tip `9d6564d`, not a novel modification.
+- **Range-Diff Analysis:** `git range-diff luna/skills-locate-guarded-20260826~3..luna/skills-locate-guarded-20260826 da0bda8~1..da0bda8` confirms `da0bda8` cleanly squashes `8be07d3` + `7a47834` + `d82d9de` while stripping out the test deletion in `tagrefresh_test.go` and the range-over-int regression in `cmd_tag_onestore_test.go`.
 
 ---
 
-## 3. Upstream Bloat Skills Scorecard (Grades A–F)
+## 3. Rival Placebo Proof: Iterator Churn (`21b8011`)
 
-Each skill is graded for this target on:
-1. **Actionable Deletion Signal**: Does it guide deleting real code and choosing smaller constructs?
-2. **Correctness & Safety Awareness**: Does it prevent behavioral regressions and test deletions?
-3. **Noise & Over-Engineering Ratio**: Does it avoid introducing ceremonial wrappers, premature interfaces, or iterator bloat?
+### Placebo Finding: `21b8011` on `norm/locate-theft`
+- **SHA:** `21b80115067267a8ce8070bca6db2c1e177607b5`
+- **Patch-ID:** `14d8c058c645ace2d1480d913c950d38ad7c5d47`
+- **Location:** `internal/cli/cmd_tag.go:284`
+- **Diff:**
+  ```diff
+  -			for i := len(displayable) - 1; i >= 0; i-- {
+  +			for i := range slices.Backward(displayable) {
+  				if displayable[i].ID <= id {
+  					end = i
+  					endOK = true
+  					break
+  				}
+  			}
+  ```
+- **Placebo Proof:**
+  1. **Discards Yielded Element:** `slices.Backward(displayable)` yields `(i, item)`, but the loop binds only the index `i` and manually indexes `displayable[i].ID`.
+  2. **Net Lines Delta: 0.** It deletes 1 line and adds 1 line, plus import churn. It achieves zero code reduction.
+  3. **Performance & Overhead Penalty:** Replaces a zero-allocation, native reverse index loop with an iterator closure sequence invocation.
+  4. **Ruling:** **REJECTED (Placebo / False Novelty)**.
+
+### Anti-Modernization & Test Deletion Placebos (`d82d9de`)
+- **`internal/cli/cmd_tag_onestore_test.go`:** Attempted regression of Go 1.22+ `for i := range 12` to `for i := 0; i < 12; i++` → **REJECTED**.
+- **`internal/cli/tagrefresh_test.go`:** Attempted deletion of `TestRunPrewarmRegeneratesWhenDumpMissing` → **REJECTED**.
+
+---
+
+## 4. Upstream Bloat Skills Scorecard (Grades A–F)
 
 | Skill | Grade | Evaluation & Target Fit |
 |---|:---:|---|
@@ -96,6 +108,10 @@ Each skill is graded for this target on:
 
 ---
 
-## 4. Final Verdict
+## 5. Final Verdict & Governance
 
-The locate/tagging modernization and salvage candidate (`10572cff` / `da0bda88a50e`) is **LEAN, CORRECT, AND FULLY PROVEN**. It achieves a verified **net -31 production lines** reduction without adding dependencies, expanding public API surface, or introducing clever iterator churn. All test contracts remain intact.
+The locate/tagging modernization candidate (`10572cff` / `da0bda88a50e`) is **LEAN, CORRECT, AND FULLY PROVEN**:
+- **Production Net Delta:** **net -31 lines** (53 insertions, 84 deletions).
+- **Patch-ID Match:** Proven identical to `10572cff` (`3d1bc22c4...`).
+- **Placebo Eliminated:** `21b8011` (`slices.Backward`) rejected as zero-line iterator churn.
+- **Benchmark & Test Stability:** All existing benchmark names (`BenchmarkFTS5Search/Warm`, `BenchmarkFTS5Search/Cold`) and test suites remain 100% intact without regression.
