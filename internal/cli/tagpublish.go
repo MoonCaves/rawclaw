@@ -138,6 +138,8 @@ func publishSession(ctx context.Context, con *sql.DB, sid string, segments []sto
 	sourceOrigin := ""
 	if len(segments) > 0 {
 		sourceOrigin = segments[0].OriginMachine
+	} else if hasVerdict {
+		sourceOrigin = verdict.OriginMachine
 	}
 	var sourceRevision float64
 	for _, s := range segments {
@@ -161,7 +163,13 @@ func publishSession(ctx context.Context, con *sql.DB, sid string, segments []sto
 		return tx.Commit()
 	}
 	var currentRevision sql.NullFloat64
-	if err := tx.QueryRowContext(ctx, "SELECT MAX(tagged_at) FROM topic_segment WHERE session_id=? AND (origin_machine IS NULL OR origin_machine='')", sid).Scan(&currentRevision); err != nil {
+	revisionQuery := "SELECT MAX(tagged_at) FROM topic_segment WHERE session_id=? AND (origin_machine IS NULL OR origin_machine='')"
+	args := []any{sid}
+	if sourceOrigin != "" {
+		revisionQuery = "SELECT MAX(tagged_at) FROM topic_segment WHERE session_id=? AND origin_machine=?"
+		args = append(args, sourceOrigin)
+	}
+	if err := tx.QueryRowContext(ctx, revisionQuery, args...).Scan(&currentRevision); err != nil {
 		return err
 	}
 	if !currentRevision.Valid || currentRevision.Float64 <= sourceRevision {
