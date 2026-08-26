@@ -54,17 +54,22 @@
 
 ---
 
-## Candidate 4: `remotes/candidates/conor-31test`
-- **Rival SHA**: `2bb219f8aeb412dbf9add6fe691cf606ad8805f1`
+## Candidate 4: `luna/conor-31-log-tests-20260826` (Conor Fence-Test Takeover)
+- **Rival SHAs**:
+  - `2bb219f8aeb412dbf9add6fe691cf606ad8805f1` (`test(index): capture consolidated phase timing logs`)
+  - `d5d036b9dd94c59a9ee3da2da8fb8d1039cb671d` (`test(index): keep failed fence timing proof`)
 - **Locations**:
-  - `internal/index/consolidated_logging_test.go:1-145`
+  - `internal/index/consolidated_logging_test.go:1-145` (in `2bb219f`)
+  - `internal/index/consolidated_logging_test.go:1-68` (in `d5d036b`)
 - **Hostile Review & Reproducible Evidence**:
-  - **Flaw 1 (Global Slog Race)**: `conor-31test` mutated `slog.SetDefault()` inside parallel/unfenced tests (`TestConsolidate_LogsFoldPhaseStartsAndDurations` and `TestConsolidatedFence_LogsAcquireDurationOnTimeout`), introducing race conditions when other concurrent tests or goroutines log.
-  - **Flaw 2 (Duplicate Infrastructure)**: Defined a redundant `consolidatedLogRecorder` type rather than using the canonical `testLogRecorder` in `internal/index/testhelpers_test.go`.
-  - **Flaw 3 (False Confidence on Failed Acquisition)**: Conor claimed to test timeout duration logging in a separate file, but deferred timing in `AcquireConsolidatedFence` runs unconditionally on any exit path.
-  - In current `HEAD`, `internal/index/testhelpers_test.go` provides `testLogRecorder`, which `TestConsolidate_LogsPhaseStartsAndDurations` uses safely in `internal/index/consolidated_test.go:19-82` to assert all 9 fold phases plus fence acquire/release.
+  - In `2bb219f`, Conor added duplicate fold logging tests and a failed-fence acquisition timeout log test in a new file `consolidated_logging_test.go`.
+  - In `d5d036b`, Conor pruned the duplicate fold logging test (recognizing that `2ee9950` in main already owned the 9-phase fold contract) and kept only `TestConsolidatedFence_LogsAcquireDurationOnTimeout`.
+  - **Defects in `d5d036b`**:
+    1. **Global Slog Race**: Mutated `slog.SetDefault()` inside test execution, creating race conditions under parallel test execution.
+    2. **Structural Duplication**: Introduced a standalone test file `consolidated_logging_test.go` and defined a redundant `consolidatedLogRecorder` type instead of using the canonical test infrastructure in `consolidated_fence_test.go` and `testhelpers_test.go`.
+    3. **No Added Coverage**: The deferred start and duration logging in `AcquireConsolidatedFence` is already active and verified in `TestConsolidatedFence_ReportsHolderOnceAfterThreshold` (0.12s) and `TestIsBusy_RecognizesConsolidatedFenceTimeout` (0.06s), while `TestConsolidate_LogsPhaseStartsAndDurations` pins the complete 9 fold phases plus fence acquire/release contract.
 - **Ruling**: `REJECT`
-  - Reject duplicate file and struct. Any missing edge assertion (such as logging during timeout) belongs in canonical test files using existing test infrastructure.
+  - Reject duplicate file and struct from `d5d036b`/`2bb219f`. Current HEAD already has clean, race-free coverage.
 
 ---
 
@@ -97,8 +102,8 @@
 | Candidate | SHA | Ruling | Rationale |
 |---|---|---|---|
 | `work/luna-fence` | `91741a0` | `CLEAN` | Writer fence architecture integrated and hardened in HEAD |
-| `luna/phase-timing-20260826` | `fc7cfde` | `CLEAN` | Fold and fence phase start/duration logging fully implemented |
-| `luna/fault-repro-20260826` | `a32c4a1` | `CLEAN` | Superseded by fixed same-store fault repro in `479d14c` |
-| `conor-31test` | `2bb219f` | `REJECT` | Global slog mutation race; duplicate recorder struct; redundant file |
+| `luna/phase-timing` | `fc7cfde` | `CLEAN` | Fold and fence phase start/duration logging fully implemented |
+| `luna/fault-repro` | `a32c4a1` | `CLEAN` | Superseded by fixed same-store fault repro in `479d14c` |
+| `conor-31test` | `2bb219f`, `d5d036b` | `REJECT` | Standalone file duplication; redundant `consolidatedLogRecorder`; global slog mutation race |
 | `conor-32a` | `8947c21` | `REJECT` | Incomplete retry test (watermark no-op) |
 | `conor-32b` | `cece0a5` | `CLEAN` | Source mutation & message count assertions already live in `479d14c` |
