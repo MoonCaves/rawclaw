@@ -27,6 +27,11 @@ import (
 // a second time as an "orphaned" project scope).
 const ConsolidatedDBName = "consolidated.db"
 
+// consolidateAfterMergeHook is test-only fault injection. Production leaves it
+// nil; tests use a child process so os.Exit can model an abrupt close without
+// terminating the test runner.
+var consolidateAfterMergeHook func()
+
 // ConsolidatedPath returns the consolidated store's path in the cache dir.
 func ConsolidatedPath() string {
 	return filepath.Join(store.CacheDir(), ConsolidatedDBName)
@@ -781,7 +786,12 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	done()
 
 	done = phase("merge")
-	defer done()
+	defer func() {
+		done()
+		if consolidateAfterMergeHook != nil {
+			consolidateAfterMergeHook()
+		}
+	}()
 	tx, err := con.Begin()
 	if err != nil {
 		return 0, false, true, fmt.Errorf("begin fold: %w", err)
