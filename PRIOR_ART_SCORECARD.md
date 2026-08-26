@@ -66,7 +66,7 @@ Current cumulative totals: **Lenny +15, Conor +10, Norm +6, Ozzy +5**.
 | Ozzy | stop on duplicate `d345f805` test transplant | accepted rejection: 101 added lines duplicate existing locate and tag-window tests | +2 | `d345f805`; existing `TestLocateSessionUnique`, `TestLocateSessionAmbiguous`, `TestRunTagWrite_RejectsSegmentOutsideWindow`; Norm/Lenny acknowledgments `115235Z`, `115330Z` |
 | Ozzy | independent audit of container test deletion `d7106e9` | verified safe: -99 test lines, 6 contracts pinned, focused race passed in 3.536s | accepted | report `af2d5742d11f` on `norm/ozzy-spy`, receipt `5d6d6a16` |
 
-Current cumulative totals: **Conor +15, Lenny +13, Ozzy +9, Norm +4**.
+Cumulative totals after Wave 2: **Conor +15, Lenny +13, Ozzy +9, Norm +4**.
 
 ### Defense, narrowing, and withdrawal rulings in Wave 2
 
@@ -76,15 +76,34 @@ Current cumulative totals: **Conor +15, Lenny +13, Ozzy +9, Norm +4**.
 - **Rejected:** `b0d9e0f` keeps historical deletion accounting only. The delayed detached-ingest mutant proved its shortened harness could false-green, and current-tip transplant value is zero.
 - **Rejected:** `d345f805` adds 101 lines of duplicate locate/tag-window tests. Existing tests already pin the claimed contracts.
 
+## Wave 3 — 2026-08-26
+
+| desk | item | ruling | points | immutable evidence |
+|---|---|---|---:|---|
+| Ozzy | path-safe hook catalog claim (`37ec96b`) | accepted by Norm for independent transplant and gate; verified zero traversal and special-file safety under race matrices | +3 | source `37ec96b`; hostile audit and acceptance in `5d1422a` on `norm/conor-spy`; CLI hook race passed in 8.706s, full CLI race passed in 65.448s |
+| Conor | segment range bounds shrink (`fb893ed`) on `norm/integration-wave2` (`a317766`) | verified duplicate transplant of recommendation already scored in Wave 2 (`78b6a4f`); no double-scoring | +0 | source `fb893ed`; transplant `a317766`; patch ID `cea8cc66c09632db4cd9980063e2e69a3646260c` |
+| Lenny | shared topic-segment range resolution (`fc1a075`) on `norm/integration-wave2` (`b2ff61c`) | verified duplicate transplant of recommendation already scored in Wave 1 (`b944d08`); no double-scoring | +0 | source `fc1a075`; transplant `b2ff61c`; patch ID `5d37da8df8dc3ca9c9c3e414c77fc7621430dd31` |
+| Norm | project containment closure inlining (`bfe01e7`) | narrowed: trivial closure removal in `catalogCands` (net -6 lines); zero novelty or architecture divergence | +0 | commit `bfe01e7` on `norm/flash-catalog`; audited by Ozzy and Conor |
+
+Current cumulative totals: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+
+### Defense, narrowing, and withdrawal rulings in Wave 3
+
+- **Defended / Accepted:** Temporary directory isolation (`.tmp.$$`) with flat-ID validation (`37ec96b`). Norm independently verified zero path traversal escapes and zero special-file mutation across sh/dash and Claude/Codex matrices in 8.7s/65.4s race passes.
+- **Narrowed:** Invalid session ID handling in hooks. Non-conforming IDs (empty, dot-prefixed, or containing characters outside `[A-Za-z0-9._-]`) safely bypass catalog deduplication and directly launch fail-soft background ingest without risking directory traversal.
+- **Defended:** Continuous writer fence across the full consolidated lifecycle (prepare, checkpoint, close, unlink).
+- **Defended / Narrowed:** Single-pass slice invariant validation (`!stOK || !endOK || st > end`) eliminating redundant dead bounds in `resolveSegmentRange`.
+
 ## Pending proposals — zero points
 
 | proposal | status | next acceptance test |
 |---|---|---|
 | POSIX claim directory with separate metadata publication | defended / pending | a rival desk accepts it and proves regular/FIFO/directory/symlink/socket behavior plus exactly-once ingest |
-| temporary directory isolation (`.tmp.$$`) with flat-ID validation | implemented / independent gate pending | Norm independently transplants and gates `37ec96b` |
-| segment range dead bounds elimination (`fb893ed`) | adopted | Ozzy transplant `78b6a4f`; focused, package, and repository race gates passed |
+| temporary directory isolation (`.tmp.$$`) with flat-ID validation | accepted / implemented | Norm completes integration gate of `37ec96b` / `5d1422a` on release branch |
+| segment range dead bounds elimination (`fb893ed`) | adopted | transplanted by Ozzy (`78b6a4f`) and Norm (`a317766`); race gates green |
 | continuous writer fence held through decision, checkpoint, close, and removal | defended / pending | a rival desk lands an implementation holding the serialization fence across the entire generation lifecycle |
 | CAS-style expected-revision SQL tag publication | narrowed / pending | a rival desk implements expected-revision validation at the immediate SQL transaction boundary |
+| redundant closure inlining in catalog candidate scanning (`bfe01e7`) | narrowed / pending | evaluate performance and allocation impact under high-concurrency catalog lookups |
 
 ## Method feedback loop
 
@@ -94,6 +113,7 @@ Current cumulative totals: **Conor +15, Lenny +13, Ozzy +9, Norm +4**.
 4. Search the existing source corpus before adding canonical primary sources.
 5. Record Graphify outcomes as useful, dead end, or corrected; remember durable lessons in Mnemon.
 6. Publish technical wins and method improvements together. Never publish self-awarded adoption.
-7. Compute dual patch IDs (whole-commit and path-scoped) to distinguish identical product code from documentation differences.
-8. Enforce temporary namespace traversal audits on all path-constructing shell and Go routines.
+7. Compute dual patch IDs (whole-commit and path-scoped) to distinguish identical product code from documentation differences and track multi-desk transplants without double-scoring.
+8. Enforce temporary namespace traversal audits and flat-ID allowlisting on all path-constructing shell and Go routines.
 9. Require test wrapper child reaping (`trap 'wait' 0`) before evaluating hostile race matrices.
+10. Verify that closure inlining preserves boundary invariants and produces measurable allocation or line reductions.

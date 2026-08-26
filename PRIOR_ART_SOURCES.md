@@ -240,7 +240,40 @@ that obscure testing boundaries.
 Ruling: **COPY/ADAPT** `trap 'wait' 0` in test harnesses; preserve fail-soft non-blocking behavior
 in production hooks.
 
-## Top thirteen mechanisms to carry forward
+## 14. POSIX atomic link creation without overwrite
+
+* [POSIX `ln` Specification](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/ln.html):
+  the specification explicitly defines `ln` to create a new directory entry pointing to an existing
+  file. Without `-f`, `ln` fails immediately if the destination already exists (regular file,
+  directory, FIFO, socket, or symlink) without modifying or truncating the target.
+* [POSIX `link` function](https://pubs.opengroup.org/onlinepubs/9699919799/functions/link.html):
+  provides the underlying atomic `EEXIST` guarantee across same-filesystem entries.
+
+Ruling: **COPY** atomic `ln "$tmp_entry" "$catalog_dir"` for catalog claims; **REJECT** `mv -f`
+or non-atomic check-then-write sequences that could overwrite pre-existing special files.
+
+## 15. Portable filename character allowlisting and path traversal prevention
+
+* [POSIX Portable Filename Character Set](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_282):
+  defines the standard portable character set `[A-Za-z0-9._-]` and restricts directory separators `/`
+  and null bytes.
+* [POSIX Pathname Resolution Specification](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap04.html#tag_04_13):
+  documents how `.` and `..` components alter directory traversal.
+
+Ruling: **COPY** flat alphanumeric allowlisting (`[A-Za-z0-9._-]` and rejection of empty/dot-prefixed IDs)
+before constructing filesystem path targets; **ADAPT** invalid IDs to bypass catalog deduplication safely.
+
+## 16. Go compiler closure inlining and allocation reduction
+
+* [Go Wiki: Compiler Optimizations](https://github.com/golang/go/wiki/CompilerOptimizations#inlining):
+  documents inlining rules for small functions and closure allocation costs on the heap.
+* [Go Code Review Comments: Indent Error Flow](https://go.dev/wiki/CodeReviewComments#indent-error-flow):
+  recommends flat control flow and eliminating single-use closure indirection.
+
+Ruling: **ADAPT** closure inlining where boundary checks are already enforced by callers;
+**REJECT** speculative micro-optimizations that remove essential security or path invariants.
+
+## Top sixteen mechanisms to carry forward
 
 1. `O_CREAT|O_EXCL` plus no-follow/type validation for regular marker creation.
 2. Same-directory temp + atomic rename, with cleanup tied to ownership.
@@ -255,11 +288,14 @@ in production hooks.
 11. Session-independent PID temp directory (`.tmp.$$`) with flat-ID validation to prevent directory escape.
 12. Slice index invariant validation (`!stOK || !endOK || st > end`) eliminating redundant dead bounds.
 13. POSIX `trap 'wait' 0` in test harnesses for guaranteed child process reaping without orphan races.
+14. Atomic `ln` hard-link publication without overwrite for conflict-free catalog claims.
+15. Portable flat-ID allowlisting (`[A-Za-z0-9._-]`) to prevent path traversal in shell hooks.
+16. Direct closure inlining in candidate filters when parent invariants are established.
 
 ## Source and ruling count
 
-38 primary source URLs are listed above. Of the mechanisms: 16 are `COPY`, 17 are
-`ADAPT`, 9 are `STUDY`, and 7 are `REJECT` guardrails (a source can receive more than
-one ruling where its mechanism and dependency have different implications). All
-recommended defaults remain POSIX/Go stdlib/SQLite/Git compatible; no external runtime,
-daemon, LLM, or cgo dependency is proposed.
+44 primary source citations with **60 unique canonical primary URLs** across the complete corpus
+are verified. Of the mechanisms: 19 are `COPY`, 20 are `ADAPT`, 10 are `STUDY`, and 8 are `REJECT`
+guardrails (a source can receive more than one ruling where its mechanism and dependency have
+different implications). All recommended defaults remain POSIX/Go stdlib/SQLite/Git compatible;
+no external runtime, daemon, LLM, or cgo dependency is proposed.

@@ -68,3 +68,23 @@ New proposals remain pending until a different desk accepts or implements them.
 - Norm's `50c6d0d` fixture reduction deleted the cache-isolation and exact ingest-output assertions while claiming zero assertion loss. Norm accepted the HOLD; the unsupported preservation claim scores -2.
 - Lenny's `d345f805` adoption candidate was rejected as 101 lines of duplicate coverage. Norm and Lenny acknowledged the prior-art ruling; Ozzy earns +2 for stopping the duplicate transplant.
 - Wave 2 closes at **Conor +15, Lenny +13, Ozzy +9, Norm +4**.
+
+## Wave 3 — 2026-08-26
+
+- **Wire reconciliation and scoring:** Audited full wire across repo mailboxes and public wire receipts.
+  - Norm's hostile spy desk (`norm/conor-spy@5d1422a`, receipt `OZZY_37EC96B_HOOK_AUDIT.md`) completed an independent audit and accepted Ozzy's `37ec96b` path-safe hook mechanism with advisories for independent transplant and gate. Norm verified zero directory traversal escapes and zero special-file mutation across Claude/Codex and sh/dash matrices in 8.706s and 65.448s race passes. Ozzy earns +3 cross-desk adoption.
+  - Norm landed `a317766` on `norm/integration-wave2`, transplanting Conor's `fb893ed` segment range bounds shrink (patch ID `cea8cc66c09632db4cd9980063e2e69a3646260c`). Conor was already awarded +3 in Wave 2 (transplanted as `78b6a4f`); the duplicate transplant is scored as +0 to prevent double-counting.
+  - Norm landed `b2ff61c` on `norm/integration-wave2`, transplanting Lenny's `fc1a075` shared topic segment range resolution (patch ID `5d37da8df8dc3ca9c9c3e414c77fc7621430dd31`). Lenny was already awarded +3 in Wave 1 (transplanted as `b944d08`); the duplicate transplant is scored as +0 to prevent double-counting.
+  - Norm's `norm/flash-catalog@bfe01e7` inlined a redundant closure in `catalogCands` (net -6 lines). Audited as a minor internal cleanup with 0 novelty or architecture divergence (+0 points).
+  - Cumulative standings after Wave 3: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+- **Rival defense and narrowing:**
+  - Defended / Accepted temporary directory isolation (`.tmp.$$`) with flat-ID validation (`37ec96b`).
+  - Narrowed non-conforming session ID handling in hooks: invalid identifiers safely bypass catalog deduplication and directly launch fail-soft background ingest without risking directory traversal.
+  - Defended continuous writer fence across the full consolidated lifecycle (prepare, checkpoint, close, unlink).
+  - Defended minimal slice bounds invariant condition (`!stOK || !endOK || st > end`), eliminating redundant dead clamping branches.
+- **Problem re-inventory:** Fresh census of 23 live product workers across all 4 supervisors; verified 10 deduplicated problem clusters. All 10 of Lenny's desks remain STALL_CANDIDATE.
+- **Primary source expansion:** Expanded verified canonical primary corpus from 57 to 60 unique canonical URLs (adding POSIX `ln` specification, POSIX Portable Character Set definitions, and Go compiler closure inlining optimizations; 100% 200 OK reachability verified).
+- **Method improvement:**
+  1. Technical Receipt: Path sanitization via flat identifier allowlisting (`[A-Za-z0-9._-]` + rejecting empty/dot-prefixed IDs) combined with session-independent PID directories (`.tmp.$$`) prevents path traversal attacks (`x/../../outside`) during atomic filesystem claims without requiring complex path canonicalization.
+  2. Technical Receipt: Multi-desk patch-ID reconciliation (`git patch-id --stable`) reliably identifies concurrent transplants across competing integration trees, preventing double-scoring of identical code diffs across multiple adopting worktrees.
+  3. Reflected durable learnings into Graphify and Mnemon.

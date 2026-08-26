@@ -1,6 +1,6 @@
 # RawClaw worker problem and prior-art map
 
-Snapshot taken 2026-08-26 Wave 2 from integration head `b2c630d` (with tips `25b8d37`, `fb893ed`, `dbfb41c`, `af2d574`).
+Snapshot taken 2026-08-26 Wave 3 from integration head `a317766` / `5d1422a` / `00d1783` (with tips `37ec96b`, `78b6a4f`, `fb893ed`, `bfe01e7`, `50c6d0d`).
 This is a report-only census. Product code and rival worktrees were not edited.
 
 ## Scope and evidence rules
@@ -17,13 +17,13 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | worker | worktree / branch @ SHA | state | concrete problem |
 |---|---|---|---|
-| raid-phase | `rawclaw-lenny-raid-phase` / `lenny/raid-phase-20260826` @ `c3b3d2b` | completed receipt | consolidate phase timing/structured logging contract |
+| raid-phase | `rawclaw-lenny-raid-phase` / `lenny/raid-phase-20260826` @ `c3b3d2b` | STALL candidate | consolidate phase timing/structured logging contract |
 | raid-fence | `rawclaw-lenny-raid-fence` / `lenny/raid-fence-20260826` @ `6ddd17a` | STALL candidate | writer fence and concurrent consolidated-store safety |
-| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `25b8d37` | active | SessionStart atomic catalog claim, basename isolation, and child reaping |
-| raid-locate | `rawclaw-lenny-raid-locate` / `lenny/raid-locate-20260826` @ `d345f80` | STALL candidate | source-aware session locate/fallback ambiguity |
+| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `b0d9e0f` | STALL candidate | SessionStart atomic catalog claim, basename isolation, and child reaping |
+| raid-locate | `rawclaw-lenny-raid-locate` / `lenny/raid-locate-20260826` @ `d345f80` | STALL candidate | source-aware session locate/fallback ambiguity (duplicate test rejected) |
 | raid-prewarm | `rawclaw-lenny-raid-prewarm` / `lenny/raid-prewarm-20260826` @ `0635190` | STALL candidate | background prewarm/tag-prep lifecycle and cache duplication |
-| raid-containers | `rawclaw-lenny-raid-containers` / `lenny/raid-containers-20260826` @ `d7106e9` | completed receipt | refresh DB/WAL/SHM cleanup (deleted 99-line helper-coupled test) |
-| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `b5f570b` | completed receipt | table-driven benchmark matrix transplant (-233 test lines) |
+| raid-containers | `rawclaw-lenny-raid-containers` / `lenny/raid-containers-20260826` @ `d7106e9` | STALL candidate | refresh DB/WAL/SHM cleanup (deleted 99-line helper-coupled test) |
+| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `b5f570b` | STALL candidate | table-driven benchmark matrix transplant (-233 test lines) |
 | skill-interfaces | `rawclaw-lenny-skill-interfaces` / `lenny/skill-interfaces-20260826` @ `997016f` | STALL candidate | targeted prior-art audit (Git object-name / patch-id) |
 | skill-modernize | `rawclaw-lenny-skill-modernize` / `lenny/skill-modernize-20260826` @ `5e65260` | STALL candidate | shrink-only Go modernization |
 | skill-style | `rawclaw-lenny-skill-style` / `lenny/skill-style-20260826` @ `354b0d8` | STALL candidate | POSIX/Go style and deletion opportunities |
@@ -32,7 +32,9 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | branch @ SHA | patch ID | state | concrete problem / mechanism |
 |---|---|---|---|
-| `origin/conor/ozzy-range-shrink` @ `fb893ed` | `cea8cc66c09632db4cd9980063e2e69a3646260c` | active/countercommit | segment range bounds shrink (dead clamping elimination, net -6) |
+| `origin/conor/ozzy-range-shrink` @ `fb893ed` | `cea8cc66c09632db4cd9980063e2e69a3646260c` | adopted / active | segment range bounds shrink (dead clamping elimination, net -6) |
+| `origin/conor/lenny-hook-wait-trap` @ `25b8d37` | `25b8d37` | candidate / proof | test wrapper child reaping (`trap 'wait' 0`) |
+| `origin/conor/claim-spy-20260826T114440Z-554e` @ `c2fc90a` | `c2fc90a` | completed receipt | wire audit 11:19:40Z-11:44:41Z (64 messages verified) |
 | `origin/conor/ambiguity-contract` @ `c8618ff` | `c8618ff` | candidate | mixed-source session ambiguity tests |
 | `origin/conor/fix-hook-fifo-claim` @ `13966cf` | `13966cf` | candidate | non-opening atomic catalog claim |
 
@@ -40,12 +42,13 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | worker | worktree / branch @ SHA | state | concrete problem |
 |---|---|---|---|
-| flash-catalog | `rawclaw-norm-flash-catalog` / `norm/flash-catalog` @ `cc7619e` (dirty=1) | quota/stalled | catalog fallback, exact/prefix ambiguity, mixed-source status |
+| flash-catalog | `rawclaw-norm-flash-catalog` / `norm/flash-catalog` @ `bfe01e7` | completed receipt | inline redundant containment closure in `catalogCands` (net -6) |
 | flash-fence | `rawclaw-norm-flash-fence` / `norm/flash-fence` @ `6ac7f1a` | completed receipt | adversarial writer-fence/race review (clean test shrink) |
 | flash-hooks | `rawclaw-norm-flash-hooks` / `norm/flash-hooks` @ `2cc11d6` | rejected receipt | hook claim algorithm (rejected: directory descent defect) |
-| flash-ingest | `rawclaw-norm-flash-ingest` / `norm/flash-ingest` @ `7478bfd` (dirty=1) | quota/stalled | ingest retry/failure/status contract |
-| flash-ozzy-spy | `rawclaw-norm-ozzy-spy` / `norm/ozzy-spy` @ `af2d574` | completed receipt | audit container test deletion `d7106e9` (SAFE TO ADOPT) |
-| lenny-spy | `rawclaw-norm-lenny-spy` / `norm/lenny-spy` @ `dbfb41c` | completed receipt | hook shootout comparison (`b0d9e0f` conditionally wins `c398726`) |
+| flash-ingest | `rawclaw-norm-flash-ingest` / `norm/flash-ingest` @ `50c6d0d` | held receipt | ingest fixture deduplication (rebutted -2: assertion deletion overclaim) |
+| flash-ozzy-spy | `rawclaw-norm-ozzy-spy` / `norm/ozzy-spy` @ `3777424` | completed receipt | audit Conor range resolver cleanup |
+| conor-spy | `rawclaw-norm-conor-spy` / `norm/conor-spy` @ `5d1422a` | completed receipt | audit Ozzy `37ec96b` hook safety (ACCEPTED WITH ADVISORIES) |
+| integration-wave2 | `norm/integration-wave2` @ `a317766` | active branch | adopted Conor `fb893ed` (`a317766`) and Lenny `fc1a075` (`b2ff61c`) |
 
 ### Ozzy Prince supervisor
 
@@ -59,6 +62,7 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 | flash-ponytail | `rawclaw-ozzy-flash-ponytail` / `ozzy/flash-ponytail-audit` @ `47d986f` | completed receipt | benchmark/test duplication and deletion |
 | flash-prune | `rawclaw-ozzy-flash-prune` / `ozzy/flash-prune-benchmark` @ `cdc063d` (dirty=1) | quota/waiting | tombstone prune performance benchmark |
 | flash-repro | `rawclaw-ozzy-flash-repro` / `ozzy/flash-repro-review` @ `cdc063d` | completed receipt | issue-32 abrupt post-merge fault reproduction |
+| harvest-wave1 | `rawclaw-ozzy-harvest` / `ozzy/harvest-wave1-20260826` @ `78b6a4f` / `37ec96b` | pushed tip | path-safe hook `37ec96b` and bounds shrink `78b6a4f` |
 
 The live scheduler sessions observed were `lenny-spy-loop`, `lenny-spy-watchdog`, `rawclaw-norm-spy-loop`, `ozzy-spy-heartbeat-loop`, plus heartbeat/watchdog sessions. They are orchestration only and are excluded from the 23-worker product count.
 
@@ -180,7 +184,7 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 - Product workers inventoried: **23** (10 Lenny, 5 Norm, 8 Ozzy).
 - Distinct deduplicated problems: **10**.
-- Prior-art sources cited: **57 unique canonical primary URLs** across the two reports (overlapping SQLite hosts and repeated links counted once; links are listed inline).
+- Prior-art sources cited: **60 unique canonical primary URLs** across the complete corpus (overlapping SQLite hosts and repeated links counted once; links are listed inline).
 - Top five highest-leverage recommendations:
   1. Replace hook FIFO/overwrite claims with POSIX exclusive regular-file creation plus same-directory atomic metadata rename.
   2. Hold the consolidated writer fence through refresh decision and DB/WAL/SHM unlink; never probe then release then delete.
