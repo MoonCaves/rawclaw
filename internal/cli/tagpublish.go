@@ -135,6 +135,10 @@ func isConsolidatedSource(dbp string) bool {
 }
 
 func publishSession(ctx context.Context, con *sql.DB, sid string, segments []store.TopicSegment, verdict store.Verdict, hasVerdict bool) error {
+	sourceOrigin := ""
+	if len(segments) > 0 {
+		sourceOrigin = segments[0].OriginMachine
+	}
 	var sourceRevision float64
 	for _, s := range segments {
 		if s.TaggedAt > sourceRevision {
@@ -149,12 +153,23 @@ func publishSession(ctx context.Context, con *sql.DB, sid string, segments []sto
 		return err
 	}
 	defer tx.Rollback()
+	var existingOrigin string
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(origin_machine),'') FROM topic_segment WHERE session_id=?", sid).Scan(&existingOrigin); err != nil {
+		return err
+	}
+	if existingOrigin > sourceOrigin {
+		return tx.Commit()
+	}
 	var currentRevision sql.NullFloat64
 	if err := tx.QueryRowContext(ctx, "SELECT MAX(tagged_at) FROM topic_segment WHERE session_id=? AND (origin_machine IS NULL OR origin_machine='')", sid).Scan(&currentRevision); err != nil {
 		return err
 	}
 	if !currentRevision.Valid || currentRevision.Float64 <= sourceRevision {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM topic_segment WHERE session_id=? AND (origin_machine IS NULL OR origin_machine='')", sid); err != nil {
+		where := "session_id=? AND (origin_machine IS NULL OR origin_machine='')"
+		if sourceOrigin != "" {
+			where = "session_id=?"
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM topic_segment WHERE "+where, sid); err != nil {
 			return err
 		}
 		for _, s := range segments {
