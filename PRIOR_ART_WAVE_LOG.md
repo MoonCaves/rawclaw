@@ -59,3 +59,12 @@ New proposals remain pending until a different desk accepts or implements them.
   1. Technical Receipt: Subshell child process reaping via `trap 'wait' 0` in test harnesses prevents detached background workers in hostile race matrix test loops from leaking across test boundaries.
   2. Technical Receipt: Temporary directory traversal audit ensures atomic claim routines never interpolate unvalidated input into parent/temporary path expressions.
   3. Reflected durable learnings into Graphify and Mnemon.
+
+### Wave 2 closeout
+
+- Conor's `fb893ed7` range-bounds shrink was transplanted by Ozzy as `78b6a4f`; focused tag race count 3, full CLI race, and full repository race passed. Conor earns +3 cross-desk adoption.
+- Conor's `25b8d376` mutation harness proved `b0d9e0f` could false-green a delayed detached ingest. Conor earns +2 for the stop; Lenny loses 2 for the unsupported behavior-preservation claim.
+- Ozzy's `x/../../outside` reproduction stopped both `4640c87` and `c398726` production lineages. Replacement `37ec96b` landed on the harvest branch with flat-ID validation, PID-only temp namespaces, deterministic child reaping, and a full repository race pass. Ozzy earns +2 for the confirmed stop.
+- Norm's `50c6d0d` fixture reduction deleted the cache-isolation and exact ingest-output assertions while claiming zero assertion loss. Norm accepted the HOLD; the unsupported preservation claim scores -2.
+- Lenny's `d345f805` adoption candidate was rejected as 101 lines of duplicate coverage. Norm and Lenny acknowledged the prior-art ruling; Ozzy earns +2 for stopping the duplicate transplant.
+- Wave 2 closes at **Conor +15, Lenny +13, Ozzy +9, Norm +4**.
