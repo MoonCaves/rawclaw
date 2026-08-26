@@ -209,6 +209,47 @@ func TestRunTagPrepCmdRefreshesRegisteredSourceWithoutCWD(t *testing.T) {
 	}
 }
 
+func TestRunTagPrepCmdUsesFreshPrewarmDump(t *testing.T) {
+	dump, src, c := runPrewarmTest(t, "prewarmed", []model.Message{{
+		Role: "user", Text: "from prewarm", UUID: "aaaaaaaa-prewarm",
+	}})
+	src.messagesErr = errors.New("refresh should not run")
+
+	var out strings.Builder
+	if err := runTagPrepCmdWithSources(&out, c.ID, nil, nil, []source.Registration{
+		tagTestRegistration("prewarm-test", src),
+	}); err != nil {
+		t.Fatalf("runTagPrepCmdWithSources: %v", err)
+	}
+	want := string(mustReadFile(t, dump))
+	if out.String() != want {
+		t.Fatalf("tag-prep output = %q, want prewarm dump %q", out.String(), want)
+	}
+}
+
+func TestRunTagPrepCmdFallsBackForStalePrewarmDump(t *testing.T) {
+	_, src, c := runPrewarmTest(t, "old", []model.Message{{
+		Role: "user", Text: "old", UUID: "bbbbbbbb-old",
+	}})
+	writeTagSourceFile(t, c.Path, "old\nnew")
+	src.messages = append(src.messages, model.Message{
+		Role: "assistant", Text: "refreshed", UUID: "cccccccc-new",
+	})
+
+	var out strings.Builder
+	if err := runTagPrepCmdWithSources(&out, c.ID, nil, nil, []source.Registration{
+		tagTestRegistration("prewarm-test", src),
+	}); err != nil {
+		t.Fatalf("runTagPrepCmdWithSources: %v", err)
+	}
+	if !strings.Contains(out.String(), "cccccccc [assistant] refreshed") {
+		t.Fatalf("tag-prep did not fall back to refreshed source:\n%s", out.String())
+	}
+	if src.messagesCalls < 2 {
+		t.Fatalf("Messages called %d times, want prewarm plus fallback refresh", src.messagesCalls)
+	}
+}
+
 func TestRunTagPrepCmdDiscoversUnindexedRegisteredSource(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

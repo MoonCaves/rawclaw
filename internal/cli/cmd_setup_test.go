@@ -432,6 +432,7 @@ func TestSetupCmd_ScriptContentContainsBanner(t *testing.T) {
 		`rawclaw "query"`,
 		"rawclaw read <ref>",
 		"rawclaw outline <sess8>",
+		"already fast if pre-warming",
 		"--json for structured output",
 		"offering to resume/fork it can help",
 	}
