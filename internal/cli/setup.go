@@ -61,7 +61,6 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 	if [ -f "$entry" ]; then
 		exit 0
 	fi
@@ -81,6 +80,7 @@ if [ -n "$session_id" ]; then
 		printf '  "source": "claude"\n'
 		printf '}\n'
 	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
+	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 
 cat <<'BANNER'
@@ -147,7 +147,6 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 	if [ -f "$entry" ]; then
 		exit 0
 	fi
@@ -167,6 +166,7 @@ if [ -n "$session_id" ]; then
 		printf '  "source": "codex"\n'
 		printf '}\n'
 	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
+	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 
 # No python3 for JSON encoding — silent no-op rather than a hook error (a
@@ -680,50 +680,42 @@ func installRawclawCodexHook(configDir string) error {
 	return installRawclawHookAt(configDir, codexHooksPath(configDir), rawclawCodexPrimeScript)
 }
 
-// installRawclawHookAt writes the hook scripts under configDir and registers
-// them in configFile, in that order (an entry pointing at a script that
-// doesn't exist yet is the wrong intermediate state to risk if the second step
-// fails). Shared by both the Claude Code and Codex targets — they differ in
-// which JSON file the entries are merged into and whether the SessionEnd
-// tagging-queue hook is wired (withSessionEnd).
-func installRawclawHookAt(configDir, configFile, primeTemplate string) error {
-	// Resolve this binary's absolute path once and bake it into every script
-	// this install writes, so the hooks fire regardless of the hook's PATH.
-	quotedBin := rawclawBinQuoted()
-
+// installRawclawHookWith writes the hook scripts under configDir, registers
+// them in configFile using registerHooks, and prunes any legacy tag-queue script.
+func installRawclawHookWith(configDir, configFile, scriptContent string, registerHooks func(map[string]any, string) error) error {
 	scriptPath := hookScriptPath(configDir)
-	if err := writeHookScript(scriptPath, renderHookScript(primeTemplate, quotedBin)); err != nil {
+	if err := writeHookScript(scriptPath, scriptContent); err != nil {
 		return fmt.Errorf("install hook script: %w", err)
 	}
-	entries := map[string]string{
-		"SessionStart": scriptPath,
-		"Stop":         scriptPath,
-	}
-
 	data, err := readJSONFile(configFile)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", configFile, err)
 	}
-	if err := addRawclawHooks(data, entries); err != nil {
+	if err := registerHooks(data, scriptPath); err != nil {
 		return fmt.Errorf("register hook in %s: %w", configFile, err)
 	}
 	if err := writeJSONFile(configFile, data); err != nil {
 		return fmt.Errorf("write %s: %w", configFile, err)
 	}
-
-	// Migration: rawclaw <= v0.5.x also installed a SessionEnd tagqueue.sh.
-	// Sessions self-tag at closeout now, so the stale script goes — but only
-	// AFTER the config write above succeeded. Deleting it first would, on a
-	// failed or refused write, leave the old SessionEnd entry registered and
-	// pointing at a file that no longer exists: precisely the broken
-	// intermediate state this function's ordering exists to prevent. The entry
-	// itself needs no special case, because addRawclawHooks strips every
-	// rawclaw-owned entry across every event before re-adding, so simply not
-	// listing SessionEnd unregisters it.
 	if err := os.Remove(legacyTagQueueScriptPath(configDir)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove legacy tag-queue hook script: %w", err)
 	}
 	return nil
+}
+
+// installRawclawHookAt writes the hook scripts under configDir and registers
+// them in configFile, in that order (an entry pointing at a script that
+// doesn't exist yet is the wrong intermediate state to risk if the second step
+// fails). Shared by both the Claude Code and Codex targets — they differ in
+// which JSON file the entries are merged into.
+func installRawclawHookAt(configDir, configFile, primeTemplate string) error {
+	quotedBin := rawclawBinQuoted()
+	return installRawclawHookWith(configDir, configFile, renderHookScript(primeTemplate, quotedBin), func(data map[string]any, scriptPath string) error {
+		return addRawclawHooks(data, map[string]string{
+			"SessionStart": scriptPath,
+			"Stop":         scriptPath,
+		})
+	})
 }
 
 // removeIfEmpty removes dir only when it exists and holds nothing at all. A
@@ -778,12 +770,10 @@ func (o ejectOutcome) didAnything() bool {
 	return o.scriptRemoved || o.tagScriptRemoved || o.entryRemoved || o.fileDeleted
 }
 
-// ejectRawclawHookAt reverses installRawclawHookAt: remove the hook script
-// (and its now-possibly-empty parent dirs), strip rawclaw's own entries out of
-// configFile, and delete configFile entirely once nothing else is left in it.
-// Every step tolerates the thing already being gone — ejecting a target that
-// was never installed (or ejecting twice) is a clean no-op, never an error.
-func ejectRawclawHookAt(configDir, configFile string) (ejectOutcome, error) {
+// ejectRawclawHookWith removes installed hook scripts under configDir, strips
+// rawclaw hooks from configFile using removeHooks when hasHooks reports true,
+// and cascades directory cleanup. Shared across all targets (Claude, Codex, Antigravity).
+func ejectRawclawHookWith(configDir, configFile string, hasHooks func(map[string]any) bool, removeHooks func(map[string]any)) (ejectOutcome, error) {
 	scriptPath := hookScriptPath(configDir)
 	tagScriptPath := legacyTagQueueScriptPath(configDir)
 	scriptDir := filepath.Dir(scriptPath)     // configDir/hooks/rawclaw — ours alone
@@ -817,9 +807,9 @@ func ejectRawclawHookAt(configDir, configFile string) (ejectOutcome, error) {
 	// then may it be deleted, once nothing else remains). A file with no
 	// rawclaw entry — including a user's pre-existing empty {} — is not ours to
 	// rewrite or remove: it stays byte-untouched.
-	if containsRawclaw(data["hooks"]) {
+	if hasHooks(data) {
 		out.entryRemoved = true
-		removeRawclawHooks(data)
+		removeHooks(data)
 		if err := writeOrRemoveConfigFile(configFile, data); err != nil {
 			return out, err
 		}
@@ -828,6 +818,18 @@ func ejectRawclawHookAt(configDir, configFile string) (ejectOutcome, error) {
 
 	removeIfEmpty(configDir)
 	return out, nil
+}
+
+// ejectRawclawHookAt reverses installRawclawHookAt: remove the hook script
+// (and its now-possibly-empty parent dirs), strip rawclaw's own entries out of
+// configFile, and delete configFile entirely once nothing else is left in it.
+// Every step tolerates the thing already being gone — ejecting a target that
+// was never installed (or ejecting twice) is a clean no-op, never an error.
+func ejectRawclawHookAt(configDir, configFile string) (ejectOutcome, error) {
+	return ejectRawclawHookWith(configDir, configFile,
+		func(data map[string]any) bool { return containsRawclaw(data["hooks"]) },
+		removeRawclawHooks,
+	)
 }
 
 // ejectRawclawHook reverses installRawclawHook — the Claude Code target.
@@ -900,7 +902,7 @@ func removeRawclawAntigravityHooks(data map[string]any) {
 // addRawclawAntigravityHooks registers rawclaw's named PreInvocation and Stop
 // hooks in Antigravity's hooks.json map. Existing rawclaw entries are stripped
 // first so the operation is idempotent.
-func addRawclawAntigravityHooks(data map[string]any, scriptPath string) error {
+func addRawclawAntigravityHooks(data map[string]any, scriptPath string) {
 	removeRawclawAntigravityHooks(data)
 	data["rawclaw"] = map[string]any{
 		"PreInvocation": []any{
@@ -916,80 +918,30 @@ func addRawclawAntigravityHooks(data map[string]any, scriptPath string) error {
 			},
 		},
 	}
-	return nil
 }
 
 // installRawclawAntigravityHook writes the Antigravity discovery script and
-// registers it in <configDir>/hooks.json as a PreInvocation hook.
+// registers it in <configDir>/hooks.json as PreInvocation and Stop hooks.
 func installRawclawAntigravityHook(configDir string) error {
 	quotedBin := rawclawBinQuoted()
 	scriptContent, err := renderAntigravityPrimeScript(quotedBin)
 	if err != nil {
 		return fmt.Errorf("render antigravity hook script: %w", err)
 	}
-
-	scriptPath := hookScriptPath(configDir)
-	if err := writeHookScript(scriptPath, scriptContent); err != nil {
-		return fmt.Errorf("install antigravity hook script: %w", err)
-	}
-	configFile := antigravityHooksPath(configDir)
-	data, err := readJSONFile(configFile)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", configFile, err)
-	}
-	if err := addRawclawAntigravityHooks(data, scriptPath); err != nil {
-		return fmt.Errorf("register antigravity hook in %s: %w", configFile, err)
-	}
-	if err := writeJSONFile(configFile, data); err != nil {
-		return fmt.Errorf("write %s: %w", configFile, err)
-	}
-
-	if err := os.Remove(legacyTagQueueScriptPath(configDir)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove legacy tag-queue hook script: %w", err)
-	}
-	return nil
+	return installRawclawHookWith(configDir, antigravityHooksPath(configDir), scriptContent, func(data map[string]any, scriptPath string) error {
+		addRawclawAntigravityHooks(data, scriptPath)
+		return nil
+	})
 }
 
 // ejectRawclawAntigravityHook reverses installRawclawAntigravityHook — the
 // Antigravity target.
 func ejectRawclawAntigravityHook(configDir string) (ejectOutcome, error) {
-	scriptPath := hookScriptPath(configDir)
-	tagScriptPath := legacyTagQueueScriptPath(configDir)
-	configFile := antigravityHooksPath(configDir)
-	scriptDir := filepath.Dir(scriptPath)     // configDir/hooks/rawclaw
-	hooksParentDir := filepath.Dir(scriptDir) // configDir/hooks
-
-	out := ejectOutcome{scriptPath: scriptPath, tagScriptPath: tagScriptPath, configFile: configFile}
-
-	if _, err := os.Stat(scriptPath); err == nil {
-		if err := os.Remove(scriptPath); err != nil {
-			return out, fmt.Errorf("remove %s: %w", scriptPath, err)
-		}
-		out.scriptRemoved = true
-	}
-	if _, err := os.Stat(tagScriptPath); err == nil {
-		if err := os.Remove(tagScriptPath); err != nil {
-			return out, fmt.Errorf("remove %s: %w", tagScriptPath, err)
-		}
-		out.tagScriptRemoved = true
-	}
-	removeIfEmpty(scriptDir)
-	removeIfEmpty(hooksParentDir)
-
-	data, err := readJSONFile(configFile)
-	if err != nil {
-		return out, fmt.Errorf("read %s: %w", configFile, err)
-	}
-
-	if _, hasRawclawGroup := data["rawclaw"]; hasRawclawGroup || containsRawclaw(data) {
-		out.entryRemoved = true
-		removeRawclawAntigravityHooks(data)
-		if err := writeOrRemoveConfigFile(configFile, data); err != nil {
-			return out, err
-		}
-		out.fileDeleted = len(data) == 0
-	}
-
-	removeIfEmpty(configDir)
-	return out, nil
+	return ejectRawclawHookWith(configDir, antigravityHooksPath(configDir),
+		func(data map[string]any) bool {
+			_, hasRawclawGroup := data["rawclaw"]
+			return hasRawclawGroup || containsRawclaw(data)
+		},
+		removeRawclawAntigravityHooks,
+	)
 }
