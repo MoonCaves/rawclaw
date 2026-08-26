@@ -166,6 +166,22 @@ func TestRunPrewarmExternalBehaviors(t *testing.T) {
 	})
 }
 
+func TestRunPrewarmRegeneratesWhenDumpMissing(t *testing.T) {
+	dump, src, c := runPrewarmTest(t, "one", []model.Message{{
+		Role: "user", Text: "one", UUID: "11111111-one",
+	}})
+	if err := os.Remove(dump); err != nil {
+		t.Fatalf("remove dump: %v", err)
+	}
+	var out strings.Builder
+	if err := runPrewarmCmd(&out, c.ID, nil, nil, []source.Registration{tagTestRegistration("prewarm-test", src)}); err != nil {
+		t.Fatalf("regenerate missing dump: %v", err)
+	}
+	if _, err := os.Stat(dump); err != nil {
+		t.Fatalf("missing dump was not regenerated: %v", err)
+	}
+}
+
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)

@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
+	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/sources"
@@ -88,14 +89,14 @@ func runPrewarmCmd(
 		}
 		dump.Fingerprint = prewarmFingerprint{MTime: st.ModTime().UnixNano(), Size: st.Size()}
 	}
-	if err := os.WriteFile(dumpPath, []byte(dump.Content), 0o600); err != nil {
+	if err := durable.WriteAtomic(dumpPath, []byte(dump.Content)); err != nil {
 		return fmt.Errorf("write prewarm dump: %w", err)
 	}
 	state, err := json.Marshal(dump.Fingerprint)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(dumpPath+".state", state, 0o600); err != nil {
+	if err := durable.WriteAtomic(dumpPath+".state", state); err != nil {
 		return fmt.Errorf("write prewarm fingerprint: %w", err)
 	}
 	_, _ = io.WriteString(w, dumpPath+"\n")
@@ -123,9 +124,11 @@ func prewarmSourcePath(dbPath, sessionID string) string {
 }
 
 func prewarmFresh(dumpPath, sourcePath string) bool {
+	if _, err := os.Stat(dumpPath); err != nil {
+		return false
+	}
 	if sourcePath == "" {
-		_, err := os.Stat(dumpPath)
-		return err == nil
+		return true
 	}
 	st, err := os.Stat(sourcePath)
 	if err != nil {
