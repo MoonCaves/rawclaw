@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -169,43 +170,7 @@ func computeUntaggedWindow(
 
 	tagged := make([]bool, len(displayable))
 	for _, seg := range existingSegs {
-		st, stOK := uuidToDispIdx[seg.StartUUID]
-		if !stOK {
-			if id, hasID := uuidToMsgID[seg.StartUUID]; hasID {
-				for i, dm := range displayable {
-					if dm.ID >= id {
-						st = i
-						stOK = true
-						break
-					}
-				}
-			}
-		}
-
-		endUUID := seg.EndUUID
-		if endUUID == "" {
-			endUUID = seg.StartUUID
-		}
-		end, endOK := uuidToDispIdx[endUUID]
-		if !endOK {
-			if id, hasID := uuidToMsgID[endUUID]; hasID {
-				for i := len(displayable) - 1; i >= 0; i-- {
-					if displayable[i].ID <= id {
-						end = i
-						endOK = true
-						break
-					}
-				}
-			}
-		}
-
-		if stOK && endOK && st <= end && st < len(displayable) && end >= 0 {
-			if st < 0 {
-				st = 0
-			}
-			if end >= len(displayable) {
-				end = len(displayable) - 1
-			}
+		if st, end, ok := resolveSegmentRange(seg, uuidToDispIdx, uuidToMsgID, displayable); ok {
 			for k := st; k <= end; k++ {
 				tagged[k] = true
 			}
@@ -280,35 +245,8 @@ func findPrevSegment(
 	bestStart := -1
 	for i := range existingSegs {
 		seg := &existingSegs[i]
-		st, stOK := uuidToDispIdx[seg.StartUUID]
-		if !stOK {
-			if id, hasID := uuidToMsgID[seg.StartUUID]; hasID {
-				for j, dm := range displayable {
-					if dm.ID >= id {
-						st = j
-						stOK = true
-						break
-					}
-				}
-			}
-		}
-		endUUID := seg.EndUUID
-		if endUUID == "" {
-			endUUID = seg.StartUUID
-		}
-		end, endOK := uuidToDispIdx[endUUID]
-		if !endOK {
-			if id, hasID := uuidToMsgID[endUUID]; hasID {
-				for j := len(displayable) - 1; j >= 0; j-- {
-					if displayable[j].ID <= id {
-						end = j
-						endOK = true
-						break
-					}
-				}
-			}
-		}
-		if stOK && endOK && st <= targetIdx && targetIdx <= end {
+		st, end, ok := resolveSegmentRange(*seg, uuidToDispIdx, uuidToMsgID, displayable)
+		if ok && st <= targetIdx && targetIdx <= end {
 			if st > bestStart {
 				bestStart = st
 				bestSeg = seg
@@ -316,6 +254,53 @@ func findPrevSegment(
 		}
 	}
 	return bestSeg
+}
+
+func resolveSegmentRange(
+	seg store.TopicSegment,
+	uuidToDispIdx, uuidToMsgID map[string]int,
+	displayable []store.SessionMessage,
+) (int, int, bool) {
+	st, stOK := uuidToDispIdx[seg.StartUUID]
+	if !stOK {
+		if id, hasID := uuidToMsgID[seg.StartUUID]; hasID {
+			for i, dm := range displayable {
+				if dm.ID >= id {
+					st = i
+					stOK = true
+					break
+				}
+			}
+		}
+	}
+
+	endUUID := seg.EndUUID
+	if endUUID == "" {
+		endUUID = seg.StartUUID
+	}
+	end, endOK := uuidToDispIdx[endUUID]
+	if !endOK {
+		if id, hasID := uuidToMsgID[endUUID]; hasID {
+			for i, dm := range slices.Backward(displayable) {
+				if dm.ID <= id {
+					end = i
+					endOK = true
+					break
+				}
+			}
+		}
+	}
+
+	if !stOK || !endOK || st > end || st >= len(displayable) || end < 0 {
+		return 0, 0, false
+	}
+	if st < 0 {
+		st = 0
+	}
+	if end >= len(displayable) {
+		end = len(displayable) - 1
+	}
+	return st, end, true
 }
 
 // ── verb: tag-write ────────────────────────────────────────────────────────────
