@@ -91,8 +91,6 @@ func PrepareFreshContainer(
 	msgs MessagesFunc,
 	sourceID string,
 ) (int, error) {
-	pruneStaleRefreshDBs()
-
 	var loadErr error
 	strictMessages := func(got source.Container) ([]model.Message, error) {
 		ms, err := msgs(got)
@@ -133,6 +131,8 @@ func EnsureFreshContainer(
 	msgs MessagesFunc,
 	sourceID string,
 ) (int, error) {
+	pruneStaleRefreshDBs()
+
 	nMessages, err := PrepareFreshContainer(dbp, c, msgs, sourceID)
 	if err != nil {
 		return 0, err
