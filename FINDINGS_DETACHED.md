@@ -1,10 +1,11 @@
 # Detached publication shootout
 
-Review target: Ozzy `b7752f4` (supersedes `3170b19`, `2ad239c`, and the
-short-lived compile-failing `f54829c`). Furiosa `8aab2cb`/`cc3e088` are
-characterization and cancellation audits; Han `d2315cb` is a test-isolation
-follow-up, not the implementation commit. Current-base source and focused
-race tests were inspected independently.
+Review target: Ozzy tree tip `b7752f4` (supersedes `3170b19`, `2ad239c`, and the
+short-lived compile-failing `f54829c`). Han tree tip `d2315cb` includes
+implementation `7edd58d` plus its test-isolation follow-up; both core patches
+have stable patch ID `6f276e8e4dcba0dedb80739a1966dfc10a3ca64a`. Furiosa
+`8aab2cb`/`cc3e088` are characterization and cancellation audits. Current-base
+source and focused race tests were inspected independently.
 
 ## Findings
 
@@ -17,7 +18,7 @@ race tests were inspected independently.
    successful tag-write, then read through consolidated-only access; the tag is
    missing although the command printed success. This is eventual-consistency
    behavior, not data loss, but “queued” overstates durability because no
-   pending work survives process loss. **Ozzy: -2.**
+   pending work survives process loss. **Ozzy and Han: -2 each.**
 
 2. **P2 — child timeout is a hard process exit, not context-aware cancellation.**
    `internal/cli/tagpublish.go:75-83` accepts `ctx` only for a preflight check;
@@ -27,14 +28,14 @@ race tests were inspected independently.
    cancellation receipt. SQLite transaction recovery is expected, but the log
    can end mid-phase and cannot distinguish timeout from crash without the
    watchdog line. The bound is real, but cancellation observability is weak.
-   **Ozzy: -1.**
+   **Ozzy and Han: -1 each.**
 
-3. **P2 — duplicate tag writes create duplicate detached processes.**
+3. **P2 — duplicate tag writes create duplicate detached processes (both implementations).**
    `internal/cli/tagpublish.go:39-63` has no spawn token/coalescing marker.
    Reproducer: concurrently invoke `tag-write` ten times for the same project
    and count `tag-publish` children; ten are launched. The existing consolidated
    fence makes folds serialize and the fold is idempotent, so this is a process
-   storm/performance defect rather than a correctness failure. **Ozzy: -1.**
+   storm/performance defect rather than a correctness failure. **Ozzy and Han: -1 each.**
 
 ## Positive checks
 
@@ -52,8 +53,9 @@ race tests were inspected independently.
 | Candidate | Score | Reason |
 |---|---:|---|
 | Furiosa `8aab2cb` + `cc3e088` | 0/10 | Useful latency/cancellation evidence, but no publisher implementation. |
-| Han `d2315cb` | 1/10 | Test-isolation fix only at the pinned SHA; no detached publisher code in that commit. |
+| Han tree `d2315cb` (`7edd58d` implementation) | 6/10 | Same core detached handoff, bounded child, logs, and eventual-read output; lacks Ozzy's path-clean/symlink self-source guard and cancellation preflight. |
 | Ozzy `b7752f4` | 6/10 | Small working detached handoff with honest eventual-read output, bounded child, logs, and self-source protection; deductions above remain. |
 
-Verdict: **Ozzy is the strongest implementation candidate, conditional on
-accepting eventual publication without a durable retry queue.**
+Verdict: **Ozzy and Han are equivalent core candidates, conditional on
+accepting eventual publication without a durable retry queue. Ozzy has the
+stronger self-source boundary; Han has equivalent publisher behavior.**
