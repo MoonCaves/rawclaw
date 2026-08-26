@@ -133,9 +133,9 @@ Source: /Users/jay-m4/org/skills-upstream/shared/team-communication-protocols/SK
 
 Trigger/frequency: every tick for direct messages and mailbox cursors; at handoff/shutdown boundaries for acknowledgments. Broadcast sparingly.
 
-Exact receipt: message filename, sender/recipient mailbox, subject, timestamp, and the acknowledged evidence. The local PreToolUse mailbox enforcement is concrete evidence: it denied repository inspection until the unread Furiosa directive was replied to and marked read. This is a hook mechanism, separate from a periodic skill audit.
+Exact receipt: message filename, sender/recipient mailbox, subject, timestamp, and the acknowledged evidence. The local PreToolUse mailbox enforcement is concrete evidence: it denied repository inspection until the unread Furiosa directive was replied to and marked read. Furiosa’s owner-only cursor-recovery adoption (receipt 20260826T193148Z-29472131) requires hash/preserve, quarantine without deletion, owner-only cursor reset, a normal-UTC unread self-test, and retained hashes. This is a hook mechanism, separate from a periodic skill audit.
 
-False-positive trap: a sent message is not an acknowledgment, and a shutdown request is not proof of stopped work. Stop/SubagentStop status is UNCERTAIN here unless independently observed. Adoption value: makes the claim-spy clock enforceable and prevents unread steering directives from being silently skipped.
+False-positive trap: a sent message is not an acknowledgment, and a shutdown request is not proof of stopped work. Furiosa +3 is external recommendation-adoption credit when committed, not evidence of mailbox-helper correctness. Stop/SubagentStop status is UNCERTAIN here unless independently observed. Adoption value: makes the claim-spy clock enforceable and prevents unread steering directives from being silently skipped.
 
 ### 11. Parallel feature development — worktree and integration boundary
 
@@ -182,6 +182,10 @@ These bodies were evaluated, but are intentionally not in the 14-skill rotating 
 - /Users/jay-m4/org/skills-upstream/shared/git-advanced-workflows/SKILL.md — apply at branch divergence, bisect, recovery, or release preparation, with explicit git worktree list, base SHA, and upstream-equal receipt. Running rebase/bisect guidance every tick adds no evidence.
 - /Users/jay-m4/org/skills-upstream/shared/repomix-explorer/SKILL.md — use for broad unfamiliar-repository exploration or remote packs, not known-symbol lookups; its own body says local single-symbol questions should use direct search. Graphify is the stronger RawClaw prior-art entry point.
 
+## Emergency mailbox recovery (owner-only)
+
+When a mailbox cursor is poisoned by future-dated filenames, use Furiosa’s proven owner-only sequence (receipt 20260826T193148Z-29472131): preserve pre/post hashes; quarantine future-dated top-level files without deleting them; only the inbox owner resets .cursor to the newest intended UTC top-level receipt; run a normal-UTC unread self-test and prove the test file appears unread; retain both hash sets. This earns Furiosa +3 external recommendation-adoption credit only when this commit lands, not mailbox-helper correctness. Stop/SubagentStop remains UNCERTAIN.
+
 ## Adoption scorecard
 
 At each daily boundary, score each selected skill 0–2:
@@ -194,4 +198,4 @@ Report the total per supervisor, the three weakest skills, and one concrete chan
 
 ## Evidence boundary
 
-Graphify orientation plus saved-outcome feedback is the largest demonstrated adoption win in this cadence. The mailbox PreToolUse denial demonstrates that enforcement can make a required read/action happen, but it is not evidence that every hook or scheduler is healthy. Furiosa’s direct-collaboration Luna launch adoption is backed by immutable receipt 20260826T192710Z-74df1457-class-a-confirmed-han-plus-3-d.md and scores Han +3 for launch-mechanism adoption only, not product correctness; the later score-entry SHA is pending until received. Stop/SubagentStop remains UNCERTAIN. No product files are changed by this document.
+Graphify orientation plus saved-outcome feedback is the largest demonstrated adoption win in this cadence. The mailbox PreToolUse denial demonstrates that enforcement can make a required read/action happen, but it is not evidence that every hook or scheduler is healthy. Furiosa’s direct-collaboration Luna launch adoption is backed by immutable receipt 20260826T192710Z-74df1457-class-a-confirmed-han-plus-3-d.md and scores Han +3 for launch-mechanism adoption only, not product correctness; the later score-entry SHA is pending until received. Furiosa’s owner-only cursor-recovery recommendation is separately +3 external recommendation-adoption credit when committed, not helper-correctness evidence. Stop/SubagentStop remains UNCERTAIN. No product files are changed by this document.
