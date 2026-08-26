@@ -21,6 +21,11 @@ type tagPrepLatencySample struct {
 	publication time.Duration
 }
 
+type tagPrepPublicationResult struct {
+	err       error
+	completed time.Time
+}
+
 func runTagPrepLatencySample(t *testing.T, held bool) tagPrepLatencySample {
 	t.Helper()
 	home := t.TempDir()
@@ -57,22 +62,27 @@ func runTagPrepLatencySample(t *testing.T, held bool) tagPrepLatencySample {
 	}
 
 	lock := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
+	lockHeld := false
 	if held {
 		locked, err := lock.TryLock()
 		if err != nil || !locked {
 			t.Fatalf("hold consolidated.lock: locked=%t err=%v", locked, err)
 		}
-		defer lock.Unlock()
+		lockHeld = true
+		t.Cleanup(func() {
+			if lockHeld {
+				_ = lock.Unlock()
+			}
+		})
 	}
 
 	dbp := index.RefreshDBPath(reg.ID, sid, path)
-	publicationDone := make(chan time.Time, 1)
+	publicationDone := make(chan tagPrepPublicationResult, 1)
 	oldSpawn := spawnIngest
 	spawnIngest = func(string) {
 		go func() {
-			started := time.Now()
-			_ = index.SyncConsolidatedFrom(dbp)
-			publicationDone <- started
+			err := index.SyncConsolidatedFrom(dbp)
+			publicationDone <- tagPrepPublicationResult{err: err, completed: time.Now()}
 		}()
 	}
 	t.Cleanup(func() { spawnIngest = oldSpawn })
@@ -87,24 +97,29 @@ func runTagPrepLatencySample(t *testing.T, held bool) tagPrepLatencySample {
 		t.Fatalf("tag-prep output missing fixture: %q", out.String())
 	}
 	if held {
-		select {
-		case <-publicationDone:
-			t.Fatal("publication completed while consolidated.lock was held")
-		default:
-		}
 		// Keep the lock held after the foreground return so publication latency
 		// includes a controlled fence wait rather than a coincidental handoff.
 		time.Sleep(250 * time.Millisecond)
+		select {
+		case result := <-publicationDone:
+			t.Fatalf("publication completed while consolidated.lock was held: err=%v", result.err)
+		default:
+		}
 		if err := lock.Unlock(); err != nil {
 			t.Fatal(err)
 		}
+		lockHeld = false
 	}
 	select {
-	case <-publicationDone:
+	case result := <-publicationDone:
+		if result.err != nil {
+			t.Fatalf("detached publication: %v", result.err)
+		}
+		return tagPrepLatencySample{foreground: foreground, publication: result.completed.Sub(started)}
 	case <-time.After(5 * time.Second):
 		t.Fatal("detached publication did not complete")
 	}
-	return tagPrepLatencySample{foreground: foreground, publication: time.Since(started)}
+	return tagPrepLatencySample{}
 }
 
 func summarizeTagPrepLatency(samples []tagPrepLatencySample) string {
