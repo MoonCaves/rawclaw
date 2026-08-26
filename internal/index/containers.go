@@ -575,8 +575,7 @@ func appendContainer(con *sql.DB, c source.Container, ms []model.Message, source
 	return nil
 }
 
-// vaultContainer stores rawclaw's own copy of a container-sourced session.
-func vaultContainer(c source.Container, ms []model.Message, sourceID string, projectArg, cwdArg any) error {
+func containerMeta(c source.Container, sourceID string, projectArg, cwdArg any) (durable.Meta, string) {
 	m := durable.Meta{
 		ID:         c.ID,
 		Source:     sourceID,
@@ -592,26 +591,18 @@ func vaultContainer(c source.Container, ms []model.Message, sourceID string, pro
 		m.SourceSize = size
 		m.SourceFP = fp
 	}
+	return m, rawPath
+}
+
+// vaultContainer stores rawclaw's own copy of a container-sourced session.
+func vaultContainer(c source.Container, ms []model.Message, sourceID string, projectArg, cwdArg any) error {
+	m, _ := containerMeta(c, sourceID, projectArg, cwdArg)
 	return durable.StoreMessages(m, ms)
 }
 
 // vaultContainerAll vaults a complete session after append.
 func vaultContainerAll(tx *sql.Tx, c source.Container, sourceID string, projectArg, cwdArg any) error {
-	m := durable.Meta{
-		ID:         c.ID,
-		Source:     sourceID,
-		Project:    strOf(projectArg),
-		CWD:        strOf(cwdArg),
-		IsSubagent: c.IsSubagent,
-		ParentID:   c.ParentID,
-		SourcePath: realpath(c.Path),
-	}
-	rawPath := backingFilePath(c.Path)
-	if mtime, size, fp, err := backingFileState(rawPath); err == nil {
-		m.SourceMTime = mtime
-		m.SourceSize = size
-		m.SourceFP = fp
-	}
+	m, rawPath := containerMeta(c, sourceID, projectArg, cwdArg)
 	if sourceID == sourceClaude || sourceID == "" {
 		return durable.StoreFile(m, rawPath)
 	}

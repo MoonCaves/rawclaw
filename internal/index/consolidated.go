@@ -418,8 +418,6 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 		if err != nil {
 			return st, fmt.Errorf("preserve consolidated tags: %w", err)
 		}
-	}
-	if rebuild {
 		prevLive = dst
 		// Build the replacement BESIDE the live store and swap only once it is
 		// complete. Deleting first meant any later failure — connect, schema,
