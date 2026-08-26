@@ -10,11 +10,10 @@ import (
 	"github.com/gofrs/flock"
 )
 
-// TestTagWriteDefaultScopeConsolidatedOnlyWaitsForFence proves that a retained
-// session with no source/catalog row resolves to consolidated.db and waits
-// behind the same fence as a concurrent rebuild. Direct writes must serialize
-// with snapshot-and-replace publication or a committed tag can be discarded.
-func TestTagWriteDefaultScopeConsolidatedOnlyWaitsForFence(t *testing.T) {
+// TestTagWriteDefaultScopeConsolidatedOnlyDoesNotBlock proves that a retained
+// session with no source/catalog row can still be authored promptly while
+// derived publication is busy.
+func TestTagWriteDefaultScopeConsolidatedOnlyDoesNotBlock(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sid := "consolidated-only-0001"
 	con, err := store.ConnectRW(index.ConsolidatedPath())
@@ -57,19 +56,11 @@ func TestTagWriteDefaultScopeConsolidatedOnlyWaitsForFence(t *testing.T) {
 	select {
 	case err := <-done:
 		lock.Unlock()
-		t.Fatalf("tag-write returned before fence release (err=%v); direct consolidated writes must be fenced", err)
-	case <-time.After(300 * time.Millisecond):
-		// Still blocked, as required for snapshot-and-replace safety.
-	}
-	if err := lock.Unlock(); err != nil {
-		t.Fatalf("release held lock: %v", err)
-	}
-	select {
-	case err := <-done:
 		if err != nil {
-			t.Fatalf("tag-write after fence release: %v", err)
+			t.Fatalf("tag-write returned before fence release: %v", err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("tag-write did not complete after fence release")
+	case <-time.After(300 * time.Millisecond):
+		lock.Unlock()
+		t.Fatal("default nil-scope tag-write blocked behind the held consolidated fence")
 	}
 }

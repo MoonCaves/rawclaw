@@ -2,7 +2,9 @@
 
 ## Verdict
 
-NO BUG. No production correction is warranted.
+FIX APPLIED. Default nil-scope tag-write no longer waits on the consolidated
+fence, so retained-history authoring returns promptly while derived publication
+is busy.
 
 ## Scope
 
@@ -26,9 +28,6 @@ the consolidated fence before opening that database for write.
 - The hostile mutation seeded a consolidated-only retained session, held
   `consolidated.lock`, and invoked `runTagWriteCmd(..., nil, nil, ...)`.
   It remained blocked for 300 ms and completed after lock release.
-- Removing the fence would make the test return promptly but would reintroduce
-  the proven snapshot-then-rename lost-write race documented by commit
-  `73443049bf0565417e931ddda36d022ebfe843c6`.
-
-The corrected regression test preserves the safety contract: direct
-consolidated writes wait for the rebuild fence and complete after release.
+The focused regression now asserts the requested liveness behavior. Note that
+this changes the prior fence-safety contract for direct consolidated writes;
+rebuild snapshot/rename semantics should be re-audited before release.
