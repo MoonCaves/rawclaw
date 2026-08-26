@@ -146,7 +146,7 @@ func TestPrimeScripts_SessionStartHostilePathMatrix(t *testing.T) {
 		{name: "claude", tmpl: rawclawPrimeScript, json: false},
 		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
 	}
-	kinds := []string{"new", "regular", "fifo", "directory", "symlink", "dangling-symlink", "socket", "missing-parent"}
+	kinds := []string{"new", "regular", "fifo", "directory", "injected-directory", "symlink", "dangling-symlink", "socket", "missing-parent"}
 
 	for _, shellName := range shells {
 		shell, err := exec.LookPath(shellName)
@@ -178,8 +178,17 @@ func TestPrimeScripts_SessionStartHostilePathMatrix(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
+					scriptBytes := renderHookScript(tc.tmpl, "''")
+					if kind == "injected-directory" {
+						scriptBytes = strings.Replace(
+							scriptBytes,
+							`if ln "$tmp_entry" "$catalog_dir"`,
+							"mkdir -p \"$catalog_dir/$session_id\"\n\t\tif ln \"$tmp_entry\" \"$catalog_dir\"",
+							1,
+						)
+					}
 					scriptPath := filepath.Join(t.TempDir(), "prime.sh")
-					if err := os.WriteFile(scriptPath, []byte(renderHookScript(tc.tmpl, "''")), 0o755); err != nil {
+					if err := os.WriteFile(scriptPath, []byte(scriptBytes), 0o755); err != nil {
 						t.Fatal(err)
 					}
 
@@ -263,7 +272,7 @@ func TestPrimeScripts_SessionStartHostilePathMatrix(t *testing.T) {
 							t.Fatalf("unexpected ingest call for existing %s under %s: %q", kind, shellName, string(b))
 						}
 						switch kind {
-						case "directory":
+						case "directory", "injected-directory":
 							entries, err := os.ReadDir(entry)
 							if err != nil {
 								t.Fatalf("read existing directory: %v", err)
@@ -291,98 +300,6 @@ func TestPrimeScripts_SessionStartHostilePathMatrix(t *testing.T) {
 					}
 				})
 			}
-		}
-	}
-}
-
-// TestPrimeScripts_SessionStartDirectoryInjectedBeforeLinkDeduplicatesWithoutNesting
-// deterministically tests the check-to-link race where a directory is created
-// at catalog/<session_id> right after the pre-check and before the link attempt.
-func TestPrimeScripts_SessionStartDirectoryInjectedBeforeLinkDeduplicatesWithoutNesting(t *testing.T) {
-	shells := []string{"sh"}
-	if _, err := exec.LookPath("dash"); err == nil {
-		shells = append(shells, "dash")
-	}
-	templates := []struct {
-		name string
-		tmpl string
-	}{
-		{name: "claude", tmpl: rawclawPrimeScript},
-		{name: "codex", tmpl: rawclawCodexPrimeScript},
-	}
-
-	for _, shellName := range shells {
-		shell, err := exec.LookPath(shellName)
-		if err != nil {
-			continue
-		}
-		for _, tc := range templates {
-			t.Run(tc.name+"/"+shellName, func(t *testing.T) {
-				stubDir := t.TempDir()
-				logPath := filepath.Join(stubDir, "calls.log")
-				stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
-				if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				catalogDir, err := os.MkdirTemp("/tmp", "rc-cat-race")
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(func() { _ = os.RemoveAll(catalogDir) })
-
-				// Inject directory creation right before `ln "$tmp_entry" "$catalog_dir"`
-				injectedScript := renderHookScript(tc.tmpl, "''")
-				injectedScript = strings.Replace(
-					injectedScript,
-					`if ln "$tmp_entry" "$catalog_dir"`,
-					"mkdir -p \"$catalog_dir/$session_id\"\n\t\tif ln \"$tmp_entry\" \"$catalog_dir\"",
-					1,
-				)
-
-				scriptPath := filepath.Join(t.TempDir(), "prime-race.sh")
-				if err := os.WriteFile(scriptPath, []byte(injectedScript), 0o755); err != nil {
-					t.Fatal(err)
-				}
-
-				sessionID := "injected-dir-race-sess"
-				cmd := exec.Command(shell, scriptPath)
-				cmd.Env = append(os.Environ(),
-					"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-					"RAWCLAW_TEST_LOG="+logPath,
-					"RAWCLAW_CATALOG_DIR="+catalogDir,
-				)
-				cmd.Stdin = strings.NewReader(`{"session_id":"` + sessionID + `"}`)
-				out, err := cmd.CombinedOutput()
-				if err != nil {
-					t.Fatalf("hook script failed: %v (out=%q)", err, out)
-				}
-
-				// Assert zero ingest calls
-				time.Sleep(100 * time.Millisecond)
-				if b, err := os.ReadFile(logPath); err == nil && strings.TrimSpace(string(b)) != "" {
-					t.Fatalf("ingest was launched despite injected directory: %q", string(b))
-				}
-
-				// Assert no nested artifacts in the injected directory
-				dirEntries, err := os.ReadDir(filepath.Join(catalogDir, sessionID))
-				if err != nil {
-					t.Fatalf("read injected directory: %v", err)
-				}
-				if len(dirEntries) != 0 {
-					t.Fatalf("nested artifacts leaked inside injected directory: %v", dirEntries)
-				}
-
-				// Assert no .tmp.* directories leaked
-				catEntries, err := os.ReadDir(catalogDir)
-				if err != nil {
-					t.Fatalf("read catalog directory: %v", err)
-				}
-				for _, ce := range catEntries {
-					if strings.HasPrefix(ce.Name(), ".tmp.") {
-						t.Fatalf("temporary claim directory leaked: %s", ce.Name())
-					}
-				}
-			})
 		}
 	}
 }

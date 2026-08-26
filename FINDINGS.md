@@ -16,8 +16,7 @@
 | 3 | **Hook Wiring Helper Unification** | `6b37f40` | `internal/cli/setup.go:658-795,930-960` | Installation and ejection routines for Claude, Codex, and Antigravity duplicated file removal, config merging, and empty directory pruning. Extracting `installRawclawHookWith` and `ejectRawclawHookWith` eliminates ~80 lines of duplicate plumbing while preserving exact JSON semantics. | **ADAPT_TO_CURRENT** |
 | 4 | **Remove Impossible Antigravity Error** | `7d5a6a5` | `internal/cli/setup.go:900-920` | `addRawclawAntigravityHooks` unconditionally returned `nil` error; removing the dead error return simplifies callers and removes unreachable error paths. | **ADAPT_TO_CURRENT** |
 | 5 | **Prewarm Refresh & SQL Simplification** | `cc40455` | `internal/cli/cmd_prewarm.go:40-75,100-115` | Branching in `runPrewarmCmd` duplicated `refreshTagSession` calls. Streamlining with `agentproto.LocateConsolidatedSession` and collapsing `prewarmSourcePath` into a single `COALESCE` query avoids redundant code and queries. | **ADAPT_TO_CURRENT** |
-| 8 | **Non-Opening Hard-Link Catalog Claim** | `c44beea4`, `c4d67bd`, `13966cf` | `internal/cli/setup.go:78-105,154-181`, `internal/cli/cmd_ingest_test.go:133-255` | Staging rich JSON in private candidate file and publishing via atomic hard link `ln "$tmp_entry" "$catalog_dir"` with `[ -e ] || [ -L ]` checks eliminates all FIFO hangs, symlink leaks, and handles missing parent directories fail-soft. | **TRANSPLANT_EXACTLY** |
-| 9 | **Directory Traversal Race & Session Basename Isolation** | `6d20bda`, `eb1160c` | `internal/cli/setup.go:88-110,165-188`, `internal/cli/cmd_ingest_test.go:250-320` | If `$entry` is created as a directory after the `-e/-L` pre-check, `ln "$tmp_entry" "$entry"` traverses into the directory and creates `$entry/$tmp_entry` with exit code 0. Authoring in `tmp_dir/.tmp.$session_id.$$/$session_id` and linking to `$catalog_dir` guarantees `EEXIST` failure without traversal. | **ADAPT_TO_CURRENT** |
+| 8 | **Non-Opening Atomic Claim with Basename Isolation** | `c44beea4`, `c4d67bd`, `6d20bda` | `internal/cli/setup.go:88-115,165-192`, `internal/cli/cmd_ingest_test.go:136-295` | Staging in `tmp_dir/.tmp.$session_id.$$/$session_id` and linking to `$catalog_dir` eliminates FIFO hang and directory-traversal race while preserving fail-soft ingest and single-winner dedup. | **ADAPT_TO_CURRENT** |
 
 ---
 
@@ -93,30 +92,17 @@
 
 ---
 
-### Finding 8: Non-Opening Hard-Link Catalog Claim & Hostile Matrix Protection
-- **Prior Art SHA:** `c44beea485f0f2feaf460e2ac87fdd5608d63cf0` (Git `tempfile.c`), `c4d67bd5a03cbfa2c3ac9bfa35086551cf95c4b0`, `13966cf`
-- **File & Line:** `internal/cli/setup.go:78-105,154-181`, `internal/cli/cmd_ingest_test.go:133-255`
+### Finding 8: Non-Opening Atomic Catalog Claim with Basename Isolation
+- **Prior Art SHA:** `c44beea485f0f2feaf460e2ac87fdd5608d63cf0` (Git `tempfile.c`), `c4d67bd`, `6d20bda`, `eb1160c`
+- **File & Line:** `internal/cli/setup.go:88-115,165-192`, `internal/cli/cmd_ingest_test.go:136-295`
 - **Mechanism:**
-  Redirection `(set -C; : > "$entry")` opens the target before checking file type, hanging indefinitely if `$entry` is a named pipe/FIFO.
-  Adapting Git's `create_tempfile_mode` non-opening allocation pattern:
-  1. Check `[ -e "$entry" ] || [ -L "$entry" ]` first for fast return.
-  2. Write rich session JSON into private candidate file.
-  3. Execute atomic non-opening publication via POSIX `ln` (`link(2)` never opens `$entry`).
-  4. Winner cleans temp files and launches detached ingest; loser cleans temp files and exits 0 on `[ -e "$entry" ] || [ -L "$entry" ]`.
-  5. If the filesystem parent is unwritable / missing, cleans temp files and launches fail-soft ingest.
+  Redirection `(set -C; : > "$entry")` hangs indefinitely on FIFOs. Direct `ln "$tmp_entry" "$entry"` suffers a check-to-link race where a directory at `$entry` causes `ln` to link inside `$entry` with exit code 0.
+  Fix:
+  1. Quick return on `[ -e "$entry" ] || [ -L "$entry" ]`.
+  2. Create private temp dir `tmp_dir="$catalog_dir/.tmp.$session_id.$$"`.
+  3. Write session JSON into `tmp_entry="$tmp_dir/$session_id"` (whose basename is the session ID).
+  4. Link to parent directory `ln "$tmp_entry" "$catalog_dir" 2>/dev/null` (guaranteeing `EEXIST` failure against directories/symlinks without traversal).
+  5. Clean up temp directory; loser exits 0 on `[ -e "$entry" ] || [ -L "$entry" ]`; missing/unwritable catalog parent launches fail-soft ingest.
 - **Reproducible Evidence:**
-  - `TestPrimeScripts_SessionStartHostilePathMatrix` tests 32 combinations: {claude, codex} x {sh, dash} x {new, regular, fifo, directory, symlink, dangling-symlink, socket, missing-parent} with 0 hangs, 0 errors, and zero FIFO blocking.
-  - `TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest` tests a 20-way concurrent race, recording exactly 1 ingest invocation.
-- **Ruling:** **TRANSPLANT_EXACTLY** (Adopted the non-opening hard-link claim on top of unified helpers and interpolated banner).
-
----
-
-### Finding 9: Directory Traversal Race & Session Basename Isolation
-- **Prior Art SHA:** `6d20bda`, `eb1160c`
-- **File & Line:** `internal/cli/setup.go:88-110,165-188`, `internal/cli/cmd_ingest_test.go:250-320`
-- **Mechanism:**
-  Direct `ln "$tmp_entry" "$entry"` suffers from a check-to-link race: if a directory exists or is created at `$entry` between `[ -e ]` and `ln`, `ln` treats `$entry` as the destination directory, creating a nested link inside `$entry` and returning exit code 0 (spurious claim success).
-  By creating a private temp directory `tmp_dir="$catalog_dir/.tmp.$session_id.$$"`, writing candidate file `tmp_entry="$tmp_dir/$session_id"` whose basename is the exact session ID, and executing `ln "$tmp_entry" "$catalog_dir"`, `ln` targets `$catalog_dir/$session_id`. Any existing object (including a directory or symlink) causes `ln` to fail immediately with `EEXIST` rather than traversing into `$entry`.
-- **Reproducible Evidence:**
-  `TestPrimeScripts_SessionStartDirectoryInjectedBeforeLinkDeduplicatesWithoutNesting` explicitly injects directory creation before `ln` across Claude and Codex templates under `/bin/sh` and `/bin/dash`, asserting zero ingest calls, zero nested artifacts, and clean temp directory removal.
-- **Ruling:** **ADAPT_TO_CURRENT** (Adopted candidate basename isolation in `setup.go` with deterministic regression tests).
+  `TestPrimeScripts_SessionStartHostilePathMatrix` tests 36 combinations: {claude, codex} x {sh, dash} x {new, regular, fifo, directory, injected-directory, symlink, dangling-symlink, socket, missing-parent} asserting zero hangs, zero duplicate ingests, zero nested artifacts, and 20-way concurrency race.
+- **Ruling:** **ADAPT_TO_CURRENT** (Adopted candidate basename isolation with fail-soft ingest fallback and unified helpers).
