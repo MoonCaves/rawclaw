@@ -551,14 +551,27 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 // then hands that db here, so the consolidated store tracks without a separate
 // pass over the transcripts.
 func SyncConsolidatedFrom(srcPath string) error {
+	return SyncConsolidatedFromContext(context.Background(), srcPath)
+}
+
+// SyncConsolidatedFromContext is the context-aware form of
+// SyncConsolidatedFrom. Cancellation is honored while waiting for the
+// consolidated fence and between the major fold phases.
+func SyncConsolidatedFromContext(ctx context.Context, srcPath string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if IsConsolidatedDB(srcPath) {
 		return nil
 	}
-	fence, err := AcquireConsolidatedFence(context.Background())
+	fence, err := AcquireConsolidatedFence(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = fence.Close() }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	con, err := store.ConnectRW(ConsolidatedPath())
 	if err != nil {
 		return fmt.Errorf("open consolidated store: %w", err)
@@ -568,6 +581,9 @@ func SyncConsolidatedFrom(srcPath string) error {
 		_ = con.Close()
 		done()
 	}()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	done := beginConsolidatePhase(srcPath, "schema-migrate")
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		done()
@@ -587,12 +603,18 @@ func SyncConsolidatedFrom(srcPath string) error {
 		return fmt.Errorf("migrate session sources: %w", err)
 	}
 	done()
-	_, changed, skipped, err := consolidateOne(con, srcPath)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	_, changed, skipped, err := consolidateOneContext(ctx, con, srcPath)
 	if err != nil {
 		return fmt.Errorf("consolidate %s: %w", filepath.Base(srcPath), err)
 	}
 	if skipped || !changed {
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	done = beginConsolidatePhase(srcPath, "tombstone-prune")
 	if err := pruneTombstoned(con); err != nil {
@@ -656,6 +678,10 @@ func beginConsolidatePhase(src, name string) func() {
 // write it makes to a source is the additive column migration below, on its own
 // connection, before the read-only attach.
 func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
+	return consolidateOneContext(context.Background(), con, src)
+}
+
+func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
 	if _, err := os.Stat(src); err != nil {
 		return 0, false, true, fmt.Errorf("source unreadable: %w", err)
 	}
@@ -756,7 +782,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	// invocation, which is the cost the per-project layout was hiding.
 	key := syncMarkKey(src)
 	var prev string
-	switch err := con.QueryRow("SELECT value FROM meta WHERE key=?", key).Scan(&prev); {
+	switch err := con.QueryRowContext(ctx, "SELECT value FROM meta WHERE key=?", key).Scan(&prev); {
 	case err == nil && prev == mark:
 		return offered, false, false, nil
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
@@ -778,7 +804,7 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 			consolidateAfterMergeHook()
 		}
 	}()
-	tx, err := con.Begin()
+	tx, err := con.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, false, true, fmt.Errorf("begin fold: %w", err)
 	}
