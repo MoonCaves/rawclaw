@@ -17,26 +17,26 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | worker | worktree / branch @ SHA | state | concrete problem |
 |---|---|---|---|
-| raid-phase | `rawclaw-lenny-raid-phase` / `lenny/raid-phase-20260826` @ `dd57060` | RUNNING receipt | consolidate phase timing/structured logging contract |
+| raid-phase | `rawclaw-lenny-raid-phase` / `lenny/raid-phase-20260826` @ `c3b3d2b` | completed receipt | consolidate phase timing/structured logging contract |
 | raid-fence | `rawclaw-lenny-raid-fence` / `lenny/raid-fence-20260826` @ `6ddd17a` | STALL candidate | writer fence and concurrent consolidated-store safety |
-| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `7a78884` | completed receipt | SessionStart atomic catalog claim and fail-soft POSIX hook |
-| raid-locate | `rawclaw-lenny-raid-locate` / `lenny/raid-locate-20260826` @ `fc1a075` | STALL candidate | source-aware session locate/fallback ambiguity |
-| raid-prewarm | `rawclaw-lenny-raid-prewarm` / `lenny/raid-prewarm-20260826` @ `229f7e9` | STALL candidate | background prewarm/tag-prep lifecycle and cache duplication |
-| raid-containers | `rawclaw-lenny-raid-containers` / `lenny/raid-containers-20260826` @ `be4ef6c` | STALL candidate | refresh DB/WAL/SHM cleanup and lock lifetime |
-| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `65f3b8b` | completed receipt | architecture/code-bloat audit |
-| skill-interfaces | `rawclaw-lenny-skill-interfaces` / `lenny/skill-interfaces-20260826` @ `6209534` | STALL candidate | unnecessary interfaces and seam shape |
-| skill-modernize | `rawclaw-lenny-skill-modernize` / `lenny/skill-modernize-20260826` @ `7bf86ec` | STALL candidate | shrink-only Go modernization |
-| skill-style | `rawclaw-lenny-skill-style` / `lenny/skill-style-20260826` @ `37e4f70` | STALL candidate | POSIX/Go style and deletion opportunities |
+| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `c398726` (dirty=2) | active | SessionStart atomic catalog claim and fail-soft POSIX hook |
+| raid-locate | `rawclaw-lenny-raid-locate` / `lenny/raid-locate-20260826` @ `d345f80` | STALL candidate | source-aware session locate/fallback ambiguity |
+| raid-prewarm | `rawclaw-lenny-raid-prewarm` / `lenny/raid-prewarm-20260826` @ `0635190` | STALL candidate | background prewarm/tag-prep lifecycle and cache duplication |
+| raid-containers | `rawclaw-lenny-raid-containers` / `lenny/raid-containers-20260826` @ `d7106e9` | completed receipt | refresh DB/WAL/SHM cleanup (deleted 99-line helper-coupled test) |
+| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `b5f570b` | completed receipt | architecture/code-bloat audit |
+| skill-interfaces | `rawclaw-lenny-skill-interfaces` / `lenny/skill-interfaces-20260826` @ `997016f` | STALL candidate | unnecessary interfaces and seam shape |
+| skill-modernize | `rawclaw-lenny-skill-modernize` / `lenny/skill-modernize-20260826` @ `5e65260` | STALL candidate | shrink-only Go modernization |
+| skill-style | `rawclaw-lenny-skill-style` / `lenny/skill-style-20260826` @ `354b0d8` | STALL candidate | POSIX/Go style and deletion opportunities |
 
 ### Norm Bell supervisor
 
 | worker | worktree / branch @ SHA | state | concrete problem |
 |---|---|---|---|
 | flash-catalog | `rawclaw-norm-flash-catalog` / `norm/flash-catalog` @ `cc7619e` (dirty=1) | quota/stalled | catalog fallback, exact/prefix ambiguity, mixed-source status |
-| flash-fence | `rawclaw-norm-flash-fence` / `norm/flash-fence` @ `6ddd17a` | quota/stalled | adversarial writer-fence/race review |
-| flash-hooks | `rawclaw-norm-flash-hooks` / `norm/flash-hooks` @ `2b60e72` (dirty=2) | quota/stalled | hook claim algorithm; compare FIFO claim with temp JSON/atomic rename |
+| flash-fence | `rawclaw-norm-flash-fence` / `norm/flash-fence` @ `6ac7f1a` | completed receipt | adversarial writer-fence/race review (clean test shrink) |
+| flash-hooks | `rawclaw-norm-flash-hooks` / `norm/flash-hooks` @ `2cc11d6` | rejected receipt | hook claim algorithm (rejected: directory descent defect) |
 | flash-ingest | `rawclaw-norm-flash-ingest` / `norm/flash-ingest` @ `7478bfd` (dirty=1) | quota/stalled | ingest retry/failure/status contract |
-| flash-ozzy-spy | `rawclaw-norm-ozzy-spy` / `norm/ozzy-spy` @ `3530005` | completed receipt | audit worker claims, dirty trees, and unsafe cleanup |
+| flash-ozzy-spy | `rawclaw-norm-ozzy-spy` / `norm/ozzy-spy` @ `c84c540` | completed receipt | audit worker claims, dirty trees, and unsafe cleanup |
 
 ### Ozzy Prince supervisor
 
@@ -91,9 +91,9 @@ The following are primary documentation or mature repositories. Links are pinned
 | source resolution | SQLite query planner/indexing: https://www.sqlite.org/queryplanner.html ; ripgrep’s literal path filtering model: https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md | ADAPT: explicit exact/prefix/source precedence with a unique result set. Trap: FTS5 content search cannot prove arbitrary session-ID identity; keep catalog/path identity separate from message FTS. |
 | tag closeout | SQLite UPSERT/uniqueness: https://www.sqlite.org/lang_upsert.html ; Syncthing’s idempotent `INSERT OR IGNORE` repair queue: https://github.com/syncthing/syncthing/blob/main/internal/db/sqlite/folderdb_update.go | COPY/ADAPT NOW: make prep/write repeatable by unique session/topic keys and transaction boundaries. Trap: idempotent insertion does not solve stale snapshot overlap; prep and write still need a coherent snapshot/version. |
 | consolidated atomicity | SQLite atomic commit: https://www.sqlite.org/atomiccommit.html ; SQLite locking: https://www.sqlite.org/lockingv3.html ; rqlite WAL checkpoint policy: https://github.com/rqlite/rqlite/blob/master/db/db.go | COPY/ADAPT NOW: hold one SQLite transaction/lock across the decision and mutation, then checkpoint only at an explicit quiet boundary. Trap: a `BEGIN IMMEDIATE; ROLLBACK` probe followed by `os.Remove` is not a fence. |
-| WAL/sidecar cleanup | SQLite WAL checkpoint pragma: https://www.sqlite.org/pragma.html#pragma_wal_checkpoint ; PocketBase periodic truncate checkpoint: https://github.com/pocketbase/pocketbase/blob/master/core/base.go ; PocketBase backup transaction/checkpoint: https://github.com/pocketbase/pocketbase/blob/master/core/base_backup.go | STUDY FIRST: checkpoint/close before deleting sidecars; make missing sidecars success. Trap: `TRUNCATE` can return busy; deletion must not race another connection. |
+| WAL/sidecar cleanup | SQLite WAL checkpoint pragma: https://www.sqlite.org/pragma.html#pragma_wal_checkpoint ; PocketBase periodic truncate checkpoint: https://github.com/pocketbase/pocketbase/blob/master/core/base.go ; PocketBase backup transaction/checkpoint: https://github.com/pocketbase/pocketbase/blob/master/core/backup.go | STUDY FIRST: checkpoint/close before deleting sidecars; make missing sidecars success. Trap: `TRUNCATE` can return busy; deletion must not race another connection. |
 | atomic replacement | SQLite backup API: https://www.sqlite.org/backup.html ; nginx-ui staged rename/rollback: https://github.com/0xJacky/nginx-ui/blob/dev/internal/backup/replace.go | ADAPT: stage then same-volume rename with rollback. Trap: RawClaw’s cache is disposable, so do not add a new durable archive format or dependency. |
-| benchmark discipline | Go testing benchmarks: https://pkg.go.dev/testing#hdr-Benchmarks ; SQLite FTS5: https://www.sqlite.org/fts5.html ; Go benchmark examples in SQLite-adjacent project: https://github.com/kenn-io/msgvault/tree/main/internal/db | COPY/ADAPT NOW: one corpus fixture, warm/cold sub-benchmarks, `ReportAllocs`, and no correctness assertion deletion. Trap: synthetic 100-session corpus does not prove live transcript or contention behavior. |
+| benchmark discipline | Go testing benchmarks: https://pkg.go.dev/testing#hdr-Benchmarks ; SQLite FTS5: https://www.sqlite.org/fts5.html ; Go benchmark examples in SQLite-adjacent project: https://github.com/kenn-io/msgvault/tree/main/internal/store | COPY/ADAPT NOW: one corpus fixture, warm/cold sub-benchmarks, `ReportAllocs`, and no correctness assertion deletion. Trap: synthetic 100-session corpus does not prove live transcript or contention behavior. |
 | fault/release gates | Go race detector: https://go.dev/doc/articles/race_detector ; SQLite test harness concepts: https://www.sqlite.org/testing.html ; Git worktree isolation: https://git-scm.com/docs/git-worktree | COPY/ADAPT NOW: reproduce the interleaving, then run focused + race + full gates from immutable SHAs. Trap: a green focused test is not full-suite or release evidence. |
 
 ### Prior-art search record

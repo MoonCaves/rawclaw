@@ -109,10 +109,15 @@ Crash-fault injection should interrupt after each publish step and reopen the ol
 
 ## 6. Safe cleanup of refresh DB/WAL/SHM files
 
-* SQLite [WAL](https://sqlite.org/wal.html) says the `-wal` file is persistent state and
-  checkpointing is coordinated with readers. **COPY**: cleanup must operate only on a
-  refresh database that the current owner created and closed; do not glob-delete
-  `*.db-wal` or `*.db-shm` next to a live store.
+* SQLite's [WAL checkpoint pragma](https://www.sqlite.org/pragma.html#pragma_wal_checkpoint)
+  and [savepoints](https://www.sqlite.org/lang_savepoint.html) make transaction checkpoints
+  explicit. PocketBase's [periodic truncate checkpoint](https://github.com/pocketbase/pocketbase/blob/master/core/base.go)
+  and [backup transaction/checkpoint](https://github.com/pocketbase/pocketbase/blob/master/core/backup.go)
+  demonstrate verified pure-Go checkpoint/backup sequencing. msgvault's
+  [store benchmarks](https://github.com/kenn-io/msgvault/tree/main/internal/store)
+  show SQLite-adjacent benchmark structuring. **STUDY FIRST**: checkpoint/close before
+  deleting sidecars; make missing sidecars success. Trap: `TRUNCATE` can return busy;
+  deletion must not race another connection.
 * SQLite's [locking v3](https://sqlite.org/lockingv3.html) documents hot journals and
   lock transitions. **STUDY** its recovery rule: the presence of a sidecar is not proof
   that it is stale. Re-open/validate ownership and use an explicit per-refresh
