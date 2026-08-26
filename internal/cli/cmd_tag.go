@@ -520,7 +520,7 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 		if err := spawnTagPublish(dbp); err != nil {
 			fmt.Fprintf(w, "tag-write: publication deferred (authoritative write succeeded): %v\n", err)
 		} else {
-			fmt.Fprintln(w, "tag-write: publication queued (read-after-write is eventual)")
+			fmt.Fprintln(w, "tag-write: publication queued (best effort; queued does not mean published; read-after-write is eventual)")
 		}
 	}
 	return nil
