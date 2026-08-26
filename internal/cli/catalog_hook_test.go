@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/paths"
 )
@@ -320,5 +321,78 @@ func TestSetupCmd_UpgradesLegacyPrimeScript(t *testing.T) {
 	}
 	if strings.Contains(string(b2), "/tmp/rawclaw-prime") {
 		t.Errorf("upgraded script still has legacy /tmp/rawclaw-prime marker: %s", string(b2))
+	}
+}
+
+func TestPrimeScripts_SessionStartDeduplicatesDetachedIngest(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+
+	for _, tc := range []struct {
+		name string
+		tmpl string
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			stubDir := filepath.Join(root, "bin")
+			if err := os.MkdirAll(stubDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			logPath := filepath.Join(root, "calls.log")
+			stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
+			if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			scriptPath := filepath.Join(root, "prime.sh")
+			if err := os.WriteFile(scriptPath, []byte(renderHookScript(tc.tmpl, "''")), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			catalogDir := filepath.Join(root, "catalog")
+			env := append(os.Environ(),
+				"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"RAWCLAW_TEST_LOG="+logPath,
+				"RAWCLAW_CATALOG_DIR="+catalogDir,
+				"HOME="+root,
+			)
+			payload := `{"session_id":"dedup-session-123"}`
+			for run := range 2 {
+				cmd := exec.Command(sh, scriptPath)
+				cmd.Env = env
+				cmd.Stdin = strings.NewReader(payload)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("SessionStart %d failed: %v (out=%q)", run+1, err, out)
+				}
+			}
+
+			deadline := time.Now().Add(5 * time.Second)
+			seen := false
+			for time.Now().Before(deadline) {
+				if b, err := os.ReadFile(logPath); err == nil {
+					if got := strings.TrimSpace(string(b)); got == "ingest dedup-session-123" {
+						seen = true
+						break
+					} else if got != "" {
+						t.Fatalf("ingest calls = %q, want exactly one call", got)
+					}
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if !seen {
+				t.Fatal("detached ingest did not run")
+			}
+			time.Sleep(100 * time.Millisecond)
+			b, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatalf("read ingest log: %v", err)
+			}
+			if got := strings.TrimSpace(string(b)); got != "ingest dedup-session-123" {
+				t.Fatalf("ingest calls = %q, want exactly one call", got)
+			}
+		})
 	}
 }
