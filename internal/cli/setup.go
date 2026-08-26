@@ -23,7 +23,8 @@ const rawclawMarker = "hooks/rawclaw/"
 
 // rawclawPrimeScript is the TEMPLATE installed at <configDir>/hooks/rawclaw/
 // prime.sh (via renderHookScript) and registered as a Claude Code SessionStart
-// hook. POSIX sh only — a SessionStart hook runs with no guaranteed bash. It
+// hook. POSIX sh only — a SessionStart or Stop hook runs with no guaranteed
+// bash. It
 // resolves the rawclaw binary from the absolute path `setup` bakes in — a
 // SessionStart hook does NOT inherit an interactive login PATH, so a bare
 // `command -v rawclaw` silently fails even when rawclaw is installed (binary
@@ -45,6 +46,14 @@ set -eu
 
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+
+if [ "$hook_event_name" = "Stop" ]; then
+	if [ -n "$session_id" ]; then
+		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
+	exit 0
+fi
 
 # Session catalog & once-per-session dedup: write a durable catalog entry under
 # the rawclaw data home at session birth, and exit if this session already ran.
@@ -124,6 +133,14 @@ set -eu
 
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+
+if [ "$hook_event_name" = "Stop" ]; then
+	if [ -n "$session_id" ]; then
+		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
+	exit 0
+fi
 
 if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
@@ -663,7 +680,10 @@ func installRawclawHookAt(configDir, configFile, primeTemplate string) error {
 	if err := writeHookScript(scriptPath, renderHookScript(primeTemplate, quotedBin)); err != nil {
 		return fmt.Errorf("install hook script: %w", err)
 	}
-	entries := map[string]string{"SessionStart": scriptPath}
+	entries := map[string]string{
+		"SessionStart": scriptPath,
+		"Stop":         scriptPath,
+	}
 
 	data, err := readJSONFile(configFile)
 	if err != nil {

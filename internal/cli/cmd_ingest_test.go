@@ -75,6 +75,60 @@ func TestPrimeScripts_EmitDetachedIngest(t *testing.T) {
 	}
 }
 
+// TestPrimeScripts_StopLaunchDetachedPrewarm verifies that both targets
+// dispatch Stop without emitting the SessionStart banner or waiting for the
+// prewarm command to finish.
+func TestPrimeScripts_StopLaunchDetachedPrewarm(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+
+	for _, tc := range []struct {
+		name string
+		tmpl string
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubDir := t.TempDir()
+			logPath := filepath.Join(t.TempDir(), "calls.log")
+			stubPath := filepath.Join(stubDir, "rawclaw")
+			stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$RAWCLAW_TEST_LOG\"\n"
+			if err := os.WriteFile(stubPath, []byte(stub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			scriptPath := filepath.Join(t.TempDir(), "prime.sh")
+			if err := os.WriteFile(scriptPath, []byte(renderHookScript(tc.tmpl, "''")), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(sh, scriptPath)
+			cmd.Env = append(os.Environ(),
+				"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"RAWCLAW_TEST_LOG="+logPath,
+			)
+			cmd.Stdin = strings.NewReader(`{"hook_event_name":"Stop","session_id":"session-stop-123456"}`)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("Stop hook failed: %v, out: %s", err, out)
+			}
+
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				if b, err := os.ReadFile(logPath); err == nil {
+					if got := strings.TrimSpace(string(b)); got != "prewarm session-stop-123456" {
+						t.Fatalf("prewarm args = %q", got)
+					}
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Fatal("detached prewarm did not run")
+		})
+	}
+}
+
 // TestClaudePrimeScript_ExecutesDetachedIngest verifies that running the Claude
 // prime script in sh executes without blocking and exits 0 when rawclaw is stubbed.
 func TestClaudePrimeScript_ExecutesDetachedIngest(t *testing.T) {
