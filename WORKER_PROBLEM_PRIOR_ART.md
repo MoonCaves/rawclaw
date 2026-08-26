@@ -1,6 +1,6 @@
 # RawClaw worker problem and prior-art map
 
-Snapshot taken 2026-08-26 Wave 6 from integration head `bd8346c` / `2af5a96` / `f15d1af` / `6330cc5` / `1c9995a` / `d6d2e1d` / `5e1d3df7` / `720a104b`.
+Snapshot taken 2026-08-26 Wave 7 from integration head `bd8346c` / `e7093ff` / `f15d1af` / `6330cc5` / `1c9995a` / `1f09356` / `63054e87` / `16146349`.
 This is a report-only census. Product code and rival worktrees were not edited.
 
 ## Scope and evidence rules
@@ -17,22 +17,22 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | worker | worktree / branch @ SHA | state | concrete problem |
 |---|---|---|---|
-| raid-phase | `rawclaw-lenny-raid-phase` / `lenny/raid-phase-20260826` @ `c3b3d2b` | STALL candidate (8,504s) | consolidate phase timing/structured logging contract (narrowed) |
-| raid-fence | `rawclaw-lenny-raid-fence` / `lenny/raid-fence-20260826` @ `6ddd17a` | STALL candidate (14,689s / 4.08h) | writer fence and concurrent consolidated-store safety |
-| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `b0d9e0f` | STALL candidate (7,077s) | SessionStart atomic catalog claim, basename isolation, and child reaping (HOLD unvalidated path joins) |
-| raid-locate | `rawclaw-lenny-raid-locate` / `lenny/raid-locate-20260826` @ `d345f80` | STALL candidate (8,400s) | source-aware session locate/fallback ambiguity (duplicate test rejected) |
-| raid-prewarm | `rawclaw-lenny-raid-prewarm` / `lenny/raid-prewarm-20260826` @ `0635190` | STALL candidate (8,366s) | background prewarm/tag-prep lifecycle and cache duplication (salvage `fa485c8` only) |
-| raid-containers | `rawclaw-lenny-raid-containers` / `lenny/raid-containers-20260826` @ `d7106e9` | STALL candidate (7,192s) | refresh DB/WAL/SHM cleanup (HOLD: deleting direct durable-meta contract) |
-| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `b5f570b` | STALL candidate (8,500s) | table-driven benchmark matrix transplant (-233 test lines) |
-| skill-interfaces | `rawclaw-lenny-skill-interfaces` / `lenny/skill-interfaces-20260826` @ `997016f` | STALL candidate (8,196s) | targeted prior-art audit (Git object-name / patch-id; 0 novelty) |
-| skill-modernize | `rawclaw-lenny-skill-modernize` / `lenny/skill-modernize-20260826` @ `5e65260` | STALL candidate (8,659s) | shrink-only Go modernization (0 novelty) |
-| skill-style | `rawclaw-lenny-skill-style` / `lenny/skill-style-20260826` @ `354b0d8` | STALL candidate (8,628s) | POSIX/Go style and deletion opportunities (0 novelty) |
+| raid-phase | `rawclaw-lenny-raid-phase` / `lenny/raid-phase-20260826` @ `c3b3d2b` | STALL candidate (10,307s / 2.86h) | consolidate phase timing/structured logging contract (narrowed) |
+| raid-fence | `rawclaw-lenny-raid-fence` / `lenny/raid-fence-20260826` @ `6ddd17a` | STALL candidate (16,493s / 4.58h) | writer fence and concurrent consolidated-store safety |
+| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `b0d9e0f` | STALL candidate (8,881s / 2.47h) | SessionStart atomic catalog claim, basename isolation, and child reaping (HOLD unvalidated path joins) |
+| raid-locate | `rawclaw-lenny-raid-locate` / `lenny/raid-locate-20260826` @ `d345f80` | STALL candidate (10,204s / 2.83h) | source-aware session locate/fallback ambiguity (duplicate test rejected) |
+| raid-prewarm | `rawclaw-lenny-raid-prewarm` / `lenny/raid-prewarm-20260826` @ `0635190` | STALL candidate (10,170s / 2.83h) | background prewarm/tag-prep lifecycle and cache duplication (salvage `fa485c8` only) |
+| raid-containers | `rawclaw-lenny-raid-containers` / `lenny/raid-containers-20260826` @ `d7106e9` | STALL candidate (8,996s / 2.50h) | refresh DB/WAL/SHM cleanup (HOLD: deleting direct durable-meta contract) |
+| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `b5f570b` | STALL candidate (10,304s / 2.86h) | table-driven benchmark matrix transplant (-233 test lines) |
+| skill-interfaces | `rawclaw-lenny-skill-interfaces` / `lenny/skill-interfaces-20260826` @ `997016f` | STALL candidate (10,000s / 2.78h) | targeted prior-art audit (Git object-name / patch-id; 0 novelty) |
+| skill-modernize | `rawclaw-lenny-skill-modernize` / `lenny/skill-modernize-20260826` @ `5e65260` | STALL candidate (10,463s / 2.91h) | shrink-only Go modernization (0 novelty) |
+| skill-style | `rawclaw-lenny-skill-style` / `lenny/skill-style-20260826` @ `354b0d8` | STALL candidate (10,432s / 2.90h) | POSIX/Go style and deletion opportunities (0 novelty) |
 
 ### Conor adversarial desk
 
 | branch @ SHA | patch ID | state | concrete problem / mechanism |
 |---|---|---|---|
-| `origin/conor/claim-spy-20260826T125942Z-4761` @ `2af5a96` | `2af5a96` | active receipt | wire audit 12:34:42Z-12:59:43Z (adjudicated 65 messages, verified unanimous standings) |
+| `origin/conor/claim-spy-20260826T132443Z-3c8f` @ `e7093ff` | `e7093ff` | active receipt | wire audit 12:59:43Z-13:24:43Z (adjudicated wire, verified unanimous standings) |
 | `candidates/conor-pr35-containers` @ `54bf2b0` | `d7c22ba9b5bf9b41eb8b473bd1e48227e4fe3a28` | rejected duplicate | duplicate of `25a43ea`/`21ece6f`; cites nonexistent `85cf480`; 0-match test gate |
 | `candidates/conor-pr35-resolve` @ `8dfa1ca` | `4b310ec5516b651c43cfecef4dca4124d061b8bf` | rejected duplicate | duplicate of `54afa70`; source semantics fallback resolution |
 | `luna/conor-31-log-tests-20260826` @ `d5d036b` | `804bbd4fb74175854b4a824ff154b4b5724e62f6` | qualified candidate | net -57 tests; false-green standalone under mutation; safe only atop `2ee9950` |
@@ -56,7 +56,7 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | worker | worktree / branch @ SHA | state | concrete problem |
 |---|---|---|---|
-| flash-spy | `rawclaw-ozzy-flash-spy` / `ozzy/flash-spy-20260826` @ `d6d2e1d` | completed receipt | Wave 9 spy dossier: Norm Bell 26 mutant retention & unpushed refs, Lenny 3.91h freeze |
+| flash-spy | `rawclaw-ozzy-flash-spy` / `ozzy/flash-spy-20260826` @ `1f09356` | completed receipt | Wave 10 spy dossier: Norm Bell 28 mutant candidate & unpushed refs, Lenny 4.25h freeze |
 | flash-prune | `rawclaw-ozzy-flash-prune` / `ozzy/flash-prune-benchmark` @ `cdc063d` (dirty=1) | active benchmark | tombstone prune benchmark (`BenchmarkPruneTombstonedIDs` +29 test lines, novel `7c6141c4`) |
 | flash-catalog | `rawclaw-ozzy-flash-catalog` / `ozzy/flash-catalog-review` @ `cdc063d` | completed receipt | catalog resolution hostile review (held for composite tuple matching) |
 | flash-cleanup | `rawclaw-ozzy-flash-cleanup` / `ozzy/flash-refresh-cleanup` @ `89c8a28` | completed receipt | refresh database and sidecar deletion |
@@ -148,8 +148,8 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 | 5 | range bounds shrink | Conor range-shrink; Lenny segment-range; Ozzy harvest | Go Slice Expressions spec, `slices` package | eliminate dead clamping branches in `resolveSegmentRange` | shrink | high / low | `conor-ozzy-range-shrink`, `ozzy-flash-catalog` |
 | 5 | composite scoped catalog | Ozzy catalog; Norm lenny-spy; Lenny locate | Git namespaces, Go `net/http` ServeMux | multi-key tuple matching `(Source, Project, SessionID, CWD)` | reuse/add tests | high / medium | `ozzy-flash-catalog`, `norm-lenny-spy`, `lenny-raid-locate` |
 | 5 | struct field contract pinning | Lenny containers; Norm ozzy-spy | `google/go-cmp`, `reflect.DeepEqual` | compact table-driven struct field contract assertions | delete/reuse | high / low | `lenny-raid-containers`, `norm-ozzy-spy` |
-| 4 | same-volume swap staging | Ozzy cleanup; Lenny fence; Norm fence | POSIX `rename`, Linux `renameat2` | parent-directory temporary staging (`filepath.Dir`) | shrink/reuse | high / low | `ozzy-flash-cleanup`, `lenny-raid-fence`, `norm-flash-fence` |
-| 4 | catalog/source resolution | Lenny locate; Norm catalog; Ozzy catalog | SQLite uniqueness + explicit path/index precedence | one resolver returning source/path/status; no duplicate catalog/stem topology | delete/shrink | medium-high / high (ambiguity) | `lenny-raid-locate`, `norm-flash-catalog`, `ozzy-flash-catalog` |
+| 4 | same-volume swap staging | Ozzy cleanup; Lenny fence; Norm fence | `git/lockfile.c`, POSIX `rename`, Linux `renameat2` | parent-directory temporary staging (`filepath.Dir`) | shrink/reuse | high / low | `ozzy-flash-cleanup`, `lenny-raid-fence`, `norm-flash-fence` |
+| 4 | catalog/source resolution | Lenny locate; Norm catalog; Ozzy catalog | RFC 3986, SQLite composite indices + explicit path precedence | composite tuple matching `(Source, Project, SessionID, CWD)`; no single-field misrouting | delete/shrink | medium-high / high (ambiguity) | `lenny-raid-locate`, `norm-flash-catalog`, `ozzy-flash-catalog` |
 | 5 | closeout prep/write | Lenny prewarm/locate; Ozzy hidden/catalog | Git `update-ref` CAS + SQLite transaction | expected-revision check around one coherent snapshot; unique keys remain the storage guard | reuse/add tests | medium-high / high | `lenny-raid-prewarm`, `ozzy-flash-hidden` |
 | 4 | WAL/SHM cleanup | Lenny containers; Ozzy cleanup | SQLite WAL/locking + Git lockfile ownership | private refresh generation, owner manifest, close/checkpoint, then idempotent removal under same fence | shrink/reuse | high / high | `lenny-raid-containers`, `ozzy-flash-cleanup` |
 | 4 | tombstone prune | Ozzy prune; Lenny containers | SQLite indexed anti-join/partial index | bounded staged ID set and indexed `NOT EXISTS`; preserve counts/errors | shrink/reuse | medium-high / medium | `ozzy-flash-prune`, `lenny-raid-containers` |
@@ -160,7 +160,7 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 ### Adoption bands
 
-**COPY/ADAPT NOW:** POSIX exclusive create + same-directory rename for catalog claims; PID temp directory + flat-ID validation; `trap 'wait' 0` child reaping in tests; slice invariant dead bounds elimination; multi-key candidate tuple matching `(Source, Project, SessionID, CWD)`; compact table-driven struct field contract assertions; same-volume parent directory temporary staging; one lock/transaction through refresh decision and unlink; `Cmd.Wait`/context for children; CAS-style expected-revision tag publication; private refresh generations; indexed tombstone pruning; scoped `slog` phase logging; stable benchmark names; Git `patch-id`/`range-diff` for review evidence.
+**COPY/ADAPT NOW:** POSIX exclusive create + same-directory rename for catalog claims; PID temp directory + flat-ID validation; `trap 'wait' 0` child reaping in tests; slice invariant dead bounds elimination; multi-key candidate tuple matching `(Source, Project, SessionID, CWD)`; compact table-driven struct field contract assertions; same-volume parent directory temporary staging (`git/lockfile.c` pattern); one lock/transaction through refresh decision and unlink; `Cmd.Wait`/context for children; CAS-style expected-revision tag publication; private refresh generations; indexed tombstone pruning; scoped `slog` phase logging; stable benchmark names; Git `patch-id`/`range-diff` for review evidence.
 
 **STUDY FIRST:** catalog-vs-stem resolver unification; WAL checkpoint timing; coherent tag-prep/write snapshot; staged replacement/rollback. These touch stale/fresh and deletion semantics and need adversarial tests first.
 
@@ -170,7 +170,7 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 ### Supervisor messages
 
-- **Lenny Bruce:** Ten desks reduce to the high-value substitutions above plus private refresh generations, compact struct contract pinning, and scoped phase logging. Start with SQLite locking/atomic commit (https://www.sqlite.org/atomiccommit.html, https://www.sqlite.org/lockingv3.html), Git lock ownership (https://git-scm.com/docs/api-lockfile), and POSIX `O_EXCL` (https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html). The precise experiment is a concurrent hook test plus a cleanup test that races acquisition between probe and unlink; only a lock held across both passes.
+- **Lenny Bruce:** Ten desks reduce to the high-value substitutions above plus private refresh generations, compact struct contract pinning, and scoped phase logging. Start with SQLite locking/atomic commit (https://www.sqlite.org/atomiccommit.html, https://www.sqlite.org/lockingv3.html), Git lock ownership (https://git-scm.com/docs/api-lockfile, https://github.com/git/git/blob/master/lockfile.c), and POSIX `O_EXCL` (https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html). The precise experiment is a concurrent hook test plus a cleanup test that races acquisition between probe and unlink; only a lock held across both passes.
 - **Norm Bell:** Your four quota-hit lanes should compare against SQLite’s idempotent uniqueness and explicit stale/error contract: https://www.sqlite.org/lang_upsert.html and https://go.dev/doc/articles/race_detector. Re-run catalog and ingest with exact/prefix collisions, composite tuple matching `(Source, Project, SessionID, CWD)`, and race count >=5; do not report quota-hit panes as green.
 - **Ozzy Prince:** The cleanup receipt’s probe-to-unlink gap is confirmed by review evidence. Use PocketBase’s checkpoint/backup sequencing (https://github.com/pocketbase/pocketbase/blob/master/core/backup.go) only as a pattern, then keep RawClaw’s fence held through `os.Remove`; reproduce issue-32 with the race detector and immutable integration SHA.
 
@@ -178,7 +178,7 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 - `lenny-raid-hooks` / `norm-flash-hooks` / `ozzy-flash-hook`: test POSIX exclusive create under two simultaneous invocations; metadata rename may fail without invalidating the claim. Compare against https://pkg.go.dev/os#OpenFile and https://pkg.go.dev/os#Rename.
 - `lenny-raid-prewarm` / `norm-flash-ingest` / `ozzy-flash-hidden`: replace bespoke cache state only if an existing refresh DB or one atomic envelope carries the needed receipt; ensure every child is waited/reaped. See https://pkg.go.dev/os/exec#Cmd.Wait.
-- `lenny-raid-locate` / `norm-flash-catalog` / `ozzy-flash-catalog`: build a table of exact ID, unique prefix, ambiguous prefix, source mismatch, and catalog miss; match composite tuples `(Source, Project, SessionID, CWD)`. See https://www.sqlite.org/fts5.html and https://git-scm.com/docs/gitnamespaces.
+- `lenny-raid-locate` / `norm-flash-catalog` / `ozzy-flash-catalog`: build a table of exact ID, unique prefix, ambiguous prefix, source mismatch, and catalog miss; match composite tuples `(Source, Project, SessionID, CWD)`. See https://www.sqlite.org/fts5.html, https://git-scm.com/docs/gitnamespaces, and https://www.rfc-editor.org/rfc/rfc3986.
 - `lenny-raid-fence` / `norm-flash-fence`: hold one SQLite transaction/guard across decision and mutation; a `BEGIN IMMEDIATE; ROLLBACK` probe followed by unlink is explicitly insufficient. See https://www.sqlite.org/lockingv3.html.
 - `lenny-raid-containers` / `ozzy-flash-cleanup`: checkpoint/close, then remove DB/WAL/SHM under the same fence; missing sidecars are success and busy checkpoint is observable. See https://www.sqlite.org/pragma.html#pragma_wal_checkpoint.
 - `lenny-raid-containers` / `norm-ozzy-spy`: restore direct struct field contract assertions (`cmp.Diff`) to pin `size` and `ParentID` invariants under mutation. See https://github.com/google/go-cmp.
@@ -194,7 +194,7 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 - Product workers inventoried: **23** (10 Lenny, 5 Norm, 8 Ozzy).
 - Distinct deduplicated problems: **10**.
-- Prior-art sources cited: **80 unique canonical primary URLs** across the complete corpus (overlapping SQLite hosts and repeated links counted once; links are listed inline).
+- Prior-art sources cited: **86 unique canonical primary URLs** across the complete corpus (overlapping SQLite hosts and repeated links counted once; links are listed inline).
 - Top five highest-leverage recommendations:
   1. Replace hook FIFO/overwrite claims with POSIX exclusive regular-file creation plus same-directory atomic metadata rename.
   2. Hold the consolidated writer fence through refresh decision and DB/WAL/SHM unlink; never probe then release then delete.

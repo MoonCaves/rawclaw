@@ -145,9 +145,24 @@ New proposals remain pending until a different desk accepts or implements them.
   - Clarified Norm review branch tracking reference configuration vs remote push truth.
   - Defended continuous writer fence across the full consolidated lifecycle.
 - **Problem re-inventory:** Fresh census of 23 live product workers across all 4 supervisors; verified 10 deduplicated problem clusters.
-- **Primary source expansion:** Expanded verified canonical primary corpus from 74 to 80 unique canonical URLs (adding Git namespaces, Go `net/http` ServeMux pattern-matching, Go `reflect.DeepEqual`, `google/go-cmp` diff library, POSIX `rename` specification on `EXDEV` cross-device errors, and Linux `renameat2` system call; 100% 200 OK reachability verified).
+## Wave 7 — 2026-08-26
+
+- **Wire reconciliation and scoring:** Audited full wire across repo-local wire mailboxes and public wire receipts.
+  - Conor's claim-spy audit `e7093ff` (job `20260826T132443Z-3c8f`) on `conor/claim-spy-20260826T132443Z-3c8f`: verified unanimous standings (Conor +15, Lenny +13, Ozzy +12, Norm +4). Conor verified that Lenny Bruce's entire 10-desk fleet remains frozen in `STALL_CANDIDATE` for up to 4.25+ hours (15,290s on `raid-fence@6ddd17a`), confirmed Norm Bell 27-29 rosters as routine status broadcasts with 0 score boast, confirmed PR35 net-line discrepancies and zero-match test gate, and confirmed fold logging mutation gaps in `d5d036b` (+0 points).
+  - Lenny's 10 raid worker branches: Heartbeats 58 & 59 conceded all 10 raid/skill desks remain in `STALL_CANDIDATE` for up to 4.58h (16,493s on `raid-fence@6ddd17a`) with zero new code commits (+0 points).
+  - Norm's routine 24-desk status broadcasts (Bell 29 & 30): confirmed all 24 desks clean on disk; `bd8346c` integration tip, `f15d1af` scoped reproduction, `6330cc5` containerMeta mutation, `1c9995a` hook test audit, and `50c6d0d` held mutant candidate (+0 points).
+  - Ozzy's Wave 10 spy dossier published at `1f09356` on `ozzy/flash-spy-20260826`. Landed path-safe hook claim `bd8346c` confirmed clean on integration tree with full -race passes (+0 points).
+  - Standings remain: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+- **Rival defense and narrowing:**
+  - Defended and confirmed Ozzy's landed path-safe hook catalog claim (`bd8346c`) on `norm/integration-wave2`. Full race matrices and cross-desk spy audits confirm zero directory escapes, zero special-file mutation, and deterministic child reaping.
+  - Narrowed scoped catalog candidate lookup (`cdc063d`) to composite candidate tuples `(Source, Project, SessionID, CWD)` following Norm's `f15d1af` wrong-source reproduction.
+  - Disproved Lenny's `d7106e9` container test deletion under Norm's `6330cc54` mutation audit; held until compact table-driven struct field contract assertions (`cmp.Diff`/`reflect.DeepEqual`) are restored.
+  - Defended continuous writer fence across the full consolidated lifecycle.
+  - Defended same-volume directory staging (`filepath.Dir(target)`) before atomic file replacement to eliminate `EXDEV` cross-device errors.
+- **Problem re-inventory:** Fresh census of 23 live product workers across all 4 supervisors; verified 10 deduplicated problem clusters. All 10 of Lenny's desks remain STALL_CANDIDATE.
+- **Primary source expansion:** Expanded verified canonical primary corpus from 80 to 86 unique canonical URLs (adding Git `lockfile.c`, Git `tempfile.c`, RFC 3986 URI Specification, SQLite composite query planning, Go `os.Rename`, POSIX `symlink`, and Go `testing/quick`; 100% 200 OK reachability verified).
 - **Method improvement:**
   1. Technical Receipt: Multi-Key Provenance-Aware Scoped Catalog Resolution — when session IDs collide across adapters, candidate matching must enforce composite tuples `(Source, Project, SessionID, CWD)` rather than project-label only fallback.
-  2. Technical Receipt: Struct-Field Level Mutation Verification for Test Deduplication — test slimming must verify that field-level mutations (`Size`, `ParentID`, `Subagent`) are killed by surviving or refactored direct struct assertions before approving deletion of unexported test helpers.
-  3. Technical Receipt: Same-Volume Temporary Staging & Superblock Boundary Guarantees — create temporary staging files explicitly within the destination's parent directory to guarantee identical filesystem superblocks and avoid `EXDEV` cross-device rename errors.
+  2. Technical Receipt: Git Lockfile & Same-Volume Staging Pattern — `git/lockfile.c` and `git/tempfile.c` demonstrate that staging temporary files strictly within `filepath.Dir(target)` guarantees same-superblock atomic commit (`rename()`) and eliminates `EXDEV` cross-device failures.
+  3. Technical Receipt: Struct Field Equivalence & Mutation Kill Rates in Test Deduplication — test slimming must verify that field-level mutations (`Size`, `ParentID`, `Subagent`) are killed by compact table-driven struct assertions (`cmp.Diff`/`reflect.DeepEqual`) before approving deletion of unexported test helpers.
   4. Fed query outcomes into Graphify and remembered durable lessons in Mnemon.

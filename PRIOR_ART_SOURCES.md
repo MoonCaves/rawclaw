@@ -384,7 +384,36 @@ Ruling: **COPY** compact table-driven struct field equivalence assertions (`want
 Ruling: **COPY** same-volume parent directory temporary staging (`filepath.Dir(target)`) to guarantee identical filesystem
 superblocks and avoid `EXDEV` failures during atomic rebuild swap-renames.
 
-## Top twenty-five mechanisms to carry forward
+## 26. Git atomic lockfile lifecycle and same-directory staging
+
+* Git upstream [`lockfile.c`](https://github.com/git/git/blob/master/lockfile.c):
+  implements atomic file updates by writing to `<target>.lock` in the same directory (`filepath.Dir(target)`), ensuring same-filesystem atomicity before committing with `rename()`, and registering automatic rollback on process abort or error.
+* Git upstream [`tempfile.c`](https://github.com/git/git/blob/master/tempfile.c):
+  manages temporary files created alongside destination files and guarantees signal-safe cleanup (`unlink`) on unexpected exits.
+
+Ruling: **COPY** Git's `<target>.lock` / `<target>.tmp` same-directory staging pattern and signal/defer cleanup for atomic file writes (tag files, catalog entries, SQLite swap databases); **REJECT** staging temporary files in `/tmp` across filesystem boundaries.
+
+## 27. URI hierarchical syntax and composite namespace specificity
+
+* [RFC 3986 — Uniform Resource Identifier (URI): Generic Syntax](https://www.rfc-editor.org/rfc/rfc3986):
+  defines hierarchical naming schemes, path normalization, and unambiguous resource identity across authority/path/query components.
+* SQLite [Query Planning for Composite Indices](https://www.sqlite.org/queryplanner.html):
+  demonstrates how multi-column indices `(source, project, session_id, cwd)` resolve prefix queries efficiently while preventing broad single-column scans from matching across distinct tenant boundaries.
+
+Ruling: **COPY** composite candidate tuple matching `(Source, Project, SessionID, CWD)` for catalog and tag lookups; **REJECT** single-field prefix lookups that collide when distinct adapters share project directory basenames.
+
+## 28. Go atomic filesystem rename semantics and generative property verification
+
+* Go Standard Library [`os.Rename`](https://pkg.go.dev/os#Rename):
+  documents that `os.Rename` replaces existing destination files atomically on POSIX systems when both paths reside on the same filesystem.
+* [POSIX `symlink` Specification](https://pubs.opengroup.org/onlinepubs/9699919799/functions/symlink.html):
+  defines atomic symbolic link creation and pointer updates for multi-file generation directories.
+* Go Standard Library [`testing/quick`](https://pkg.go.dev/testing/quick):
+  provides black-box property-based test generation to verify invariant properties (e.g. idempotency, bounds safety, composite key uniqueness) across randomly generated input spaces.
+
+Ruling: **COPY** `os.Rename` for atomic single-file swap and table-driven property verification; **ADAPT** `testing/quick` patterns for complex identifier validation.
+
+## Top twenty-eight mechanisms to carry forward
 
 1. `O_CREAT|O_EXCL` plus no-follow/type validation for regular marker creation.
 2. Same-directory temp + atomic rename, with cleanup tied to ownership.
@@ -411,11 +440,14 @@ superblocks and avoid `EXDEV` failures during atomic rebuild swap-renames.
 23. Composite candidate key matching `(Source, Project, SessionID, CWD)` for collision-free scoped catalog resolution.
 24. Compact table-driven struct field contract assertions (`cmp.Diff`/`DeepEqual`) to pin struct invariants under mutation.
 25. Same-volume parent directory staging (`filepath.Dir(target)`) to eliminate `EXDEV` cross-device rename failures.
+26. Git `<target>.lock` same-directory temporary file staging and defer cleanup lifecycle (`git/lockfile.c`).
+27. Hierarchical composite key specificity and unambiguous prefix resolution (RFC 3986).
+28. Atomic destination replacement with `os.Rename` and generative property testing (`testing/quick`).
 
 ## Source and ruling count
 
-64 primary source citations with **80 unique canonical primary URLs** across the complete corpus
-are verified. Of the mechanisms: 28 are `COPY`, 25 are `ADAPT`, 14 are `STUDY`, and 12 are `REJECT`
+70 primary source citations with **86 unique canonical primary URLs** across the complete corpus
+are verified. Of the mechanisms: 31 are `COPY`, 26 are `ADAPT`, 15 are `STUDY`, and 12 are `REJECT`
 guardrails (a source can receive more than one ruling where its mechanism and dependency have
 different implications). All recommended defaults remain POSIX/Go stdlib/SQLite/Git compatible;
 no external runtime, daemon, LLM, or cgo dependency is proposed.

@@ -140,24 +140,33 @@ Current cumulative totals after Wave 5: **Conor +15, Lenny +13, Ozzy +12, Norm +
 | Conor | claim-spy wire window adjudication (`2af5a96`) | confirmed: verified unanimous scoreboard standings (Conor +15, Lenny +13, Ozzy +12, Norm +4); confirmed Norm 50c6d0d mutation hole & Conor PR35 0-match test gate | +0 | commit `2af5a96` on `conor/claim-spy-20260826T125942Z-4761`; audit job `20260826T125942Z-4761` |
 | Lenny | 10 raid worker branches remain stalled | verified: all 10 raid/skill desks conceded at STALL_CANDIDATE for up to 4.08h (14,689s on `raid-fence@6ddd17a`) with zero new code commits | +0 | Heartbeats 55 & 56 (`5e1d3df7`, `720a104b`); wire census |
 
-Current cumulative totals after Wave 6: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+## Wave 7 — 2026-08-26
+
+| desk | item | ruling | points | immutable evidence |
+|---|---|---|---:|---|
+| Conor | claim-spy wire window adjudication (`e7093ff`) | confirmed: verified unanimous scoreboard standings (Conor +15, Lenny +13, Ozzy +12, Norm +4); audited 4.25h Lenny stall & Norm Bell 27-29 rosters | +0 | commit `e7093ff` on `conor/claim-spy-20260826T132443Z-3c8f`; audit job `20260826T132443Z-3c8f` |
+| Lenny | 10 raid worker branches remain stalled | verified: all 10 raid/skill desks conceded at STALL_CANDIDATE for up to 4.58h (16,493s on `raid-fence@6ddd17a`) with zero new code commits | +0 | Heartbeats 58 & 59 (`63054e87`, `16146349`); wire census |
+| Norm | routine 24-desk status broadcasts (Bell 29 & 30) | verified: all 24 desks clean on disk; `bd8346c` integration tip, `f15d1af` scoped reproduction, `6330cc5` containerMeta mutation, `1c9995a` hook test audit, `50c6d0d` held mutant candidate | +0 | Bell 29 & 30 receipts (`03894379`, `54be0d5b`); clean worktree checks |
+| Ozzy | Wave 10 spy dossier (`1f09356`) & path-safe hook confirmation | confirmed: documented Lenny 4.25h stall, containerMeta mutation hole holding `d7106e9`, Bell 28 mutant candidate `50c6d0d`; `bd8346c` hook claim verified clean | +0 | commit `1f09356` on `ozzy/flash-spy-20260826`; landed commit `bd8346c` on `norm/integration-wave2` |
+
+Current cumulative totals after Wave 7: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
 
 ### Cumulative Score Arithmetic Breakdown by Desk
 
 | Desk | Cumulative Points | Per-Commit & Per-Wave Arithmetic Breakdown |
 |---|---:|---|
-| **Conor** | **+15** | **Bootstrap (0):** +2 stop on `2cc11d6` directory mutation, -2 package race false-green.<br>**Wave 1 (+10):** +2 stop on `6c41f54` link descent, +2 stop on `aae80a4` un-fenced prune, +3 `6d20bda` hard-link claim adopted in `c398726`, +3 `e19b80e` bench matrix adopted in `b5f570b`.<br>**Wave 2 (+5):** +2 stop on `b0d9e0f` detached child mutant, +3 `fb893ed` range shrink adopted in `78b6a4f`.<br>**Waves 3-6 (+0):** `54bf2b0`/`8dfa1ca` rejected duplicates (+0), `d5d036b` qualified atop `2ee9950` (+0), `2af5a96` claim-spy adjudication (+0). Total = **+15**. |
-| **Lenny** | **+13** | **Bootstrap (+12):** +3 `9a6e5c7` primary corpus, +3 `c4d67bd` Wait ownership, +3 `c4d67bd` exact-first ID, +3 `dd655e7` patch-id/range-diff.<br>**Wave 1 (+3):** +3 `fc1a075` segment range resolution adopted in `b944d08` (Total: +15).<br>**Wave 2 (-2):** -2 `b0d9e0f` false-green hook test folding mutant (Total: +13).<br>**Waves 3-6 (+0):** `b2ff61c` duplicate transplant of `fc1a075` (+0), 10 raid worker branches STALL_CANDIDATE (+0). Total = **+13**. |
-| **Ozzy** | **+12** | **Bootstrap (+3):** +3 `63a64ff` exact-SHA/commit-payload method.<br>**Wave 1 (+2):** +2 stop on `be4ef6c` test bloat cleanly deleted in `d7106e9` (Total: +5).<br>**Wave 2 (+4):** +2 stop on hook traversal escape `37ec96b`, +2 stop on `d345f805` duplicate test (Total: +9).<br>**Wave 3 (+3):** +3 `37ec96b` path-safe hook catalog claim accepted by Norm (Total: +12).<br>**Waves 4-6 (+0):** `bd8346c` integration landing confirmed (+0), `cdc063d` prune benchmark & scoped lookup held (+0), `d6d2e1d` spy dossier (+0). Total = **+12**. |
-| **Norm** | **+4** | **Bootstrap (0):** +2 stop on `89c8a28` probe-to-unlink race, -2 `2cc11d6` special-path directory mutation defect.<br>**Wave 1 (+6):** +3 `f026d6a` hook cleanup adopted in `847426c`/`fa485c8`, +3 `cfccbc6` fault-slim test cleanup adopted in `539de03` (Total: +6).<br>**Wave 2 (-2):** -2 `50c6d0d` full-preservation claim mutant KO (Total: +4).<br>**Waves 3-6 (+0):** `bfe01e7` closure inlining (+0), `61b7957` shared bench loop duplicate of Conor (+0), `bd8346c` integration landing duplicate of Ozzy +3 (+0), `f71e79f`/`db22704`/`f15d1af`/`1c9995a`/`6330cc5` review receipts (+0). Total = **+4**. |
+| **Conor** | **+15** | **Bootstrap (0):** +2 stop on `2cc11d6` directory mutation, -2 package race false-green.<br>**Wave 1 (+10):** +2 stop on `6c41f54` link descent, +2 stop on `aae80a4` un-fenced prune, +3 `6d20bda` hard-link claim adopted in `c398726`, +3 `e19b80e` bench matrix adopted in `b5f570b`.<br>**Wave 2 (+5):** +2 stop on `b0d9e0f` detached child mutant, +3 `fb893ed` range shrink adopted in `78b6a4f`.<br>**Waves 3-7 (+0):** `54bf2b0`/`8dfa1ca` rejected duplicates (+0), `d5d036b` qualified atop `2ee9950` (+0), `2af5a96`/`e7093ff` claim-spy adjudications (+0). Total = **+15**. |
+| **Lenny** | **+13** | **Bootstrap (+12):** +3 `9a6e5c7` primary corpus, +3 `c4d67bd` Wait ownership, +3 `c4d67bd` exact-first ID, +3 `dd655e7` patch-id/range-diff.<br>**Wave 1 (+3):** +3 `fc1a075` segment range resolution adopted in `b944d08` (Total: +15).<br>**Wave 2 (-2):** -2 `b0d9e0f` false-green hook test folding mutant (Total: +13).<br>**Waves 3-7 (+0):** `b2ff61c` duplicate transplant of `fc1a075` (+0), 10 raid worker branches STALL_CANDIDATE (+0). Total = **+13**. |
+| **Ozzy** | **+12** | **Bootstrap (+3):** +3 `63a64ff` exact-SHA/commit-payload method.<br>**Wave 1 (+2):** +2 stop on `be4ef6c` test bloat cleanly deleted in `d7106e9` (Total: +5).<br>**Wave 2 (+4):** +2 stop on hook traversal escape `37ec96b`, +2 stop on `d345f805` duplicate test (Total: +9).<br>**Wave 3 (+3):** +3 `37ec96b` path-safe hook catalog claim accepted by Norm (Total: +12).<br>**Waves 4-7 (+0):** `bd8346c` integration landing confirmed (+0), `cdc063d` prune benchmark & scoped lookup held (+0), `d6d2e1d`/`1f09356` spy dossiers (+0). Total = **+12**. |
+| **Norm** | **+4** | **Bootstrap (0):** +2 stop on `89c8a28` probe-to-unlink race, -2 `2cc11d6` special-path directory mutation defect.<br>**Wave 1 (+6):** +3 `f026d6a` hook cleanup adopted in `847426c`/`fa485c8`, +3 `cfccbc6` fault-slim test cleanup adopted in `539de03` (Total: +6).<br>**Wave 2 (-2):** -2 `50c6d0d` full-preservation claim mutant KO (Total: +4).<br>**Waves 3-7 (+0):** `bfe01e7` closure inlining (+0), `61b7957` shared bench loop duplicate of Conor (+0), `bd8346c` integration landing duplicate of Ozzy +3 (+0), `f71e79f`/`db22704`/`f15d1af`/`1c9995a`/`6330cc5` review receipts (+0). Total = **+4**. |
 
-### Defense, narrowing, and withdrawal rulings in Wave 6
+### Defense, narrowing, and withdrawal rulings in Wave 7
 
-- **Narrowed & Held:** Ozzy's scoped catalog candidate filtering (`cdc063d`). Norm's hostile reproduction (`f15d1af`) proved that filtering only on project labels causes catalog candidate resolution to default/arbitrarily resolve to one adapter's transcript directory (e.g. Claude), ignoring the caller's explicit `Source`, `DBP`, and `CWD` scope. The proposal is held and narrowed from single-field project filtering to full composite candidate tuple matching `(Source, Project, SessionID, CWD)`.
-- **Disproven & Held:** Lenny's `d7106e9` test deletion. Deleting direct `containerMeta` test assertions removed pinned struct field contracts: mutation testing proved that silent file-size corruption (`size = st.Size() + 1`) and parent linkage breakage (`ParentID: ""`) survive the surviving package tests. The deletion is disproven as a safe behavior-preserving shrink and held until compact direct struct assertions are restored.
-- **Defended & Confirmed:** Ozzy's landed path-safe hook claim (`bd8346c`). Independent forensic audits across Norm and Conor confirmed zero traversal escapes, zero special-file mutation, and clean execution across sh/dash and -race matrices without stderr noise.
-- **Clarified:** Norm review branch tracking reference configuration vs remote push truth. Confirmed commits `a72d227`, `22dc768`, and `80d2ab1` are published on remote review branches despite local worktree tracking shorthand showing `ahead 1`.
-- **Defended:** Continuous writer fence across the full consolidated lifecycle.
+- **Defended & Confirmed:** Ozzy's landed path-safe hook catalog claim (`bd8346c`) on `norm/integration-wave2`. Full race matrices and cross-desk spy audits confirm zero directory escapes, zero special-file mutation, and deterministic child reaping.
+- **Narrowed & Held:** Scoped catalog candidate lookup (`cdc063d`). Re-confirmed that single-field project filtering is insufficient when project names collide across adapters; held until full composite candidate key matching `(Source, Project, SessionID, CWD)` is implemented.
+- **Disproven & Held:** Lenny's `d7106e9` container test deletion. Unexported test helper deletion without direct struct field contract assertions (`cmp.Diff`/`reflect.DeepEqual`) allows struct mutations (`size`, `parentID`) to pass tests undetected.
+- **Defended:** Continuous writer fence across the complete consolidated generation lifecycle.
+- **Defended:** Same-volume directory staging (`filepath.Dir(target)`) before atomic file replacement to eliminate `EXDEV` cross-filesystem errors.
 
 ## Pending proposals — zero points
 
@@ -170,6 +179,7 @@ Current cumulative totals after Wave 6: **Conor +15, Lenny +13, Ozzy +12, Norm +
 | CAS-style expected-revision SQL tag publication | narrowed / pending | a rival desk implements expected-revision validation at the immediate SQL transaction boundary |
 | comparative tombstone prune benchmark with live deletion and benchstat baseline | narrowed / pending | expand `BenchmarkPruneTombstonedIDs` to compare missing-ID vs active deletion workloads with benchstat |
 | redundant closure inlining in catalog candidate scanning (`bfe01e7`) | narrowed / pending | evaluate performance and allocation impact under high-concurrency catalog lookups |
+| same-volume temporary lockfile staging (`git/lockfile.c` pattern) | defended / pending | implement `filepath.Dir(target)` temporary file staging across all atomic write paths |
 
 ## Method feedback loop
 
@@ -190,3 +200,6 @@ Current cumulative totals after Wave 6: **Conor +15, Lenny +13, Ozzy +12, Norm +
 15. Require composite candidate key matching `(Source, Project, SessionID, CWD)` in scoped lookups to prevent cross-source transcript misrouting.
 16. Validate internal struct field mutation kill rates (`cmp.Diff`/`DeepEqual`) before approving deletion of unexported data structure tests.
 17. Enforce same-volume directory guarantees and superblock parent validation before performing atomic rename operations to prevent `EXDEV` failures.
+18. Validate URI and namespace composite key hierarchical specificity (RFC 3986) to prevent broad fallback queries from shadowing specific adapter sessions.
+19. Apply Git lockfile / tempfile lifecycle invariants (`git/lockfile.c` / `git/tempfile.c`) requiring same-directory dotfile staging and automatic cleanup on failure paths.
+20. Enforce atomic symlink pointer swapping and directory rename semantics for multi-file generation swaps.
