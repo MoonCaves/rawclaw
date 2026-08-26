@@ -65,7 +65,10 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 					}
 					t.Cleanup(func() { _ = os.RemoveAll(catalogDir) })
 					scriptPath := filepath.Join(t.TempDir(), "prime.sh")
-					if err := os.WriteFile(scriptPath, []byte(renderHookScript(tc.tmpl, "''")), 0o755); err != nil {
+					// Reap any detached ingest before the test shell exits, so assertions
+					// observe launches deterministically instead of racing the scheduler.
+					script := "trap 'wait' 0\n" + renderHookScript(tc.tmpl, "''")
+					if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 						t.Fatal(err)
 					}
 
@@ -132,7 +135,11 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 						beforeMode = info.Mode()
 					}
 
-					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					timeout := 2 * time.Second
+					if kind == "new" {
+						timeout = 15 * time.Second
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), timeout)
 					defer cancel()
 					cmd := exec.CommandContext(ctx, shell, scriptPath)
 					cmd.Env = append(os.Environ(),
@@ -149,7 +156,7 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 						t.Fatalf("hook failed for %s path under %s: %v; output=%q", kind, shellName, err, out)
 					}
 
-					calls := readDetachedIngestCalls(t, logPath, kind == "new")
+					calls := readDetachedIngestCalls(t, logPath)
 					if kind == "new" {
 						if len(calls) != 1 || calls[0] != "ingest "+sessionID {
 							t.Fatalf("detached rawclaw calls = %q, want [%q]", calls, "ingest "+sessionID)
@@ -225,29 +232,19 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 	}
 }
 
-func readDetachedIngestCalls(t *testing.T, logPath string, waitForCall bool) []string {
+func readDetachedIngestCalls(t *testing.T, logPath string) []string {
 	t.Helper()
-	wait := 100 * time.Millisecond
-	if waitForCall {
-		wait = 2 * time.Second
+	data, err := os.ReadFile(logPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
-	deadline := time.Now().Add(wait)
-	for {
-		data, err := os.ReadFile(logPath)
-		if err != nil && !os.IsNotExist(err) {
-			t.Fatal(err)
+	var calls []string
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+		if line != "" {
+			calls = append(calls, line)
 		}
-		var calls []string
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-			if line != "" {
-				calls = append(calls, line)
-			}
-		}
-		if (!waitForCall && len(calls) > 0) || (waitForCall && len(calls) >= 1) || time.Now().After(deadline) {
-			return calls
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
+	return calls
 }
 
 // TestClaudePrimeScript_CreatesSessionCatalogEntry verifies that starting a new
