@@ -61,26 +61,31 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
-	if [ -f "$entry" ]; then
+	claimed=0
+	if (set -C; : > "$entry") 2>/dev/null; then
+		claimed=1
+	elif [ -e "$entry" ]; then
 		exit 0
 	fi
-	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
-	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
-	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
-	# Fallback ladder uses 'true >' not ': >': ':' is a POSIX special builtin, so
-	# its redirection failure exits dash (Linux /bin/sh) despite the '|| true'.
-	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
-	{
-		printf '{\n'
-		printf '  "session_id": "%s",\n' "$esc_session_id"
-		printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
-		printf '  "cwd": "%s",\n' "$esc_cwd"
-		printf '  "source": "claude"\n'
-		printf '}\n'
-	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
+	if [ "$claimed" -eq 1 ]; then
+		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
+		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
+		cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+		# The empty claim is already a valid dedup marker. Replace it atomically
+		# with rich JSON when possible; a crash before mv still suppresses repeats.
+		tmp_entry="$catalog_dir/.tmp.$session_id.$$"
+		{
+			printf '{\n'
+			printf '  "session_id": "%s",\n' "$esc_session_id"
+			printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+			printf '  "cwd": "%s",\n' "$esc_cwd"
+			printf '  "source": "claude"\n'
+			printf '}\n'
+		} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || true
+		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
 fi
 
 cat <<'BANNER'
@@ -147,26 +152,31 @@ if [ -n "$session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
 	entry="$catalog_dir/$session_id"
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
-	if [ -f "$entry" ]; then
+	claimed=0
+	if (set -C; : > "$entry") 2>/dev/null; then
+		claimed=1
+	elif [ -e "$entry" ]; then
 		exit 0
 	fi
-	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
-	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
-	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
-	# Fallback ladder uses 'true >' not ': >': ':' is a POSIX special builtin, so
-	# its redirection failure exits dash (Linux /bin/sh) despite the '|| true'.
-	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
-	{
-		printf '{\n'
-		printf '  "session_id": "%s",\n' "$esc_session_id"
-		printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
-		printf '  "cwd": "%s",\n' "$esc_cwd"
-		printf '  "source": "codex"\n'
-		printf '}\n'
-	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
+	if [ "$claimed" -eq 1 ]; then
+		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
+		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
+		cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+		# The empty claim is already a valid dedup marker. Replace it atomically
+		# with rich JSON when possible; a crash before mv still suppresses repeats.
+		tmp_entry="$catalog_dir/.tmp.$session_id.$$"
+		{
+			printf '{\n'
+			printf '  "session_id": "%s",\n' "$esc_session_id"
+			printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+			printf '  "cwd": "%s",\n' "$esc_cwd"
+			printf '  "source": "codex"\n'
+			printf '}\n'
+		} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || true
+		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
 fi
 
 # No python3 for JSON encoding — silent no-op rather than a hook error (a
