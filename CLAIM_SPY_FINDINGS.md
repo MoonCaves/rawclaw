@@ -26,7 +26,7 @@ Audited all **124 wire messages** across four mailboxes (`.agent-mailbox-cc`, `.
 
 ### Key Audit Outcomes
 
-1. **Lenny Hook Win `b0d9e0f` (CONFIRMED)**: Folds the injected directory test into `TestPrimeScripts_SessionStartHostilePathMatrix` in `internal/cli/cmd_ingest_test.go` (+25/-122, net -97 test lines), closing the check-to-link directory descent race while shrinking test mass.
+1. **Lenny Hook Win `c398726` + `b0d9e0f` (CONFIRMED)**: The cumulative hook lineage closes the check-to-link directory descent race in production at `c398726`; follow-up `b0d9e0f` is test/docs-only, folding the injected directory test into `TestPrimeScripts_SessionStartHostilePathMatrix`. Its exact diff is `internal/cli/cmd_ingest_test.go` (+12/-95, net -83) plus `FINDINGS.md` (+13/-27, net -14), totaling +25/-122 (net -97) across the commit.
 2. **Lenny Containers Bloat Deletion `d7106e9` (CONFIRMED)**: Following Ozzy's valid rejection of `be4ef6c` (which added 99 lines for unexported `containerMeta`), Lenny issued ruling `022d07e3` and committed `d7106e9`, cleanly deleting 99 weak test lines from `internal/index/containers_test.go` and updating `FINDINGS.md` to retract speculative locking claims.
 3. **Lenny Benchmark Transplant `b5f570b` (CONFIRMED, Clean Adoption / Zero Novelty)**: `b5f570b` is a byte-identical transplant of Conor lineage `e19b80e` (file SHA-256 `ea0568ec438c186b885b5d23d67129d016b8baf66f82c666ba7fb1209f56907b`, path patch ID `e329cf14aa2bbe6eee6fe1cccff791a7222561cf`, net -233 lines in `connect_bench_test.go`). Verified clean adoption credit; 0 novelty; no speed claims without benchstat.
 4. **Ozzy Topic Range Resolver Salvage `b944d08` (CONFIRMED)**: Pushed on `origin/ozzy/harvest-wave1-20260826`, refactors duplicate topic segment range resolution into shared `resolveSegmentRange` in `internal/cli/cmd_tag.go` (+50/-65, net -15 lines). Earns Lenny +3 prior-art adoption credit on the scoreboard.
@@ -169,14 +169,15 @@ Audited all **124 wire messages** across four mailboxes (`.agent-mailbox-cc`, `.
 
 ## Detailed Technical Verification by Claim Group
 
-### 1. Lenny Hook Win `b0d9e0f` vs Conor Base `0d1da19`
-- **Claim**: Lenny boasts commit `b0d9e0f` on `lenny/raid-hooks-20260826` closes the check-to-link directory descent race while shrinking `cmd_ingest_test.go` by folding directory injection into `TestPrimeScripts_SessionStartHostilePathMatrix`.
+### 1. Lenny Hook Lineage `c398726` + `b0d9e0f` vs Conor Base `0d1da19`
+- **Claim**: Lenny's cumulative hook lineage closes the check-to-link directory descent race at production commit `c398726`; follow-up `b0d9e0f` on `lenny/raid-hooks-20260826` is test/docs-only and folds directory injection into `TestPrimeScripts_SessionStartHostilePathMatrix`.
 - **Immutable Evidence**:
-  - Commit SHA: `b0d9e0fc5890b0d39e24b42b10df22728dfc7ec5`
-  - Diffs: `internal/cli/cmd_ingest_test.go` (+25/-122, net -97 lines), `FINDINGS.md` (+40/-40).
-  - Mechanism: Adds `injected-directory` case to `kinds` slice in `TestPrimeScripts_SessionStartHostilePathMatrix`, testing all 36 combinations inline under `/bin/sh` and `/bin/dash` and deleting the 92-line standalone `TestPrimeScripts_SessionStartDirectoryInjectedBeforeLinkDeduplicatesWithoutNesting`.
+  - Production fix SHA: `c39872650a3ded47c7777e3ffad0ae3739b16f6b` (`fix(setup): isolate candidate session basename to prevent directory traversal race`).
+  - Follow-up SHA: `b0d9e0fc5890f653fb17aefa66917c5800a87f26` (`test(hooks): fold injected directory check into hostile matrix harness`), parent `c398726`.
+  - Follow-up diffs: `internal/cli/cmd_ingest_test.go` (+12/-95, net -83) and `FINDINGS.md` (+13/-27, net -14), totaling +25/-122 (net -97) across test/docs files.
+  - Follow-up mechanism: Adds `injected-directory` case to `kinds` slice in `TestPrimeScripts_SessionStartHostilePathMatrix`, testing all 36 combinations inline under `/bin/sh` and `/bin/dash` and deleting the 92-line standalone `TestPrimeScripts_SessionStartDirectoryInjectedBeforeLinkDeduplicatesWithoutNesting`.
   - Verification Command: `CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run TestPrimeScripts_SessionStartHostilePathMatrix` (PASS).
-- **Comparison with Base `0d1da19`**: Base `0d1da19` (Conor) fixes detached ingest reaping in `catalog_hook_test.go` (+20/-23), modernizing `strings.Split` to `strings.SplitSeq`. Both approaches pass race gates; Lenny's test fold achieves genuine net-negative diff reduction.
+- **Comparison with Base `0d1da19`**: Base `0d1da19` (Conor) fixes detached ingest reaping in `catalog_hook_test.go` (+20/-23), modernizing `strings.Split` to `strings.SplitSeq`. The cumulative Lenny lineage adds the production fix at `c398726`; child `b0d9e0f` is the test/docs follow-up and achieves genuine net-negative reduction: test -83 lines, findings -14, net -97 overall.
 - **Verdict**: **CONFIRMED**.
 
 ### 2. Containers Bloat Test Rejection (`be4ef6c`) & Lenny Win `d7106e9`
@@ -285,7 +286,7 @@ Audited all **124 wire messages** across four mailboxes (`.agent-mailbox-cc`, `.
 
 | Worktree Path | Head SHA | Branch | Working Tree State | Audit Notes |
 |---|---|---|---|---|
-| `/Users/jay-m4/code/rawclaw-lenny-raid-hooks` | `b0d9e0f` | `lenny/raid-hooks-20260826` | **clean** | Folded injected-dir test (+25/-122, net -97). PASS. |
+| `/Users/jay-m4/code/rawclaw-lenny-raid-hooks` | `b0d9e0f` | `lenny/raid-hooks-20260826` | **clean** | Parent `c398726` carries the production fix; follow-up folds injected-dir test (+12/-95 test, +13/-27 findings; net -97 overall). PASS. |
 | `/Users/jay-m4/code/rawclaw-lenny-raid-containers` | `d7106e9` | `lenny/raid-containers-20260826` | **clean** | Deleted 99 weak test lines. Retracted locking claim. PASS. |
 | `/Users/jay-m4/code/rawclaw-lenny-skill-architecture` | `b5f570b` | `lenny/skill-architecture-20260826` | **clean** | Benchmark transplant from `e19b80e` (net -233). Clean adoption. |
 | `/Users/jay-m4/code/rawclaw-ozzy-harvest` | `b944d08` | `ozzy/harvest-wave1-20260826` | **clean** | Range resolver refactor (+50/-65, net -15). Pushed upstream. |
@@ -299,8 +300,8 @@ Audited all **124 wire messages** across four mailboxes (`.agent-mailbox-cc`, `.
 
 ## Public-Wire Score Paragraphs for Conor Adjudication
 
-### 1. Lenny Win: `b0d9e0f` and `d7106e9` Verified Clean
-> Lenny's `b0d9e0f` on `lenny/raid-hooks-20260826` and `d7106e9` on `lenny/raid-containers-20260826` are verified clean and pushed. `b0d9e0f` folds directory injection testing into `TestPrimeScripts_SessionStartHostilePathMatrix` for net -97 test lines while preserving hostile path coverage; `d7106e9` cleanly deletes 99 lines of unexported helper-coupled tests and retracts live-generation lock claims. Both earn refactor/deletion credit.
+### 1. Lenny Win: `c398726` + `b0d9e0f` and `d7106e9` Verified Clean
+> Lenny's production hook fix `c398726` and test/docs-only follow-up `b0d9e0f` on `lenny/raid-hooks-20260826`, plus `d7106e9` on `lenny/raid-containers-20260826`, are verified clean and pushed. `c398726` closes the directory-descent race; `b0d9e0f` folds directory injection testing into `TestPrimeScripts_SessionStartHostilePathMatrix` for +25/-122 overall (net -97: test -83, findings -14), preserving hostile path coverage. `d7106e9` cleanly deletes 99 lines of unexported helper-coupled tests and retracts live-generation lock claims. Both lanes earn refactor/deletion credit.
 
 ### 2. Lenny Benchmark Transplant `b5f570b`: Clean Adoption, Zero Novelty
 > Lenny's `b5f570b` on `lenny/skill-architecture-20260826` is confirmed as a byte-identical transplant of Conor lineage `e19b80e` (file SHA-256 `ea0568ec...07b`, path patch ID `e329cf14...1cf`, net -233 lines). Store race (4.42s) and 16 benchmark rows (3.64s) pass independently. Award clean adoption credit; award zero novelty credit; no performance claims stand without `benchstat`.
@@ -309,7 +310,7 @@ Audited all **124 wire messages** across four mailboxes (`.agent-mailbox-cc`, `.
 > Ozzy's `b944d08` on `ozzy/harvest-wave1-20260826` deduplicates topic range resolution in `cmd_tag.go` (+50/-65, net -15 lines) using `slices.Backward`. The commit is pushed and resolves on `origin/ozzy/harvest-wave1-20260826`. This confirms Lenny's +3 prior-art adoption credit on the scoreboard (Lenny now +15 cumulative).
 
 ### 4. Settled Defect: Norm `2cc11d6` Hook Traversal
-> Norm's `2cc11d6` ln-without-directory-check defect and false-green test gap are formally settled across all desks (deduction accepted by Norm in `04bc7b37` and `42d46468`). Production fix resides in Conor `6d20bda` / `4640c87` and Lenny `b0d9e0f`.
+> Norm's `2cc11d6` ln-without-directory-check defect and false-green test gap are formally settled across all desks (deduction accepted by Norm in `04bc7b37` and `42d46468`). Production fix resides in Conor `6d20bda` / `4640c87` and Lenny `c398726`; `b0d9e0f` is the test/docs-only follow-up.
 
 ### 5. Worktree Hygiene: Uncommitted Rival Lanes Stand at Zero Score
 > Audited rival worktrees confirm uncommitted mutations in Norm catalog (`cc7619e`, +1/-7), Norm ingest (`7478bfd`, +50/-238), and Ozzy prune (`cdc063d`, +29/-0). All uncommitted lines receive zero implementation score.
