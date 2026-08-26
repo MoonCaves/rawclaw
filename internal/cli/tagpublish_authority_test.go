@@ -78,3 +78,36 @@ func TestPublishSessionEmptyWithoutRevisionCannotClear(t *testing.T) {
 		t.Fatalf("segments = %#v, want current set preserved", got)
 	}
 }
+
+func TestPublishSessionOlderLocalVerdictCannotOverwrite(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "verdict-order"
+	if err := store.UpsertVerdict(con, store.Verdict{SessionID: sid, Verdict: store.VerdictRoutine, Source: store.VerdictSourceAgent, TaggedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishSession(context.Background(), con, sid, nil, store.Verdict{SessionID: sid, Verdict: store.VerdictRoutine, Source: store.VerdictSourceFloor, TaggedAt: 10}, true); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.VerdictFor(con, sid)
+	if err != nil || !ok {
+		t.Fatalf("verdict read: %v, %v", got, err)
+	}
+	if got.TaggedAt != 20 || got.Source != store.VerdictSourceAgent {
+		t.Fatalf("verdict = %#v, want newer local verdict", got)
+	}
+}
+
+func TestPublishSessionOlderNoVerdictCannotDelete(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "verdict-delete-order"
+	if err := store.UpsertVerdict(con, store.Verdict{SessionID: sid, Verdict: store.VerdictRoutine, Source: store.VerdictSourceAgent, TaggedAt: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishSession(context.Background(), con, sid, []store.TopicSegment{{SessionID: sid, StartUUID: "old", EndUUID: "old", Topic: "old", TaggedAt: 10}}, store.Verdict{}, false); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := store.VerdictFor(con, sid)
+	if err != nil || !ok {
+		t.Fatalf("newer verdict was deleted: %v, %v", ok, err)
+	}
+}
