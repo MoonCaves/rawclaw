@@ -462,6 +462,52 @@ func TestConsolidate_FoldsTheTopicLayer(t *testing.T) {
 	}
 }
 
+func TestConsolidate_DeletesTopicsRemovedFromSource(t *testing.T) {
+	isolateCache(t)
+	src := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`,
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:01:00Z","uuid":"u-b1","message":{"role":"user","content":"then verify the payment"}}`)
+	sid := firstSessionID(t, src)
+	con, err := store.ConnectRW(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	if err := store.ReplaceSessionSegments(con, sid, []store.TopicSegment{
+		{SessionID: sid, StartUUID: "u-a1", EndUUID: "u-b1", Topic: "A", Summary: "first"},
+		{SessionID: sid, StartUUID: "u-b1", Topic: "B", Summary: "second"},
+	}); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+
+	con, err = store.ConnectRW(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceSessionSegments(con, sid, []store.TopicSegment{
+		{SessionID: sid, StartUUID: "u-a1", EndUUID: "u-b1", Topic: "A", Summary: "first"},
+	}); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("second consolidate: %v", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment WHERE session_id=? AND start_uuid='u-b1'", sid); got != "0" {
+		t.Fatalf("removed topic B remains in consolidated store: %s rows", got)
+	}
+}
+
 func TestConsolidate_RebuildPreservesStoreOnlyTags(t *testing.T) {
 	isolateCache(t)
 	a := indexProject(t, "-w-ledger",
