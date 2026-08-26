@@ -178,7 +178,7 @@ func TestPrimeScripts_SessionStartHostilePathMatrix(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					scriptBytes := renderHookScript(tc.tmpl, "''")
+					scriptBytes := "trap 'wait' 0\n" + renderHookScript(tc.tmpl, "''")
 					if kind == "injected-directory" {
 						scriptBytes = strings.Replace(
 							scriptBytes,
