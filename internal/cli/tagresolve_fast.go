@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -16,6 +17,9 @@ func locateTagWriteFast(session8 string, scope []view.Scope) (dbp, fullSID strin
 	var hits int
 	for _, sc := range scope {
 		db := sc.DBP
+		if db == "" && sc.TDir != "" {
+			db = index.DBPath(sc.TDir)
+		}
 		if db == "" {
 			continue
 		}
