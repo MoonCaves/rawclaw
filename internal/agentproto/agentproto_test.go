@@ -1583,3 +1583,53 @@ func TestTopicsCollapsesRepeatedLabel(t *testing.T) {
 		t.Errorf("distinct label appeared %d times, want 1 (hits: %+v)", counts["distinct label"], res.Hits)
 	}
 }
+
+func TestLocateSession_ExactUniqueAmbiguousMatrix(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	proj := t.TempDir()
+	const fullA = "019f0001-aaaa-7000-8000-000000000001"
+	const fullB = "019f0001-bbbb-7000-8000-000000000002"
+	const fullC = "019f0099-cccc-7000-8000-000000000003"
+
+	writeSession(t, proj, fullA, "9f3e1c20-aaaa-bbbb-cccc-000000000001", "session A")
+	writeSession(t, proj, fullB, "9f3e1c20-aaaa-bbbb-cccc-000000000002", "session B")
+	writeSession(t, proj, fullC, "9f3e1c20-aaaa-bbbb-cccc-000000000003", "session C")
+
+	db, _, _, err := index.EnsureIndexed(proj, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+	if _, err := index.ConsolidateFrom([]string{db}, true); err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+
+	// 1. Exact full SID matches session A directly
+	if _, fullSID, _, err := locateSession(scope, nil, fullA); err != nil {
+		t.Fatalf("exact full SID failed: %v", err)
+	} else if fullSID != fullA {
+		t.Errorf("fullSID = %q, want %q", fullSID, fullA)
+	}
+
+	// 2. Unique prefix "019f0099" matches session C
+	if _, fullSID, _, err := locateSession(scope, nil, "019f0099"); err != nil {
+		t.Fatalf("unique prefix failed: %v", err)
+	} else if fullSID != fullC {
+		t.Errorf("fullSID = %q, want %q", fullSID, fullC)
+	}
+
+	// 3. Ambiguous prefix "019f0001" matches both fullA and fullB -> must return ErrAmbiguousSession
+	if _, _, _, err := locateSession(scope, nil, "019f0001"); err == nil {
+		t.Fatal("expected ambiguous prefix to return error")
+	} else {
+		var amb *ErrAmbiguousSession
+		if !errors.As(err, &amb) {
+			t.Fatalf("want *ErrAmbiguousSession, got %T: %v", err, err)
+		}
+		if len(amb.Candidates) != 2 {
+			t.Errorf("got %d candidates, want 2", len(amb.Candidates))
+		}
+	}
+}

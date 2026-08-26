@@ -782,3 +782,54 @@ func TestRunTagFloorCmd_WaitsForConsolidatedFence(t *testing.T) {
 		t.Fatal("runTagFloorCmd did not complete after the fence was released")
 	}
 }
+
+// TestTagWrite_MutationBetweenPrepAndWriteRefused verifies that if a session
+// is mutated or tagged by another writer between tag-prep and tag-write,
+// tag-write refuses to overwrite or append inconsistent segments.
+func TestTagWrite_MutationBetweenPrepAndWriteRefused(t *testing.T) {
+	con := newTagTestDB(t)
+	sid := "sess-cas-mutation-1"
+	addMsg(t, con, sid, "user", "alpha", "11111111-aaaa")
+	addMsg(t, con, sid, "user", "bravo", "22222222-bbbb")
+	addMsg(t, con, sid, "user", "charl", "33333333-cccc")
+	addMsg(t, con, sid, "user", "delta", "44444444-dddd")
+
+	// Writer A prepares on untagged window [0..3]
+	var prepDump strings.Builder
+	if err := runTagPrep(&prepDump, con, sid); err != nil {
+		t.Fatalf("prep failed: %v", err)
+	}
+
+	// Writer B races in and writes a segment covering the whole window
+	bJSON := `[{"start_uuid":"11111111","topic":"writer-b","summary":"intervening write"}]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(bJSON), 10.0, false); err != nil {
+		t.Fatalf("writer B tag-write: %v", err)
+	}
+
+	// Writer A attempts to submit its stale write for [0..3]
+	aJSON := `[{"start_uuid":"11111111","topic":"writer-a","summary":"stale write"}]`
+	if _, err := runTagWrite(con, sid, strings.NewReader(aJSON), 20.0, false); err == nil {
+		t.Fatal("expected tag-write to fail when window was tagged between prep and write")
+	} else if !strings.Contains(err.Error(), "already fully tagged") {
+		t.Errorf("expected 'already fully tagged' error, got: %v", err)
+	}
+
+	// Now grow the session with 2 more messages
+	addMsg(t, con, sid, "user", "echo", "55555555-eeee")
+	addMsg(t, con, sid, "user", "foxtrot", "66666666-ffff")
+
+	// A stale write targeting the earlier window [0..3] must be rejected as outside window
+	if _, err := runTagWrite(con, sid, strings.NewReader(aJSON), 30.0, false); err == nil {
+		t.Fatal("expected tag-write targeting previously-tagged window to be rejected")
+	} else if !strings.Contains(err.Error(), "outside window") {
+		t.Errorf("expected 'outside window' error, got: %v", err)
+	}
+
+	// Clean append covering the new untagged window [4..5] succeeds
+	validJSON := `[{"start_uuid":"55555555","topic":"valid-tail","summary":"appended tail"}]`
+	if n, err := runTagWrite(con, sid, strings.NewReader(validJSON), 40.0, false); err != nil {
+		t.Fatalf("valid tail write failed: %v", err)
+	} else if n != 1 {
+		t.Errorf("wrote %d segments, want 1", n)
+	}
+}
