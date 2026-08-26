@@ -723,6 +723,14 @@ func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing
 		}, nil
 	}
 	dbp := RefreshDBPath("claude", c.ID, c.Path)
+	stalePath := filepath.Join(store.CacheDir(), "refresh", "unrelated-stale.db")
+	if err := os.WriteFile(stalePath, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staleTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(stalePath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
 
 	n, err := PrepareFreshContainer(dbp, c, msgs, "claude")
 	if err != nil {
@@ -730,6 +738,9 @@ func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing
 	}
 	if n != 1 {
 		t.Errorf("PrepareFreshContainer n = %d, want 1", n)
+	}
+	if _, err := os.Stat(stalePath); err != nil {
+		t.Fatalf("PrepareFreshContainer pruned unrelated stale refresh db: %v", err)
 	}
 
 	// Refresh DB exists and has the message
