@@ -25,4 +25,4 @@ source-aware resolver instead of being reconstructed as Claude scopes.
 - `10572cf`/`fc1a075` show the smaller inline predicate shape in rival history;
   only the fenced `agentproto.go` hunk is applicable here.
 
-Expected production delta: `-5` lines, no test changes.
+Observed production delta: `-6` lines (`1` added, `7` deleted), no test changes.
