@@ -1,88 +1,27 @@
-# Catalog-claim mutation audit
+# Catalog-claim mutation audit — corrected candidate evidence
 
-Independent base: `0d1da19c4c21961b86cb3ca84ed047d941c83ed3`, branch
-`worker/furiosa-audit-mutation-20260827`. Graphify was the first codebase action:
-`renderHookScript` and `TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath`.
-Required skills, root `AGENTS.md`, `CONTRIBUTING.md`, and the requested Mnemon recall
-were read; recall was treated as hypothesis only. The graph is the main checkout
-snapshot and cannot see detached-branch edits.
+This correction supersedes the conclusion in `56bbb4a`; that commit remains transport evidence from base `0d1da19c4c21961b86cb3ca84ed047d941c83ed3` but did not exercise the assigned candidate-only test.
 
-The Claude and Codex POSIX-sh templates create a same-directory temporary entry,
-publish with `ln "$tmp_entry" "$catalog_dir"`, and recognize existing paths with
-`[ -e "$entry" ] || [ -L "$entry" ]`.
+Graphify was re-run first with literal catalog/claim/traversal queries. Its graph lacks the candidate symbol and commit nodes, so exact relationships were then confirmed from named objects. Fresh detached worktrees were created at `bd8346c5468435ba8636042c4846032e26460dba` and `37ec96bebb2a8317617544836ef9730149e1f0d4`; both contain `TestPrimeScripts_SessionStartCatalogClaimIsPathSafe`.
 
-## Baseline
+Candidate baselines passed: bd package `2.739s`, wall `5.498s`; raw 37 package `2.379s`, wall `4.536s`, using `CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run TestPrimeScripts_SessionStartCatalogClaimIsPathSafe`.
 
-```text
-time CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run 'TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath|TestClaudePrimeScript_CreatesSessionCatalogEntry|TestCodexPrimeScript_Creates'
-```
+The candidate test covers `sh`/`dash` x Claude/Codex x FIFO, directory, and `x/../../outside` traversal, with a 5-second context timeout. It does not cover regular files, symlinks, sockets, or bash.
 
-`PASS`; package test `5.362s`, wall `7.886s`.
+## Candidate mutants
 
-The hostile matrix is 3 shells (`/bin/sh`, `dash`, `bash`) × Claude/Codex × 9 states:
-new, regular, FIFO, directory, symlink, dangling symlink, symlink-directory,
-symlink-FIFO, and Unix socket. Existing cases have a 2-second context timeout; new
-cases have 15 seconds. It checks no special-path mutation/open, valid new JSON,
-no temporary-directory leak, and one detached ingest for a new claim. No FIFO probe
-is unbounded.
+### C1 — remove flat-ID validation: SURVIVED
 
-```text
-time env CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run 'TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest|TestPrimeScripts_SessionStartIngestsWhenCatalogUnavailable|TestPrimeScripts_StopLaunchDetachedPrewarm|TestPrimeScript_CatalogWriteFailure_NeverFailsHook'
-```
+In fresh bd worktree `bd8346c`, both `catalog_session_id` validation `case` blocks were removed. The bounded candidate command returned `ok`, `VALIDATION_MUTANT_EXIT=0`, package `2.417s`. The candidate test **SURVIVED**. Its fixture precreates `.tmp.x`, but implementation uses `.tmp.$$`; the unvalidated traversal temporary path fails to create/write and falls through to best-effort ingest without a root artifact. This is a test coverage hole, not proof validation is redundant.
 
-`PASS`; package test `3.739s`, wall `4.493s`. This covers concurrent deduplication,
-unavailable-parent fail-soft behavior, detached Stop prewarm, and exit-zero write
-failure.
+### C2 — remove dangling-symlink existence check: SURVIVED
 
-## Mutants
+In fresh bd worktree `bd8346c`, both `[ -e ] || [ -L ]` checks became `[ -e ]`. The bounded candidate command returned `ok`, `CANDIDATE_SYMLINK_MUTANT_EXIT=0`, package `2.116s`, wall `2.519s`. The candidate test **SURVIVED** because it has no symlink case.
 
-Both scratch variants were fresh detached worktrees at the exact base SHA above.
+## Comparison with base test
 
-### M1: unsafe opening redirection (FIFO)
+The base `TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath` passed its larger 3-shell x 2-template x 9-state matrix, including regular, symlink, dangling-symlink, symlink-directory, symlink-FIFO, and socket, in `7.886s` wall. Its FIFO-opening mutant timed out at 12s; omitting `[ -L ]` failed all six dangling-symlink combinations in `8.335s`. Thus base kills both, while the candidate test kills neither C1 nor C2.
 
-Scratch `/private/tmp/rawclaw-mut-fifo`, `HEAD=0d1da19c4c21961b86cb3ca84ed047d941c83ed3`.
-Both `ln` claims were replaced with `(set -C; : > "$entry" 2>/dev/null)`, restoring
-open-before-check behavior. Scratch diff: 2 insertions/2 deletions, net 0 lines.
+## Corrected verdict
 
-```text
-timeout 12s env CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath
-```
-
-`MUTATION_EXIT=124`, wall about `12.6s`, with no completion. **KILLED**: opening the
-existing FIFO blocks. The timeout protected the probe.
-
-### M2: omit dangling-symlink check
-
-Scratch `/private/tmp/rawclaw-mut-symlink`, `HEAD=0d1da19c4c21961b86cb3ca84ed047d941c83ed3`.
-Both `[ -e ] || [ -L ]` checks became `[ -e ]`; scratch diff: 2 insertions/2 deletions,
-net 0 lines.
-
-```text
-timeout 30s env CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath
-```
-
-**KILLED** in `8.335s` wall: all six Claude/Codex × `/bin/sh`, `dash`, `bash`
-dangling-symlink cases launched `ingest fifo-claim-test`, but expected zero.
-
-## Traversal / invalid ID
-
-The supported-hook matrix uses scalar tool-generated IDs; it does not claim arbitrary
-manual IDs safe. In fresh detached `/private/tmp/rawclaw-mut-traversal` at the same SHA,
-the fixed test ID became `../escape/invalid-session`. With `TMPDIR=/private/tmp/mut-tmp`
-and its `escape` parent pre-created:
-
-```text
-TMPDIR=/private/tmp/mut-tmp timeout 30s env CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath
-```
-
-`TRAVERSAL_EXIT=1`, wall `1.302s`; it created
-`/private/tmp/mut-tmp/escape/invalid-session` outside each random catalog directory,
-then failed in-catalog assertions. This is advisory evidence that slash-bearing manual
-IDs can escape the catalog namespace, not a supported Claude/Codex payload regression.
-
-## Verdict
-
-Supported Claude/Codex claims are mutation-backed for non-opening/non-blocking
-special-path handling and dangling-symlink deduplication. Concurrency, fail-soft,
-detached Stop, and timeout protections passed. Arbitrary invalid/traversal IDs remain
-an explicit boundary/advisory.
+The bd/37 candidate payload contains flat-ID validation and same-directory hard-link claiming, and its supported traversal fixture passes. However, its candidate test has semantic coverage gaps: removing flat-ID validation and removing dangling-symlink recognition both survive. Retain the original base-matrix evidence, but do not credit the candidate test as mutation-backed for those properties.
