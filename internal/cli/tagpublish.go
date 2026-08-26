@@ -41,7 +41,7 @@ func newTagPublishCmd() *cobra.Command {
 }
 
 func spawnTagPublishChild(dbp string) error {
-	if dbp == "" || dbp == index.ConsolidatedPath() {
+	if dbp == "" || filepath.Clean(dbp) == filepath.Clean(index.ConsolidatedPath()) {
 		return nil
 	}
 	exe, err := selfExe()
@@ -66,9 +66,12 @@ func spawnTagPublishChild(dbp string) error {
 }
 
 func runTagPublishChild(ctx context.Context, w io.Writer, dbp string) error {
-	if dbp == "" || dbp == index.ConsolidatedPath() {
+	if dbp == "" || filepath.Clean(dbp) == filepath.Clean(index.ConsolidatedPath()) {
 		tagPublishLogLine(w, "tag-publish: skipped invalid/self source %q", dbp)
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := index.SyncConsolidatedFrom(dbp); err != nil {
 		tagPublishLogLine(w, "tag-publish: %s: %v", dbp, err)

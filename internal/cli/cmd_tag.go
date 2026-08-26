@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -516,7 +517,7 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 	} else {
 		fmt.Fprintf(w, "wrote %d topic segments for %s\n", n, lastSlice8(fullSID))
 	}
-	if dbp != index.ConsolidatedPath() {
+	if filepath.Clean(dbp) != filepath.Clean(index.ConsolidatedPath()) {
 		if err := spawnTagPublish(dbp); err != nil {
 			fmt.Fprintf(w, "tag-write: publication deferred (authoritative write succeeded): %v\n", err)
 		} else {
