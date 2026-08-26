@@ -76,10 +76,27 @@ All proposed rival changes touching the container lifecycle and indexing paths h
 
 ---
 
+### C8 — Rebuild Publication Under Universal Fence (`ee89c6b` / `de423f3`)
+- **Exact Rival SHA**: `ee89c6b` (upstream `rqlite/rqlite` `de423f3adf08f6929325d12767035c7962cda64f`)
+- **File / Lines**: `internal/index/consolidated.go:402-450`, `internal/index/consolidated_test.go:2190-2224`
+- **Evidence**: `ConsolidateFrom` with `rebuild == true` acquires exclusive `AcquireConsolidatedFence` before any store access and holds it through complete rebuild, sidecar cleanup, and atomic swap. On injected rebuild failure, live store and sidecars remain completely untouched and `.rebuild` temporary files are removed.
+- **Verification**: Covered by `TestConsolidate_RebuildFailureLeavesLiveStoreUntouched` and `TestConsolidate_RebuildPreservesStoreOnlyTags`.
+- **RULING**: `CLEAN` (architecture conforms to rqlite snapshot/fence model).
+
+---
+
+### C9 — Refresh DB/WAL/SHM Generation Unit Cleanup (`ee89c6b` / `63225f1` / `765c44d`)
+- **Exact Rival SHA**: `ee89c6b` (upstream `benbjohnson/litestream` `63225f17ccbb8dedfb26d03f7d3d07e74c6cf69f`)
+- **File / Lines**: `internal/index/containers.go:50-84`
+- **Evidence**: `pruneStaleRefreshDBs` now groups all `.db`, `-wal`, and `-shm` sidecars by unique database base and unlinks the entire generation group together only when all files in the generation exceed `refreshStaleAfter`. If any sidecar is fresh, the entire generation is preserved.
+- **Verification**: Covered by `TestEnsureFreshContainer_PruneStaleLeftovers` (mixed-age and stale group cases).
+- **RULING**: `ADAPT_TO_CURRENT` (applied in `internal/index/containers.go`).
+
+---
+
 ## Verification Plan
 
 1. Ensure tests in `internal/index` pass cleanly with race detection:
    `CGO_ENABLED=0 go test -race -count=1 ./internal/index/...`
 2. Ensure formatting:
    `gofmt -l internal/index/`
-

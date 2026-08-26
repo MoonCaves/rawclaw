@@ -54,30 +54,33 @@ func pruneStaleRefreshDBs() {
 		return
 	}
 	mtimes := make(map[string]time.Time, len(entries))
+	bases := make(map[string]struct{})
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
+		name := entry.Name()
 		if info, err := entry.Info(); err == nil {
-			mtimes[entry.Name()] = info.ModTime()
+			mtimes[name] = info.ModTime()
+		}
+		base := strings.TrimSuffix(strings.TrimSuffix(name, "-wal"), "-shm")
+		if strings.HasSuffix(base, ".db") {
+			bases[base] = struct{}{}
 		}
 	}
 	now := time.Now()
-	// A db and its WAL/SHM sidecars age as one group: a fresh -wal means the
-	// database is still live even when the .db file itself has an old mtime.
-	for name, mt := range mtimes {
-		base := strings.TrimSuffix(strings.TrimSuffix(name, "-wal"), "-shm")
-		if !strings.HasSuffix(base, ".db") {
-			continue
-		}
-		newest := mt
+	// A db and its WAL/SHM sidecars age and delete as one generation unit.
+	for base := range bases {
+		newest := time.Time{}
 		for _, sib := range []string{base, base + "-wal", base + "-shm"} {
 			if t, ok := mtimes[sib]; ok && t.After(newest) {
 				newest = t
 			}
 		}
-		if now.Sub(newest) > refreshStaleAfter {
-			_ = os.Remove(filepath.Join(dir, name))
+		if !newest.IsZero() && now.Sub(newest) > refreshStaleAfter {
+			for _, sib := range []string{base, base + "-wal", base + "-shm"} {
+				_ = os.Remove(filepath.Join(dir, sib))
+			}
 		}
 	}
 }

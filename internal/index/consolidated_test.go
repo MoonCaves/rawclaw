@@ -2186,3 +2186,37 @@ func TestConsolidate_CurrentIdentityFormWinsMetadataTie(t *testing.T) {
 		t.Errorf("merged cwd = %q, want /w/current", got)
 	}
 }
+
+func TestConsolidate_RebuildFailureLeavesLiveStoreUntouched(t *testing.T) {
+	isolateCache(t)
+	a := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+	if _, err := ConsolidateFrom([]string{a}, false); err != nil {
+		t.Fatalf("initial consolidate: %v", err)
+	}
+	sid := firstSessionID(t, a)
+	con := openConsolidated(t)
+	if count := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id=?", sid); count != "1" {
+		t.Fatalf("initial session count = %s, want 1", count)
+	}
+	con.Close()
+
+	// Attempt a rebuild pass with a non-existent / invalid source path
+	badSrc := filepath.Join(t.TempDir(), "nonexistent.db")
+	if _, err := ConsolidateFrom([]string{badSrc}, true); err == nil {
+		t.Fatal("rebuild with bad source path succeeded, want error")
+	}
+
+	// Assert live store is completely intact
+	con = openConsolidated(t)
+	defer con.Close()
+	if count := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id=?", sid); count != "1" {
+		t.Errorf("session count after failed rebuild = %s, want 1 (live store preserved)", count)
+	}
+
+	// Assert no temporary .rebuild files remain
+	rebuildFile := ConsolidatedPath() + ".rebuild"
+	if _, err := os.Stat(rebuildFile); !os.IsNotExist(err) {
+		t.Errorf("temporary rebuild file %s still exists after failure", rebuildFile)
+	}
+}
