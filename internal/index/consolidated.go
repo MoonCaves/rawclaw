@@ -855,13 +855,41 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 						SELECT 1 FROM main.session_sources other
 						WHERE other.session_id = ss.session_id AND other.source_db <> ss.source_db
 					)
+				UNION
+				SELECT a.session_id
+				FROM temp.consolidation_affected_sessions a
+				WHERE NOT EXISTS (
+					SELECT 1 FROM main.session_sources other
+					WHERE other.session_id = a.session_id
+				)
 				)
 				AND NOT EXISTS (
 					SELECT 1 FROM src.topic_segment incoming
 					WHERE incoming.session_id = main.topic_segment.session_id
 					  AND incoming.start_uuid = main.topic_segment.start_uuid
+					  AND incoming.session_id IN (SELECT id FROM src.sessions)
 				)`, srcID); err != nil {
 			return 0, false, true, fmt.Errorf("prune stale source topics: %w", err)
+		}
+	}
+	if hasVerdicts {
+		if _, err := tx.Exec(`
+			DELETE FROM main.session_verdict
+			WHERE session_id IN (
+				SELECT a.session_id
+				FROM temp.consolidation_affected_sessions a
+				WHERE NOT EXISTS (
+					SELECT 1 FROM main.session_sources other
+					WHERE other.session_id = a.session_id
+				)
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM src.session_verdict incoming
+				WHERE incoming.session_id = main.session_verdict.session_id
+				  AND incoming.session_id IN (SELECT id FROM src.sessions)
+			)
+		`); err != nil {
+			return 0, false, true, fmt.Errorf("prune stale source verdicts: %w", err)
 		}
 	}
 	if _, err := tx.Exec(mergeSessionsSQL); err != nil {
@@ -874,10 +902,30 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 		if _, err := tx.Exec(mergeTopicsSQLFor(srcOrigin)); err != nil {
 			return 0, false, true, fmt.Errorf("merge topics: %w", err)
 		}
+		if _, err := tx.Exec(`
+			DELETE FROM main.topic_segment
+			WHERE session_id IN (SELECT session_id FROM temp.consolidation_affected_sessions)
+			  AND NOT EXISTS (
+				SELECT 1 FROM main.session_sources other
+				WHERE other.session_id = main.topic_segment.session_id
+			  )
+		`); err != nil {
+			return 0, false, true, fmt.Errorf("prune deleted session topics: %w", err)
+		}
 	}
 	if hasVerdicts {
 		if _, err := tx.Exec(mergeVerdictsSQL); err != nil {
 			return 0, false, true, fmt.Errorf("merge verdicts: %w", err)
+		}
+		if _, err := tx.Exec(`
+			DELETE FROM main.session_verdict
+			WHERE session_id IN (SELECT session_id FROM temp.consolidation_affected_sessions)
+			  AND NOT EXISTS (
+				SELECT 1 FROM main.session_sources other
+				WHERE other.session_id = main.session_verdict.session_id
+			  )
+		`); err != nil {
+			return 0, false, true, fmt.Errorf("prune deleted session verdicts: %w", err)
 		}
 	}
 	if _, err := tx.Exec(`
