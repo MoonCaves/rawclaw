@@ -1849,15 +1849,6 @@ func TestConsolidate_RetryAfterAbruptPostMergeExit(t *testing.T) {
 		t.Fatalf("fault child ran DETACH after forced exit:\n%s", childOutput)
 	}
 	t.Logf("fault child output:\n%s", childOutput)
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		path := ConsolidatedPath() + suffix
-		info, statErr := os.Stat(path)
-		if statErr != nil {
-			t.Logf("post-exit artifact %s: absent (%v)", filepath.Base(path), statErr)
-			continue
-		}
-		t.Logf("post-exit artifact %s: present size=%d", filepath.Base(path), info.Size())
-	}
 	lockPath := filepath.Join(store.CacheDir(), "consolidated.lock")
 	if _, err := os.Stat(lockPath); err != nil {
 		t.Fatalf("post-exit consolidated lock artifact missing: %v", err)
