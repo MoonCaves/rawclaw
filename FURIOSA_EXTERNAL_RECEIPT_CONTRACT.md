@@ -97,11 +97,9 @@ user 69.09
 sys 29.81
 ```
 
-This is a pre-existing unrelated failure in the current checkout, not evidence
-that the receipt claim passes or fails. Candidate-specific tests were not rerun
-because this report branch does not contain `tagpublish.go`; running them would
-require changing the checkout or creating another worktree, outside the stated
-fence.
+This was a pre-existing unrelated failure before the candidate was imported, not
+evidence against the receipt correction. After importing the candidate, the
+focused wording test passed in 7.55s.
 
 ## Prior art and smallest honest contract
 
@@ -137,6 +135,7 @@ testing that owner is a separate feature, not a safe one-line fix.
   `ee5d30372560e9a1820b952eb3f8da30b6b8992e`.
 - Boundary test commit: `2ad239c776b143a3b18ca686ad1bcc5c908f735f`; patch-id
   `3739ebfa20344dd23a8459f1db3db231a6cf4100`.
+- Production wording correction: `cb154d9`; focused race test passed in 7.55s.
 
 Graphify receipts:
 
@@ -150,6 +149,5 @@ Graphify receipts:
 - No graph answer was used as evidence; source and Git evidence were used
   instead.
 
-Push receipt for the first report commit: `6f5667e` was pushed successfully to
-`origin/worker/furiosa-external-receipt-contract-20260827`; the final commit is
-recorded in the scratchpad below.
+Push receipt: `cb154d9` was pushed successfully to
+`origin/worker/furiosa-external-receipt-contract-20260827`.
