@@ -1,25 +1,26 @@
 # NORM PHASE CONTRACT TAKEOVER — FINDINGS & RULINGS
 
-**Lane**: NORM PHASE CONTRACT TAKEOVER (`lenny/raid-phase-20260826`)  
-**Base Commit**: `479d14c`  
-**File Fence**: `internal/index/consolidated.go`, `internal/index/consolidated_test.go`  
+**Lane**: NORM PHASE CONTRACT TAKEOVER (`lenny/raid-phase-20260826`)
+**Base Commit**: `479d14c` (`origin/integrate/tagwrite-closeout-wave1`)
+**Rival Target**: `/Users/jay-m4/code/rawclaw-norm-phase`, branch `norm/phase-contract`, reported final `33c7421`
+**File Fence**: `FINDINGS.md`; `internal/index/consolidated.go`; `internal/index/consolidated_test.go`; `internal/index/consolidated_fence.go`; `internal/index/consolidated_fence_test.go`
 
 ---
 
 ## Finding 1 — Duplicated Phase Lifecycle Closures Across Consolidation Entry Points
 
-- **Rival SHAs**: `6e7d29a` (`norm/phase-contract-fix`), `7e86623` (`norm/phase-adversarial-review`), `fc7cfde` (`luna/phase-timing-20260826`)
+- **Rival SHAs**: `33c7421` / `6e7d29a` (`norm/phase-contract`), `7e86623` (`norm/phase-adversarial-review`), `fc7cfde` (`luna/phase-timing-20260826`)
 - **File & Line**: `internal/index/consolidated.go:470-488`, `580-598`, `665-671`, `691-699`, `781-795`
 - **Reproducible Evidence**:
   `ConsolidateFrom`, `SyncConsolidatedFrom`, and `consolidateOne` each define identical local closures `phase := func(name string) func()` capturing `started := time.Now()` and emitting `"consolidate fold phase"` start and duration log records. Additionally, the `connection-close` defer blocks in `ConsolidateFrom` and `SyncConsolidatedFrom` and the `detach` defer block in `consolidateOne` duplicate raw `started := time.Now(); slog.Info(...)` blocks by hand.
 - **RULING**: `ADAPT_TO_CURRENT`
-- **Action**: Extract a single package-private helper `beginConsolidatePhase(src, name string) func()` in `internal/index/consolidated.go` that emits identical log messages, phase names, `event=start`, and elapsed `duration` values. Route `connection-close` and `detach` defers through this helper. Net reduction: -25 source lines without behavioral or logging drift.
+- **Action**: Extract a single package-private helper `beginConsolidatePhase(src, name string) func()` in `internal/index/consolidated.go` that captures `started := time.Now()` before start emission and emits identical log messages, phase names, `event=start`, and elapsed `duration` values. Route `connection-close` and `detach` defers through this helper. Net reduction: -10 lines in production code without behavioral or logging drift.
 
 ---
 
 ## Finding 2 — Consolidation Phase Starts and Durations Contract Test
 
-- **Rival SHAs**: `2ee9950` (`HEAD`), `6e7d29a` (`norm/phase-contract-fix`)
+- **Rival SHAs**: `2ee9950` (`HEAD`), `6e7d29a` (`norm/phase-contract-fix`), `33c7421` (`norm/phase-contract`)
 - **File & Line**: `internal/index/consolidated_test.go:19-82`
 - **Reproducible Evidence**:
   `TestConsolidate_LogsPhaseStartsAndDurations` (pinned in `2ee9950`) exercises all 11 consolidation phases (`schema-migrate`, `source-migrate`, `attach`, `prepare`, `merge`, `detach`, `tombstone-prune`, `watermark-stamp`, `connection-close`, `acquire`, `release`) against a custom `slog.Handler` recorder, asserting that every phase produces both a start event and a typed `time.Duration`.

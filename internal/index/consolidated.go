@@ -456,19 +456,11 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 		return st, fmt.Errorf("open consolidated store: %w", err)
 	}
 	defer func() {
-		started := time.Now()
-		slog.Info("consolidate fold phase", "phase", "connection-close", "event", "start")
+		done := beginConsolidatePhase("", "connection-close")
 		_ = con.Close()
-		slog.Info("consolidate fold phase", "phase", "connection-close", "duration", time.Since(started))
+		done()
 	}()
-	phase := func(name string) func() {
-		started := time.Now()
-		slog.Info("consolidate fold phase", "phase", name, "event", "start")
-		return func() {
-			slog.Info("consolidate fold phase", "phase", name, "duration", time.Since(started))
-		}
-	}
-	done := phase("schema-migrate")
+	done := beginConsolidatePhase("", "schema-migrate")
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		done()
 		return st, fmt.Errorf("ensure consolidated schema: %w", err)
@@ -536,7 +528,7 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 			return st, fmt.Errorf("recount messages: %w", err)
 		}
 	}
-	done = phase("tombstone-prune")
+	done = beginConsolidatePhase("", "tombstone-prune")
 	if err := pruneTombstoned(con); err != nil {
 		done()
 		return st, err
@@ -548,7 +540,7 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	if err := con.QueryRow("SELECT COUNT(*) FROM messages").Scan(&st.Messages); err != nil {
 		return st, fmt.Errorf("count messages: %w", err)
 	}
-	done = phase("watermark-stamp")
+	done = beginConsolidatePhase("", "watermark-stamp")
 	if err := StampIngestWatermark(con); err != nil {
 		slog.Debug("stamp ingest watermark failed", "err", err)
 	}
@@ -574,19 +566,11 @@ func SyncConsolidatedFrom(srcPath string) error {
 		return fmt.Errorf("open consolidated store: %w", err)
 	}
 	defer func() {
-		started := time.Now()
-		slog.Info("consolidate fold phase", "source", filepath.Base(srcPath), "phase", "connection-close", "event", "start")
+		done := beginConsolidatePhase(srcPath, "connection-close")
 		_ = con.Close()
-		slog.Info("consolidate fold phase", "source", filepath.Base(srcPath), "phase", "connection-close", "duration", time.Since(started))
+		done()
 	}()
-	phase := func(name string) func() {
-		started := time.Now()
-		slog.Info("consolidate fold phase", "source", filepath.Base(srcPath), "phase", name, "event", "start")
-		return func() {
-			slog.Info("consolidate fold phase", "source", filepath.Base(srcPath), "phase", name, "duration", time.Since(started))
-		}
-	}
-	done := phase("schema-migrate")
+	done := beginConsolidatePhase(srcPath, "schema-migrate")
 	if err := EnsureSchema(con, sourceClaude); err != nil {
 		done()
 		return fmt.Errorf("ensure consolidated schema: %w", err)
@@ -612,13 +596,13 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if skipped || !changed {
 		return nil
 	}
-	done = phase("tombstone-prune")
+	done = beginConsolidatePhase(srcPath, "tombstone-prune")
 	if err := pruneTombstoned(con); err != nil {
 		done()
 		return err
 	}
 	done()
-	done = phase("watermark-stamp")
+	done = beginConsolidatePhase(srcPath, "watermark-stamp")
 	if err := StampIngestWatermark(con); err != nil {
 		slog.Debug("stamp ingest watermark failed", "err", err)
 	}
@@ -652,6 +636,20 @@ func writeThroughConsolidated(dbp string, indexErr error) {
 	fireVectorTopup(ConsolidatedPath())
 }
 
+func beginConsolidatePhase(src, name string) func() {
+	started := time.Now()
+	if src != "" {
+		slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "event", "start")
+		return func() {
+			slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "duration", time.Since(started))
+		}
+	}
+	slog.Info("consolidate fold phase", "phase", name, "event", "start")
+	return func() {
+		slog.Info("consolidate fold phase", "phase", name, "duration", time.Since(started))
+	}
+}
+
 // consolidateOne attaches src, merges its sessions and messages, and detaches.
 // It is atomic per source: if a merge fails, the detach still runs and the one
 // store's transaction rolls back. It does not modify src — the one store is a
@@ -662,13 +660,6 @@ func writeThroughConsolidated(dbp string, indexErr error) {
 // write it makes to a source is the additive column migration below, on its own
 // connection, before the read-only attach.
 func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
-	phase := func(name string) func() {
-		started := time.Now()
-		slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "event", "start")
-		return func() {
-			slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "duration", time.Since(started))
-		}
-	}
 	if _, err := os.Stat(src); err != nil {
 		return 0, false, true, fmt.Errorf("source unreadable: %w", err)
 	}
@@ -677,22 +668,21 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	// source is usable — but without this step a corpus indexed before the scope
 	// migration has no project/cwd columns anywhere and the whole pass skips
 	// every source while reporting success.
-	done := phase("source-migrate")
+	done := beginConsolidatePhase(src, "source-migrate")
 	if mErr := migrateSourceScope(src); mErr != nil {
 		slog.Debug("consolidate: source not migrated", "db", filepath.Base(src), "err", mErr)
 	}
 	done()
-	done = phase("attach")
+	done = beginConsolidatePhase(src, "attach")
 	if _, err := con.Exec("ATTACH DATABASE ? AS src", "file:"+src+"?mode=ro"); err != nil {
 		done()
 		return 0, false, true, fmt.Errorf("attach: %w", err)
 	}
 	done()
 	defer func() {
-		started := time.Now()
-		slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", "detach", "event", "start")
+		done := beginConsolidatePhase(src, "detach")
 		_, dErr := con.Exec("DETACH DATABASE src")
-		slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", "detach", "duration", time.Since(started))
+		done()
 		if dErr != nil && err == nil {
 			err = fmt.Errorf("detach: %w", dErr)
 		}
@@ -778,20 +768,20 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	}
 
 	srcID := sourceIdentity(src)
-	done = phase("prepare")
+	done = beginConsolidatePhase(src, "prepare")
 	if err := migrateSessionSources(con); err != nil {
 		done()
 		return 0, false, true, fmt.Errorf("migrate session sources: %w", err)
 	}
 	done()
 
-	done = phase("merge")
-	defer func() {
+	done = beginConsolidatePhase(src, "merge")
+	defer func(done func()) {
 		done()
 		if consolidateAfterMergeHook != nil {
 			consolidateAfterMergeHook()
 		}
-	}()
+	}(done)
 	tx, err := con.Begin()
 	if err != nil {
 		return 0, false, true, fmt.Errorf("begin fold: %w", err)
