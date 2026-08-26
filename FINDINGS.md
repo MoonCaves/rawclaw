@@ -1,105 +1,50 @@
-# Architectural Review & Deletion Test Findings
+# Architectural Review & Scorecard Verdict
 
-**Session Tag:** `20260826-architecture-scorecard`  
+**Session Tag:** `20260826-architecture-scorecard-final`  
 **Target Commits:** `6e7d29a`, `33c7421`, `7e86623`, `f8fd1fe`  
-**Methodology:** `ponytail`, `modular-refactor` (with `right-sizing`), `codebase-design`, `golang-safety`, `golang-testing`, `golang-design-patterns`, `golang-code-style`, `golang-lint`, `golang-structs-interfaces`, `golang-modernize`.  
 **Governing Invariant:** `AGENTS.md` (pure Go static binary, zero runtime dependencies, sovereign core with adapters on seams, `CGO_ENABLED=0`, no silent failure).
 
 ---
 
-## Executive Summary
+## Final Architecture Verdict
 
-This evaluation applied **right-sizing** and the **deletion test** against four recent commits in the RawClaw commit lineage:
-1. `6e7d29a` (fix: consolidate phase timing)
-2. `33c7421` (refactor: consolidate fold phase timing + logging tests)
-3. `7e86623` (adversarial review scratch artifact `PHASE_ADVERSARIAL_REVIEW.md`)
-4. `f8fd1fe` (fix: deduplicate SessionStart ingest and hook wiring helpers)
-
-Across these targets, the review identified **five actionable deletion and right-sizing findings** totaling a potential reduction of **-205 lines** without regressing race-safety, phase contracts, or hook idempotency.
+1. **Phase Helper Verdict:** The current `beginConsolidatePhase` helper in `internal/index/consolidated.go` **earns its locality** by centralizing fold phase logging, start/duration pairing, source basename tagging, and defer handling across 9 fold phases. It is **net -10 lines** compared to repeating phase closures in `ConsolidateFrom`, `SyncConsolidatedFrom`, and `consolidateOne`. It **must remain a plain concrete function** — no hypothetical interface or seam.
+2. **`33c7421` Loses (Rejected):** Introduced `started := time.Now()` after the start event log (measuring latency after emission) and added a 94-line duplicate test (`TestConsolidate_PhaseLogsHaveStartsAndDurations`) that mutates global `slog.SetDefault` (race hazard under `go test -race`).
+3. **`6e7d29a` Wins (Approved):** Fixes the duration-capture ordering by recording `started := time.Now()` before emitting `event=start`. Preserves fold phase contracts, source basenames, `DETACH` timing, and error completions with **net -8 lines**.
+4. **`7e86623` (`PHASE_ADVERSARIAL_REVIEW.md`):** Deleted from repository root (scratch review artifact).
+5. **`f8fd1fe` (`setup.go`):** Higher-order closure wrappers (`installRawclawHookWith` / `ejectRawclawHookWith`) are flagged as premature `yagni:` abstraction; concrete target helpers preferred.
 
 ---
 
-## Actionable Findings
+## Actionable Findings Summary
 
-### Finding 1: Duplicate Phase Contract Test with Global Logger Race Hazard
-- **SHA:** `33c742137376ee3bf7ff38497167f19476ec1195` (partially addressed in `6e7d29a`)
-- **File & Line:** `internal/index/consolidated_test.go:19-112`
-- **Tag:** `delete:`
-- **What to cut:** `phaseLogRecorder` and `TestConsolidate_PhaseLogsHaveStartsAndDurations` (94 lines). The test mutates global state (`slog.SetDefault`), introducing concurrency race hazards under `go test -race`, calls the private `beginConsolidatePhase` helper directly (reaching past the `ConsolidateFrom` interface), and duplicates the 9-phase fold contract already pinned race-free in integration commit `2ee9950`.
-- **Replacement:** Delete the redundant test and custom handler; rely on existing integration fold logging tests.
-- **Behavior Risk:** Zero. Fold phase logging contracts remain pinned by `TestConsolidate_LogsPhaseStartsAndDurations` in `consolidated_test.go` without race hazards.
-- **Net Lines Possible:** `-94 lines`
+| Target SHA | File & Line | Tag | Finding & Replacement | Behavior Risk | Net Lines |
+|---|---|:---:|---|:---:|:---:|
+| `33c7421` | `internal/index/consolidated_test.go:19-112` | `delete:` | Delete `phaseLogRecorder` and redundant test with `slog.SetDefault` race hazard. Rely on existing `2ee9950` phase contract test. | Zero | -94 lines |
+| `7e86623` | `PHASE_ADVERSARIAL_REVIEW.md:1-36` | `delete:` | Delete root-level review scratchpad. | Zero | -36 lines |
+| `6e7d29a` | `internal/index/consolidated.go:20-33` | `shrink:` | `beginConsolidatePhase` earns locality as plain function; net -8 lines. | Zero | -8 lines |
+| `f8fd1fe` | `internal/cli/setup.go:773-832` | `yagni:` | Remove higher-order callback abstraction in hook install/eject; use direct target functions. | Low | -22 lines |
+| `f8fd1fe` | `internal/cli/cmd_ingest_test.go:133-205` | `shrink:` | Replace 73-line shell execution with 5s sleep polling by direct catalog lock verification. | Low | -45 lines |
 
----
-
-### Finding 2: Ephemeral Adversarial Review File Committed to Repository Root
-- **SHA:** `7e86623b80e5b68b973d77614db66568748e55e8`
-- **File & Line:** `PHASE_ADVERSARIAL_REVIEW.md:1-36`
-- **Tag:** `delete:`
-- **What to cut:** Root-level markdown review log (`PHASE_ADVERSARIAL_REVIEW.md`).
-- **Replacement:** None (delete from root; preserve review outcomes in commit messages or `docs/notes/` if archival is required).
-- **Behavior Risk:** Zero. Non-code documentation artifact.
-- **Net Lines Possible:** `-36 lines`
+**Total Potential Reduction:** `-205 lines`
 
 ---
 
-### Finding 3: Dynamic Closure Factory on Internal Phase Transitions
-- **SHA:** `6e7d29a494f47648df2b2ffd974c61c2a6cb0525`
-- **File & Line:** `internal/index/consolidated.go:20-33`
-- **Tag:** `shrink:`
-- **What to cut:** `beginConsolidatePhase(source, name string) func()` closure factory that allocates closures and dynamic attribute slices across 9 fold phases.
-- **Replacement:** Use a direct timing helper `logPhaseStart(source, name)` and `logPhaseEnd(source, name, start time.Time)` with stack allocation, eliminating closure capture overhead in deferred paths like `consolidateOne:merge`.
-- **Behavior Risk:** Low. Must preserve `time.Now()` timestamp capture before the start log and exact slog attributes (`phase`, `event`, `source`, `duration`).
-- **Net Lines Possible:** `-8 lines`
+## Six-Skill Report Card (Grades A–F)
 
----
-
-### Finding 4: Higher-Order Closure Parameterization for Static Hook Configs
-- **SHA:** `f8fd1feb063f6b6ae4ecf0224b427e07eca72e91`
-- **File & Line:** `internal/cli/setup.go:773-832`
-- **Tag:** `yagni:`
-- **What to cut:** Artificial higher-order abstraction `ejectRawclawHookWith` / `installRawclawHookWith` taking `hasHooks func(map[string]any) bool` and `removeHooks func(map[string]any)` to unify Claude/Codex (`data["hooks"]`) with Antigravity (`data["rawclaw"]`).
-- **Replacement:** Inline direct checks or dispatch on the target type without passing higher-order anonymous closures through intermediate helpers.
-- **Behavior Risk:** Low. Hook formats for Claude, Codex, and Antigravity are statically defined and unchanging.
-- **Net Lines Possible:** `-22 lines`
-
----
-
-### Finding 5: End-to-End Shell Execution with 5-Second Polling Loop in Unit Tests
-- **SHA:** `f8fd1feb063f6b6ae4ecf0224b427e07eca72e91`
-- **File & Line:** `internal/cli/cmd_ingest_test.go:133-205`
-- **Tag:** `shrink:`
-- **What to cut:** 73 lines executing real child `/bin/sh` processes with file-backed logs, sleeping up to 5s with 10ms polling to prove session-start deduplication.
-- **Replacement:** Test catalog lock deduplication directly via the catalog locking interface or a fast in-process hook runner without spawning child shell processes and sleep loops.
-- **Behavior Risk:** Low. Directly asserts deduplication lock semantics while eliminating CI flakiness and sleep delays.
-- **Net Lines Possible:** `-45 lines`
-
-```
-Total Potential Net Reduction: -205 lines
-```
-
----
-
-## Skill Report Card (Grades A–F)
-
-| Skill | Grade | Actionable Deletion Signal | Correctness Awareness | Noise Level | Evaluation & Rationale |
+| Skill | Grade | Actionable Deletion Signal | Correctness Awareness | Noise Level | Verdict & Evaluation |
 |---|:---:|---|---|---|---|
-| **`ponytail` / `ponytail-review` / `ponytail-audit`** | **A** | High (`net: -N lines`, ladder priority) | High (root-cause vs symptom) | Minimal | **Top Performer.** Directly identified the 94-line duplicate test, root-level markdown litter, and unnecessary shell test scaffolding. |
-| **`modular-refactor` / `right-sizing`** | **A** | High (enforces 2-port ceiling, deletes pass-throughs) | High (green guard at every commit) | Low | **Top Performer.** Caught the artificial higher-order hook helpers in `setup.go` and flagged tests reaching past the module's real interface. |
-| **`codebase-design`** | **A-** | High (deletion test, shallow module penalty) | High (interface is test surface) | Low | Accurately classified `beginConsolidatePhase` and `ejectRawclawHookWith` as shallow pass-throughs. |
-| **`golang-safety`** | **A-** | Medium | High (nil interface, race hazards, defer ordering) | Low | Flagged the global `slog.SetDefault` race hazard and closure evaluation timing in deferred execution. |
-| **`golang-testing`** | **B+** | Medium (flags implementation testing) | High (`goleak`, `t.Parallel()`, -race) | Medium | Correctly caught testing implementation details in `consolidated_test.go`; slightly noisy regarding test fixture generation. |
-| **`golang-design-patterns`** | **B+** | Medium | High (warns against mutable globals and `init()`) | Low | Enforces explicit constructors over global state and flags unnecessary closures. |
-| **`golang-structs-interfaces`** | **B** | Medium (flags single-impl interfaces) | High ("accept interfaces, return structs") | Low | Good baseline rules, but target commits primarily contained helper functions rather than interface hierarchies. |
-| **`golang-code-style`** | **B** | Low (style/formatting focus) | Medium (early returns, nesting) | Low | Useful for reducing function parameter counts and nesting, but less focused on deleting redundant abstractions. |
-| **`golang-lint`** | **B** | Low (linter enforcement) | Medium (static analysis checks) | Low | Enforces `.golangci.yml` rules and dead-code detection, but cannot detect semantic test duplication. |
-| **`golang-how-to`** | **B** | Low (orchestration catalog) | Medium | Low | Useful as a routing directory, but delegates actual analysis to underlying specialized skills. |
-| **`golang-modernize`** | **B-** | Low (upgrade focus rather than deletion) | Medium | Medium | Useful for Go 1.22+ `range` over int and `time.Since`, but does not provide deletion signals for over-engineered test scaffolding. |
+| **`ponytail`** | **A** | High (`net: -N lines`, ladder priority) | High (root cause vs symptom) | Minimal | **Top Performer.** Directly identified the 94-line duplicate test, root-level markdown litter, and unnecessary shell test scaffolding. |
+| **`modular-refactor` / `right-sizing`** | **A** | High (2-port ceiling, deletes pass-throughs) | High (green guard at every commit) | Low | **Top Performer.** Enforced 2-port limit, confirmed helper stays a concrete function, and flagged higher-order hook wrapper as premature abstraction. |
+| **`codebase-design`** | **A-** | High (deletion test, shallow module penalty) | High (interface is test surface) | Low | Deletion test proved helper earns locality; rejected premature interface abstraction. |
+| **`golang-safety`** | **A-** | Medium | High (nil interface, race hazards, defer ordering) | Low | Caught `slog.SetDefault` race hazard and closure evaluation timing in deferred execution. |
+| **`golang-design-patterns`** | **B+** | Medium | High (warns against mutable globals and `init()`) | Low | Enforced explicit constructors over mutable globals and flagged unnecessary closure nesting. |
+| **`golang-structs-interfaces`** | **B** | Medium (flags single-impl interfaces) | High ("accept interfaces, return structs") | Low | Confirmed phase timing must remain a concrete function, not a premature interface. |
 
 ---
 
-## Verification & Guard Invariants
+## Verification
 
-1. **Go File Formatting:** No Go files were modified in this lane (`gofmt -l internal/` verified clean).
-2. **Pre-commit Outbound Report:** Status reported through `agent-mailbox-report.sh` prior to commit.
-3. **Memory Recorded:** Concrete review conclusions saved to Mnemon store `rawclaw`.
+- **Go source edits:** 0 lines (clean `gofmt -l internal/`).
+- **Broad test suites:** Skipped per directive.
+- **Repository state:** Clean working tree.
