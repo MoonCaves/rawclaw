@@ -10,6 +10,11 @@ In internal/index/consolidated.go, ConsolidateFrom coordinates folding per-proje
 At the end of ConsolidateFrom, tombstone pruning was gated behind:
 `if rebuild || anyChanged`
 
+The current foreground tag flow is also intentionally asynchronous: `tag-prep`
+and `tag-write` author the requested session first, then queue the detached
+publication/fold work. The foreground command does not wait for the full
+consolidated-store fold.
+
 ### The Defect
 1. A session is indexed into a per-project db (p.db) and consolidated into consolidated.db.
 2. The user deletes the session (rawclaw delete <session>). The CLI removes the transcript file (if live) and appends the session ID to the tombstone sidecar (~/.cache/session-search/.deleted). Crucially, p.db is NOT touched by the delete command (by design, per-project dbs are reconciled during their next scan).
@@ -18,6 +23,14 @@ At the end of ConsolidateFrom, tombstone pruning was gated behind:
 5. Because no source reported changes, anyChanged remains false.
 6. Pruning is skipped completely.
 7. The deleted session remains searchable in consolidated.db.
+
+When a source database itself no longer offers a session, consolidation removes
+that source contribution during the merge. After the merge, its topic and
+verdict sidecars are pruned only when no other `session_sources` contributor
+remains. This prevents orphaned sidecar rows while preserving tags belonging to
+another surviving source. A completely empty topic set still carries no durable
+deletion revision; it must not be treated as proof that it is newer than an
+existing consolidated topic set.
 
 ## 2. Evaluation of Candidate Contracts
 
