@@ -200,14 +200,6 @@ func BenchmarkConnectionPragmas(b *testing.B) {
 					return len(hits) > 0
 				})
 			})
-		}
-	}
-	for _, cold := range []bool{false, true} {
-		for _, connector := range benchConnectors {
-			mode := "Warm"
-			if cold {
-				mode = "Cold"
-			}
 			b.Run("Browse/"+connector.name+"/"+mode, func(b *testing.B) {
 				runConnectionBench(b, dbp, connector, cold, "BrowseSessions", ": 0 sessions returned", browse, func(sessions []store.BrowseSession) bool {
 					return len(sessions) > 0
