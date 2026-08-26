@@ -558,6 +558,55 @@ func TestConsolidate_DeletesSidecarsWhenSourceRemovesWholeSession(t *testing.T) 
 		t.Errorf("verdict sidecar for removed session remains: %s rows", got)
 	}
 }
+
+func TestConsolidate_PrunesExistingSidecarsWhenSourceHasNoSidecarTables(t *testing.T) {
+	isolateCache(t)
+	src := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+	sid := firstSessionID(t, src)
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec(`
+		INSERT INTO topic_segment(session_id, start_uuid, topic, summary) VALUES (?, ?, 'invoice', 'summary');
+		INSERT INTO session_verdict(session_id, verdict, source) VALUES (?, 'routine', 'floor')`, sid, "u-a1", sid); err != nil {
+		con.Close()
+		t.Fatalf("seed consolidated sidecars: %v", err)
+	}
+	con.Close()
+
+	srcCon, err := store.ConnectRW(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srcCon.Exec("DELETE FROM sessions WHERE id=?", sid); err != nil {
+		srcCon.Close()
+		t.Fatal(err)
+	}
+	if err := srcCon.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("second consolidate: %v", err)
+	}
+
+	con = openConsolidated(t)
+	defer con.Close()
+	for _, query := range []string{
+		"SELECT COUNT(*) FROM topic_segment WHERE session_id=?",
+		"SELECT COUNT(*) FROM session_verdict WHERE session_id=?",
+	} {
+		if got := scalar(t, con, query, sid); got != "0" {
+			t.Errorf("sidecar rows after source removal without sidecar tables = %s, want 0", got)
+		}
+	}
+}
+
 func TestConsolidate_RebuildPreservesStoreOnlyTags(t *testing.T) {
 	isolateCache(t)
 	a := indexProject(t, "-w-ledger",
