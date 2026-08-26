@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/store"
@@ -12,9 +13,10 @@ import (
 // write; multiple hits deliberately fall back to guarded lookup so its exact
 // ambiguity rendering remains unchanged.
 func locateTagWriteFast(session8 string, scope []view.Scope) (dbp, fullSID string, found bool) {
-	if len(scope) == 0 {
-		hits := paths.ResolveSession(session8)
-		if len(hits) != 1 || hits[0].Path == "" || hits[0].CWD == "" {
+	if scope == nil {
+		normalized := agentproto.NormalizeSessionArg(session8)
+		hits := paths.ResolveSession(normalized)
+		if len(hits) != 1 || hits[0].Path == "" {
 			return "", "", false
 		}
 		tdir := paths.ProjectDirOf(hits[0].Path)
@@ -29,7 +31,7 @@ func locateTagWriteFast(session8 string, scope []view.Scope) (dbp, fullSID strin
 		if err != nil {
 			return "", "", false
 		}
-		ids, err := store.SessionsByPrefix(con, session8, false, 2)
+		ids, err := store.SessionsByPrefix(con, normalized, false, 2)
 		con.Close()
 		if err != nil || len(ids) != 1 || ids[0] != hits[0].SessionID {
 			return "", "", false

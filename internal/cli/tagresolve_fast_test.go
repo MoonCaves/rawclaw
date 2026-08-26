@@ -100,3 +100,9 @@ func TestTagWriteTDirFastPathAuthorsBeforeConsolidatedFence(t *testing.T) {
 		t.Fatalf("authoritative topics = %#v, err=%v", segs, err)
 	}
 }
+
+func TestLocateTagWriteFast_ExplicitEmptyScopeDoesNotUseCatalog(t *testing.T) {
+	if db, sid, found := locateTagWriteFast("anything", []view.Scope{}); found || db != "" || sid != "" {
+		t.Fatalf("explicit empty scope fast path = (%q, %q, %v), want no lookup", db, sid, found)
+	}
+}
