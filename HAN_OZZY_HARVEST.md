@@ -99,4 +99,3 @@ must pass the stated composite-key, same-volume staging, mutation, and writer-fe
 **REJECT_ALL product-code transplants from Ozzy's two tips**: the five harvest code
 commits are duplicate/inherited mechanisms, and the prior-art tip's code delta is stale
 lineage rather than a candidate payload.
-
