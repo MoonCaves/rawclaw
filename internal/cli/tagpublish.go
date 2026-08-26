@@ -41,7 +41,7 @@ func newTagPublishCmd() *cobra.Command {
 }
 
 func spawnTagPublishChild(dbp string) error {
-	if dbp == "" || filepath.Clean(dbp) == filepath.Clean(index.ConsolidatedPath()) {
+	if isConsolidatedSource(dbp) {
 		return nil
 	}
 	exe, err := selfExe()
@@ -66,7 +66,7 @@ func spawnTagPublishChild(dbp string) error {
 }
 
 func runTagPublishChild(ctx context.Context, w io.Writer, dbp string) error {
-	if dbp == "" || filepath.Clean(dbp) == filepath.Clean(index.ConsolidatedPath()) {
+	if isConsolidatedSource(dbp) {
 		tagPublishLogLine(w, "tag-publish: skipped invalid/self source %q", dbp)
 		return nil
 	}
@@ -79,6 +79,21 @@ func runTagPublishChild(ctx context.Context, w io.Writer, dbp string) error {
 	}
 	tagPublishLogLine(w, "tag-publish: published %s", dbp)
 	return nil
+}
+
+// isConsolidatedSource rejects alternate spellings and symlinks to the derived
+// store; publishing it into itself could otherwise attach the live destination.
+func isConsolidatedSource(dbp string) bool {
+	if dbp == "" {
+		return true
+	}
+	dst := index.ConsolidatedPath()
+	resolvedDB, dbErr := filepath.EvalSymlinks(dbp)
+	resolvedDst, dstErr := filepath.EvalSymlinks(dst)
+	if dbErr == nil && dstErr == nil {
+		return filepath.Clean(resolvedDB) == filepath.Clean(resolvedDst)
+	}
+	return filepath.Clean(dbp) == filepath.Clean(dst)
 }
 
 func openTagPublishLog() (*os.File, error) {
