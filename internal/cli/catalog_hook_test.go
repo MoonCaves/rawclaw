@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -410,5 +413,78 @@ func TestPrimeScripts_SessionStartDeduplicatesDetachedIngest(t *testing.T) {
 				t.Fatalf("ingest calls = %q, want exactly one call", got)
 			}
 		})
+	}
+}
+
+func TestPrimeScripts_ExistingSpecialCatalogPathDoesNotBlock(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+	shells := []string{sh}
+	if dash, err := exec.LookPath("dash"); err == nil && dash != sh {
+		shells = append(shells, dash)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		setup func(string) (func(), error)
+	}{
+		{name: "fifo", setup: func(path string) (func(), error) {
+			return func() {}, syscall.Mkfifo(path, 0o600)
+		}},
+		{name: "directory", setup: func(path string) (func(), error) {
+			return func() {}, os.Mkdir(path, 0o700)
+		}},
+		{name: "symlink", setup: func(path string) (func(), error) {
+			return func() {}, os.Symlink(filepath.Join(filepath.Dir(path), "missing"), path)
+		}},
+		{name: "socket", setup: func(path string) (func(), error) {
+			listener, err := net.Listen("unix", path)
+			if err != nil {
+				return nil, err
+			}
+			return func() { _ = listener.Close() }, nil
+		}},
+	} {
+		for _, shell := range shells {
+			for _, script := range []struct {
+				name string
+				tmpl string
+			}{
+				{name: "claude", tmpl: rawclawPrimeScript},
+				{name: "codex", tmpl: rawclawCodexPrimeScript},
+			} {
+				t.Run(tc.name+"/"+filepath.Base(shell)+"/"+script.name, func(t *testing.T) {
+					root := t.TempDir()
+					catalogDir := filepath.Join(root, "catalog")
+					if err := os.Mkdir(catalogDir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					const sessionID = "special-catalog-path"
+					cleanup, err := tc.setup(filepath.Join(catalogDir, sessionID))
+					if err != nil {
+						t.Skipf("cannot create %s: %v", tc.name, err)
+					}
+					defer cleanup()
+
+					scriptPath := filepath.Join(root, "prime.sh")
+					if err := os.WriteFile(scriptPath, []byte(renderHookScript(script.tmpl, "'/bin/true'")), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					cmd := exec.CommandContext(ctx, shell, scriptPath)
+					cmd.Env = append(os.Environ(), "RAWCLAW_CATALOG_DIR="+catalogDir)
+					cmd.Stdin = strings.NewReader(`{"session_id":"` + sessionID + `"}`)
+					if out, err := cmd.CombinedOutput(); err != nil {
+						t.Fatalf("hook failed: %v (out=%q)", err, out)
+					}
+					if ctx.Err() != nil {
+						t.Fatal("hook blocked on existing special catalog path")
+					}
+				})
+			}
+		}
 	}
 }
