@@ -39,9 +39,9 @@ func TestConsolidate_LogsPhaseStartsAndDurations(t *testing.T) {
 		message string
 		phase   string
 	}
-	starts := make(map[phaseKey]bool)
-	durations := make(map[phaseKey]bool)
-	for _, rec := range records {
+	startIdx := make(map[phaseKey]int)
+	durationIdx := make(map[phaseKey]int)
+	for i, rec := range records {
 		var phase, event string
 		var duration slog.Value
 		rec.Attrs(func(attr slog.Attr) bool {
@@ -56,18 +56,31 @@ func TestConsolidate_LogsPhaseStartsAndDurations(t *testing.T) {
 			return true
 		})
 		key := phaseKey{message: rec.Message, phase: phase}
-		starts[key] = starts[key] || event == "start"
-		durations[key] = durations[key] || duration.Kind() == slog.KindDuration
+		if event == "start" {
+			if _, exists := startIdx[key]; !exists {
+				startIdx[key] = i
+			}
+		}
+		if duration.Kind() == slog.KindDuration && duration.Duration() >= 0 {
+			if _, exists := durationIdx[key]; !exists {
+				durationIdx[key] = i
+			}
+		}
 	}
 
 	assertLogged := func(message, phase string) {
 		t.Helper()
 		key := phaseKey{message: message, phase: phase}
-		if !starts[key] {
+		sIdx, hasStart := startIdx[key]
+		dIdx, hasDuration := durationIdx[key]
+		if !hasStart {
 			t.Errorf("%s phase %q has no start log", message, phase)
 		}
-		if !durations[key] {
+		if !hasDuration {
 			t.Errorf("%s phase %q has no duration log", message, phase)
+		}
+		if hasStart && hasDuration && sIdx >= dIdx {
+			t.Errorf("%s phase %q start log (idx=%d) did not precede duration log (idx=%d)", message, phase, sIdx, dIdx)
 		}
 	}
 	for _, phase := range []string{

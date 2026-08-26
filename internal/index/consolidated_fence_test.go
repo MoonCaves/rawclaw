@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,5 +78,78 @@ func TestIsBusy_RecognizesConsolidatedFenceTimeout(t *testing.T) {
 	}
 	if !isBusy(fenceErr) {
 		t.Fatalf("isBusy(%v) = false, want true (a fence-wait timeout is a busy/contended store)", fenceErr)
+	}
+}
+
+// TestConsolidatedFence_LogsAcquireTimeoutDuration proves that a timed-out
+// AcquireConsolidatedFence emits an initial event=start marker and a terminal
+// duration log recording elapsed wait time (>= timeout), in strict order.
+func TestConsolidatedFence_LogsAcquireTimeoutDuration(t *testing.T) {
+	isolateCache(t)
+	holder := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
+	locked, err := holder.TryLock()
+	if err != nil || !locked {
+		t.Fatalf("hold consolidated lock: locked=%t err=%v", locked, err)
+	}
+	defer holder.Unlock()
+
+	recorder := &testLogRecorder{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(orig)
+
+	timeout := 50 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if _, err := AcquireConsolidatedFence(ctx); err == nil {
+		t.Fatal("AcquireConsolidatedFence succeeded while another writer held the lock")
+	}
+
+	recorder.mu.Lock()
+	records := append([]slog.Record(nil), recorder.records...)
+	recorder.mu.Unlock()
+
+	startIdx, durationIdx := -1, -1
+	var recordedDuration time.Duration
+	for i, rec := range records {
+		if rec.Message != "consolidated fence phase" {
+			continue
+		}
+		var phase, event string
+		var dur slog.Value
+		rec.Attrs(func(attr slog.Attr) bool {
+			switch attr.Key {
+			case "phase":
+				phase = attr.Value.String()
+			case "event":
+				event = attr.Value.String()
+			case "duration":
+				dur = attr.Value
+			}
+			return true
+		})
+		if phase != "acquire" {
+			continue
+		}
+		if event == "start" && startIdx == -1 {
+			startIdx = i
+		}
+		if dur.Kind() == slog.KindDuration && durationIdx == -1 {
+			durationIdx = i
+			recordedDuration = dur.Duration()
+		}
+	}
+	if startIdx == -1 {
+		t.Error("timed-out fence acquisition missing phase=acquire event=start log")
+	}
+	if durationIdx == -1 {
+		t.Error("timed-out fence acquisition missing phase=acquire duration log")
+	}
+	if startIdx != -1 && durationIdx != -1 && startIdx >= durationIdx {
+		t.Errorf("start log (idx=%d) did not precede duration log (idx=%d)", startIdx, durationIdx)
+	}
+	if recordedDuration < timeout {
+		t.Errorf("recorded duration %v is less than wait timeout %v", recordedDuration, timeout)
 	}
 }
