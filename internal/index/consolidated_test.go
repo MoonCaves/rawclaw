@@ -3,6 +3,7 @@ package index
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,71 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
+
+func TestConsolidate_LogsPhaseStartsAndDurations(t *testing.T) {
+	isolateCache(t)
+	src := seedSessionDB(t, "phase-logs.db", sessionRow{
+		id: "phase-log-session", project: "phase-logs", cwd: "/w/phase-logs",
+		msgs: []msgRow{{"phase-log-message", "user", "log this fold", 100}},
+	})
+	recorder := &testLogRecorder{}
+	original := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(original)
+
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+
+	recorder.mu.Lock()
+	records := append([]slog.Record(nil), recorder.records...)
+	recorder.mu.Unlock()
+
+	type phaseKey struct {
+		message string
+		phase   string
+	}
+	starts := make(map[phaseKey]bool)
+	durations := make(map[phaseKey]bool)
+	for _, rec := range records {
+		var phase, event string
+		var duration slog.Value
+		rec.Attrs(func(attr slog.Attr) bool {
+			switch attr.Key {
+			case "phase":
+				phase = attr.Value.String()
+			case "event":
+				event = attr.Value.String()
+			case "duration":
+				duration = attr.Value
+			}
+			return true
+		})
+		key := phaseKey{message: rec.Message, phase: phase}
+		starts[key] = starts[key] || event == "start"
+		durations[key] = durations[key] || duration.Kind() == slog.KindDuration
+	}
+
+	assertLogged := func(message, phase string) {
+		t.Helper()
+		key := phaseKey{message: message, phase: phase}
+		if !starts[key] {
+			t.Errorf("%s phase %q has no start log", message, phase)
+		}
+		if !durations[key] {
+			t.Errorf("%s phase %q has no duration log", message, phase)
+		}
+	}
+	for _, phase := range []string{
+		"schema-migrate", "source-migrate", "attach", "prepare", "merge",
+		"detach", "tombstone-prune", "watermark-stamp", "connection-close",
+	} {
+		assertLogged("consolidate fold phase", phase)
+	}
+	for _, phase := range []string{"acquire", "release"} {
+		assertLogged("consolidated fence phase", phase)
+	}
+}
 
 // TestConsolidate_UnionsEveryProject is the ticket's headline: sessions from
 // separate per-project dbs land in ONE store, each keeping the project it came
