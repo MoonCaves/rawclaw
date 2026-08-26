@@ -92,3 +92,5 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
 - [PRIOR_ART_SOURCES.md](PRIOR_ART_SOURCES.md) — primary references and reusable mechanisms for reliability, locking, hooks, durability, and performance work.
 - [WORKER_PROBLEM_PRIOR_ART.md](WORKER_PROBLEM_PRIOR_ART.md) — time-stamped worker/problem census, adoption status, and source-to-seam mapping; refresh it before relying on live branch state.
+- [PRIOR_ART_SCORECARD.md](PRIOR_ART_SCORECARD.md) — adoption-gated competition scores, rebuttal outcomes, and pending zero-point proposals.
+- [PRIOR_ART_WAVE_LOG.md](PRIOR_ART_WAVE_LOG.md) — append-only research-wave changes and feedback-loop improvements.
