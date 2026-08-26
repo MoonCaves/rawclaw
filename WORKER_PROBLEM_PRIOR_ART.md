@@ -2,6 +2,7 @@
 
 Snapshot taken 2026-08-26 from integration head `5b9756b2200ff6bd670f07407407d84d9f42d84b`.
 This is a report-only census. Product code and rival worktrees were not edited.
+Live primary endpoint reachability and pinned alternatives verified 2026-08-26.
 
 ## Scope and evidence rules
 
@@ -11,7 +12,7 @@ Graphify was queried first. Relevant graph symbols are `renderHookScript`, `cata
 
 ## Phase 1: live product-worker inventory
 
-All paths below are the pane paths and all SHAs are immutable branch tips observed in the same census. “RUNNING” means the pane still had an active agy prompt/process; “STALL/complete” means the pane showed a finished receipt or quota/stall state.
+All paths below are the pane paths and all SHAs are immutable branch tips observed in the same census. “RUNNING” means the pane still had an active agy prompt/process; “STALL/complete” means the pane showed a finished receipt or quota/stall state. The 23 entries represent live worker rows (panes/branch assignments across 3 supervisor desks) rather than 23 independent problems.
 
 ### Lenny Bruce supervisor
 
@@ -57,11 +58,13 @@ Representative local receipt: `/Users/jay-m4/code/rawclaw-wt-instant-closeout-sp
 
 Representative local receipts: `/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T100014Z-7bbc7513-conor-correction-wire-ozzy-cle.md`, `/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T100806Z-norm-ozzy-spy-blast.md`.
 
-The live scheduler sessions observed were `lenny-spy-loop`, `lenny-spy-watchdog`, `rawclaw-norm-spy-loop`, `ozzy-spy-heartbeat-loop`, plus heartbeat/watchdog sessions. They are orchestration only and are excluded from the 23-worker product count.
+The live scheduler sessions observed were `lenny-spy-loop`, `lenny-spy-watchdog`, `rawclaw-norm-spy-loop`, `ozzy-spy-heartbeat-loop`, plus heartbeat/watchdog sessions. They are orchestration only and are excluded from the 23 worker rows.
 
 ## Phase 2: deduplicated problem taxonomy and local evidence
 
-There are 10 distinct problems after deduplication. Competing workers are preserved in parentheses.
+The 23 worker rows deduplicate into 10 distinct problem and review areas, spanning **7 concrete product domains** (core Go/SQLite/POSIX runtime mechanisms) and **3 cross-cutting review and audit concerns** (benchmark discipline, seam complexity/Ponytail review, and post-merge fault reproduction / patch identity). Competing workers are preserved in parentheses.
+
+### Product domains (7 core mechanisms)
 
 1. **SessionStart catalog claim and fail-soft safety** (Lenny raid-hooks; Norm flash-hooks; Ozzy flash-hook). Local contract: `internal/cli/setup.go:24-85,128-178` writes a claim with `set -C`, then upgrades it with a same-directory temp file and `mv`; `internal/cli/catalog_hook_test.go:14-95,244-260` requires exactly-once output and hook success on catalog failure. The integration base still contains the older FIFO-opening expression called out in the supervisor message; Conor’s `conor/fix-hook-fifo-claim@13966cf` is the competing temp-file/atomic-claim reference. Receipts: `/Users/jay-m4/code/rawclaw/.agent-mailbox-norm/20260826T100820Z-norm-ack-ozzy-ammunition.md` and the Lenny heartbeat above.
 
@@ -71,17 +74,19 @@ There are 10 distinct problems after deduplication. Competing workers are preser
 
 4. **Incremental tag closeout and source-aware refresh** (Lenny raid-prewarm/raid-locate; Ozzy flash-hidden/flash-catalog). `refreshTagMatches` refreshes every matching source and chooses one target at `internal/cli/tagrefresh.go:319-360`; `EnsureFreshContainer` strictly verifies watermark then folds at `internal/index/containers.go:84-105`. The contract risk is a source match being fresh in a private cache while the chosen consolidated/read path is stale or ambiguous.
 
-5. **Consolidated-store atomicity, writer fencing, fault reproduction, and phase logging** (Lenny raid-fence/raid-phase/raid-containers; Norm flash-fence; Ozzy flash-cleanup/flash-repro/flash-integration). Local symbols: `internal/index/consolidated.go:553-609` (`SyncConsolidatedFrom`), `:637-647` (`beginConsolidatePhase`), `internal/index/containers.go:201-229` (`EnsureIndexedContainers`), and `internal/index/index.go:1195` (`EnsureIndexedTree`). The local Conor receipt reports `89c8a28` probes with `BEGIN IMMEDIATE` then releases before unlinking DB/WAL/SHM, a probe-to-unlink TOCTOU (`/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T100014Z-7bbc7513-conor-correction-wire-ozzy-cle.md`).
+5. **Consolidated-store atomicity and writer fencing** (Lenny raid-fence/raid-containers; Norm flash-fence; Ozzy flash-cleanup). Local symbols: `internal/index/consolidated.go:553-609` (`SyncConsolidatedFrom`), `:637-647` (`beginConsolidatePhase`), `internal/index/containers.go:201-229` (`EnsureIndexedContainers`), and `internal/index/index.go:1195` (`EnsureIndexedTree`). The local Conor receipt reports `89c8a28` probes with `BEGIN IMMEDIATE` then releases before unlinking DB/WAL/SHM, a probe-to-unlink TOCTOU (`/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox/20260826T100014Z-7bbc7513-conor-correction-wire-ozzy-cle.md`).
 
-6. **Refresh DB/WAL/SHM cleanup** (Lenny raid-containers; Ozzy flash-cleanup). `RefreshDBPath` and WAL-aware fingerprinting are in `internal/index/containers.go:27-35,119-139`; deletion is the contested cleanup path. The safe contract is “hold the same serialization guard through decision and unlink, or make cleanup idempotent and retryable.”
+6. **Refresh DB/WAL/SHM generation lifecycle and safe cleanup** (Lenny raid-containers; Ozzy flash-cleanup). `RefreshDBPath` and WAL-aware fingerprinting are in `internal/index/containers.go:27-35,119-139`; deletion is the contested cleanup path. The safe contract is “hold the same serialization guard through decision and unlink, or make cleanup idempotent and retryable.”
 
-7. **Benchmark and test duplication / contention** (Lenny skill-architecture/skill-style/skill-modernize; Ozzy flash-ponytail/flash-prune). `internal/index/index_bench_test.go:12-109` has corpus seeding plus warm/cold FTS5 benchmarks; the local audit receipts discuss deleting duplicated scaffolding while preserving correctness assertions. `BenchmarkFTS5Search` directly exercises `EnsureSchema`, `UpdateIndex`, and `SearchHits` (Graphify edges).
+7. **Stale/error status propagation and structured phase logging** (Norm flash-ingest; Lenny raid-phase; Ozzy flash-integration). `EnsureIndexedTree` returns `IndexStatus` and wraps reindex failures at `internal/index/index.go:1195`; `SyncConsolidatedFrom` logs phase boundaries and intentionally treats write-through failure as retryable at `internal/index/consolidated.go:611-635`. Any swallowed source/read failure must remain stale/unknown, never fresh.
 
-8. **Code-bloat and seam shape** (Lenny skill-interfaces/skill-architecture/skill-style). The Graphify/CC evidence centers on `cmd_prewarm.go`, duplicate resolution paths, and hypothetical interfaces around static shell/Go behavior. This is a shrink-only design problem, not a request for a new framework.
+### Cross-cutting review and audit concerns (3 methodological areas)
 
-9. **Stale/error status and logging honesty** (Norm flash-ingest; Lenny raid-phase; Ozzy flash-integration). `EnsureIndexedTree` returns `IndexStatus` and wraps reindex failures at `internal/index/index.go:1195`; `SyncConsolidatedFrom` logs phase boundaries and intentionally treats write-through failure as retryable at `internal/index/consolidated.go:611-635`. Any swallowed source/read failure must remain stale/unknown, never fresh.
+8. **Benchmark and test duplication / contention** (Lenny skill-architecture/skill-style/skill-modernize; Ozzy flash-ponytail/flash-prune). `internal/index/index_bench_test.go:12-109` has corpus seeding plus warm/cold FTS5 benchmarks; the local audit receipts discuss deleting duplicated scaffolding while preserving correctness assertions. `BenchmarkFTS5Search` directly exercises `EnsureSchema`, `UpdateIndex`, and `SearchHits` (Graphify edges).
 
-10. **Abrupt post-merge fault reproduction and release evidence** (Ozzy flash-repro; Norm flash-ozzy-spy; Lenny all lanes). The report-only evidence is branch/receipt state rather than a product symbol: `internal/index/consolidated.go` is the fault seam, and `internal/cli/catalog_hook_test.go` is the hook seam. The trap is treating a focused green test or a finished pane as repository-wide release proof.
+9. **Code-bloat and seam shape** (Lenny skill-interfaces/skill-architecture/skill-style). The Graphify/CC evidence centers on `cmd_prewarm.go`, duplicate resolution paths, and hypothetical interfaces around static shell/Go behavior. This is a shrink-only design problem, not a request for a new framework.
+
+10. **Abrupt post-merge fault reproduction, duplicate patch detection, and release evidence** (Ozzy flash-repro; Norm flash-ozzy-spy; Lenny all lanes). The report-only evidence is branch/receipt state rather than a product symbol: `internal/index/consolidated.go` is the fault seam, and `internal/cli/catalog_hook_test.go` is the hook seam. The trap is treating a focused green test or a finished pane as repository-wide release proof.
 
 ## Phase 3: internet prior art
 
@@ -97,9 +102,9 @@ The following are primary documentation or mature repositories. Links are pinned
 | source resolution | SQLite query planner/indexing: https://www.sqlite.org/queryplanner.html ; ripgrep’s literal path filtering model: https://github.com/BurntSushi/ripgrep/blob/master/GUIDE.md | ADAPT: explicit exact/prefix/source precedence with a unique result set. Trap: FTS5 content search cannot prove arbitrary session-ID identity; keep catalog/path identity separate from message FTS. |
 | tag closeout | SQLite UPSERT/uniqueness: https://www.sqlite.org/lang_upsert.html ; Syncthing’s idempotent `INSERT OR IGNORE` repair queue: https://github.com/syncthing/syncthing/blob/main/internal/db/sqlite/folderdb_update.go | COPY/ADAPT NOW: make prep/write repeatable by unique session/topic keys and transaction boundaries. Trap: idempotent insertion does not solve stale snapshot overlap; prep and write still need a coherent snapshot/version. |
 | consolidated atomicity | SQLite atomic commit: https://www.sqlite.org/atomiccommit.html ; SQLite locking: https://www.sqlite.org/lockingv3.html ; rqlite WAL checkpoint policy: https://github.com/rqlite/rqlite/blob/master/db/db.go | COPY/ADAPT NOW: hold one SQLite transaction/lock across the decision and mutation, then checkpoint only at an explicit quiet boundary. Trap: a `BEGIN IMMEDIATE; ROLLBACK` probe followed by `os.Remove` is not a fence. |
-| WAL/sidecar cleanup | SQLite WAL checkpoint pragma: https://www.sqlite.org/pragma.html#pragma_wal_checkpoint ; PocketBase periodic truncate checkpoint: https://github.com/pocketbase/pocketbase/blob/master/core/base.go ; PocketBase backup transaction/checkpoint: https://github.com/pocketbase/pocketbase/blob/master/core/base_backup.go | STUDY FIRST: checkpoint/close before deleting sidecars; make missing sidecars success. Trap: `TRUNCATE` can return busy; deletion must not race another connection. |
+| WAL/sidecar cleanup | SQLite WAL checkpoint pragma: https://www.sqlite.org/pragma.html#pragma_wal_checkpoint ; PocketBase periodic truncate checkpoint: https://github.com/pocketbase/pocketbase/blob/master/core/base.go ; PocketBase backup transaction/checkpoint: https://github.com/pocketbase/pocketbase/blob/master/core/backup.go | STUDY FIRST: checkpoint/close before deleting sidecars; make missing sidecars success. (Verified 2026-08-26: `core/backup.go` returns 200; former `base_backup.go` returns 404). Trap: `TRUNCATE` can return busy; deletion must not race another connection. |
 | atomic replacement | SQLite backup API: https://www.sqlite.org/backup.html ; nginx-ui staged rename/rollback: https://github.com/0xJacky/nginx-ui/blob/dev/internal/backup/replace.go | ADAPT: stage then same-volume rename with rollback. Trap: RawClaw’s cache is disposable, so do not add a new durable archive format or dependency. |
-| benchmark discipline | Go testing benchmarks: https://pkg.go.dev/testing#hdr-Benchmarks ; SQLite FTS5: https://www.sqlite.org/fts5.html ; Go benchmark examples in SQLite-adjacent project: https://github.com/kenn-io/msgvault/tree/main/internal/db | COPY/ADAPT NOW: one corpus fixture, warm/cold sub-benchmarks, `ReportAllocs`, and no correctness assertion deletion. Trap: synthetic 100-session corpus does not prove live transcript or contention behavior. |
+| benchmark discipline | Go testing benchmarks: https://pkg.go.dev/testing#hdr-Benchmarks ; SQLite FTS5: https://www.sqlite.org/fts5.html ; Go benchmark examples in SQLite-adjacent project: https://github.com/kenn-io/msgvault/tree/main/internal/store | COPY/ADAPT NOW: one corpus fixture, warm/cold sub-benchmarks, `ReportAllocs`, and no correctness assertion deletion. (Verified 2026-08-26: `internal/store` returns 200; former `internal/db` returns 404). Trap: synthetic 100-session corpus does not prove live transcript or contention behavior. |
 | fault/release gates | Go race detector: https://go.dev/doc/articles/race_detector ; SQLite test harness concepts: https://www.sqlite.org/testing.html ; Git worktree isolation: https://git-scm.com/docs/git-worktree | COPY/ADAPT NOW: reproduce the interleaving, then run focused + race + full gates from immutable SHAs. Trap: a green focused test is not full-suite or release evidence. |
 
 ### Prior-art search record
@@ -108,7 +113,7 @@ GitHub code search was run for `os.Rename`, `PRAGMA wal_checkpoint`, `Wait()`, `
 
 ### Supplemental mechanisms from the source-hunter report
 
-These additions are deliberately limited to mechanisms not already covered above. URLs are canonicalized for counting (`www.sqlite.org` and `sqlite.org` count once); overlapping mechanisms are not counted twice.
+These additions are deliberately limited to mechanisms not already covered above. The cited figure of 54 in previous notes represents normalized URL string arithmetic across draft lists, not 54 independently reachable unique endpoints. Live network verification on 2026-08-26 validated live primary endpoints, corrected broken 404 links (PocketBase `core/base_backup.go` -> `core/backup.go`, msgvault `internal/db` -> `internal/store`), and notes reachability uncertainty across upstream repo refactors. URLs are canonicalized for counting (`www.sqlite.org` and `sqlite.org` count once); overlapping mechanisms are not counted twice.
 
 - **CAS-style tag publication:** Git `update-ref` transactions support old-value checks and atomic multi-ref publication (https://git-scm.com/docs/git-update-ref). Adapt this to tag-prep’s expected session revision: prepare from one snapshot, validate the revision at write time, publish once, and leave downstream fold/embedding work best-effort. This is stronger than an insert-only uniqueness check because it detects a stale prep snapshot.
 - **Child lifecycle ownership:** Go’s `Cmd.Start` (https://pkg.go.dev/os/exec#Cmd.Start), `Cmd.Wait` (https://pkg.go.dev/os/exec#Cmd.Wait), and `os/exec` implementation (https://cs.opensource.google/go/go/+/refs/tags/go1.24.6:src/os/exec/exec.go) make start/wait ownership explicit; Git’s `run-command` API (https://github.com/git/git/blob/master/run-command.c) is a mature orchestration analogue. SessionStart may return quickly, but RawClaw still needs a bounded reaper and observable exit status.
@@ -152,7 +157,7 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 - **Lenny Bruce:** Ten desks reduce to the high-value substitutions above plus private refresh generations and scoped phase logging. Start with SQLite locking/atomic commit (https://www.sqlite.org/atomiccommit.html, https://www.sqlite.org/lockingv3.html), Git lock ownership (https://git-scm.com/docs/api-lockfile), and POSIX `O_EXCL` (https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html). The precise experiment is a concurrent hook test plus a cleanup test that races acquisition between probe and unlink; only a lock held across both passes.
 - **Norm Bell:** Your four quota-hit lanes should compare against SQLite’s idempotent uniqueness and explicit stale/error contract: https://www.sqlite.org/lang_upsert.html and https://go.dev/doc/articles/race_detector. Re-run catalog and ingest with exact/prefix collisions, source failure, and race count >=5; do not report quota-hit panes as green.
-- **Ozzy Prince:** The cleanup receipt’s probe-to-unlink gap is confirmed locally at the mailbox path above. Use PocketBase’s checkpoint/backup sequencing (https://github.com/pocketbase/pocketbase/blob/master/core/base_backup.go) only as a pattern, then keep RawClaw’s fence held through `os.Remove`; reproduce issue-32 with the race detector and immutable integration SHA.
+- **Ozzy Prince:** The cleanup receipt’s probe-to-unlink gap is confirmed locally at the mailbox path above. Use PocketBase’s checkpoint/backup sequencing (https://github.com/pocketbase/pocketbase/blob/master/core/backup.go) only as a pattern, then keep RawClaw’s fence held through `os.Remove`; reproduce issue-32 with the race detector and immutable integration SHA.
 
 ### Live-worker directives
 
@@ -171,9 +176,9 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 ## Final accounting
 
-- Product workers inventoried: **23** (10 Lenny, 5 Norm, 8 Ozzy).
-- Distinct deduplicated problems: **10**.
-- Prior-art sources cited: **54 unique canonical primary URLs** across the two reports (overlapping SQLite hosts and repeated links counted once; links are listed inline).
+- Product worker rows inventoried: **23 worker rows** (10 Lenny, 5 Norm, 8 Ozzy panes/branches), representing parallel worker assignments across three supervisor desks, deduplicating to 10 problem and review areas.
+- Deduplicated problem taxonomy: **10 distinct areas**, distinguishing **7 concrete product domains** (core Go/SQLite/POSIX runtime mechanisms) from **3 cross-cutting review and audit concerns** (benchmark discipline, seam complexity/Ponytail review, fault repro & patch identity).
+- Prior-art source count: The previous headline figure of **54** was normalized URL string arithmetic across draft source maps, not 54 independently reachable unique primary endpoints. Live reachability verification on 2026-08-26 confirmed live endpoints, corrected broken 404 URLs (PocketBase `core/base_backup.go` -> `core/backup.go`, msgvault `internal/db` -> `internal/store`), and records reachability dates and source uncertainty explicitly.
 - Top five highest-leverage recommendations:
   1. Replace hook FIFO/overwrite claims with POSIX exclusive regular-file creation plus same-directory atomic metadata rename.
   2. Hold the consolidated writer fence through refresh decision and DB/WAL/SHM unlink; never probe then release then delete.
