@@ -722,19 +722,11 @@ func TestRunTagPrepCmdNeverIndexedSessionEndToEnd(t *testing.T) {
 		t.Fatalf("tag-prep output missing assistant message:\n%s", out.String())
 	}
 
-	// Verify session is now indexed in consolidated store
-	con, err := store.ConnectRO(index.ConsolidatedPath())
-	if err != nil {
-		t.Fatalf("connect consolidated store: %v", err)
-	}
-	defer con.Close()
-
-	var count int
-	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id = ?", fullSID).Scan(&count); err != nil {
-		t.Fatalf("query consolidated store: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("expected 1 row in consolidated store for %s, got %d", fullSID, count)
+	// The refreshed source DB is durable immediately; consolidated publication is
+	// detached and may complete after tag-prep returns.
+	dbp := index.RefreshDBPath(claude.Registration().ID, fullSID, transcriptPath)
+	if _, err := os.Stat(dbp); err != nil {
+		t.Fatalf("refreshed source DB %s not retained: %v", dbp, err)
 	}
 }
 
@@ -867,7 +859,7 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 	}
 }
 
-func TestRunTagPrepCmd_ContentionDefersFoldAndFoldsOnNextTouch(t *testing.T) {
+func TestRunTagPrepCmd_ContentionSpawnsDetachedFoldAndFoldsOnNextTouch(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	t.Setenv("HOME", configDir)
@@ -902,11 +894,10 @@ func TestRunTagPrepCmd_ContentionDefersFoldAndFoldsOnNextTouch(t *testing.T) {
 		t.Fatalf("BEGIN IMMEDIATE on consolidated store: %v", err)
 	}
 
-	// Capture stderr
-	var errOut strings.Builder
-	oldStderr := tagPrepStderr
-	tagPrepStderr = &errOut
-	defer func() { tagPrepStderr = oldStderr }()
+	var spawned string
+	oldSpawn := spawnIngest
+	spawnIngest = func(sessionArg string) { spawned = sessionArg }
+	t.Cleanup(func() { spawnIngest = oldSpawn })
 
 	// (a) Run tag-prep while consolidated store is locked
 	var out strings.Builder
@@ -923,10 +914,8 @@ func TestRunTagPrepCmd_ContentionDefersFoldAndFoldsOnNextTouch(t *testing.T) {
 		t.Fatalf("dump missing assistant reply; got:\n%s", out.String())
 	}
 
-	// Stderr must contain the deferred note
-	wantNote := "# fold deferred (store busy); refresh db retained, will fold on next ingest"
-	if !strings.Contains(errOut.String(), wantNote) {
-		t.Fatalf("stderr = %q, want containing %q", errOut.String(), wantNote)
+	if spawned != fullSID {
+		t.Fatalf("detached ingest session = %q, want %q", spawned, fullSID)
 	}
 
 	// Refresh DB must be retained on disk
@@ -1022,12 +1011,9 @@ func TestRunTagPrepCmdGooseOptedOutServesIndexedCopy(t *testing.T) {
 	}
 }
 
-// TestRunTagPrepCmd_NonBusyFoldFailureIsReportedNotSwallowed proves a fold
-// error that is NOT store-contention (index.IsBusy) still surfaces on
-// stderr instead of vanishing silently — the dump itself already succeeded
-// and stdout is honest, but a genuine fold failure (as opposed to the
-// expected "try again later" busy case) must not print nothing.
-func TestRunTagPrepCmd_NonBusyFoldFailureIsReportedNotSwallowed(t *testing.T) {
+// TestRunTagPrepCmd_DetachedFoldDoesNotInspectConsolidatedFailures proves the
+// dump does not synchronously touch the consolidated store after refresh.
+func TestRunTagPrepCmd_DetachedFoldDoesNotInspectConsolidatedFailures(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	t.Setenv("HOME", configDir)
@@ -1053,10 +1039,10 @@ func TestRunTagPrepCmd_NonBusyFoldFailureIsReportedNotSwallowed(t *testing.T) {
 		t.Fatalf("mkdir consolidatedPath (as a directory, not a file): %v", err)
 	}
 
-	var errOut strings.Builder
-	oldStderr := tagPrepStderr
-	tagPrepStderr = &errOut
-	defer func() { tagPrepStderr = oldStderr }()
+	var spawned string
+	oldSpawn := spawnIngest
+	spawnIngest = func(sessionArg string) { spawned = sessionArg }
+	t.Cleanup(func() { spawnIngest = oldSpawn })
 
 	var out strings.Builder
 	if err := runTagPrepCmd(&out, "foldfa", nil, nil); err != nil {
@@ -1067,10 +1053,7 @@ func TestRunTagPrepCmd_NonBusyFoldFailureIsReportedNotSwallowed(t *testing.T) {
 		t.Fatalf("dump missing message; got:\n%s", out.String())
 	}
 
-	if strings.Contains(errOut.String(), "fold deferred (store busy)") {
-		t.Fatalf("stderr wrongly reported a busy-deferral for a non-busy error:\n%s", errOut.String())
-	}
-	if !strings.Contains(errOut.String(), "fold failed") {
-		t.Fatalf("stderr = %q, want a non-silent \"fold failed\" note for the non-busy error", errOut.String())
+	if spawned != fullSID {
+		t.Fatalf("detached ingest session = %q, want %q", spawned, fullSID)
 	}
 }
