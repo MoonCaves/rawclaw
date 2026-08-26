@@ -55,6 +55,54 @@ func TestRunTagWriteDefaultCatalogFastPathBeforeFence(t *testing.T) {
 	}
 }
 
+func TestLocateTagWriteFast_TDirScopesAmbiguousPrefix(t *testing.T) {
+	root := newCfgRoot(t)
+	const prefix = "samepref"
+	sidA := prefix + "-aaaa-4000-8000-000000000001"
+	sidB := prefix + "-bbbb-4000-8000-000000000002"
+	uuidA := "aaaaaaaa-aaaa-bbbb-cccc-000000000001"
+	uuidB := "bbbbbbbb-bbbb-cccc-dddd-000000000002"
+	dirA := writeTaggableSession(t, root, "proj-a", sidA, uuidA)
+	dirB := writeTaggableSession(t, root, "proj-b", sidB, uuidB)
+	for _, path := range []string{filepath.Join(dirA, sidA+".jsonl")} {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(`{"type":"user","uuid":"` + map[string]string{path: uuidA + "-new", filepath.Join(dirB, sidB+".jsonl"): uuidB + "-new"}[path] + `","timestamp":"2026-06-01T10:00:01Z","message":{"role":"user","content":"new"}}
+`); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	old := spawnTagPublish
+	spawnTagPublish = func(string, string) error { return nil }
+	t.Cleanup(func() { spawnTagPublish = old })
+	var out strings.Builder
+	if err := runTagWriteCmd(&out, strings.NewReader(`[{"start_uuid":"`+uuidB[:8]+`","topic":"scoped","summary":"scoped"}]`), prefix, []view.Scope{{Project: "proj-b", TDir: dirB}}, nil, false, "", false); err != nil {
+		t.Fatalf("scoped tag-write: %v", err)
+	}
+	for _, tc := range []struct {
+		name, db, sid string
+		want          int
+	}{{"unscoped project", index.DBPath(dirA), sidA, 0}, {"scoped project", index.DBPath(dirB), sidB, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			con, err := store.ConnectRO(tc.db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer con.Close()
+			segs, err := store.TopicsForSession(con, tc.sid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(segs) != tc.want {
+				t.Fatalf("topics = %#v, want %d", segs, tc.want)
+			}
+		})
+	}
+}
+
 func TestLocateTagWriteFast_NilScopeAmbiguousCatalogFallsBack(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	config := t.TempDir()

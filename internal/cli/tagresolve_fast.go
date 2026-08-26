@@ -1,12 +1,52 @@
 package cli
 
 import (
+	"os"
+	"strings"
+
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
+
+// refreshTagWriteTDir refreshes only the catalog-resolved session in a TDir.
+// The source/container path is the exact-session refresh seam; using it here
+// avoids walking every JSONL file in the project tree on the tag-write path.
+func refreshTagWriteTDir(dbp, tdir, session8 string) bool {
+	targetDir, err := os.Stat(tdir)
+	if err != nil {
+		return false
+	}
+	prefix := agentproto.NormalizeSessionArg(session8)
+	for _, hit := range paths.ResolveSession(prefix) {
+		if hit.Path == "" || !strings.HasPrefix(hit.SessionID, prefix) {
+			continue
+		}
+		projectDir := paths.ProjectDirOf(hit.Path)
+		projectInfo, err := os.Stat(projectDir)
+		if err != nil || !os.SameFile(targetDir, projectInfo) {
+			continue
+		}
+		for _, reg := range sources.Registered() {
+			if reg.New == nil || reg.Detect == nil || !reg.Detect(hit.Path) {
+				continue
+			}
+			adapter := reg.New()
+			if adapter == nil {
+				continue
+			}
+			_, status, err := index.EnsureIndexedContainers(dbp, false, []source.Container{{
+				ID: hit.SessionID, Path: hit.Path, CWD: hit.CWD,
+			}}, adapter.Messages, reg.ID, "")
+			return err == nil && status == index.IndexFresh
+		}
+	}
+	return false
+}
 
 // locateTagWriteFast probes already-known scope databases without indexing or
 // consulting the derived store. A unique source hit is authoritative for the
@@ -24,7 +64,7 @@ func locateTagWriteFast(session8 string, scope []view.Scope) (dbp, fullSID strin
 			return "", "", false
 		}
 		db := index.DBPath(tdir)
-		if _, status, err := index.EnsureIndexedTreeSource(db, tdir); err != nil || status != index.IndexFresh {
+		if !refreshTagWriteTDir(db, tdir, normalized) {
 			return "", "", false
 		}
 		con, err := store.ConnectRO(db)
@@ -43,7 +83,7 @@ func locateTagWriteFast(session8 string, scope []view.Scope) (dbp, fullSID strin
 		db := sc.DBP
 		if db == "" && sc.TDir != "" {
 			db = index.DBPath(sc.TDir)
-			if _, status, err := index.EnsureIndexedTreeSource(db, sc.TDir); err != nil || status != index.IndexFresh {
+			if !refreshTagWriteTDir(db, sc.TDir, session8) {
 				continue
 			}
 		}
