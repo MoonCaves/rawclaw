@@ -14,7 +14,9 @@ rows. That is safe for historical rows from a missing source, but it is wrong
 for a live source session after `tag-write --retag-all` replaces `[A,B]` with
 `[A]`: the overlay returns `[A(new),B(stale)]`. `runTagPrepWithTopics` then
 sees B as already tagged and can suppress the untagged window while printing a
-topic the authoritative DB deleted.
+topic the authoritative DB deleted. The same flaw exists in `cabab43` at
+`internal/cli/tagrefresh.go:111-136`; its start-UUID map is session-filtered on
+both sides, so this is not a cross-session collision.
 
 Exact reproducer: derived rows `(sid,A),(sid,B)`; authoritative rows `(sid,A)`;
 call `overlayAuthoritativeTopics(derived, authoritative)`. Observed/pinned
@@ -62,10 +64,11 @@ Deduction: **-1**.
 
 ## Explicit verdict
 
-Reject `cabab43` standalone: its start-UUID-only map is cross-session unsafe;
-the composite key in `e6f22f1` is required. Retain the overlay concept only
-after fixing session deletion semantics. Retain `047a6de` as partial fence
-cancellation progress, but do not call it end-to-end SQL cancellation.
+Reject both overlay candidates as complete fixes until whole-session
+replacement/deletion semantics are represented. The composite key in `e6f22f1`
+is harmless and more defensive, but it does not fix the stale same-session
+boundary. Retain `047a6de` as partial fence cancellation progress, but do not
+call it end-to-end SQL cancellation.
 
 ## Gates and limitations
 
