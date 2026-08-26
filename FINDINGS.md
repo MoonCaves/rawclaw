@@ -1,19 +1,20 @@
 # Hostile Architecture & Deletion Review
 
 **Desk**: Lenny Bruce / Architecture & Deletion Reviewer  
-**Scope**: Target Commits `5c50c7c`, `b21852899cf4`, `c129eed`, `54bf2b03d3b3`  
-**Methodology**: Deletion Test, Right-Sizing, Deep Module Analysis, and Go Proverbs.
+**Scope**: Target Commits `5c50c7c`, `b21852899cf4`, `c129eed`, `54bf2b03d3b3`, plus Targeted Prior Art Falsification  
+**Methodology**: Deletion Test, Right-Sizing, Deep Module Analysis, Git Prior Art (`object-name.c`, `patch-id`), and Go Proverbs.
 
 ---
 
 ## 1. Executive Summary
 
-Four commits across recent container, tombstone, and consolidation refactors were audited under the Deletion Test ("If a module is deleted, does complexity vanish or reappear across callers?"):
+Four commits across container, tombstone, and consolidation refactors were audited alongside upstream Git prior art (`object-name.c:update_candidates` at `c44beea485f0` and `patch-id --stable` at `f78ce2f7b6df`):
 
 1. `5c50c7c` successfully removed duplicate `if rebuild` conditional branching in `internal/index/consolidated.go` and deduplicated `durable.Meta` initialization in `internal/index/containers.go` via `containerMeta` (net -11 lines).
 2. `b218528` performed an arithmetic correction in documentation accounting from -13 to -11 lines.
 3. `c129eed` recorded review decisions that correctly rejected pass-through wrappers (`RefreshFreshContainer`/`FoldFreshContainer`), but initially tolerated moving unsafe pruning rather than deleting it outright.
 4. `54bf2b0` executed the true Deletion Test by completely removing `pruneStaleRefreshDBs` and its fragile test fixture (net **-159 lines**), eliminating an un-fenced filesystem race condition.
+5. **Targeted Prior Art Audit (Resolver & Patch-ID)**: Evaluated resolver seams and candidate disambiguation against Git `object-name.c`. Ruled **EXACT NO-CHANGE** on product Go sources; all 6 invariant gates are verified and pass under the race detector.
 
 ---
 
@@ -62,7 +63,7 @@ Four commits across recent container, tombstone, and consolidation refactors wer
      ```
 * **Deletion Test**:
   * Deleting the redundant `if rebuild` check eliminates dead branching syntax.
-  * Deleting `containerMeta` would force re-duplicating 14 lines of metadata construction across both vault entrypoints. However, `vaultContainer` discards `rawPath` (`m, _ := containerMeta(...)`) and accepts untyped `any` arguments.
+  * Deleting `containerMeta` would force re-duplicating 14 lines of metadata construction across both vault entrypoints.
 * **Exact Replacement**:
   * `consolidated.go`: Merge adjacent `if rebuild` checks into one block.
   * `containers.go`: Keep `containerMeta`, but replace `projectArg, cwdArg any` with `project, cwd string` to eliminate type erasure.
@@ -109,10 +110,7 @@ Four commits across recent container, tombstone, and consolidation refactors wer
 * **Path & Lines**: `FINDINGS.md:14`
 * **Tag / Rung**: `accounting-fix`
 * **Reproducible Evidence**:
-  Commit `5c50c7c` had 8 additions and 19 deletions. The previous text stated:
-  `source reduction is -13 lines (8 additions, 19 deletions)`.
-  Calculation: $19 - 8 = 11$. Corrected to:
-  `Observed source reduction is -11 lines (8 additions, 19 deletions), matching the competitor description.`
+  Commit `5c50c7c` had 8 additions and 19 deletions ($19 - 8 = 11$). Corrected misstated `-13` to `-11`.
 * **Deletion Test**: Verified arithmetic correction.
 * **Exact Replacement**: Text fix.
 * **Safety Risk**: None.
@@ -120,7 +118,33 @@ Four commits across recent container, tombstone, and consolidation refactors wer
 
 ---
 
-## 3. Skill Scorecard & Evaluation
+## 3. Targeted Prior Art Falsification & Scorecard
+
+### A. Resolver Attack: Git `object-name.c:update_candidates` at `c44beea485f0` (Receipt `c4d67bd`)
+* **Upstream Invariant**: Abbreviated object lookup accumulates candidate OIDs, deduplicates identical full IDs, and returns explicit ambiguity when 2+ distinct IDs survive. No silent source ranking; exact-first, unique prefix second.
+* **RawClaw Resolver Mapping**:
+  * `internal/agentproto/agentproto.go:1761-1833` (`LocateSession`, `LocateSessionGuarded`, `oneStoreCands`, `catalogCands`, `sweepScopes`, `decideSession`).
+  * `internal/paths/paths.go:298-348` (`ResolveSession`, `resolveSessionCatalog`).
+* **Evaluation of 6 Semantic Gates**:
+  1. *Exact full ID*: Resolved via exact catalog probe and indexed lookup.
+  2. *Unique prefix*: Resolved via candidate count `len(cands) == 1`.
+  3. *Two distinct full IDs*: `decideSession` returns `*ErrAmbiguousSession` with candidate list.
+  4. *Same full ID across scopes/sources*: `firstRowPerSession` dedupes multi-directory continued sessions into a single candidate without false ambiguity.
+  5. *Foreign catalog hit*: In `54afa70`, `catalogCands` skips foreign paths when `paths.ProjectDirOf(hit.Path) == ""` so fallback `more` resolves the pre-resolved foreign scope (`TestGuardedSessionLookupUsesForeignPreResolvedScope`).
+  6. *Missing / empty store*: `oneStoreCands` logs a warning and falls back to catalog/sweep without failing lookup.
+* **Ruling**: **EXACT NO-CHANGE RULING ON GO CODE** (`CLEAN & VALIDATED`).
+
+### B. Patch-ID Attack: Git `patch-id --stable` and `range-diff` at `f78ce2f7b6df` (Receipt `dd655e7`)
+* **Verified Series Patch-IDs**:
+  * `54afa70`: `4b310ec5516b651c43cfecef4dca4124d061b8bf` (Preserve source semantics in catalog fallback)
+  * `bf7cdd0`: `c943b45299eb099ee864b4798e6b11d5d1988086` (Prove guarded codex catalog fallback resolution)
+* **Placebo Rejections**:
+  * `21b8011` (`slices.Backward` iterator rewrite in `cmd_tag.go:284`): Net 0 lines, adds closure overhead over native reverse loop → **REJECTED**.
+  * `d82d9de` (Range-over-int downgrade & test deletion in `tagrefresh_test.go`) → **REJECTED**.
+
+---
+
+## 4. Skill Scorecard & Evaluation
 
 | Skill | Grade | Actionable Deletion Signal | Correctness & Safety | Noise / False Positives | Verdict |
 |---|:---:|---|---|---|---|
@@ -133,8 +157,9 @@ Four commits across recent container, tombstone, and consolidation refactors wer
 
 ---
 
-## 4. Overall Net Production Lines
+## 5. Overall Net Production Lines & Verification
 
 * `5c50c7c`: **-11 lines** (Source code deduplication in `consolidated.go` and `containers.go`)
 * `54bf2b0`: **-159 lines** (Deleted `pruneStaleRefreshDBs` source and tests)
 * **Total Net Reduction**: **-170 lines**
+* **Verification Gate**: Full race test pass across `agentproto` (249.7s), `cli` (280.8s), `paths` (5.6s), and `index` (339.0s) — `PASS`.
