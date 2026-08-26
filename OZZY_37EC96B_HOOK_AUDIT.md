@@ -108,4 +108,3 @@ Proceed to an independent transplant/gate, preserving the candidate's path
 validation and hard-link publication together. Keep the invalid-ID repeated
 ingest behavior documented, and add a targeted test only if the product later
 requires deduplication for nonconforming provider IDs.
-
