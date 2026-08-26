@@ -588,6 +588,63 @@ func TestEnsureIndexedContainers_ReindexFailure_WrapsContextWithoutLogging(t *te
 	}
 }
 
+// TestEnsureFreshContainer_PreservesRefreshDBOnPublishFailure proves that a
+// failed consolidated publish does not discard the successfully refreshed
+// per-container database needed for retry/recovery.
+func TestEnsureFreshContainer_PreservesRefreshDBOnPublishFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+
+	path := filepath.Join(home, "session.jsonl")
+	if err := os.WriteFile(path, []byte("message\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := source.Container{ID: "sess-seed", Path: path, CWD: "/work"}
+	msgs := func(source.Container) ([]model.Message, error) {
+		return []model.Message{{Role: "user", Text: "retry me", TS: 1, TSISO: "2026-08-25T00:00:00Z", UUID: "u1"}}, nil
+	}
+	seedDB := RefreshDBPath("claude", c.ID, c.Path)
+	if _, err := EnsureFreshContainer(seedDB, c, msgs, "claude"); err != nil {
+		t.Fatalf("seed EnsureFreshContainer: %v", err)
+	}
+
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("CREATE TRIGGER fail_publish BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'injected publish failure'); END;"); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	failurePath := filepath.Join(home, "failed-session.jsonl")
+	if err := os.WriteFile(failurePath, []byte("message\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c = source.Container{ID: "sess-publish-failure", Path: failurePath, CWD: "/work"}
+	dbp := RefreshDBPath("claude", c.ID, c.Path)
+	if _, err := EnsureFreshContainer(dbp, c, msgs, "claude"); err == nil {
+		t.Fatal("EnsureFreshContainer succeeded, want consolidated publish failure")
+	}
+
+	refresh, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("open refresh db after publish failure: %v", err)
+	}
+	defer refresh.Close()
+	var count int
+	if err := refresh.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id=?", c.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("refresh db message count = %d, want 1 after failed publish", count)
+	}
+}
+
 func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing.T) {
 	cfg := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
