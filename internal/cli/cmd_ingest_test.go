@@ -114,7 +114,7 @@ func TestPrimeScripts_StopLaunchDetachedPrewarm(t *testing.T) {
 				t.Fatalf("Stop hook failed: %v, out: %s", err, out)
 			}
 
-			deadline := time.Now().Add(5 * time.Second)
+			deadline := time.Now().Add(time.Second)
 			for time.Now().Before(deadline) {
 				if b, err := os.ReadFile(logPath); err == nil {
 					if got := strings.TrimSpace(string(b)); got == "prewarm session-stop-123456" {
@@ -206,6 +206,67 @@ func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
 					t.Fatalf("ingest calls = %q, want exactly one call", got)
 				}
 				return
+			}
+			t.Fatal("detached ingest did not run")
+		})
+	}
+}
+
+func TestPrimeScripts_SessionStartIngestsWhenCatalogUnavailable(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+
+	for _, tc := range []struct {
+		name string
+		tmpl string
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			stubDir := filepath.Join(root, "bin")
+			if err := os.MkdirAll(stubDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			logPath := filepath.Join(root, "calls.log")
+			stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
+			if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			parent := filepath.Join(root, "catalog-parent")
+			if err := os.WriteFile(parent, []byte("not a directory"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			scriptPath := filepath.Join(root, "prime.sh")
+			if err := os.WriteFile(scriptPath, []byte(renderHookScript(tc.tmpl, "''")), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			const sessionID = "catalog-unavailable-session"
+			cmd := exec.Command(sh, scriptPath)
+			cmd.Env = append(os.Environ(),
+				"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"RAWCLAW_TEST_LOG="+logPath,
+				"RAWCLAW_CATALOG_DIR="+filepath.Join(parent, "catalog"),
+			)
+			cmd.Stdin = strings.NewReader(`{"session_id":"` + sessionID + `"}`)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("SessionStart failed: %v (out=%q)", err, out)
+			}
+
+			deadline := time.Now().Add(time.Second)
+			for time.Now().Before(deadline) {
+				b, err := os.ReadFile(logPath)
+				if err == nil && strings.TrimSpace(string(b)) != "" {
+					if got := strings.TrimSpace(string(b)); got != "ingest "+sessionID {
+						t.Fatalf("ingest calls = %q, want exactly one call", got)
+					}
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
 			}
 			t.Fatal("detached ingest did not run")
 		})
