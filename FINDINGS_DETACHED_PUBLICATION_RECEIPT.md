@@ -45,3 +45,31 @@ publication is best-effort and that absence of a terminal log line is an
 allowed outcome; neither is a one-line correction.
 
 No production code was changed in this report-only red proof.
+
+## Independent referee reproduction
+
+Reviewed candidate `8c8216e25e22496b2e3e919fce836be49d692e25` in detached
+worktree `/private/tmp/furiosa-candidate-run-20260827`. The focused race gate
+passed:
+
+```text
+CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run \
+  'TestRunTagPublishChildHonorsContextTimeout|TestRunTagWriteCommandSeamIsNotIsolated'
+ok   github.com/MoonCaves/rawclaw/internal/cli  3.022s
+```
+
+I also built that candidate and ran a temporary harness that performs the same
+bare `exec.Command` + `Start` + `Process.Kill` + `Release` sequence against
+the real `tag-publish` child. Across 20 immediate-kill runs, every run
+reported `Start` returned and `kill_err=<nil>` while the redirected child log
+had `child_receipt_bytes=0`. Two 20 ms control runs also had zero bytes once
+and a partial pre-receipt fence line once. This is direct timing evidence that
+the child can be killed after `Start` returns but before its terminal log line;
+the foreground's queued line would therefore be the only receipt.
+
+The reproduction is deliberately external and temporary; no production source
+or test was changed. It establishes the missing receipt, not a proposed queue
+semantics. The smallest honest disposition remains **keep open**: durable
+queue/retry ownership is required for guaranteed completion, while a best-effort
+contract must explicitly permit a missing terminal line. A startup log line or
+`Release` handling alone cannot close the post-`Start` window.
