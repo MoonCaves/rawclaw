@@ -524,10 +524,8 @@ func writeTaggableSession(t *testing.T, root, project, id string, uuids ...strin
 	return dir
 }
 
-// TestRunTagWriteFoldsIntoTheOneStore locks the write-through: a topic tagged
-// today must be visible to the readers that query the consolidated store, not
-// only to the project db it was written into. Without the fold, `topics` would
-// keep missing every tag until the next full consolidate run.
+// TestRunTagWriteFoldsIntoTheOneStore verifies immediate authoritative state and
+// eventual detached visibility in the consolidated store.
 func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	root := newCfgRoot(t)
 	sid := "9f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
@@ -540,21 +538,35 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, "", false); err != nil {
 		t.Fatalf("runTagWriteCmd: %v\nout: %s", err, out.String())
 	}
+	if !strings.Contains(out.String(), "publication queued") {
+		t.Fatalf("output = %q, want eventual publication receipt", out.String())
+	}
+	auth, err := store.ConnectRO(index.DBPath(dir))
+	if err != nil {
+		t.Fatalf("open authoritative store: %v", err)
+	}
+	segs, err := store.TopicsForSession(auth, sid)
+	_ = auth.Close()
+	if err != nil || len(segs) != 1 || segs[0].Topic != "watermark" {
+		t.Fatalf("authoritative topics = %#v, err=%v", segs, err)
+	}
 
-	con, err := store.ConnectRO(index.ConsolidatedPath())
-	if err != nil {
-		t.Fatalf("open consolidated store: %v", err)
-	}
-	defer con.Close()
-	hits, err := store.MatchTopics(con, "watermark", 8, nil)
-	if err != nil {
-		t.Fatalf("MatchTopics on the consolidated store: %v", err)
-	}
-	if len(hits) != 1 || hits[0].Topic != "watermark" {
-		t.Fatalf("consolidated store topic hits = %+v, want the freshly written watermark tag", hits)
-	}
-	if hits[0].Project != "proj-tag" {
-		t.Errorf("hit project = %q, want proj-tag", hits[0].Project)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		con, openErr := store.ConnectRO(index.ConsolidatedPath())
+		if openErr == nil {
+			hits, readErr := store.MatchTopics(con, "watermark", 8, nil)
+			_ = con.Close()
+			if readErr == nil && len(hits) == 1 && hits[0].Project == "proj-tag" {
+				return
+			}
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("consolidated store did not receive queued watermark tag")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
@@ -576,24 +588,40 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 		t.Errorf("output missing expected confirmation: %q", out.String())
 	}
 
-	// Verify in the consolidated store
-	con, err := store.ConnectRO(index.ConsolidatedPath())
+	// The authoritative project DB is synchronous; consolidated visibility is
+	// eventual because publication is detached.
+	auth, err := store.ConnectRO(index.DBPath(dir))
 	if err != nil {
-		t.Fatalf("open consolidated store: %v", err)
+		t.Fatalf("open authoritative store: %v", err)
 	}
-	defer con.Close()
-
-	v, ok, err := store.VerdictFor(con, sid)
+	v, ok, err := store.VerdictFor(auth, sid)
+	_ = auth.Close()
 	if err != nil || !ok {
 		t.Fatalf("VerdictFor(%s) = (%+v, %v, %v), want ok=true", sid, v, ok, err)
 	}
 	if v.Verdict != store.VerdictRoutine || v.Source != store.VerdictSourceAgent {
 		t.Errorf("verdict = %+v, want verdict=routine, source=agent", v)
 	}
+	if !strings.Contains(out.String(), "publication queued") {
+		t.Fatalf("output = %q, want eventual publication receipt", out.String())
+	}
 
-	eff, err := store.IsEffectivelyRoutine(con, sid)
-	if err != nil || !eff {
-		t.Errorf("IsEffectivelyRoutine = %v, %v, want true, nil", eff, err)
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		con, openErr := store.ConnectRO(index.ConsolidatedPath())
+		if openErr == nil {
+			eff, readErr := store.IsEffectivelyRoutine(con, sid)
+			_ = con.Close()
+			if readErr == nil && eff {
+				return
+			}
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("consolidated store did not receive queued routine verdict")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
