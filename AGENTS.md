@@ -90,3 +90,5 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [ROADMAP.md](ROADMAP.md) — the north-star constraints and the forward plan (planned / exploring / speculative).
 - [CONTRIBUTING.md](CONTRIBUTING.md) — clean checkout → green build: prerequisites, build, test, lint.
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
+- [PRIOR_ART_SOURCES.md](PRIOR_ART_SOURCES.md) — primary references and reusable mechanisms for reliability, locking, hooks, durability, and performance work.
+- [WORKER_PROBLEM_PRIOR_ART.md](WORKER_PROBLEM_PRIOR_ART.md) — time-stamped worker/problem census, adoption status, and source-to-seam mapping; refresh it before relying on live branch state.
