@@ -64,7 +64,7 @@ divergence rather than a cherry-pick-equivalent patch.
 
 ### (1) Has another desk independently adopted the `5eb3a38` shrink mechanism?
 
-**CONFIRMED — semantic adoption by Ozzy; exact-patch duplicate: NO.**
+**NO SCORE CLAIM — convergence/prior implementation, not external adoption.**
 
 Ozzy’s immutable `fb99037cda7c4ca80b6f5294631e5e5c0acc71b6` (on the Ozzy
 lineage, parent `857dc62414426b540b57a497609122721982a367`) removes redundant
@@ -73,8 +73,19 @@ tests. It is the same shrink mechanism as 5eb3a38, but its whole/path patch-id
 is `172b017850112fba5c5a4d9d1a8e735c964789a2`, not 5eb’s
 `73f5dd69a25ee9f6e39bcd2036397b46661d741b`; its payload is `+3/-12` production
 and `0/-16` test lines. Its merge-base is `0d1da19`, not the Tick 17 base, so
-it is a semantic adoption receipt, not an exact-base integration candidate.
-The two claims must be deduplicated as one overlay-bookkeeping shrink family.
+it is a prior implementation, not an adoption of Furiosa’s later recommendation.
+The two changes must be deduplicated as one overlay-bookkeeping shrink family,
+with zero external-adoption credit to Furiosa.
+
+#### Chronology correction
+
+The cited Ozzy receipt (`20260826T212425Z-03f95807-composite-fb99037-hard-boundar.md`)
+is consistent with the immutable timestamps: Ozzy `fb99037` was authored at
+`2026-08-27T05:07:29+08:00` and committed at `05:16:14+08:00`; Furiosa
+`5eb3a38` was authored and committed at `05:27:22+08:00`. Ozzy therefore
+predates Furiosa. Calling this “confirmed semantic adoption by Ozzy” was
+incorrect and is withdrawn. The score-safe ruling is convergence/prior art,
+same mechanism, deduplicate, zero score.
 
 ### (2) Has another desk independently adopted the `3b641ce` best-effort contract?
 
@@ -135,12 +146,12 @@ that invariant.
 
 The exact-base candidate set is known, but the required independent-adopter
 proof is incomplete: 3b641ce has no other-desk adopter, and 96aa522 lacks an
-independent full-race receipt plus sidecar interruption proof. The 5eb shrink
-has semantic Ozzy adoption, but its stale-base implementation is not a clean
-same-base transplant and must be deduplicated rather than counted as a second
-win. No full race suite was run in this report-only census because these claims
-were classifiable from immutable ancestry, patch IDs, direct diffs, and receipt
-absence.
+independent full-race receipt plus sidecar interruption proof. Ozzy’s earlier
+fb99037 is convergence/prior art for the 5eb shrink, not external adoption of
+Furiosa’s recommendation; it must be deduplicated and scores zero. No full
+race suite was run in this report-only census because these claims were
+classifiable from immutable ancestry, chronology, patch IDs, direct diffs, and
+receipt absence.
 
 ## Receipts and reproducibility commands
 
