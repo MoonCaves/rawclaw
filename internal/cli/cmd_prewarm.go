@@ -46,20 +46,12 @@ func runPrewarmCmd(
 ) error {
 	// An explicitly empty scope makes LocateSession use only its consolidated
 	// store probe; it cannot fall through to the per-project sweep.
-	dbPath, fullSID, err := locatePrewarmStore(sessionArg)
-	if err == nil {
-		// Refresh the private source cache when possible, but deliberately do
-		// not fold it: presence in the one store is the no-refold fast path.
-		dbPath, fullSID, _, err = refreshTagSession(sessionArg, scope, more, registrations)
-		if err != nil {
-			return err
-		}
-	} else {
-		var toFold []string
-		dbPath, fullSID, toFold, err = refreshTagSession(sessionArg, scope, more, registrations)
-		if err != nil {
-			return err
-		}
+	_, _, locateErr := locatePrewarmStore(sessionArg)
+	dbPath, fullSID, toFold, err := refreshTagSession(sessionArg, scope, more, registrations)
+	if err != nil {
+		return err
+	}
+	if locateErr != nil {
 		for _, refreshDB := range toFold {
 			if err := index.SyncConsolidatedFrom(refreshDB); err != nil {
 				return fmt.Errorf("fold refreshed session %s: %w", fullSID, err)

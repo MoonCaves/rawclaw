@@ -131,7 +131,6 @@ func TestRunPrewarmExternalBehaviors(t *testing.T) {
 
 	t.Run("unchanged transcript keeps dump mtime", func(t *testing.T) {
 		dump, src, c := runPrewarmTest(t, "one", []model.Message{{Role: "user", Text: "one", UUID: "11111111-one"}})
-		_ = src
 		first, err := os.Stat(dump)
 		if err != nil {
 			t.Fatal(err)
