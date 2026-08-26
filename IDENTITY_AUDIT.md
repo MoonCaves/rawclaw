@@ -86,11 +86,14 @@ This does not make the commits identical. Their `setup.go` result blobs differ:
 
 ```text
 37ec96b result = 317fa26bdad032dbdbf879171fca1ff290f02a1b
-bd8346c result = 7d4e1cca596d4db869441219417bc2f7a2875960
+bd8346c result = c577bdccfdeea97264caaa98ddd15b16a0de4fad
 ```
 
 `37ec96b` parent `setup.go` = `032439cbdee190b3c65a8a2e33ff8f3e3d04b07f`.
 `bd8346c` parent `setup.go` = `7d4e1cca596d4db869441219417bc2f7a2875960`.
+The earlier report accidentally repeated the `bd8346c` parent blob as its
+result blob; the `+82/-74` stat was correct and comes from
+`git diff --numstat bd8346c^ bd8346c`.
 `internal/store/connect_bench_test.go` is unchanged by `37ec96b` and changed
 only by `61b7957`.
 
