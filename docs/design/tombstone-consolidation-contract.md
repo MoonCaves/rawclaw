@@ -10,10 +10,11 @@ In internal/index/consolidated.go, ConsolidateFrom coordinates folding per-proje
 At the end of ConsolidateFrom, tombstone pruning was gated behind:
 `if rebuild || anyChanged`
 
-The current foreground tag flow is also intentionally asynchronous: `tag-prep`
-and `tag-write` author the requested session first, then queue the detached
-publication/fold work. The foreground command does not wait for the full
-consolidated-store fold.
+The current foreground tag flow is also intentionally asynchronous: on its live-source
+path, `tag-prep` refreshes the requested session, while `tag-write` authors its tags;
+each then attempts to queue detached publication/fold work. The foreground command
+does not wait for the full consolidated-store fold. A successful detached child start
+is best-effort and is not a durable completion or retry guarantee.
 
 ### The Defect
 1. A session is indexed into a per-project db (p.db) and consolidated into consolidated.db.
@@ -25,12 +26,13 @@ consolidated-store fold.
 7. The deleted session remains searchable in consolidated.db.
 
 When a source database itself no longer offers a session, consolidation removes
-that source contribution during the merge. After the merge, its topic and
-verdict sidecars are pruned only when no other `session_sources` contributor
-remains. This prevents orphaned sidecar rows while preserving tags belonging to
-another surviving source. A completely empty topic set still carries no durable
-deletion revision; it must not be treated as proof that it is newer than an
-existing consolidated topic set.
+that source contribution during the merge. For each relevant sidecar table present
+in the source, the affected rows are pruned after the merge only when no
+`session_sources` contributor remains. This prevents orphaned sidecar rows while
+preserving tags belonging to another surviving source. A completely empty topic set
+does not itself carry a durable deletion revision; the current publisher therefore
+cannot use emptiness alone to prove that it supersedes an existing consolidated topic
+set.
 
 ## 2. Evaluation of Candidate Contracts
 
