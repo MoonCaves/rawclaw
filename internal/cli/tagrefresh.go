@@ -136,7 +136,7 @@ func refreshTagSession(
 	}
 	// No live source remains. Fall back to RawClaw's deliberately retained
 	// history, applying the caller's project scope only at this final read.
-	histDBP, histSID, histErr := agentproto.LocateSession(sessionArg, scope, more)
+	histDBP, histSID, histErr := agentproto.LocateSessionGuarded(sessionArg, scope, more)
 	if histErr != nil {
 		return "", "", nil, histErr
 	}
