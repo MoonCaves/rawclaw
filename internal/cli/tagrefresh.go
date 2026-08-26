@@ -46,7 +46,11 @@ func runTagPrepCmdWithSources(
 		return fmt.Errorf("open %q read-only: %w", dbp, err)
 	}
 
-	existingSegs := readConsolidatedTopics(fullSID)
+	existingSegs, err := readAuthoritativeTagTopics(dbp, fullSID)
+	if err != nil {
+		_ = con.Close()
+		return err
+	}
 	prepErr := runTagPrepWithTopics(w, con, fullSID, existingSegs)
 	_ = con.Close()
 	if prepErr != nil {
@@ -98,6 +102,52 @@ func readConsolidatedTopics(sessionID string) []store.TopicSegment {
 	defer con.Close()
 	segs, _ := store.TopicsForSession(con, sessionID)
 	return segs
+}
+
+// readAuthoritativeTagTopics overlays the current per-session DB over the
+// derived consolidated copy. The source DB is authoritative because a fold may
+// be delayed; matching start UUIDs replace stale derived rows and new rows are
+// appended in source order.
+func readAuthoritativeTagTopics(authoritativeDB, sessionID string) ([]store.TopicSegment, error) {
+	auth, err := store.ConnectRO(authoritativeDB)
+	if err != nil {
+		return nil, fmt.Errorf("open authoritative tag store %q: %w", authoritativeDB, err)
+	}
+	defer auth.Close()
+	authSegs, err := store.TopicsForSession(auth, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("read authoritative topics for %s: %w", sessionID, err)
+	}
+	if authoritativeDB == index.ConsolidatedPath() {
+		return authSegs, nil
+	}
+	derived := readConsolidatedTopics(sessionID)
+	return overlayAuthoritativeTopics(derived, authSegs), nil
+}
+
+func overlayAuthoritativeTopics(derived, authSegs []store.TopicSegment) []store.TopicSegment {
+	derived = append([]store.TopicSegment(nil), derived...)
+	positions := make(map[string]int, len(derived))
+	for i, seg := range derived {
+		positions[topicSegmentKey(seg)] = i
+	}
+	for _, seg := range authSegs {
+		key := topicSegmentKey(seg)
+		if i, ok := positions[key]; ok {
+			derived[i] = seg
+			continue
+		}
+		positions[key] = len(derived)
+		derived = append(derived, seg)
+	}
+	// The authoritative per-session database is a complete replacement set.
+	// Returning it directly drops derived rows deleted by a retag; cross-source
+	// preservation belongs to consolidation's origin-authority merge.
+	return append([]store.TopicSegment(nil), authSegs...)
+}
+
+func topicSegmentKey(seg store.TopicSegment) string {
+	return seg.SessionID + "\x00" + seg.StartUUID
 }
 
 type tagSourceMatch struct {
