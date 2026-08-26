@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"time"
-
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -25,9 +23,6 @@ import (
 // Messages method, injected so this package never imports the concrete adapters.
 // The index stays source-agnostic; the caller (cli) wires source → index.
 type MessagesFunc func(source.Container) ([]model.Message, error)
-
-// refreshStaleAfter is the maximum age for leftover temporary refresh dbs.
-var refreshStaleAfter = 24 * time.Hour
 
 // RefreshDBPath returns the private per-container cache used by targeted live
 // refreshes. It lives below the cache root so normal scope/orphan discovery
@@ -45,41 +40,6 @@ func PrewarmDumpPath(sessionID string) string {
 	dir := filepath.Join(store.CacheDir(), "prewarm")
 	_ = os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".dump")
-}
-
-func pruneStaleRefreshDBs() {
-	dir := filepath.Join(store.CacheDir(), "refresh")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	mtimes := make(map[string]time.Time, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if info, err := entry.Info(); err == nil {
-			mtimes[entry.Name()] = info.ModTime()
-		}
-	}
-	now := time.Now()
-	// A db and its WAL/SHM sidecars age as one group: a fresh -wal means the
-	// database is still live even when the .db file itself has an old mtime.
-	for name, mt := range mtimes {
-		base := strings.TrimSuffix(strings.TrimSuffix(name, "-wal"), "-shm")
-		if !strings.HasSuffix(base, ".db") {
-			continue
-		}
-		newest := mt
-		for _, sib := range []string{base, base + "-wal", base + "-shm"} {
-			if t, ok := mtimes[sib]; ok && t.After(newest) {
-				newest = t
-			}
-		}
-		if now.Sub(newest) > refreshStaleAfter {
-			_ = os.Remove(filepath.Join(dir, name))
-		}
-	}
 }
 
 // PrepareFreshContainer incrementally refreshes one live container and proves
@@ -131,8 +91,6 @@ func EnsureFreshContainer(
 	msgs MessagesFunc,
 	sourceID string,
 ) (int, error) {
-	pruneStaleRefreshDBs()
-
 	nMessages, err := PrepareFreshContainer(dbp, c, msgs, sourceID)
 	if err != nil {
 		return 0, err
