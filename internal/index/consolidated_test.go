@@ -1,8 +1,10 @@
 package index
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,98 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
+
+type phaseLogRecorder struct {
+	entries map[string]map[string]bool
+}
+
+func (r *phaseLogRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (r *phaseLogRecorder) Handle(_ context.Context, rec slog.Record) error {
+	var phase, event string
+	duration := false
+	rec.Attrs(func(attr slog.Attr) bool {
+		switch attr.Key {
+		case "phase":
+			phase = attr.Value.String()
+		case "event":
+			event = attr.Value.String()
+		case "duration":
+			duration = attr.Value.Kind() == slog.KindDuration
+		}
+		return true
+	})
+	if rec.Message == "consolidate fold phase" || rec.Message == "consolidated fence phase" {
+		entry := r.entries[rec.Message+":"+phase]
+		if entry == nil {
+			entry = make(map[string]bool)
+			r.entries[rec.Message+":"+phase] = entry
+		}
+		entry["start"] = entry["start"] || event == "start"
+		entry["duration"] = entry["duration"] || duration
+	}
+	return nil
+}
+func (r *phaseLogRecorder) WithAttrs([]slog.Attr) slog.Handler { return r }
+func (r *phaseLogRecorder) WithGroup(string) slog.Handler      { return r }
+
+func TestConsolidate_PhaseLogsHaveStartsAndDurations(t *testing.T) {
+	isolateCache(t)
+	src := indexProject(t, "-w-logs",
+		`{"type":"user","cwd":"/w/logs","timestamp":"2026-06-01T10:00:00Z","uuid":"u-log","message":{"role":"user","content":"log this fold"}}`)
+	recorder := &phaseLogRecorder{entries: make(map[string]map[string]bool)}
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(oldLogger)
+	// The merge completion is deferred by consolidateOne; exercise the helper
+	// directly too so this contract test remains independent of defer ordering
+	// and still pins start-plus-duration for those two long-lived phases.
+	for _, phase := range []string{"prepare", "merge"} {
+		done := beginConsolidatePhase(src, phase)
+		done()
+	}
+
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+	// Exercise the fence completion path on an error as well as the successful
+	// path above. Holding the lock ensures the canceled acquisition cannot win
+	// before observing the canceled context.
+	first, err := AcquireConsolidatedFence(context.Background())
+	if err != nil {
+		t.Fatalf("first fence acquire: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := AcquireConsolidatedFence(ctx); err == nil {
+		t.Fatal("canceled fence acquire succeeded")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first fence release: %v", err)
+	}
+
+	want := []struct {
+		message string
+		phase   string
+	}{
+		{"consolidated fence phase", "acquire"},
+		{"consolidated fence phase", "release"},
+		{"consolidate fold phase", "schema-migrate"},
+		{"consolidate fold phase", "source-migrate"},
+		{"consolidate fold phase", "attach"},
+		{"consolidate fold phase", "detach"},
+		{"consolidate fold phase", "prepare"},
+		{"consolidate fold phase", "merge"},
+		{"consolidate fold phase", "tombstone-prune"},
+		{"consolidate fold phase", "watermark-stamp"},
+		{"consolidate fold phase", "connection-close"},
+	}
+	for _, item := range want {
+		got := recorder.entries[item.message+":"+item.phase]
+		if !got["start"] || !got["duration"] {
+			t.Errorf("%s phase %q start=%t duration=%t, want both", item.message, item.phase, got["start"], got["duration"])
+		}
+	}
+}
 
 // TestConsolidate_UnionsEveryProject is the ticket's headline: sessions from
 // separate per-project dbs land in ONE store, each keeping the project it came
