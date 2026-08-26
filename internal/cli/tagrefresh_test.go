@@ -326,12 +326,12 @@ func TestTagWriteAuthoritativeOverlaySurvivesDelayedPublication(t *testing.T) {
 	}
 }
 
-func TestOverlayAuthoritativeTopicsKeepsSameStartAcrossSessions(t *testing.T) {
+func TestOverlayAuthoritativeTopicsReplacesSessionSet(t *testing.T) {
 	consolidated := []store.TopicSegment{{SessionID: "session-a", StartUUID: "same", Topic: "old-a"}, {SessionID: "session-b", StartUUID: "same", Topic: "old-b"}}
 	authoritative := []store.TopicSegment{{SessionID: "session-a", StartUUID: "same", Topic: "new-a"}}
 	got := overlayAuthoritativeTopics(consolidated, authoritative)
-	if len(got) != 2 || got[0].Topic != "new-a" || got[1].Topic != "old-b" {
-		t.Fatalf("overlay = %#v, want session-scoped replacement", got)
+	if len(got) != 1 || got[0].Topic != "new-a" {
+		t.Fatalf("overlay = %#v, want authoritative replacement set", got)
 	}
 }
 

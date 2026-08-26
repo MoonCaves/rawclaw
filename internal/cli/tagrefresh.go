@@ -140,7 +140,10 @@ func overlayAuthoritativeTopics(derived, authSegs []store.TopicSegment) []store.
 		positions[key] = len(derived)
 		derived = append(derived, seg)
 	}
-	return derived
+	// The authoritative per-session database is a complete replacement set.
+	// Returning it directly drops derived rows deleted by a retag; cross-source
+	// preservation belongs to consolidation's origin-authority merge.
+	return append([]store.TopicSegment(nil), authSegs...)
 }
 
 func topicSegmentKey(seg store.TopicSegment) string {
