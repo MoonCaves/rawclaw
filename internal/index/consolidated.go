@@ -876,6 +876,26 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 		}
 	}
 	if _, err := tx.Exec(`
+		DELETE FROM main.topic_segment
+		WHERE session_id IN (SELECT session_id FROM temp.consolidation_affected_sessions)
+		  AND NOT EXISTS (
+			SELECT 1 FROM main.session_sources other
+			WHERE other.session_id = main.topic_segment.session_id
+		  )
+	`); err != nil {
+		return 0, false, true, fmt.Errorf("prune deleted session topics: %w", err)
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM main.session_verdict
+		WHERE session_id IN (SELECT session_id FROM temp.consolidation_affected_sessions)
+		  AND NOT EXISTS (
+			SELECT 1 FROM main.session_sources other
+			WHERE other.session_id = main.session_verdict.session_id
+		  )
+	`); err != nil {
+		return 0, false, true, fmt.Errorf("prune deleted session verdicts: %w", err)
+	}
+	if _, err := tx.Exec(`
 		DELETE FROM main.messages
 		WHERE session_id IN (
 			SELECT a.session_id

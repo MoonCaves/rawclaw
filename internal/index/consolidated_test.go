@@ -535,6 +535,61 @@ func TestConsolidate_RebuildPreservesStoreOnlyTags(t *testing.T) {
 	con.Close()
 }
 
+func TestConsolidate_PrunesSidecarsWithoutSourceTablesAndPreservesCoContributor(t *testing.T) {
+	isolateCache(t)
+	shared := sessionRow{id: "shared-sidecar", project: "shared", cwd: "/w/shared", msgs: []msgRow{{"shared-u1", "user", "shared", 100}}}
+	orphan := sessionRow{id: "orphan-sidecar", project: "orphan", cwd: "/w/orphan", msgs: []msgRow{{"orphan-u1", "user", "orphan", 100}}}
+	a := seedSessionDB(t, "sidecar-a.db", shared, orphan)
+	b := seedSessionDB(t, "sidecar-b.db", shared)
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][2]string{{"shared-sidecar", "shared-u1"}, {"orphan-sidecar", "orphan-u1"}} {
+		if _, err := con.Exec("INSERT INTO topic_segment(session_id, start_uuid, topic, summary) VALUES (?, ?, 'topic', 'summary')", args[0], args[1]); err != nil {
+			con.Close()
+			t.Fatalf("seed topic sidecar: %v", err)
+		}
+		if _, err := con.Exec("INSERT INTO session_verdict(session_id, verdict, source) VALUES (?, 'routine', 'floor')", args[0]); err != nil {
+			con.Close()
+			t.Fatalf("seed verdict sidecar: %v", err)
+		}
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	con, err = store.ConnectRW(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("DELETE FROM sessions WHERE id IN (?, ?)", "shared-sidecar", "orphan-sidecar"); err != nil {
+		con.Close()
+		t.Fatalf("remove source sessions: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("second consolidate: %v", err)
+	}
+
+	con = openConsolidated(t)
+	defer con.Close()
+	for _, table := range []string{"topic_segment", "session_verdict"} {
+		if got := scalar(t, con, "SELECT COUNT(*) FROM "+table+" WHERE session_id='orphan-sidecar'"); got != "0" {
+			t.Errorf("%s orphan rows = %s, want 0", table, got)
+		}
+		if got := scalar(t, con, "SELECT COUNT(*) FROM "+table+" WHERE session_id='shared-sidecar'"); got != "1" {
+			t.Errorf("%s co-contributor rows = %s, want 1", table, got)
+		}
+	}
+}
+
 // TestConsolidate_RefoldsAfterRetagging pins the watermark: tagging changes a
 // source without touching one session or message row, so a watermark built from
 // those counts alone would read a re-tagged project as unchanged and its new
