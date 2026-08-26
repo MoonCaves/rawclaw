@@ -489,7 +489,7 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	done()
 
 	for _, src := range srcPaths {
-		n, _, skipped, err := consolidateOne(con, src)
+		n, _, skipped, err := consolidateOneFor(con, src, len(srcPaths) == 1)
 		if err != nil {
 			return st, fmt.Errorf("consolidate %s: %w", filepath.Base(src), err)
 		}
@@ -678,10 +678,15 @@ func beginConsolidatePhase(src, name string) func() {
 // write it makes to a source is the additive column migration below, on its own
 // connection, before the read-only attach.
 func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
-	return consolidateOneContext(context.Background(), con, src)
+	return consolidateOneFor(con, src, true)
 }
 
-func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
+func consolidateOneFor(con *sql.DB, src string, pruneTopics bool) (offered int, changed bool, skipped bool, err error) {
+	return consolidateOneContext(context.Background(), con, src, pruneTopics)
+}
+
+func consolidateOneContext(ctx context.Context, con *sql.DB, src string, pruneTopics ...bool) (offered int, changed bool, skipped bool, err error) {
+	pruneSourceTopics := len(pruneTopics) == 0 || pruneTopics[0]
 	if _, err := os.Stat(src); err != nil {
 		return 0, false, true, fmt.Errorf("source unreadable: %w", err)
 	}
@@ -843,7 +848,7 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 	// A source's topic set is authoritative only when it is the sole surviving
 	// contributor for the session. With co-contributors, retain rows because the
 	// consolidated table has no per-source topic ownership column.
-	if hasTopics {
+	if hasTopics && pruneSourceTopics {
 		if _, err := tx.Exec(`
 			DELETE FROM main.topic_segment
 			WHERE session_id IN (
@@ -851,10 +856,8 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 				FROM main.session_sources ss
 				WHERE ss.source_db = ?
 				  AND ss.session_id IN (SELECT id FROM src.sessions)
-				  AND NOT EXISTS (
-					SELECT 1 FROM main.session_sources other
-					WHERE other.session_id = ss.session_id AND other.source_db <> ss.source_db
-				  )
+				  AND (SELECT COUNT(*) FROM main.session_sources other
+				       WHERE other.session_id = ss.session_id) = 1
 			)`, srcID); err != nil {
 			return 0, false, true, fmt.Errorf("prune stale source topics: %w", err)
 		}
