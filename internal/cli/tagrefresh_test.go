@@ -14,6 +14,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/claude"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
 type tagTestSource struct {
@@ -164,6 +165,37 @@ func TestRunPrewarmExternalBehaviors(t *testing.T) {
 			t.Fatalf("grown dump mtime did not advance: %v -> %v", first.ModTime(), second.ModTime())
 		}
 	})
+}
+
+// TestTagWriteQueuesDerivedPublication proves the foreground command can finish
+// after the authoritative project-db write without waiting for consolidated
+// publication. The publisher seam is replaced so this remains deterministic.
+func TestTagWriteQueuesDerivedPublication(t *testing.T) {
+	root := newCfgRoot(t)
+	sid := "5f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
+	dir := writeTaggableSession(t, root, "proj-tag-queued", sid,
+		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
+
+	var published string
+	old := spawnTagPublish
+	spawnTagPublish = func(dbp string) error {
+		published = dbp
+		return nil
+	}
+	t.Cleanup(func() { spawnTagPublish = old })
+
+	var out strings.Builder
+	err := runTagWriteCmd(&out, strings.NewReader(`[{"start_uuid":"11111111","topic":"queued","summary":"deferred publication"}]`),
+		sid[:8], []view.Scope{{Project: "proj-tag-queued", TDir: dir}}, nil, false, "", false)
+	if err != nil {
+		t.Fatalf("runTagWriteCmd: %v", err)
+	}
+	if published == "" {
+		t.Fatal("tag-write did not request detached derived publication")
+	}
+	if !strings.Contains(out.String(), "publication queued") {
+		t.Fatalf("output = %q, want queued publication receipt", out.String())
+	}
 }
 
 func TestRunPrewarmRegeneratesWhenDumpMissing(t *testing.T) {
