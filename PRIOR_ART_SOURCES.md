@@ -413,7 +413,25 @@ Ruling: **COPY** composite candidate tuple matching `(Source, Project, SessionID
 
 Ruling: **COPY** `os.Rename` for atomic single-file swap and table-driven property verification; **ADAPT** `testing/quick` patterns for complex identifier validation.
 
-## Top twenty-eight mechanisms to carry forward
+## 29. POSIX file existence and unlink lifecycle invariants
+
+* [POSIX `unlink` Specification](https://pubs.opengroup.org/onlinepubs/9699919799/functions/unlink.html):
+  specifies that `unlink()` removes a directory entry. If the name was the last link to a file and no processes have the file open, the space is freed; if processes have the file open, the file remains active until the last file descriptor is closed.
+* [POSIX `stat` Specification](https://pubs.opengroup.org/onlinepubs/9699919799/functions/stat.html):
+  documents metadata retrieval and `ENOENT` handling for absent or unlinked paths.
+
+Ruling: **COPY** idempotent removal (`os.Remove` with `os.IsNotExist` success) under the continuous writer fence; **REJECT** check-then-unlink patterns without holding the serialization lock.
+
+## 30. Concurrency-safe pointer swapping and canonical path normalization
+
+* Go Standard Library [`sync/atomic.Pointer`](https://pkg.go.dev/sync/atomic#Pointer):
+  provides lock-free, atomic pointer reading and swapping for in-memory catalog cache snapshots and configuration updates.
+* Go Standard Library [`path/filepath.Clean`](https://pkg.go.dev/path/filepath#Clean):
+  lexically computes the shortest equivalent path by eliminating redundant `.` and `..` elements, resolving trailing slashes, and preventing path traversal escapes before filesystem calls.
+
+Ruling: **COPY** `filepath.Clean` before all catalog path comparisons; **COPY** `atomic.Pointer` for concurrent cache state; **REJECT** hand-rolled string prefix stripping that fails on irregular path separators.
+
+## Top thirty mechanisms to carry forward
 
 1. `O_CREAT|O_EXCL` plus no-follow/type validation for regular marker creation.
 2. Same-directory temp + atomic rename, with cleanup tied to ownership.
@@ -443,11 +461,13 @@ Ruling: **COPY** `os.Rename` for atomic single-file swap and table-driven proper
 26. Git `<target>.lock` same-directory temporary file staging and defer cleanup lifecycle (`git/lockfile.c`).
 27. Hierarchical composite key specificity and unambiguous prefix resolution (RFC 3986).
 28. Atomic destination replacement with `os.Rename` and generative property testing (`testing/quick`).
+29. POSIX `unlink` and `stat` idempotent file removal under continuous writer fence.
+30. Canonical path lexical normalization with `filepath.Clean` and lock-free snapshot swapping via `atomic.Pointer`.
 
 ## Source and ruling count
 
-70 primary source citations with **86 unique canonical primary URLs** across the complete corpus
-are verified. Of the mechanisms: 31 are `COPY`, 26 are `ADAPT`, 15 are `STUDY`, and 12 are `REJECT`
+74 primary source citations with **90 unique canonical primary URLs** across the complete corpus
+are verified. Of the mechanisms: 34 are `COPY`, 27 are `ADAPT`, 16 are `STUDY`, and 13 are `REJECT`
 guardrails (a source can receive more than one ruling where its mechanism and dependency have
 different implications). All recommended defaults remain POSIX/Go stdlib/SQLite/Git compatible;
 no external runtime, daemon, LLM, or cgo dependency is proposed.

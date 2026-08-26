@@ -1,6 +1,6 @@
 # RawClaw worker problem and prior-art map
 
-Snapshot taken 2026-08-26 Wave 7 from integration head `bd8346c` / `e7093ff` / `f15d1af` / `6330cc5` / `1c9995a` / `1f09356` / `63054e87` / `16146349`.
+Snapshot taken 2026-08-26 Wave 8 from integration head `bd8346c` / `1b22703` / `f5dbe89` / `8dfa677` / `f15d1af` / `6330cc5` / `508f3544` / `3f4969e5`.
 This is a report-only census. Product code and rival worktrees were not edited.
 
 ## Scope and evidence rules
@@ -17,22 +17,22 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | worker | worktree / branch @ SHA | state | concrete problem |
 |---|---|---|---|
-| raid-phase | `rawclaw-lenny-raid-phase` / `lenny/raid-phase-20260826` @ `c3b3d2b` | STALL candidate (10,307s / 2.86h) | consolidate phase timing/structured logging contract (narrowed) |
-| raid-fence | `rawclaw-lenny-raid-fence` / `lenny/raid-fence-20260826` @ `6ddd17a` | STALL candidate (16,493s / 4.58h) | writer fence and concurrent consolidated-store safety |
-| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `b0d9e0f` | STALL candidate (8,881s / 2.47h) | SessionStart atomic catalog claim, basename isolation, and child reaping (HOLD unvalidated path joins) |
-| raid-locate | `rawclaw-lenny-raid-locate` / `lenny/raid-locate-20260826` @ `d345f80` | STALL candidate (10,204s / 2.83h) | source-aware session locate/fallback ambiguity (duplicate test rejected) |
-| raid-prewarm | `rawclaw-lenny-raid-prewarm` / `lenny/raid-prewarm-20260826` @ `0635190` | STALL candidate (10,170s / 2.83h) | background prewarm/tag-prep lifecycle and cache duplication (salvage `fa485c8` only) |
-| raid-containers | `rawclaw-lenny-raid-containers` / `lenny/raid-containers-20260826` @ `d7106e9` | STALL candidate (8,996s / 2.50h) | refresh DB/WAL/SHM cleanup (HOLD: deleting direct durable-meta contract) |
-| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `b5f570b` | STALL candidate (10,304s / 2.86h) | table-driven benchmark matrix transplant (-233 test lines) |
-| skill-interfaces | `rawclaw-lenny-skill-interfaces` / `lenny/skill-interfaces-20260826` @ `997016f` | STALL candidate (10,000s / 2.78h) | targeted prior-art audit (Git object-name / patch-id; 0 novelty) |
-| skill-modernize | `rawclaw-lenny-skill-modernize` / `lenny/skill-modernize-20260826` @ `5e65260` | STALL candidate (10,463s / 2.91h) | shrink-only Go modernization (0 novelty) |
-| skill-style | `rawclaw-lenny-skill-style` / `lenny/skill-style-20260826` @ `354b0d8` | STALL candidate (10,432s / 2.90h) | POSIX/Go style and deletion opportunities (0 novelty) |
+| raid-phase | `rawclaw-lenny-raid-phase` / `lenny/raid-phase-20260826` @ `c3b3d2b` | STALL candidate (11,511s / 3.20h) | consolidate phase timing/structured logging contract (narrowed) |
+| raid-fence | `rawclaw-lenny-raid-fence` / `lenny/raid-fence-20260826` @ `6ddd17a` | STALL candidate (17,696s / 4.91h) | writer fence and concurrent consolidated-store safety |
+| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `b0d9e0f` | STALL candidate (10,084s / 2.80h) | SessionStart atomic catalog claim, basename isolation, and child reaping (HOLD unvalidated path joins) |
+| raid-locate | `rawclaw-lenny-raid-locate` / `lenny/raid-locate-20260826` @ `d345f80` | STALL candidate (11,407s / 3.17h) | source-aware session locate/fallback ambiguity (duplicate test rejected) |
+| raid-prewarm | `rawclaw-lenny-raid-prewarm` / `lenny/raid-prewarm-20260826` @ `0635190` | STALL candidate (11,373s / 3.16h) | background prewarm/tag-prep lifecycle and cache duplication (salvage `fa485c8` only) |
+| raid-containers | `rawclaw-lenny-raid-containers` / `lenny/raid-containers-20260826` @ `d7106e9` | STALL candidate (10,199s / 2.83h) | refresh DB/WAL/SHM cleanup (HOLD: deleting direct durable-meta contract) |
+| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `b5f570b` | STALL candidate (11,508s / 3.20h) | table-driven benchmark matrix transplant (-233 test lines) |
+| skill-interfaces | `rawclaw-lenny-skill-interfaces` / `lenny/skill-interfaces-20260826` @ `997016f` | STALL candidate (11,204s / 3.11h) | targeted prior-art audit (Git object-name / patch-id; 0 novelty) |
+| skill-modernize | `rawclaw-lenny-skill-modernize` / `lenny/skill-modernize-20260826` @ `5e65260` | STALL candidate (11,667s / 3.24h) | shrink-only Go modernization (0 novelty) |
+| skill-style | `rawclaw-lenny-skill-style` / `lenny/skill-style-20260826` @ `354b0d8` | STALL candidate (11,636s / 3.23h) | POSIX/Go style and deletion opportunities (0 novelty) |
 
 ### Conor adversarial desk
 
 | branch @ SHA | patch ID | state | concrete problem / mechanism |
 |---|---|---|---|
-| `origin/conor/claim-spy-20260826T132443Z-3c8f` @ `e7093ff` | `e7093ff` | active receipt | wire audit 12:59:43Z-13:24:43Z (adjudicated wire, verified unanimous standings) |
+| `origin/conor/claim-spy-20260826T134944Z-78f4` @ `1b22703` | `1b22703` | active receipt | wire audit 13:24:43Z-13:49:44Z (adjudicated wire, verified unanimous standings) |
 | `candidates/conor-pr35-containers` @ `54bf2b0` | `d7c22ba9b5bf9b41eb8b473bd1e48227e4fe3a28` | rejected duplicate | duplicate of `25a43ea`/`21ece6f`; cites nonexistent `85cf480`; 0-match test gate |
 | `candidates/conor-pr35-resolve` @ `8dfa1ca` | `4b310ec5516b651c43cfecef4dca4124d061b8bf` | rejected duplicate | duplicate of `54afa70`; source semantics fallback resolution |
 | `luna/conor-31-log-tests-20260826` @ `d5d036b` | `804bbd4fb74175854b4a824ff154b4b5724e62f6` | qualified candidate | net -57 tests; false-green standalone under mutation; safe only atop `2ee9950` |
@@ -56,7 +56,7 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 
 | worker | worktree / branch @ SHA | state | concrete problem |
 |---|---|---|---|
-| flash-spy | `rawclaw-ozzy-flash-spy` / `ozzy/flash-spy-20260826` @ `1f09356` | completed receipt | Wave 10 spy dossier: Norm Bell 28 mutant candidate & unpushed refs, Lenny 4.25h freeze |
+| flash-spy | `rawclaw-ozzy-flash-spy` / `ozzy/flash-spy-20260826` @ `f5dbe89` | completed receipt | Wave 11 spy dossier: Lenny 4.91h freeze conceded, d7106e9 mutation hole, PR35 duplicates |
 | flash-prune | `rawclaw-ozzy-flash-prune` / `ozzy/flash-prune-benchmark` @ `cdc063d` (dirty=1) | active benchmark | tombstone prune benchmark (`BenchmarkPruneTombstonedIDs` +29 test lines, novel `7c6141c4`) |
 | flash-catalog | `rawclaw-ozzy-flash-catalog` / `ozzy/flash-catalog-review` @ `cdc063d` | completed receipt | catalog resolution hostile review (held for composite tuple matching) |
 | flash-cleanup | `rawclaw-ozzy-flash-cleanup` / `ozzy/flash-refresh-cleanup` @ `89c8a28` | completed receipt | refresh database and sidecar deletion |
@@ -194,7 +194,7 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 - Product workers inventoried: **23** (10 Lenny, 5 Norm, 8 Ozzy).
 - Distinct deduplicated problems: **10**.
-- Prior-art sources cited: **86 unique canonical primary URLs** across the complete corpus (overlapping SQLite hosts and repeated links counted once; links are listed inline).
+- Prior-art sources cited: **90 unique canonical primary URLs** across the complete corpus (overlapping SQLite hosts and repeated links counted once; links are listed inline).
 - Top five highest-leverage recommendations:
   1. Replace hook FIFO/overwrite claims with POSIX exclusive regular-file creation plus same-directory atomic metadata rename.
   2. Hold the consolidated writer fence through refresh decision and DB/WAL/SHM unlink; never probe then release then delete.

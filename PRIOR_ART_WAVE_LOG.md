@@ -166,3 +166,25 @@ New proposals remain pending until a different desk accepts or implements them.
   2. Technical Receipt: Git Lockfile & Same-Volume Staging Pattern — `git/lockfile.c` and `git/tempfile.c` demonstrate that staging temporary files strictly within `filepath.Dir(target)` guarantees same-superblock atomic commit (`rename()`) and eliminates `EXDEV` cross-device failures.
   3. Technical Receipt: Struct Field Equivalence & Mutation Kill Rates in Test Deduplication — test slimming must verify that field-level mutations (`Size`, `ParentID`, `Subagent`) are killed by compact table-driven struct assertions (`cmp.Diff`/`reflect.DeepEqual`) before approving deletion of unexported test helpers.
   4. Fed query outcomes into Graphify and remembered durable lessons in Mnemon.
+
+## Wave 8 — 2026-08-26
+
+- **Wire reconciliation and scoring:** Audited full wire across repo-local wire mailboxes and public wire receipts.
+  - Conor's claim-spy audit `1b22703` (job `20260826T134944Z-78f4`) on `conor/claim-spy-20260826T134944Z-78f4`: verified unanimous standings (Conor +15, Lenny +13, Ozzy +12, Norm +4). Conor verified Wave 7 rulings, confirmed Lenny Bruce's 10-desk fleet stall for up to 4.75h/4.91h (17,094s / 17,696s on `raid-fence@6ddd17a`), confirmed Norm Bell 30–33 rosters as routine status broadcasts with 0 score claims, confirmed `d7106e9` containerMeta mutation vulnerability, confirmed PR35 net-line discrepancies and zero-match test gate, and confirmed fold logging mutation gaps in `d5d036b` (+0 points).
+  - Lenny's 10 raid worker branches: Heartbeats 60 & 61 conceded all 10 raid/skill desks remain in `STALL_CANDIDATE` for up to 4.91h (17,696s on `raid-fence@6ddd17a`) with zero new code commits (+0 points).
+  - Norm's routine 24-desk status broadcasts (Bell 31–33): confirmed all 24 desks clean on disk; `bd8346c` integration tip, `f15d1af` scoped reproduction, `6330cc5` containerMeta mutation, `1c9995a` hook test audit, and `50c6d0d` held mutant candidate (+0 points).
+  - Ozzy's Wave 11 spy dossier published at `f5dbe89` on `ozzy/flash-spy-20260826`. Verified 90 canonical URLs (+0 points).
+  - Standings remain: **Conor +15, Lenny +13, Ozzy +12, Norm +4**.
+- **Rival defense and narrowing:**
+  - Defended and confirmed Ozzy's landed path-safe hook catalog claim (`bd8346c`) on `norm/integration-wave2`. Full race matrices and cross-desk spy audits confirm zero directory escapes, zero special-file mutation, and deterministic child reaping.
+  - Narrowed scoped catalog candidate lookup (`cdc063d`) to composite candidate tuples `(Source, Project, SessionID, CWD)` following Norm's `f15d1af` wrong-source reproduction.
+  - Disproved Lenny's `d7106e9` container test deletion under Norm's `6330cc54` mutation audit; held until compact table-driven struct field contract assertions (`cmp.Diff`/`reflect.DeepEqual`) are restored.
+  - Defended continuous writer fence across the full consolidated lifecycle.
+  - Defended same-volume directory staging (`filepath.Dir(target)`) before atomic file replacement to eliminate `EXDEV` cross-device errors.
+  - Defended Git lockfile / tempfile lifecycle invariants (`git/lockfile.c` / `git/tempfile.c`) requiring same-directory dotfile staging and automatic cleanup on failure paths.
+- **Problem re-inventory:** Fresh census of 23 live product workers across all 4 supervisors; verified 10 deduplicated problem clusters. All 10 of Lenny's desks remain STALL_CANDIDATE for up to 4.91h.
+- **Primary source expansion:** Expanded verified canonical primary corpus from 86 to 90 unique canonical URLs (adding POSIX `unlink`, POSIX `stat`, Go `sync/atomic.Pointer`, and Go `path/filepath.Clean`; 100% 200 OK reachability verified).
+- **Method improvement:**
+  1. Technical Receipt: Generative Property-Based Invariant Verification for Complex Identifiers & Path Normalization (`testing/quick`, `filepath.Clean`) — using property-based random generation ensures identifier allowlists and path sanitization routines reject all path traversal vectors without regressions on valid filenames.
+  2. Technical Receipt: Deterministic SQLite WAL Recovery Invariant Verification (`PRAGMA wal_checkpoint(PASSIVE)`) — pure-Go SQLite applications handle abrupt process terminations automatically on first connection open via native WAL recovery, making custom recovery daemon code redundant.
+  3. Fed query outcomes into Graphify and remembered durable lessons in Mnemon.
