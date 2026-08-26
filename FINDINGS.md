@@ -81,16 +81,25 @@ All proposed rival changes touching the container lifecycle and indexing paths h
 - **File / Lines**: `internal/index/consolidated.go:402-450`, `internal/index/consolidated_test.go:2190-2224`
 - **Evidence**: `ConsolidateFrom` with `rebuild == true` acquires exclusive `AcquireConsolidatedFence` before any store access and holds it through complete rebuild, sidecar cleanup, and atomic swap. On injected rebuild failure, live store and sidecars remain completely untouched and `.rebuild` temporary files are removed.
 - **Verification**: Covered by `TestConsolidate_RebuildFailureLeavesLiveStoreUntouched` and `TestConsolidate_RebuildPreservesStoreOnlyTags`.
-- **RULING**: `CLEAN` (architecture conforms to rqlite snapshot/fence model).
+- **RULING**: `CLEAN` (architecture conforms to rqlite snapshot/fence model; verified by failure injection test).
 
 ---
 
-### C9 — Refresh DB/WAL/SHM Generation Unit Cleanup (`ee89c6b` / `63225f1` / `765c44d`)
-- **Exact Rival SHA**: `ee89c6b` (upstream `benbjohnson/litestream` `63225f17ccbb8dedfb26d03f7d3d07e74c6cf69f`)
+### C9 — Refresh DB/WAL/SHM Grouped Mtime Cleanup (`ee89c6b` / `63225f1` / `765c44d` / `aae80a4`)
+- **Exact Rival SHA**: `ee89c6b` / `aae80a4`
 - **File / Lines**: `internal/index/containers.go:50-84`
-- **Evidence**: `pruneStaleRefreshDBs` now groups all `.db`, `-wal`, and `-shm` sidecars by unique database base and unlinks the entire generation group together only when all files in the generation exceed `refreshStaleAfter`. If any sidecar is fresh, the entire generation is preserved.
-- **Verification**: Covered by `TestEnsureFreshContainer_PruneStaleLeftovers` (mixed-age and stale group cases).
-- **RULING**: `ADAPT_TO_CURRENT` (applied in `internal/index/containers.go`).
+- **Evidence & Ruling Clarification**: `pruneStaleRefreshDBs` groups `.db`, `-wal`, and `-shm` sidecars by unique database base and unlinks the group together only when all files in the generation exceed `refreshStaleAfter`. Live-connection lock claims are explicitly retracted (file-level mtime grouping does not constitute cross-process lock ownership; no speculative locks added).
+- **Verification**: Covered by `TestEnsureFreshContainer_PruneStaleLeftovers`.
+- **RULING**: `ADAPT_TO_CURRENT` (ordinary grouped cleanup; speculative locking rejected).
+
+---
+
+### C10 — Revert Helper-Coupled Test (`be4ef6c`)
+- **Exact Rival SHA**: `be4ef6c`
+- **File / Lines**: `internal/index/containers_test.go`
+- **Evidence**: The 99-line `TestContainerMeta_ConstructsValidDurableMeta` test tested internal helper wiring rather than end-to-end user-observable behavior.
+- **Ponytail Judgment**: Deletion wins. Reverted in full.
+- **RULING**: `REJECT` (test deleted).
 
 ---
 
