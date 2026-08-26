@@ -47,7 +47,7 @@ func newTagPublishCmd() *cobra.Command {
 }
 
 func spawnTagPublishChild(dbp string, sessionID ...string) error {
-	if dbp == "" || dbp == index.ConsolidatedPath() {
+	if isConsolidatedSource(dbp) {
 		return nil
 	}
 	exe, err := selfExe()
@@ -77,7 +77,7 @@ func spawnTagPublishChild(dbp string, sessionID ...string) error {
 }
 
 func runTagPublishChild(ctx context.Context, w io.Writer, dbp string, sessionIDs ...string) error {
-	if dbp == "" || dbp == index.ConsolidatedPath() {
+	if isConsolidatedSource(dbp) {
 		tagPublishLogLine(w, "tag-publish: skipped invalid/self source %q", dbp)
 		return nil
 	}
@@ -101,6 +101,11 @@ func runTagPublishChild(ctx context.Context, w io.Writer, dbp string, sessionIDs
 	if err != nil {
 		return err
 	}
+	fence, err := index.AcquireConsolidatedFence(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire consolidated store lock: %w", err)
+	}
+	defer fence.Close()
 	dst, err := store.ConnectRW(index.ConsolidatedPath())
 	if err != nil {
 		return err
@@ -115,6 +120,18 @@ func runTagPublishChild(ctx context.Context, w io.Writer, dbp string, sessionIDs
 	}
 	tagPublishLogLine(w, "tag-publish: published %s", dbp)
 	return nil
+}
+
+func isConsolidatedSource(dbp string) bool {
+	if dbp == "" {
+		return true
+	}
+	db, de := filepath.EvalSymlinks(dbp)
+	dst, te := filepath.EvalSymlinks(index.ConsolidatedPath())
+	if de == nil && te == nil {
+		return filepath.Clean(db) == filepath.Clean(dst)
+	}
+	return filepath.Clean(dbp) == filepath.Clean(index.ConsolidatedPath())
 }
 
 func publishSession(ctx context.Context, con *sql.DB, sid string, segments []store.TopicSegment, verdict store.Verdict, hasVerdict bool) error {
