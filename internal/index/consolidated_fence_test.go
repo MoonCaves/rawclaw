@@ -13,6 +13,16 @@ import (
 	"github.com/gofrs/flock"
 )
 
+func holdConsolidatedFence(t *testing.T) *flock.Flock {
+	t.Helper()
+	holder := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
+	locked, err := holder.TryLock()
+	if err != nil || !locked {
+		t.Fatalf("hold consolidated lock: locked=%t err=%v", locked, err)
+	}
+	return holder
+}
+
 func TestConsolidatedFence_ReportsHolderOnceAfterThreshold(t *testing.T) {
 	isolateCache(t)
 	path := filepath.Join(store.CacheDir(), "consolidated.db")
@@ -20,11 +30,7 @@ func TestConsolidatedFence_ReportsHolderOnceAfterThreshold(t *testing.T) {
 		t.Fatalf("create consolidated placeholder: %v", err)
 	}
 
-	holder := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
-	locked, err := holder.TryLock()
-	if err != nil || !locked {
-		t.Fatalf("hold consolidated lock: locked=%t err=%v", locked, err)
-	}
+	holder := holdConsolidatedFence(t)
 	defer holder.Unlock()
 
 	oldThreshold := consolidatedLockWaitThreshold
@@ -63,11 +69,7 @@ func TestConsolidatedFence_ReportsHolderOnceAfterThreshold(t *testing.T) {
 func TestIsBusy_RecognizesConsolidatedFenceTimeout(t *testing.T) {
 	isolateCache(t)
 
-	holder := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
-	locked, err := holder.TryLock()
-	if err != nil || !locked {
-		t.Fatalf("hold consolidated lock: locked=%t err=%v", locked, err)
-	}
+	holder := holdConsolidatedFence(t)
 	defer holder.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -86,11 +88,7 @@ func TestIsBusy_RecognizesConsolidatedFenceTimeout(t *testing.T) {
 // duration log recording elapsed wait time (>= timeout), in strict order.
 func TestConsolidatedFence_LogsAcquireTimeoutDuration(t *testing.T) {
 	isolateCache(t)
-	holder := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
-	locked, err := holder.TryLock()
-	if err != nil || !locked {
-		t.Fatalf("hold consolidated lock: locked=%t err=%v", locked, err)
-	}
+	holder := holdConsolidatedFence(t)
 	defer holder.Unlock()
 
 	recorder := &testLogRecorder{}
