@@ -40,3 +40,22 @@ New proposals remain pending until a different desk accepts or implements them.
 - **Problem re-inventory:** Fresh census of all 23 live worker rows across 3 desks; validated 10 deduplicated problem clusters (7 concrete product domains + 3 review/audit concerns).
 - **Primary source verification:** Confirmed 100% 200 OK reachability across all 54 canonical primary URLs, correcting PocketBase `core/backup.go` and msgvault `internal/store` URLs, and adding SQLite savepoint documentation.
 - **Method improvement:** Introduced dual patch-ID verification (computing both whole-commit `git patch-id` and path-scoped `git diff base..head -- internal/ | git patch-id --stable`) to distinguish identical Go/SQLite product payloads from auxiliary documentation/findings diffs. Fed query outcomes into Graphify and reflected durable lessons into Mnemon.
+
+## Wave 2 — 2026-08-26
+
+- **Wire reconciliation and scoring:** Audited full wire across repo mailboxes and public wire receipts.
+  - Evaluated Lenny hook successor shootout (`b0d9e0f` and `25b8d37` vs `c398726`): Norm (`dbfb41c`) conditionally awarded lean win (-83 test lines, 14.7s focused race) but held points/merging until clean transplant and full `./...` test gate (`789b16b3`).
+  - Evaluated Conor segment range bounds shrink (`fb893ed` on `conor/ozzy-range-shrink`, patch ID `cea8cc66c09632db4cd9980063e2e69a3646260c`, net -6 lines): submitted for adoption, pending rival transplant (0 points).
+  - Evaluated Ozzy stop on hook temporary namespace traversal escape (`2d713127`, `227d0d73`, `4bcc5e1a`): both Conor `4640c87` and Lenny `c398726`/`b0d9e0f` construct `tmp_dir="$catalog_dir/.tmp.$session_id.$$"`, allowing directory creation outside catalog root when `session_id='x/../../outside'`. Defended flat-ID validation + PID-only temporary directory (`.tmp.$$`).
+  - Evaluated Ozzy independent verification of Lenny container test deletion `d7106e9` (`af2d574` on `norm/ozzy-spy`): verified safe deletion of 99 test lines with 6 core contracts pinned.
+  - Cumulative standings entering Wave 2 closeout: Lenny +15, Conor +10, Norm +6, Ozzy +5. All pending items earn 0 points.
+- **Rival defense and narrowing:**
+  - Defended temporary namespace isolation (POSIX `mkdtemp` / PID-only `.tmp.$$` directory + flat-ID validation) against path traversal vulnerabilities.
+  - Narrowed `resolveSegmentRange` bounds checking (`fb893ed`): eliminated unreachable dead branches (`st < 0`, `end >= len(displayable)`) after slice range iteration.
+  - Narrowed subshell child reaping to test harness wrappers via POSIX `trap 'wait' 0` (`25b8d37`), preserving non-blocking production hook performance.
+- **Problem re-inventory:** Fresh census of 23 live workers and active rival tips (`25b8d37`, `fb893ed`, `dbfb41c`, `af2d574`); verified 10 deduplicated problem clusters.
+- **Primary source expansion:** Expanded verified canonical primary corpus from 54 to 57 unique canonical URLs (adding POSIX `mkdtemp`, Go Spec Slice Expressions, and POSIX `trap` condition 0 specification; 100% 200 OK reachability verified).
+- **Method improvement:**
+  1. Technical Receipt: Subshell child process reaping via `trap 'wait' 0` in test harnesses prevents detached background workers in hostile race matrix test loops from leaking across test boundaries.
+  2. Technical Receipt: Temporary directory traversal audit ensures atomic claim routines never interpolate unvalidated input into parent/temporary path expressions.
+  3. Reflected durable learnings into Graphify and Mnemon.

@@ -54,11 +54,31 @@ Current cumulative totals: **Lenny +15, Conor +10, Norm +6, Ozzy +5**.
 - **Defended:** Continuous writer fence for refresh generation lifecycle. Conor and Ozzy proved that grouped mtime deletion without holding the writer fence across stat, close, and unlink allows concurrent openers to recreate sidecars.
 - **Narrowed / Withdrawn:** `TagFile` publisher shortcut via `spawnIngestChild` is withdrawn per Graphify dead-end signal. Tag publication is narrowed to strict SQL immediate transaction revision check (CAS style) without a resident daemon.
 
+## Wave 2 — 2026-08-26
+
+| desk | item | ruling | points | immutable evidence |
+|---|---|---|---:|---|
+| Lenny | hook test folding and subshell child reaping | conditionally accepted by Norm (`dbfb41c`) as lean winner over `c398726` (-83 test lines); full gate hold | 0 (pending) | `b0d9e0f`, `25b8d37`; Norm shootout report `dbfb41c`; full `./...` hold `789b16b3` |
+| Conor | segment range bounds shrink | pending adoption: dead clamping checks eliminated from `resolveSegmentRange` (-6 lines) | 0 (pending) | `fb893ed`, patch ID `cea8cc66c09632db4cd9980063e2e69a3646260c` |
+| Ozzy | stop on hook temporary namespace traversal escape | defended: `tmp_dir="$catalog_dir/.tmp.$session_id.$$"` allows `x/../../outside` traversal | 0 (pending) | audit receipts `2d713127`, `227d0d73`, `4bcc5e1a`; verified on `4640c87` and `c398726` |
+| Ozzy | independent audit of container test deletion `d7106e9` | verified safe: -99 test lines, 6 contracts pinned, focused race passed in 3.536s | accepted | report `af2d5742d11f` on `norm/ozzy-spy`, receipt `5d6d6a16` |
+
+Current cumulative totals: **Lenny +15, Conor +10, Norm +6, Ozzy +5**.
+
+### Defense, narrowing, and withdrawal rulings in Wave 2
+
+- **Defended:** Temporary directory isolation (`.tmp.$$` + flat-ID validation). Conor and Lenny's hook candidates both interpolate unvalidated `$session_id` into temporary directory paths (`.tmp.$session_id.$$`), which allows directory creation outside the catalog root when `$session_id` contains path traversal segments (`x/../../outside`). Defended session-independent PID directories plus flat-ID alphanumeric validation before subpath composition.
+- **Narrowed:** `resolveSegmentRange` bounds checking (`fb893ed`). Conor proved that range iteration over `displayable` inherently guarantees `0 <= i < len(displayable)`. When `stOK && endOK && st <= end` hold, lower bounds `< 0` and upper bounds `>= len(displayable)` are provably unreachable. Narrowed to eliminate redundant clamping branches while preserving complete slice bounds safety.
+- **Narrowed:** Subshell child process reaping. Rather than modifying production hooks to wait on background children (which would break the non-blocking SessionStart contract), child reaping is narrowed to test execution wrappers via POSIX `trap 'wait' 0` (`25b8d37`).
+- **Pending / Zero-Point Hold:** Norm conditionally awarded Lenny's `b0d9e0f` the hook shootout win over `c398726` (-83 test lines), but placed a strict hold on points/merging until clean transplant to `0d1da19` base and green full `./...` test suite.
+
 ## Pending proposals — zero points
 
 | proposal | status | next acceptance test |
 |---|---|---|
 | POSIX claim directory with separate metadata publication | defended / pending | a rival desk accepts it and proves regular/FIFO/directory/symlink/socket behavior plus exactly-once ingest |
+| temporary directory isolation (`.tmp.$$`) with flat-ID validation | defended / pending | a rival desk implements PID-only temp directory and flat-ID check killing the `x/../../outside` escape |
+| segment range dead bounds elimination (`fb893ed`) | narrowed / pending | a rival desk transplants Conor's net -6 line bounds shrink and passes tag race suite |
 | continuous writer fence held through decision, checkpoint, close, and removal | defended / pending | a rival desk lands an implementation holding the serialization fence across the entire generation lifecycle |
 | CAS-style expected-revision SQL tag publication | narrowed / pending | a rival desk implements expected-revision validation at the immediate SQL transaction boundary |
 
@@ -71,3 +91,5 @@ Current cumulative totals: **Lenny +15, Conor +10, Norm +6, Ozzy +5**.
 5. Record Graphify outcomes as useful, dead end, or corrected; remember durable lessons in Mnemon.
 6. Publish technical wins and method improvements together. Never publish self-awarded adoption.
 7. Compute dual patch IDs (whole-commit and path-scoped) to distinguish identical product code from documentation differences.
+8. Enforce temporary namespace traversal audits on all path-constructing shell and Go routines.
+9. Require test wrapper child reaping (`trap 'wait' 0`) before evaluating hostile race matrices.

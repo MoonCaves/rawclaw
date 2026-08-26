@@ -197,7 +197,50 @@ Ruling: **COPY** Git's patch identity and range comparison in the review workflo
 **REJECT** adding a runtime duplicate-detection subsystem or deleting tests merely to
   reduce line count. Remove only confirmed duplicate coverage with a preserved contract.
 
-## Top ten mechanisms to carry forward
+## 11. Temporary directory isolation and path-traversal prevention
+
+* [POSIX `mkdtemp`](https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkdtemp.html):
+  creates a unique directory with strict mode permissions (`0700`) within a specified parent.
+  **COPY/ADAPT**: for hook claims, generate a session-independent temporary directory
+  (`$catalog_dir/.tmp.$$`) and validate that `$session_id` is a flat identifier before constructing
+  `$tmp_entry="$tmp_dir/$session_id"`.
+* OpenBSD [`mktemp(1)` source](https://github.com/openbsd/src/blob/master/usr.bin/mktemp/mktemp.c):
+  demonstrates fail-safe template validation and parent-directory restriction. **STUDY** to ensure
+  that untrusted session identifiers containing path separators (`/` or `..`) cannot escape the
+  catalog root during temporary claim preparation.
+
+Ruling: **COPY/ADAPT** session-independent PID temp directories + flat-ID validation;
+**REJECT** interpolating unvalidated external session strings into temporary directory paths.
+
+## 12. Slice index invariants and dead bounds elimination
+
+* [Go Language Specification — Slice Expressions](https://go.dev/ref/spec#Slice_expressions):
+  specifies slice indexing rules `0 <= low <= high <= len(a)`. Range iteration `for i, v := range s`
+  inherently yields indices `0 <= i < len(s)`.
+* Go Standard Library [`slices` implementation](https://cs.opensource.google/go/go/+/refs/tags/go1.24.6:src/slices/slices.go):
+  demonstrates minimal, exact bounds verification without redundant clamping. **COPY**: when range
+  iteration flags `stOK` and `endOK` are true, `st` and `end` are guaranteed in `[0, len(s)-1]`.
+  The predicate `!stOK || !endOK || st > end` is necessary and sufficient; dead clamping branches
+  (`st < 0`, `end >= len(s)`) should be removed.
+
+Ruling: **COPY** exact slice invariant verification; **REJECT** unreachable defensive branches
+that obscure testing boundaries.
+
+## 13. POSIX subshell exit traps for deterministic child process reaping
+
+* [POSIX Shell `trap` Specification](https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#trap):
+  defines condition `0` (EXIT) to execute actions when the shell terminates. `trap 'wait' 0`
+  guarantees that all background asynchronous children spawned by the subshell are reaped before
+  the process terminates.
+* Defensive Shell Scripting Guide on [Signal & Exit Traps](https://mywiki.wooledge.org/SignalHandling):
+  demonstrates robust cleanup patterns for backgrounded subshells. **ADAPT**: in test harnesses
+  and hook execution wrappers, register `trap 'wait' 0` so detached background ingest processes
+  cannot outlive their parent subshell and race subsequent assertions.
+
+Ruling: **COPY/ADAPT** `trap 'wait' 0` in test harnesses; preserve fail-soft non-blocking behavior
+in production hooks.
+
+## Top thirteen mechanisms to carry forward
 
 1. `O_CREAT|O_EXCL` plus no-follow/type validation for regular marker creation.
 2. Same-directory temp + atomic rename, with cleanup tied to ownership.
@@ -209,11 +252,14 @@ Ruling: **COPY** Git's patch identity and range comparison in the review workflo
 8. Indexed set-based tombstone pruning with bounded batches and honest counts.
 9. Immutable/per-operation structured phase loggers; no global mutable phase state.
 10. Stable `B.Run` names plus Git `patch-id`/`range-diff` for duplicate evidence.
+11. Session-independent PID temp directory (`.tmp.$$`) with flat-ID validation to prevent directory escape.
+12. Slice index invariant validation (`!stOK || !endOK || st > end`) eliminating redundant dead bounds.
+13. POSIX `trap 'wait' 0` in test harnesses for guaranteed child process reaping without orphan races.
 
 ## Source and ruling count
 
-34 primary source URLs are listed above. Of the mechanisms: 13 are `COPY`, 15 are
-`ADAPT`, 8 are `STUDY`, and 6 are `REJECT` guardrails (a source can receive more than
+38 primary source URLs are listed above. Of the mechanisms: 16 are `COPY`, 17 are
+`ADAPT`, 9 are `STUDY`, and 7 are `REJECT` guardrails (a source can receive more than
 one ruling where its mechanism and dependency have different implications). All
 recommended defaults remain POSIX/Go stdlib/SQLite/Git compatible; no external runtime,
 daemon, LLM, or cgo dependency is proposed.

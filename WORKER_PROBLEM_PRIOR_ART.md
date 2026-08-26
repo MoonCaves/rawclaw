@@ -1,6 +1,6 @@
 # RawClaw worker problem and prior-art map
 
-Snapshot taken 2026-08-26 from integration head `5b9756b2200ff6bd670f07407407d84d9f42d84b`.
+Snapshot taken 2026-08-26 Wave 2 from integration head `b2c630d` (with tips `25b8d37`, `fb893ed`, `dbfb41c`, `af2d574`).
 This is a report-only census. Product code and rival worktrees were not edited.
 
 ## Scope and evidence rules
@@ -19,14 +19,22 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 |---|---|---|---|
 | raid-phase | `rawclaw-lenny-raid-phase` / `lenny/raid-phase-20260826` @ `c3b3d2b` | completed receipt | consolidate phase timing/structured logging contract |
 | raid-fence | `rawclaw-lenny-raid-fence` / `lenny/raid-fence-20260826` @ `6ddd17a` | STALL candidate | writer fence and concurrent consolidated-store safety |
-| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `c398726` (dirty=2) | active | SessionStart atomic catalog claim and fail-soft POSIX hook |
+| raid-hooks | `rawclaw-lenny-raid-hooks` / `lenny/raid-hooks-20260826` @ `25b8d37` | active | SessionStart atomic catalog claim, basename isolation, and child reaping |
 | raid-locate | `rawclaw-lenny-raid-locate` / `lenny/raid-locate-20260826` @ `d345f80` | STALL candidate | source-aware session locate/fallback ambiguity |
 | raid-prewarm | `rawclaw-lenny-raid-prewarm` / `lenny/raid-prewarm-20260826` @ `0635190` | STALL candidate | background prewarm/tag-prep lifecycle and cache duplication |
 | raid-containers | `rawclaw-lenny-raid-containers` / `lenny/raid-containers-20260826` @ `d7106e9` | completed receipt | refresh DB/WAL/SHM cleanup (deleted 99-line helper-coupled test) |
-| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `b5f570b` | completed receipt | architecture/code-bloat audit |
-| skill-interfaces | `rawclaw-lenny-skill-interfaces` / `lenny/skill-interfaces-20260826` @ `997016f` | STALL candidate | unnecessary interfaces and seam shape |
+| skill-architecture | `rawclaw-lenny-skill-architecture` / `lenny/skill-architecture-20260826` @ `b5f570b` | completed receipt | table-driven benchmark matrix transplant (-233 test lines) |
+| skill-interfaces | `rawclaw-lenny-skill-interfaces` / `lenny/skill-interfaces-20260826` @ `997016f` | STALL candidate | targeted prior-art audit (Git object-name / patch-id) |
 | skill-modernize | `rawclaw-lenny-skill-modernize` / `lenny/skill-modernize-20260826` @ `5e65260` | STALL candidate | shrink-only Go modernization |
 | skill-style | `rawclaw-lenny-skill-style` / `lenny/skill-style-20260826` @ `354b0d8` | STALL candidate | POSIX/Go style and deletion opportunities |
+
+### Conor adversarial desk
+
+| branch @ SHA | patch ID | state | concrete problem / mechanism |
+|---|---|---|---|
+| `origin/conor/ozzy-range-shrink` @ `fb893ed` | `cea8cc66c09632db4cd9980063e2e69a3646260c` | active/countercommit | segment range bounds shrink (dead clamping elimination, net -6) |
+| `origin/conor/ambiguity-contract` @ `c8618ff` | `c8618ff` | candidate | mixed-source session ambiguity tests |
+| `origin/conor/fix-hook-fifo-claim` @ `13966cf` | `13966cf` | candidate | non-opening atomic catalog claim |
 
 ### Norm Bell supervisor
 
@@ -36,7 +44,8 @@ All paths below are the pane paths and all SHAs are immutable branch tips observ
 | flash-fence | `rawclaw-norm-flash-fence` / `norm/flash-fence` @ `6ac7f1a` | completed receipt | adversarial writer-fence/race review (clean test shrink) |
 | flash-hooks | `rawclaw-norm-flash-hooks` / `norm/flash-hooks` @ `2cc11d6` | rejected receipt | hook claim algorithm (rejected: directory descent defect) |
 | flash-ingest | `rawclaw-norm-flash-ingest` / `norm/flash-ingest` @ `7478bfd` (dirty=1) | quota/stalled | ingest retry/failure/status contract |
-| flash-ozzy-spy | `rawclaw-norm-ozzy-spy` / `norm/ozzy-spy` @ `c84c540` | completed receipt | audit worker claims, dirty trees, and unsafe cleanup |
+| flash-ozzy-spy | `rawclaw-norm-ozzy-spy` / `norm/ozzy-spy` @ `af2d574` | completed receipt | audit container test deletion `d7106e9` (SAFE TO ADOPT) |
+| lenny-spy | `rawclaw-norm-lenny-spy` / `norm/lenny-spy` @ `dbfb41c` | completed receipt | hook shootout comparison (`b0d9e0f` conditionally wins `c398726`) |
 
 ### Ozzy Prince supervisor
 
@@ -113,6 +122,9 @@ These additions are deliberately limited to mechanisms not already covered above
 - **Scoped structured logging:** `slog.Logger` is concurrency-safe and derives attributes/groups (https://pkg.go.dev/log/slog#Logger); the stdlib implementation shows immutable logger derivation (https://cs.opensource.google/go/go/+/refs/tags/go1.24.6:src/log/slog/logger.go). Pass a per-operation logger with phase/source fields; do not mutate a package-global “current phase.” `testing.T.Log` is scoped to one test (https://pkg.go.dev/testing#T.Log), which is the right capture boundary for parallel phase tests.
 - **Stable benchmark names and metrics:** `B.Run` (https://pkg.go.dev/testing#B.Run) gives selectable stable sub-benchmark names; `B.ReportMetric` (https://pkg.go.dev/testing#B.ReportMetric) carries custom cold/warm/count metrics without duplicate benchmark functions; the harness source (https://cs.opensource.google/go/go/+/refs/tags/go1.24.6:src/testing/benchmark.go) explains naming/iteration behavior. Keep dimensions sorted before CSV emission and never merge equal names silently.
 - **Patch identity and range comparison:** Git `patch-id` (https://git-scm.com/docs/git-patch-id) detects equivalent diffs independent of commit metadata; `range-diff` (https://git-scm.com/docs/git-range-diff) compares overlapping patch series. Use both in review/release evidence to identify duplicate worker patches. Go test caching and `-run` selection (https://pkg.go.dev/cmd/go#hdr-Test_packages) should be recorded so cached evidence is not presented as a fresh gate.
+- **Temporary directory isolation:** POSIX `mkdtemp` (https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkdtemp.html) and OpenBSD `mktemp` (https://github.com/openbsd/src/blob/master/usr.bin/mktemp/mktemp.c) establish safe private directory generation. Use a session-independent PID directory (`$catalog_dir/.tmp.$$`) and flat-ID validation to prevent directory traversal escapes (`x/../../outside`).
+- **Slice index invariants:** Go Language Specification on Slice Expressions (https://go.dev/ref/spec#Slice_expressions) and standard `slices` implementation (https://cs.opensource.google/go/go/+/refs/tags/go1.24.6:src/slices/slices.go) prove that range iteration bounds eliminate redundant clamping branches (`st < 0`, `end >= len(s)`).
+- **Subshell exit traps:** POSIX `trap` condition 0 / EXIT specification (https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#trap) and defensive shell guides (https://mywiki.wooledge.org/SignalHandling) ensure deterministic reaping of background test children via `trap 'wait' 0`.
 
 ## Phase 4: ranked leverage table
 
@@ -120,9 +132,10 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 | score | local problem | current workers | best prior art | reusable mechanism | delta | confidence / risk | exact workers to message |
 |---:|---|---|---|---|---|---|---|
-| 5 | hook claim | Lenny hooks; Norm hooks; Ozzy hook | POSIX `O_EXCL`, Go `CreateTemp`/`Rename` | exclusive regular-file claim, same-dir metadata upgrade | delete/shrink | high / medium (shell edge cases) | `lenny-raid-hooks`, `norm-flash-hooks`, `ozzy-flash-hook` |
+| 5 | hook claim | Lenny hooks; Norm hooks; Ozzy hook | POSIX `O_EXCL`, `mkdtemp`, Go `CreateTemp`/`Rename` | exclusive regular-file claim, PID-only temp dir, flat-ID validation | delete/shrink | high / medium (shell edge cases) | `lenny-raid-hooks`, `norm-flash-hooks`, `ozzy-flash-hook` |
 | 5 | fence + cleanup | Lenny fence/containers; Norm fence; Ozzy cleanup | SQLite atomic commit/locking/WAL docs | keep serialization through decision and unlink; checkpoint at quiet boundary | shrink/reuse | high / high (silent data loss) | `lenny-raid-fence`, `lenny-raid-containers`, `norm-flash-fence`, `ozzy-flash-cleanup` |
-| 5 | child lifecycle | Lenny prewarm; Norm ingest; Ozzy hidden | Go `exec.Cmd.Wait`/`CommandContext` | explicit child handle, timeout, wait/reap, durable idempotent state | delete/add small | high / medium | `lenny-raid-prewarm`, `norm-flash-ingest`, `ozzy-flash-hidden` |
+| 5 | child lifecycle | Lenny prewarm; Norm ingest; Ozzy hidden | Go `exec.Cmd.Wait`/`CommandContext`, POSIX `trap 'wait' 0` | explicit child handle, timeout, wait/reap, trap 0 reaping in tests | delete/add small | high / medium | `lenny-raid-prewarm`, `norm-flash-ingest`, `ozzy-flash-hidden` |
+| 5 | range bounds shrink | Conor range-shrink; Lenny segment-range; Ozzy harvest | Go Slice Expressions spec, `slices` package | eliminate dead clamping branches in `resolveSegmentRange` | shrink | high / low | `conor-ozzy-range-shrink`, `ozzy-flash-catalog` |
 | 4 | catalog/source resolution | Lenny locate; Norm catalog; Ozzy catalog | SQLite uniqueness + explicit path/index precedence | one resolver returning source/path/status; no duplicate catalog/stem topology | delete/shrink | medium-high / high (ambiguity) | `lenny-raid-locate`, `norm-flash-catalog`, `ozzy-flash-catalog` |
 | 5 | closeout prep/write | Lenny prewarm/locate; Ozzy hidden/catalog | Git `update-ref` CAS + SQLite transaction | expected-revision check around one coherent snapshot; unique keys remain the storage guard | reuse/add tests | medium-high / high | `lenny-raid-prewarm`, `ozzy-flash-hidden` |
 | 4 | WAL/SHM cleanup | Lenny containers; Ozzy cleanup | SQLite WAL/locking + Git lockfile ownership | private refresh generation, owner manifest, close/checkpoint, then idempotent removal under same fence | shrink/reuse | high / high | `lenny-raid-containers`, `ozzy-flash-cleanup` |
@@ -134,19 +147,19 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 ### Adoption bands
 
-**COPY/ADAPT NOW:** POSIX exclusive create + same-directory rename for catalog claims; one lock/transaction through refresh decision and unlink; `Cmd.Wait`/context for children; CAS-style expected-revision tag publication; private refresh generations; indexed tombstone pruning; scoped `slog` phase logging; stable benchmark names; Git `patch-id`/`range-diff` for review evidence.
+**COPY/ADAPT NOW:** POSIX exclusive create + same-directory rename for catalog claims; PID temp directory + flat-ID validation; `trap 'wait' 0` child reaping in tests; slice invariant dead bounds elimination; one lock/transaction through refresh decision and unlink; `Cmd.Wait`/context for children; CAS-style expected-revision tag publication; private refresh generations; indexed tombstone pruning; scoped `slog` phase logging; stable benchmark names; Git `patch-id`/`range-diff` for review evidence.
 
 **STUDY FIRST:** catalog-vs-stem resolver unification; WAL checkpoint timing; coherent tag-prep/write snapshot; staged replacement/rollback. These touch stale/fresh and deletion semantics and need adversarial tests first.
 
 **REJECT FOR RAWCLAW:** server queues, Redis/daemon locks, LLM-based resolution, cgo SQLite wrappers, or filesystem libraries that add runtime dependencies. They violate the single static pure-Go zero-dependency default or move authority outside the local cache/SQLite seams. Also reject “probe then unlink” as a fence and reject a generic interface solely to satisfy a style rule.
 
-## Phase 5: dissemination packet (already sent by root after `f773d76`; retained for audit)
+## Phase 5: dissemination packet (retained for audit)
 
 ### Supervisor messages
 
 - **Lenny Bruce:** Ten desks reduce to the high-value substitutions above plus private refresh generations and scoped phase logging. Start with SQLite locking/atomic commit (https://www.sqlite.org/atomiccommit.html, https://www.sqlite.org/lockingv3.html), Git lock ownership (https://git-scm.com/docs/api-lockfile), and POSIX `O_EXCL` (https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html). The precise experiment is a concurrent hook test plus a cleanup test that races acquisition between probe and unlink; only a lock held across both passes.
 - **Norm Bell:** Your four quota-hit lanes should compare against SQLite’s idempotent uniqueness and explicit stale/error contract: https://www.sqlite.org/lang_upsert.html and https://go.dev/doc/articles/race_detector. Re-run catalog and ingest with exact/prefix collisions, source failure, and race count >=5; do not report quota-hit panes as green.
-- **Ozzy Prince:** The cleanup receipt’s probe-to-unlink gap is confirmed by review evidence. Use PocketBase’s checkpoint/backup sequencing (https://github.com/pocketbase/pocketbase/blob/master/core/base_backup.go) only as a pattern, then keep RawClaw’s fence held through `os.Remove`; reproduce issue-32 with the race detector and immutable integration SHA.
+- **Ozzy Prince:** The cleanup receipt’s probe-to-unlink gap is confirmed by review evidence. Use PocketBase’s checkpoint/backup sequencing (https://github.com/pocketbase/pocketbase/blob/master/core/backup.go) only as a pattern, then keep RawClaw’s fence held through `os.Remove`; reproduce issue-32 with the race detector and immutable integration SHA.
 
 ### Live-worker directives
 
@@ -167,12 +180,11 @@ Scores are 1–5 for leverage, where higher means more deletion/reuse and less s
 
 - Product workers inventoried: **23** (10 Lenny, 5 Norm, 8 Ozzy).
 - Distinct deduplicated problems: **10**.
-- Prior-art sources cited: **54 unique canonical primary URLs** across the two reports (overlapping SQLite hosts and repeated links counted once; links are listed inline).
+- Prior-art sources cited: **57 unique canonical primary URLs** across the two reports (overlapping SQLite hosts and repeated links counted once; links are listed inline).
 - Top five highest-leverage recommendations:
   1. Replace hook FIFO/overwrite claims with POSIX exclusive regular-file creation plus same-directory atomic metadata rename.
   2. Hold the consolidated writer fence through refresh decision and DB/WAL/SHM unlink; never probe then release then delete.
-  3. Reap background ingest/prewarm children with `Cmd.Wait`/context and persist idempotent state in an existing seam.
+  3. Reap background ingest/prewarm children with `Cmd.Wait`/context and persist idempotent state in an existing seam; use `trap 'wait' 0` in test harnesses.
   4. Collapse catalog/stem/discovery into one source-aware resolver with explicit exact/prefix/ambiguous outcomes.
   5. Make tag-prep/write use CAS-style expected revisions plus unique keys, and keep stale/error status visible end-to-end.
-
-Branch/push truth is intentionally recorded by the supervisor after this report commit; this worktree was created from `5b9756b` as `lenny/prior-art-map-20260826` and has no product-code edits.
+Branch/push truth is intentionally recorded by the supervisor after this report commit; this worktree was created from `5b9756b` as `ozzy/prior-art-20260826` and has no product-code edits.
