@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
 	"github.com/MoonCaves/rawclaw/internal/index"
@@ -294,12 +296,28 @@ func TestTagWriteLandsInTheOneStoreAndReadsBack(t *testing.T) {
 	jsonIn := `[{"start_uuid":"` + firstUUID[:8] + `","topic":"` + topic + `","summary":"the round trip under test"}]`
 
 	var out strings.Builder
+	publishDone := make(chan error, 1)
+	oldPublish := spawnTagPublish
+	spawnTagPublish = func(dbp, sessionID string) error {
+		go func() { publishDone <- runTagPublishChild(context.Background(), io.Discard, dbp, sessionID) }()
+		return nil
+	}
+	t.Cleanup(func() { spawnTagPublish = oldPublish })
 	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, "", false); err != nil {
 		t.Fatalf("runTagWriteCmd: %v", err)
 	}
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("tag publication: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("consolidated publisher did not finish")
+	}
 
-	// The read path must see it. This is the whole point: a tag written to a db
-	// the readers never open is a tag that does not exist.
+	// The read path must see it after the deterministic detached publisher has
+	// completed. This is the whole point: a tag written to a db the readers
+	// never open is a tag that does not exist.
 	res, err := agentproto.Outline(sid[:8], scope, false)
 	if err != nil {
 		t.Fatalf("Outline: %v", err)

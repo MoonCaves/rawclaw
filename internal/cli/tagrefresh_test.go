@@ -711,19 +711,11 @@ func TestRunTagPrepCmdNeverIndexedSessionEndToEnd(t *testing.T) {
 		t.Fatalf("tag-prep output missing assistant message:\n%s", out.String())
 	}
 
-	// Verify session is now indexed in consolidated store
-	con, err := store.ConnectRO(index.ConsolidatedPath())
-	if err != nil {
-		t.Fatalf("connect consolidated store: %v", err)
-	}
-	defer con.Close()
-
-	var count int
-	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE id = ?", fullSID).Scan(&count); err != nil {
-		t.Fatalf("query consolidated store: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("expected 1 row in consolidated store for %s, got %d", fullSID, count)
+	// The fresh project DB is authoritative immediately; detached publication
+	// may still be pending, so assert that the refresh DB was retained.
+	dbp := index.RefreshDBPath(claude.Registration().ID, fullSID, transcriptPath)
+	if _, err := os.Stat(dbp); err != nil {
+		t.Fatalf("refresh db %s not found on disk, want retained: %v", dbp, err)
 	}
 }
 
