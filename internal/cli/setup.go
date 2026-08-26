@@ -66,23 +66,32 @@ fi
 		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
 		cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 		esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
-		tmp_entry="$catalog_dir/.tmp.$session_id.$$"
-		{
-			printf '{\n'
-			printf '  "session_id": "%s",\n' "$esc_session_id"
-			printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
-			printf '  "cwd": "%s",\n' "$esc_cwd"
-			printf '  "source": "claude"\n'
-			printf '}\n'
-		} > "$tmp_entry" 2>/dev/null || true
-		if ln "$tmp_entry" "$entry" 2>/dev/null; then
+		# The source basename is the session ID, so linking to the catalog
+		# directory attempts exactly catalog/<session_id>. An existing directory
+		# or symlink cannot become ln's destination directory.
+		tmp_dir="$catalog_dir/.tmp.$session_id.$$"
+		tmp_entry="$tmp_dir/$session_id"
+		claimed=0
+		if mkdir "$tmp_dir" 2>/dev/null; then
+			{
+				printf '{\n'
+				printf '  "session_id": "%s",\n' "$esc_session_id"
+				printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+				printf '  "cwd": "%s",\n' "$esc_cwd"
+				printf '  "source": "claude"\n'
+				printf '}\n'
+			} > "$tmp_entry" 2>/dev/null || true
+			if ln "$tmp_entry" "$catalog_dir" 2>/dev/null; then
+				claimed=1
+			fi
 			rm -f "$tmp_entry" 2>/dev/null || true
+			rmdir "$tmp_dir" 2>/dev/null || true
+		fi
+		if [ "$claimed" -eq 1 ]; then
 			nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
-		elif [ -e "$entry" ]; then
-			rm -f "$tmp_entry" 2>/dev/null || true
+		elif [ -e "$entry" ] || [ -L "$entry" ]; then
 			exit 0
 		else
-			rm -f "$tmp_entry" 2>/dev/null || true
 			nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 		fi
 	fi
@@ -156,23 +165,32 @@ fi
 		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
 		cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 		esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
-		tmp_entry="$catalog_dir/.tmp.$session_id.$$"
-		{
-			printf '{\n'
-			printf '  "session_id": "%s",\n' "$esc_session_id"
-			printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
-			printf '  "cwd": "%s",\n' "$esc_cwd"
-			printf '  "source": "codex"\n'
-			printf '}\n'
-		} > "$tmp_entry" 2>/dev/null || true
-		if ln "$tmp_entry" "$entry" 2>/dev/null; then
+		# The source basename is the session ID, so linking to the catalog
+		# directory attempts exactly catalog/<session_id>. An existing directory
+		# or symlink cannot become ln's destination directory.
+		tmp_dir="$catalog_dir/.tmp.$session_id.$$"
+		tmp_entry="$tmp_dir/$session_id"
+		claimed=0
+		if mkdir "$tmp_dir" 2>/dev/null; then
+			{
+				printf '{\n'
+				printf '  "session_id": "%s",\n' "$esc_session_id"
+				printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+				printf '  "cwd": "%s",\n' "$esc_cwd"
+				printf '  "source": "codex"\n'
+				printf '}\n'
+			} > "$tmp_entry" 2>/dev/null || true
+			if ln "$tmp_entry" "$catalog_dir" 2>/dev/null; then
+				claimed=1
+			fi
 			rm -f "$tmp_entry" 2>/dev/null || true
+			rmdir "$tmp_dir" 2>/dev/null || true
+		fi
+		if [ "$claimed" -eq 1 ]; then
 			nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
-		elif [ -e "$entry" ]; then
-			rm -f "$tmp_entry" 2>/dev/null || true
+		elif [ -e "$entry" ] || [ -L "$entry" ]; then
 			exit 0
 		else
-			rm -f "$tmp_entry" 2>/dev/null || true
 			nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 		fi
 	fi

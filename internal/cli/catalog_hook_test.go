@@ -26,7 +26,17 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 		{name: "claude", tmpl: rawclawPrimeScript},
 		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
 	}
-	kinds := []string{"new", "regular", "fifo", "directory", "symlink", "socket"}
+	kinds := []string{
+		"new",
+		"regular",
+		"fifo",
+		"directory",
+		"symlink",
+		"dangling-symlink",
+		"symlink-directory",
+		"symlink-fifo",
+		"socket",
+	}
 
 	for _, shellName := range shells {
 		shell, err := exec.LookPath(shellName)
@@ -44,7 +54,11 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 			for _, kind := range kinds {
 				t.Run(tc.name+"/"+shellName+"/"+kind, func(t *testing.T) {
 					stubDir := t.TempDir()
-					stubRawclaw(t, stubDir)
+					logPath := filepath.Join(t.TempDir(), "rawclaw.log")
+					rawclawPath := stubRawclaw(t, stubDir)
+					if err := os.WriteFile(rawclawPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"), 0o755); err != nil {
+						t.Fatal(err)
+					}
 					catalogDir := filepath.Join(os.TempDir(), fmt.Sprintf("rawclaw-cat-%d", time.Now().UnixNano()))
 					if err := os.MkdirAll(catalogDir, 0o755); err != nil {
 						t.Fatal(err)
@@ -58,6 +72,7 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 					sessionID := "fifo-claim-test"
 					entry := filepath.Join(catalogDir, sessionID)
 					var listener net.Listener
+					var symlinkTarget string
 					switch kind {
 					case "regular":
 						if err := os.WriteFile(entry, []byte("existing"), 0o644); err != nil {
@@ -72,11 +87,32 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 							t.Fatal(err)
 						}
 					case "symlink":
-						target := filepath.Join(catalogDir, "target")
-						if err := os.WriteFile(target, []byte("target"), 0o644); err != nil {
+						symlinkTarget = filepath.Join(catalogDir, "target")
+						if err := os.WriteFile(symlinkTarget, []byte("target"), 0o644); err != nil {
 							t.Fatal(err)
 						}
-						if err := os.Symlink(target, entry); err != nil {
+						if err := os.Symlink(symlinkTarget, entry); err != nil {
+							t.Fatal(err)
+						}
+					case "dangling-symlink":
+						symlinkTarget = filepath.Join(catalogDir, "missing-target")
+						if err := os.Symlink(symlinkTarget, entry); err != nil {
+							t.Fatal(err)
+						}
+					case "symlink-directory":
+						symlinkTarget = filepath.Join(catalogDir, "target-dir")
+						if err := os.Mkdir(symlinkTarget, 0o755); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(symlinkTarget, entry); err != nil {
+							t.Fatal(err)
+						}
+					case "symlink-fifo":
+						symlinkTarget = filepath.Join(catalogDir, "target-fifo")
+						if err := syscall.Mkfifo(symlinkTarget, 0o644); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(symlinkTarget, entry); err != nil {
 							t.Fatal(err)
 						}
 					case "socket":
@@ -87,6 +123,14 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 						}
 						defer listener.Close()
 					}
+					var beforeMode os.FileMode
+					if kind != "new" {
+						info, err := os.Lstat(entry)
+						if err != nil {
+							t.Fatalf("lstat existing %s path before hook: %v", kind, err)
+						}
+						beforeMode = info.Mode()
+					}
 
 					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 					defer cancel()
@@ -94,6 +138,7 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 					cmd.Env = append(os.Environ(),
 						"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 						"RAWCLAW_CATALOG_DIR="+catalogDir,
+						"RAWCLAW_TEST_LOG="+logPath,
 					)
 					cmd.Stdin = strings.NewReader(`{"session_id":"` + sessionID + `"}`)
 					out, err := cmd.Output()
@@ -104,25 +149,104 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 						t.Fatalf("hook failed for %s path under %s: %v; output=%q", kind, shellName, err, out)
 					}
 
+					calls := readDetachedIngestCalls(t, logPath, kind == "new")
 					if kind == "new" {
+						if len(calls) != 1 || calls[0] != "ingest "+sessionID {
+							t.Fatalf("detached rawclaw calls = %q, want [%q]", calls, "ingest "+sessionID)
+						}
 						if info, err := os.Stat(entry); err != nil || !info.Mode().IsRegular() {
 							t.Fatalf("new claim entry = %v, want regular file", err)
 						}
 						if _, err := paths.ReadCatalogEntry(entry); err != nil {
 							t.Fatalf("new claim entry is not valid catalog JSON: %v", err)
 						}
-					} else if kind == "regular" {
-						got, err := os.ReadFile(entry)
-						if err != nil {
-							t.Fatal(err)
+					} else {
+						if len(calls) != 0 {
+							t.Fatalf("detached rawclaw calls for existing %s path = %q, want none", kind, calls)
 						}
-						if string(got) != "existing" {
-							t.Fatalf("existing regular claim changed to %q", got)
+
+						after, err := os.Lstat(entry)
+						if err != nil {
+							t.Fatalf("lstat existing %s path after hook: %v", kind, err)
+						}
+						if beforeMode != after.Mode() {
+							t.Fatalf("existing %s mode changed from %v to %v", kind, beforeMode, after.Mode())
+						}
+
+						if strings.HasPrefix(kind, "symlink") || kind == "dangling-symlink" {
+							gotTarget, err := os.Readlink(entry)
+							if err != nil {
+								t.Fatalf("read existing %s target: %v", kind, err)
+							}
+							if gotTarget != symlinkTarget {
+								t.Fatalf("existing %s target changed from %q to %q", kind, symlinkTarget, gotTarget)
+							}
+						}
+						if kind == "directory" {
+							entries, err := os.ReadDir(entry)
+							if err != nil {
+								t.Fatalf("read existing directory: %v", err)
+							}
+							if len(entries) != 0 {
+								t.Fatalf("existing directory received nested artifacts: %v", entries)
+							}
+						}
+						if kind == "symlink-directory" {
+							entries, err := os.ReadDir(symlinkTarget)
+							if err != nil {
+								t.Fatalf("read symlink target directory: %v", err)
+							}
+							if len(entries) != 0 {
+								t.Fatalf("symlink target directory received nested artifacts: %v", entries)
+							}
+						}
+						if kind == "regular" {
+							got, err := os.ReadFile(entry)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if string(got) != "existing" {
+								t.Fatalf("existing regular claim changed to %q", got)
+							}
+						}
+					}
+					catalogEntries, err := os.ReadDir(catalogDir)
+					if err != nil {
+						t.Fatalf("read catalog directory after hook: %v", err)
+					}
+					for _, catalogEntry := range catalogEntries {
+						if strings.HasPrefix(catalogEntry.Name(), ".tmp.") {
+							t.Fatalf("temporary claim directory leaked: %s", catalogEntry.Name())
 						}
 					}
 				})
 			}
 		}
+	}
+}
+
+func readDetachedIngestCalls(t *testing.T, logPath string, waitForCall bool) []string {
+	t.Helper()
+	wait := 100 * time.Millisecond
+	if waitForCall {
+		wait = 2 * time.Second
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		data, err := os.ReadFile(logPath)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		var calls []string
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if line != "" {
+				calls = append(calls, line)
+			}
+		}
+		if (!waitForCall && len(calls) > 0) || (waitForCall && len(calls) >= 1) || time.Now().After(deadline) {
+			return calls
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
