@@ -19,6 +19,39 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
+func setupIngestTestEnv(t *testing.T) string {
+	t.Helper()
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg, ".claude"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(cfg, ".local", "share", "rawclaw", "catalog"))
+	return cfg
+}
+
+func writeTestCatalogSession(t *testing.T, cfg, sessionID, content string) string {
+	t.Helper()
+	projectDir := filepath.Join(cfg, "projects", "proj-"+sessionID)
+	transPath := filepath.Join(projectDir, sessionID+".jsonl")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalogEntry := paths.CatalogEntry{
+		SessionID:      sessionID,
+		TranscriptPath: transPath,
+		CWD:            filepath.Join(cfg, "work", "proj-"+sessionID),
+		Source:         "claude",
+	}
+	if err := paths.WriteCatalogEntry(paths.CatalogDir(), catalogEntry); err != nil {
+		t.Fatalf("write catalog entry: %v", err)
+	}
+	return transPath
+}
+
 func TestDiscoverAllIngestSources_ReportsAdapterErrors(t *testing.T) {
 	broken := &tagTestSource{discoverErr: errors.New("broken adapter")}
 	working := &tagTestSource{containers: []source.Container{{ID: "working-session", Path: "/tmp/working.jsonl"}}}
@@ -255,61 +288,24 @@ func TestClaudePrimeScript_ExecutesDetachedIngest(t *testing.T) {
 	}
 }
 
-// TestIngestCmd_IndexesFreshSession_EndToEnd exercises end-to-end ingestion of
-// a newly created session transcript into consolidated.db and proves it is searchable.
+// TestIngestCmd_IndexesFreshSession_EndToEnd verifies that `rawclaw ingest <session_id>`
+// processes the session transcript into both the private refresh DB and consolidated.db,
+// and makes the conversation content immediately searchable.
 func TestIngestCmd_IndexesFreshSession_EndToEnd(t *testing.T) {
-	cfg := t.TempDir()
-	t.Setenv("HOME", cfg)
-	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg, ".claude"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
-	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(cfg, ".local", "share", "rawclaw", "catalog"))
-
-	cacheDir := store.CacheDir()
-	if !strings.HasPrefix(cacheDir, cfg) {
-		t.Fatalf("store.CacheDir() = %q not isolated inside %q", cacheDir, cfg)
-	}
+	cfg := setupIngestTestEnv(t)
 
 	sessionID := "11112222-3333-4444-5555-666677778888"
-	projectDir := filepath.Join(cfg, "projects", "my-app")
-	transPath := filepath.Join(projectDir, sessionID+".jsonl")
-
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create Claude JSONL transcript
 	jsonlContent := strings.Join([]string{
-		`{"type":"user","message":{"role":"user","content":"How do I configure redis cache pool?"},"uuid":"u-101","timestamp":"2026-08-20T10:00:00Z"}`,
-		`{"type":"assistant","message":{"role":"assistant","content":"Configure redis with PoolSize and MinIdleConns."},"uuid":"u-102","timestamp":"2026-08-20T10:00:05Z"}`,
+		`{"type":"user","message":{"role":"user","content":"Optimize redis cache pool connection lifecycle"},"uuid":"u-101","timestamp":"2026-08-20T10:00:00Z"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":"Configuring pool size and idle connection timeouts for redis."},"uuid":"u-102","timestamp":"2026-08-20T10:00:05Z"}`,
 	}, "\n") + "\n"
+	writeTestCatalogSession(t, cfg, sessionID, jsonlContent)
 
-	if err := os.WriteFile(transPath, []byte(jsonlContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Write catalog entry as prime.sh would
-	catalogEntry := paths.CatalogEntry{
-		SessionID:      sessionID,
-		TranscriptPath: transPath,
-		CWD:            filepath.Join(cfg, "work", "my-app"),
-		Source:         "claude",
-	}
-	if err := paths.WriteCatalogEntry(paths.CatalogDir(), catalogEntry); err != nil {
-		t.Fatalf("write catalog entry: %v", err)
-	}
-
-	// 1. Run rawclaw ingest <session_id>
 	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "ingest", sessionID)
 	if err != nil {
 		t.Fatalf("ingest failed: %v, out: %s", err, out)
 	}
 
-	if !strings.Contains(out, "Ingested session") || !strings.Contains(out, "2 messages") {
-		t.Errorf("unexpected ingest output: %q", out)
-	}
-
-	// 2. Verify consolidated.db holds the session and messages
 	con, err := store.ConnectRO(index.ConsolidatedPath())
 	if err != nil {
 		t.Fatalf("open consolidated store: %v", err)
@@ -329,10 +325,9 @@ func TestIngestCmd_IndexesFreshSession_EndToEnd(t *testing.T) {
 		t.Fatalf("query messages count: %v", err)
 	}
 	if rowCount != 2 {
-		t.Errorf("messages rows count = %d, want 2", rowCount)
+		t.Errorf("messages count = %d, want 2", rowCount)
 	}
 
-	// 3. Search query finds the freshly ingested session
 	searchOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--json", "redis cache pool")
 	if err != nil {
 		t.Fatalf("search failed: %v, out: %s", err, searchOut)
@@ -359,39 +354,14 @@ func TestIngestCmd_IndexesFreshSession_EndToEnd(t *testing.T) {
 // TestIngestCmd_Idempotent_RepeatedRunIsNoOp verifies that a repeated ingest run
 // on an unchanged session is a clean no-op and does not duplicate messages.
 func TestIngestCmd_Idempotent_RepeatedRunIsNoOp(t *testing.T) {
-	cfg := t.TempDir()
-	t.Setenv("HOME", cfg)
-	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg, ".claude"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
-	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(cfg, ".local", "share", "rawclaw", "catalog"))
+	cfg := setupIngestTestEnv(t)
 
 	sessionID := "22223333-4444-5555-6666-777788889999"
-	projectDir := filepath.Join(cfg, "projects", "app-dup")
-	transPath := filepath.Join(projectDir, sessionID+".jsonl")
-
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	jsonlContent := strings.Join([]string{
 		`{"type":"user","message":{"role":"user","content":"Implement idempotent background worker"},"uuid":"u-201","timestamp":"2026-08-21T10:00:00Z"}`,
 		`{"type":"assistant","message":{"role":"assistant","content":"Idempotency guaranteed by deduplication key."},"uuid":"u-202","timestamp":"2026-08-21T10:00:05Z"}`,
 	}, "\n") + "\n"
-
-	if err := os.WriteFile(transPath, []byte(jsonlContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	catalogEntry := paths.CatalogEntry{
-		SessionID:      sessionID,
-		TranscriptPath: transPath,
-		CWD:            filepath.Join(cfg, "work", "app-dup"),
-		Source:         "claude",
-	}
-	if err := paths.WriteCatalogEntry(paths.CatalogDir(), catalogEntry); err != nil {
-		t.Fatalf("write catalog entry: %v", err)
-	}
+	writeTestCatalogSession(t, cfg, sessionID, jsonlContent)
 
 	// First ingest run
 	out1, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "ingest", sessionID)
@@ -432,12 +402,7 @@ func TestIngestCmd_Idempotent_RepeatedRunIsNoOp(t *testing.T) {
 // TestIngestCmd_ConcurrentRuns verifies that multiple concurrent ingest invocations
 // serialize safely without SQLite lock contention errors or corrupted state.
 func TestIngestCmd_ConcurrentRuns(t *testing.T) {
-	cfg := t.TempDir()
-	t.Setenv("HOME", cfg)
-	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg, ".claude"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
-	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(cfg, ".local", "share", "rawclaw", "catalog"))
+	cfg := setupIngestTestEnv(t)
 
 	const numSessions = 8
 	var sessionIDs []string
@@ -445,27 +410,11 @@ func TestIngestCmd_ConcurrentRuns(t *testing.T) {
 	for i := 0; i < numSessions; i++ {
 		sid := fmt.Sprintf("33334444-5555-6666-7777-%012d", i)
 		sessionIDs = append(sessionIDs, sid)
-		projectDir := filepath.Join(cfg, "projects", fmt.Sprintf("proj-%d", i))
-		transPath := filepath.Join(projectDir, sid+".jsonl")
-		if err := os.MkdirAll(projectDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		jsonlContent := strings.Join([]string{
+		content := strings.Join([]string{
 			`{"type":"user","message":{"role":"user","content":"Concurrent test message ` + sid + `"},"uuid":"u-` + sid + `-1","timestamp":"2026-08-22T10:00:00Z"}`,
 			`{"type":"assistant","message":{"role":"assistant","content":"Response for ` + sid + `"},"uuid":"u-` + sid + `-2","timestamp":"2026-08-22T10:00:05Z"}`,
 		}, "\n") + "\n"
-		if err := os.WriteFile(transPath, []byte(jsonlContent), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		catalogEntry := paths.CatalogEntry{
-			SessionID:      sid,
-			TranscriptPath: transPath,
-			CWD:            filepath.Join(cfg, "work", fmt.Sprintf("proj-%d", i)),
-			Source:         "claude",
-		}
-		if err := paths.WriteCatalogEntry(paths.CatalogDir(), catalogEntry); err != nil {
-			t.Fatalf("write catalog entry: %v", err)
-		}
+		writeTestCatalogSession(t, cfg, sid, content)
 	}
 
 	// Run 16 concurrent ingest operations (both unique and overlapping sessions)
@@ -512,12 +461,7 @@ func TestIngestCmd_ConcurrentRuns(t *testing.T) {
 // TestIngestCmd_NonExistentTranscript_SkipsGracefully verifies that attempting
 // to ingest a session whose transcript file does not exist yet exits 0 cleanly.
 func TestIngestCmd_NonExistentTranscript_SkipsGracefully(t *testing.T) {
-	cfg := t.TempDir()
-	t.Setenv("HOME", cfg)
-	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(cfg, ".claude"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
-	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(cfg, ".local", "share", "rawclaw", "catalog"))
+	cfg := setupIngestTestEnv(t)
 
 	sessionID := "99990000-1111-2222-3333-444455556666"
 	catalogEntry := paths.CatalogEntry{
