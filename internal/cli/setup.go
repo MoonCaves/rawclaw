@@ -66,6 +66,9 @@ if [ -n "$session_id" ]; then
 		claimed=1
 	elif [ -e "$entry" ]; then
 		exit 0
+	else
+		# If the catalog cannot be reached, do not silently suppress this ingest.
+		claimed=1
 	fi
 	if [ "$claimed" -eq 1 ]; then
 		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
@@ -157,6 +160,9 @@ if [ -n "$session_id" ]; then
 		claimed=1
 	elif [ -e "$entry" ]; then
 		exit 0
+	else
+		# If the catalog cannot be reached, do not silently suppress this ingest.
+		claimed=1
 	fi
 	if [ "$claimed" -eq 1 ]; then
 		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
