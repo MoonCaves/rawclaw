@@ -1796,15 +1796,9 @@ func catalogCands(scope []view.Scope, session8 string) []sessionCand {
 		return nil
 	}
 	projects := scopeProjects(scope)
-	allowed := func(project string) bool {
-		if projects == nil {
-			return true
-		}
-		return slices.Contains(projects, project)
-	}
 	var narrowed []view.Scope
 	for _, hit := range hits {
-		if !allowed(hit.Project) {
+		if projects != nil && !slices.Contains(projects, hit.Project) {
 			continue
 		}
 		tdir := paths.ProjectDirOf(hit.Path)
