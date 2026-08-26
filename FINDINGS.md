@@ -1,7 +1,7 @@
-# Hostile Review & Cross-Examination: Hook Deduplication, Fail-Soft Resilience, and Upstream Architecture Skills
+# Hostile Review & Cross-Examination: Hook Deduplication, Fail-Soft Resilience, Special-File Matrix & Prior Art
 
 **Lane**: `lenny/skill-style-20260826`  
-**Target Commits**: `f8fd1fe`, `c88bc4664c40`, `4b32d95e04fc`, `bf7cdd0`, `92d0067`, `54afa70`  
+**Target Commits**: `f8fd1fe`, `c88bc4664c40`, `4b32d95e04fc`, `bf7cdd0`, `92d0067`, `54afa70`, `13966cf`, `9b1169a`, `2cc11d6`  
 **Inspected Files**:
 - `internal/cli/setup.go`
 - `internal/cli/catalog_hook_test.go`
@@ -29,80 +29,84 @@
 
 ---
 
-## 2. Style, Bloat & Architecture Cross-Examination
+## 2. Special-File Matrix Attack on `(set -C; : > "$entry")`
 
-### A. Unnecessary `else` Branches
-- **Audit**: Inspected conditional control flow across `setup.go`, `agentproto.go`, and test helpers.
-- **Finding**: Functions strictly adhere to early returns:
-  - `scopeConfigDir`: returns early on `!project`, keeping the happy path flat at root indentation.
-  - `writeOrRemoveConfigFile`: handles `len(data) == 0` with an early return before `writeJSONFile`.
-  - `maybePrintProjectTrustWarning`: guards on `target != targetCodex || !project` with an immediate return.
-- **Map Mutation**: In `removeRawclawAntigravityHooks`, the `if len(filtered) == 0 { delete(...) } else { groupMap[...] = filtered }` branch is an explicit map mutation and represents the minimal clear Go idiom.
+### The Special-File Vulnerability Matrix
+The naive noclobber redirection claim `(set -C; : > "$entry") 2>/dev/null` was evaluated against a matrix of non-regular filesystem entries across `/bin/sh` and `/bin/dash`:
 
-### B. Repeated Shell Fragments
-- **Audit**: `rawclawPrimeScript` and `rawclawCodexPrimeScript` duplicate ~30 lines of POSIX shell logic (session ID regex extraction, catalog path expansion, `set -C` atomic claim, and temporary JSON creation).
-- **Evaluation**: Inlining templates into `const` string blocks avoids runtime string templating dependencies, keeps binary startup instant, and makes each POSIX shell script self-contained and independently auditable with standard shell linters (`shellcheck`).
+| Node Type | Behavior under `(set -C; : > "$entry")` | Severity | Root Cause |
+|---|---|:---:|---|
+| **FIFO (named pipe)** | **HANGS INDEFINITELY** | **FATAL (P0)** | Shell redirection executes `open(path, O_WRONLY)` without `O_NONBLOCK`. In POSIX, opening a FIFO for write blocks in the kernel until a reader connects. Hook hangs on SessionStart, deadlocking agent launch. |
+| **UNIX Socket** | Fails with `ENXIO` / `EOPNOTSUPP` | Medium | Shell fails to open socket for writing. Falls through to `elif [ -e "$entry" ]`, exiting 0. |
+| **Directory** | Fails with `EISDIR` | Medium | Redirection fails; subshell exits non-zero; falls through to `elif [ -e "$entry" ]`. |
+| **Dangling Symlink** | Claims/overwrites target | High | `set -C` sees link target is missing and creates target regular file, mutating foreign paths. |
+| **Symlink to FIFO** | **HANGS INDEFINITELY** | **FATAL (P0)** | Follows symlink and blocks on FIFO `open()`. |
+| **Missing Parent** | Fails with `ENOENT` | Low | `mkdir -p` failure handled fail-soft. |
 
-### C. Needless Helpers & Public Surface
-- **Audit**: Unification helpers `installRawclawHookWith` and `ejectRawclawHookWith` use higher-order functions (`hasHooks`, `removeHooks`) to parameterize format differences.
-- **Encapsulation**: All helper functions remain strictly unexported in `package cli`. No new public API surface is introduced.
-
-### D. Comments: Invariant Defense vs. Obvious Code
-- **Audit**: Block comments in `setup.go` document critical failure modes and non-obvious platform constraints:
-  - Explains why `rawclawMarker = "hooks/rawclaw/"` uses path segments rather than the bare word "rawclaw" to avoid clobbering sibling tools.
-  - Explains why `true >` is used over `: >` (preventing fatal exits under POSIX `dash` when special builtins hit redirection errors).
-  - Documents non-interactive `PATH` isolation and `os.Executable` absolute path baking.
-- Trivial standard library calls have zero comment clutter.
-
-### E. Functional-Option & Interface Temptation
-- **Audit**: The implementation resisted introducing abstract `type HookTarget interface` or `type InstallOption func(*InstallConfig)`.
-- **Right-Sizing**: Procedural dispatch across 3 known agent targets via unexported functions satisfies the two-adapter / right-sizing rule with zero heap allocations or interface indirection.
-
-### F. Modernizations (Shrink Without Changing POSIX Bytes)
-- **Applicable Go Modernizations**: `cmp.Or` for environment fallbacks, `slices.Contains` for hook filtering, and `t.Context()` in test setups.
-- **POSIX Invariant**: Go-side modernizations strictly preserve the exact literal bytes of the POSIX `sh` templates (preserving `(set -C; : > "$entry")` and single-quote escaping).
+### Prior Art & Safe Hard-Link Mechanism (Git `tempfile.c`)
+- **Upstream Pattern**: Git `tempfile.c:create_tempfile_mode` (`c44beea485f0f2feaf460e2ac87fdd5608d63cf0`) writes to a PID-isolated sibling opened with `O_CREAT|O_EXCL`, then performs a final atomic link step.
+- **RawClaw Adaptation**: Replace open-by-redirection with atomic `ln "$tmp_entry" "$entry" 2>/dev/null`.
+- **Inviolable Invariant**: The `link(2)` system call operates strictly on directory entries and inode links; it **never opens the target file for I/O**. Consequently, `ln` cannot hang on FIFOs, sockets, or special devices.
 
 ---
 
-## 3. Proof of Correctness (Correctness Beats Line Count)
+## 3. Patch-ID & Range-Diff Attack on Rival Hook Branches
 
-### 1. Concurrent Dedup Proof
+Cross-examination of rival branches (`conor/fix-hook-fifo-claim` vs `norm/flash-hooks` vs `lenny/raid-hooks-20260826`):
+
+```bash
+git patch-id --stable:
+  9b75b6006c56603528f7ef8e3b2626a638f2c98c  13966cf (Conor: link claim)
+  4fd42e86fccc178626d19bd0353aba3a029a93fa  2cc11d6 (Norm: flash hooks)
+  0165e364e7b5c8819775f3a1734d3f4b25d6e7a3  9b1169a (Conor: pre-link existence check + test matrix)
+```
+
+- **Novelty Deduction**:
+  - `2cc11d6` (Norm) directly replicates Conor's `13966cf` template restructuring (`tmp_entry > ln "$tmp_entry" "$entry"`), confirming zero independent mechanism novelty.
+  - Conor's `9b1169a` improves on `13966cf` by adding the pre-link existence check `if [ -e "$entry" ] || [ -L "$entry" ]; then exit 0; fi`, preventing unnecessary temporary file creation when the catalog entry already exists.
+  - `9b1169a` adds comprehensive test coverage across regular/FIFO/directory/symlink/socket matrix under both `/bin/sh` and `/bin/dash`.
+
+---
+
+## 4. Confirmed Deduction & Smallest Safe Transplant
+
+### Confirmed Deduction
+The noclobber redirection `(set -C; : > "$entry")` is provably broken against pre-existing FIFOs and must be permanently discarded in favor of `link(2)`-based atomic claiming.
+
+### Smallest Safe Transplant (Net -4 lines in `setup.go`)
+Replace the two-phase empty claim + `mv` in `rawclawPrimeScript` and `rawclawCodexPrimeScript` with direct hard-link claiming:
+
 ```sh
-claimed=0
-if (set -C; : > "$entry") 2>/dev/null; then
-    claimed=1
-elif [ -e "$entry" ]; then
+tmp_entry="$catalog_dir/.tmp.$session_id.$$"
+if {
+    printf '{\n'
+    printf '  "session_id": "%s",\n' "$esc_session_id"
+    printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+    printf '  "cwd": "%s",\n' "$esc_cwd"
+    printf '  "source": "claude"\n'
+    printf '}\n'
+} > "$tmp_entry" 2>/dev/null && ln "$tmp_entry" "$entry" 2>/dev/null; then
+    rm -f "$tmp_entry" 2>/dev/null || true
+    nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+elif [ -e "$entry" ] || [ -L "$entry" ]; then
+    rm -f "$tmp_entry" 2>/dev/null || true
     exit 0
+else
+    rm -f "$tmp_entry" 2>/dev/null || true
+    # Fail-soft: if catalog persistence failed due to permissions or I/O, ingest still launches.
+    nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 ```
-- **Atomicity**: Shell `set -C` (noclobber) maps to kernel `open(..., O_WRONLY|O_CREAT|O_EXCL)`.
-- **Proof**: If $N$ processes launch concurrently for the same `session_id`, exactly one subshell creates `$entry` and sets `claimed=1`. The other $N-1$ processes fail the `set -C` check, hit `elif [ -e "$entry" ]`, and terminate immediately with exit code `0`.
-- Only the winning process writes the metadata JSON and launches `nohup "$RAWCLAW" ingest "$session_id"`.
-- Verified by `TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest`.
 
-### 2. Fail-Soft Permission and I/O Behavior
-- **Unwritable Directory / Permission Denied**:
-  - If `mkdir -p` fails or `$catalog_dir` is unwritable, `claimed` stays `0`.
-  - Fallback: `true > "$entry" 2>/dev/null || true` prevents shell termination (using `true >` instead of `: >` to avoid POSIX `dash` fatal exit on special builtin redirection failure).
-  - The hook bypasses the catalog write, outputs the discovery banner to stdout, and exits `0` without breaking the agent's SessionStart event (`TestPrimeScript_CatalogWriteFailure_NeverFailsHook`).
-- **Missing Dependencies**:
-  - Codex hook: `command -v python3 >/dev/null 2>&1 || exit 0` gracefully suppresses the banner if Python 3 is absent.
-  - Antigravity hook: Injects pre-marshaled JSON (`@@RAWCLAW_INJECT_JSON@@`), requiring zero runtime JSON binaries.
-
-### 3. JSON Envelopes
-- **Session Catalog Entry**: `{"session_id":"...", "transcript_path":"...", "cwd":"...", "source":"claude"|"codex"}` written atomically via temporary file rename (`mv -f "$tmp_entry" "$entry"`).
-- **Claude Code**: Emits bare banner text to stdout.
-- **Codex**: Emits `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}`.
-- **Antigravity**: Emits `{"injectSteps":[{"ephemeralMessage":"..."}]}`.
-
-### 4. Exact Ejection
-- **File Removal**: Deletes `hooks/rawclaw/prime.sh` and legacy `tagqueue.sh`.
-- **Directory Cascade**: `removeIfEmpty` recursively removes `hooks/rawclaw`, `hooks`, and config directories **only if completely empty**. Sibling tools or user files are never deleted.
-- **Config Surgical Editing**: Removes only keys matching `hooks/rawclaw/` or `"rawclaw"`. If the resulting config is empty `{}`, the file is deleted (`writeOrRemoveConfigFile`); otherwise, non-rawclaw keys are preserved byte-for-byte.
+**Benefits**:
+1. Eliminates FIFO hang entirely (zero open on `$entry`).
+2. Atomically claims and writes the rich JSON in one step (no separate empty marker file).
+3. Preserves fail-soft single-ingest launch on permission errors.
+4. Cleans up temporary link files reliably.
 
 ---
 
-## 4. Upstream Architecture & Bloat Skills Scorecard
+## 5. Upstream Architecture & Bloat Skills Scorecard
 
 | Skill | Grade | Actionable Deletion Signal | Correctness Awareness | Noise Level | Assessment for this Target |
 |---|:---:|:---:|:---:|:---:|---|
@@ -113,13 +117,8 @@ fi
 | **`golang-structs-interfaces`** | **C+** | Low | High | High | **Over-abstraction hazard**: Encourages interface creation, compile-time assertions, and embedding that tempt developers to convert 3 static file templates into an object hierarchy. |
 | **`golang-design-patterns`** | **D** | Low | Medium | High | **Severe bloat hazard**: Recommends functional options (`NewInstaller(WithClaude(), WithCodex())`), builders, and lifecycle hooks that would inflate 150 lines of lean Go into 400+ lines of ceremony. |
 
-### Skills That Would Make This Patch Worse
-1. **`golang-design-patterns`**: Would attempt to wrap procedural hook installation in functional options or factory structs, adding indirection without any architectural benefit.
-2. **`golang-structs-interfaces`**: Would tempt introducing a `HookTarget` interface and separate struct types for each runtime, scattering simple string templates across multiple files.
-3. **Unconstrained `ponytail` (Ultra mode)**: Might flag POSIX shell fail-soft fallback branches (`true > "$entry" || true`, `|| true` on `mkdir`, and multi-step `set -C` subshells) as "speculative error handling" or attempt to delete characterization tests, degrading runtime resilience in restricted user environments.
-
 ---
 
-## 5. Metric & Conclusion
-- **Net Production Lines Possible**: Net -42 lines across hook installation/ejection deduplication without compromising POSIX bytes or test coverage.
+## 6. Metric & Conclusion
+- **Net Production Lines Possible**: Net -42 lines across hook installation/ejection deduplication plus -4 lines from the hard-link claim transplant.
 - **Go Source Integrity**: Zero Go source edits required; `gofmt` clean across `internal/`.
