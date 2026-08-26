@@ -154,7 +154,7 @@ The current harvest tip has a separate whole-commit duplicate with Norm's
 git show cfccbc6 --pretty=format: | git patch-id --stable
 git show 539de03 --pretty=format: | git patch-id --stable
 7addd4ca88dd31164e993883d4b57a4852e8e5b8 0000000000000000000000000000000000000000
-7addd4ca88dd31164e993883d4b57a4852e8e5 0000000000000000000000000000000000000000
+7addd4ca88dd31164e993883d4b57a4852e8e5b8 0000000000000000000000000000000000000000
 git diff --numstat cfccbc6^ cfccbc6
 0  9  internal/index/consolidated_test.go
 git diff --numstat 539de03^ 539de03
