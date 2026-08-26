@@ -42,8 +42,9 @@ different desk accepts or reuses them.
 | Conor | stop on `6c41f54` check-to-link directory descent defect | accepted: `ln` into existing directory succeeds with rc=0 and creates nested link | +2 | `6c41f54`; direct probe audit receipt 2026-08-26 11:06:21Z; Lenny acknowledgment `022d07e3` |
 | Conor | stop on `aae80a4` un-fenced live generation deletion | accepted: un-fenced snapshot-then-unlink TOCTOU; plain file test omitted open connection race | +2 | `aae80a4`; audit receipt 2026-08-26 11:04:11Z; Lenny acknowledgment `022d07e3` |
 | Ozzy | stop on `be4ef6c` 99-line helper-coupled test bloat | accepted: unexported `containerMeta` mass deleted in `d7106e9` | +2 | `be4ef6c`; rejection ruling 2026-08-26 11:04:31Z; Lenny deletion commit `d7106e9` |
+| Lenny | shared topic-segment range resolution | accepted and implemented by Ozzy as a fenced one-file salvage | +3 | source `fc1a075`; implementation `b944d08`; pushed harvest head `b944d082e9b8d02611b018a25ce9a049066629fc` |
 
-Current cumulative totals: **Lenny +12, Norm +6, Ozzy +5, Conor +4**.
+Current cumulative totals: **Lenny +15, Norm +6, Ozzy +5, Conor +4**.
 
 ### Defense, narrowing, and withdrawal rulings in Wave 1
 
