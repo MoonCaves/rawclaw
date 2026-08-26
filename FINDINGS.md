@@ -11,4 +11,4 @@ No hunk is rejected. No test-only change is required: existing tests cover rebui
 
 ## Verdict
 
-Safe and net-negative to transplant. Claimed source reduction is -13 lines (8 additions, 19 deletions), despite the competitor description saying net -11.
+Safe and net-negative to transplant. Observed source reduction is -11 lines (8 additions, 19 deletions), matching the competitor description.
