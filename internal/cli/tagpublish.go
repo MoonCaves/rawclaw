@@ -93,11 +93,7 @@ func runTagPublishChild(ctx context.Context, w io.Writer, dbp string, sessionIDs
 		return err
 	}
 	defer src.Close()
-	segments, err := store.TopicsForSession(src, sid)
-	if err != nil {
-		return err
-	}
-	verdict, hasVerdict, err := store.VerdictFor(src, sid)
+	segments, verdict, hasVerdict, err := readTagSnapshot(ctx, src, sid)
 	if err != nil {
 		return err
 	}
@@ -120,6 +116,50 @@ func runTagPublishChild(ctx context.Context, w io.Writer, dbp string, sessionIDs
 	}
 	tagPublishLogLine(w, "tag-publish: published %s", dbp)
 	return nil
+}
+
+func readTagSnapshot(ctx context.Context, con *sql.DB, sid string) ([]store.TopicSegment, store.Verdict, bool, error) {
+	tx, err := con.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, store.Verdict{}, false, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, "SELECT session_id,start_uuid,end_uuid,topic,summary,tagged_at,origin_machine FROM topic_segment WHERE session_id=? ORDER BY id", sid)
+	if err != nil {
+		return nil, store.Verdict{}, false, err
+	}
+	var segments []store.TopicSegment
+	for rows.Next() {
+		var s store.TopicSegment
+		var end, topic, summary, origin sql.NullString
+		var at sql.NullFloat64
+		if err := rows.Scan(&s.SessionID, &s.StartUUID, &end, &topic, &summary, &at, &origin); err != nil {
+			rows.Close()
+			return nil, store.Verdict{}, false, err
+		}
+		s.EndUUID, s.Topic, s.Summary, s.OriginMachine, s.TaggedAt = end.String, topic.String, summary.String, origin.String, at.Float64
+		segments = append(segments, s)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, store.Verdict{}, false, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, store.Verdict{}, false, err
+	}
+	var v store.Verdict
+	var source, origin sql.NullString
+	var at sql.NullFloat64
+	err = tx.QueryRowContext(ctx, "SELECT session_id,verdict,source,origin_machine,tagged_at FROM session_verdict WHERE session_id=?", sid).Scan(&v.SessionID, &v.Verdict, &source, &origin, &at)
+	if err == sql.ErrNoRows {
+		err = nil
+	} else if err == nil {
+		v.Source, v.OriginMachine, v.TaggedAt = source.String, origin.String, at.Float64
+	}
+	if err != nil {
+		return nil, store.Verdict{}, false, err
+	}
+	return segments, v, v.SessionID != "", tx.Commit()
 }
 
 func isConsolidatedSource(dbp string) bool {
