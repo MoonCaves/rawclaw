@@ -515,10 +515,10 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	if err := pruneTombstoned(con); err != nil {
 		return st, err
 	}
-	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&st.Sessions); err != nil {
+	if err := con.QueryRow("SELECT COUNT(id) FROM sessions").Scan(&st.Sessions); err != nil {
 		return st, fmt.Errorf("count sessions: %w", err)
 	}
-	if err := con.QueryRow("SELECT COUNT(*) FROM messages").Scan(&st.Messages); err != nil {
+	if err := con.QueryRow("SELECT COUNT(session_id) FROM messages").Scan(&st.Messages); err != nil {
 		return st, fmt.Errorf("count messages: %w", err)
 	}
 	if err := StampIngestWatermark(con); err != nil {
