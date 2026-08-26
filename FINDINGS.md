@@ -65,9 +65,21 @@ All proposed rival changes touching the container lifecycle and indexing paths h
 
 ---
 
+### C7 — Deduplicate Rebuild & Vault Metadata Construction (`5c50c7c`)
+- **Exact Rival SHA**: `5c50c7c00ce748eb73d3c0454ce0027c9f90112c`
+- **File / Lines**: `internal/index/consolidated.go:416-423`, `internal/index/containers.go:578-615`
+- **Evidence**:
+  1. `internal/index/consolidated.go`: Consecutive `if rebuild {` checks without intervening statements can be merged cleanly without altering error handling, phase timing, or transaction semantics.
+  2. `internal/index/containers.go`: `vaultContainer` and `vaultContainerAll` contain 15 identical lines constructing `durable.Meta` and calling `backingFileState(rawPath)`. Extracting `containerMeta(c source.Container, sourceID string, projectArg, cwdArg any) (durable.Meta, string)` deduplicates this logic while preserving exact vault file and metadata persistence behavior across all adapters.
+- **Ponytail Judgment**: Net -13 lines of redundant code eliminated. Standard library / direct helper reuse.
+- **RULING**: `TRANSPLANT_EXACTLY`.
+
+---
+
 ## Verification Plan
 
 1. Ensure tests in `internal/index` pass cleanly with race detection:
    `CGO_ENABLED=0 go test -race -count=1 ./internal/index/...`
 2. Ensure formatting:
    `gofmt -l internal/index/`
+
