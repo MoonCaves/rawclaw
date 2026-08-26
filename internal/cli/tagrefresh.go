@@ -57,23 +57,11 @@ func runTagPrepCmdWithSources(
 		return prepErr
 	}
 
-	// Ceiling comment: Trading immediate consolidated-store consistency for closeout latency:
-	// the tag-prep dump is already delivered to stdout from the proven-fresh refresh db,
-	// so if the 2.6GB consolidated store is currently busy/locked under concurrent write traffic,
-	// we defer the fold. The retained refresh db remains on disk and will be drained into the
-	// consolidated store on the next ingest or touch.
-	for _, refreshDB := range toFold {
-		if err := index.SyncConsolidatedFrom(refreshDB); err != nil {
-			if index.IsBusy(err) {
-				fmt.Fprintln(tagPrepStderr, "# fold deferred (store busy); refresh db retained, will fold on next ingest")
-			} else {
-				// The dump above already succeeded and was delivered to stdout, so this
-				// command still exits 0 — but a non-busy fold failure is not the expected
-				// "try again later" case and must not vanish silently.
-				fmt.Fprintf(tagPrepStderr, "# fold failed (%v); refresh db retained, will retry on next ingest\n", err)
-			}
-			return nil
-		}
+	// The dump is already delivered from the proven-fresh refresh DB. Publish the
+	// retained DB asynchronously so a busy consolidated store cannot delay the
+	// answer; the ingest child will retry the fold later.
+	if len(toFold) > 0 && !maybeSpawnIngest(fullSID) {
+		fmt.Fprintln(tagPrepStderr, "# fold deferred; refresh db retained, will fold on next ingest")
 	}
 	return nil
 }
