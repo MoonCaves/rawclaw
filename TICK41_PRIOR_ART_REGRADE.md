@@ -1,7 +1,7 @@
 # Tick 41 cumulative prior-art regrade
 
 run_timestamp: `2026-08-27T02:00:53Z`
-run_completion_utc: `2026-08-27T02:00:53Z`
+run_completion_utc: `2026-08-27T02:09:37Z`
 prior_watermark: `20260827T013550Z`
 new_watermark: `20260827T020038Z`
 
@@ -106,3 +106,8 @@ The original wording incorrectly paired `new_watermark: 20260827T020038Z`
 with “the watermark does not advance.” The processed conforming receipt and
 later completion make the advance valid; only adoption and score remain
 unchanged.
+
+## Correction note — 2026-08-27T02:09:37Z
+
+Completion was refreshed after the watermark correction so all correction
+timestamps are no later than `run_completion_utc`.
