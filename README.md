@@ -171,6 +171,8 @@ Every session gets tagged at its topic-change points with concept keywords, so a
 
 `rawclaw tag-write <session-id>` writes a subagent's structured topic segments or `--routine` verdict directly into the index. A session marked with a routine verdict sorts below equal-relevance normal hits via a shared partition at result assembly; it is never hidden, renders a visible `routine` marker, and is detailed in `--debug-search`.
 
+`rawclaw closeout <full-session-id>` queues detached, bounded `tag-prep` -> optional headless tagger -> `tag-write` passes for a completed session. Configure the optional tagger with `~/.cache/session-search/tagger-config.json` as `{"argv":["/absolute/path/to/tagger","--model","name"]}`; its stdin is the exact prep output and its stdout must be only the JSON segment array accepted by `tag-write`. Without that file, run the printed recovery command: `rawclaw tag-prep <full-session-id>`.
+
 ### Optional transcript archive — a git remote as durable, multi-machine storage
 
 Raw transcripts die upstream (Claude Code's ~30-day purge) and live on only one machine until they don't. The archive gives them one durable home: any private git remote (GitHub, Gitea, a bare repo over SSH — no rawclaw-specific server).
