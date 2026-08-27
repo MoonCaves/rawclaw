@@ -115,3 +115,16 @@ not evidence that modernc supports the same public interrupt primitive.
 No external adoption, independent green receipt, Direction-Lock invalidation,
 or merge authorization was observed. Scheduler/control text and prior internal
 mutation reports are not external adoption evidence.
+
+## Correction: Tailscale source identity
+
+The Tailscale source entry previously mislabeled a 64-hex value as the Git
+commit. The verified repository `HEAD` is the 40-hex commit
+`15a02b90c60613ae3b6caa4a07c945cb3c874611`. The earlier
+`8034b3e3f7a53544a8089c3682af35b0081c27ddbd1f283f316df3093513a83c` value is
+not a Git commit; it was a content/ETag-style hash and is superseded for source
+identity. The inspected `sqlite.go` remains the same evidence: `txInit` issues
+`BEGIN IMMEDIATE`, and `WithQueryCancel` invokes SQLite interrupt handling.
+This correction does not change `PA-SQLITE-INTERRUPT-BEGIN-001` status
+(`PENDING`, score 0) or the requirement to prove applicability on modernc
+v1.45.0.
