@@ -49,3 +49,15 @@ in `internal/cli/cmd_ingest.go:backingPath` and
 unrelated cleanup.
 
 Estimated net reduction: 4 lines.
+
+# Ponytail ruling: finding #20
+
+## Finding #20 — ACCEPT
+
+`internal/cli/cmd_ingest.go:7,284` uses the deprecated `math/rand` global
+API solely for retry jitter. Go 1.24 supports `math/rand/v2`; replace the
+import and `rand.Intn(20)` with `rand.IntN(20)`. Preserve the exact `0..19`
+upper-exclusive domain and millisecond duration units. No test or abstraction
+is needed for this one-token, behavior-preserving migration.
+
+Estimated net production change: 0 lines.
