@@ -90,3 +90,4 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [ROADMAP.md](ROADMAP.md) — the north-star constraints and the forward plan (planned / exploring / speculative).
 - [CONTRIBUTING.md](CONTRIBUTING.md) — clean checkout → green build: prerequisites, build, test, lint.
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
+- [docs/agents/session-closeout.md](docs/agents/session-closeout.md) — operational closeout semantics for supervisor and harness sessions.
