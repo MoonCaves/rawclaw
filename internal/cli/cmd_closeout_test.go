@@ -160,7 +160,11 @@ func TestCloseoutToken_ReclaimsDeadLeaseButNotLiveLease(t *testing.T) {
 	old := time.Now().Add(-2 * closeoutTokenTTL)
 	writeLease := func(value string, when time.Time) {
 		t.Helper()
-		if err := os.WriteFile(path, []byte(value), 0o644); err != nil {
+		_ = os.RemoveAll(path)
+		if err := os.Mkdir(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, value), nil, 0o400); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chtimes(path, when, when); err != nil {
@@ -175,7 +179,7 @@ func TestCloseoutToken_ReclaimsDeadLeaseButNotLiveLease(t *testing.T) {
 	if _, ok := acquireCloseoutToken(sid); !ok {
 		t.Fatal("did not reclaim a dead closeout lease")
 	}
-	releaseCloseoutToken(sid, "stale-token")
+	// The newly acquired token is intentionally released by its owner only.
 }
 
 func TestCloseoutTokenHeldUntilExplicitRelease(t *testing.T) {

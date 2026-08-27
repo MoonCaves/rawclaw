@@ -66,40 +66,37 @@ func acquireCloseoutToken(sessionID string) (string, bool) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", false
 	}
-	path := closeoutTokenPath(dir, sessionID)
-	tokenBytes := make([]byte, 32)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return "", false
-	}
-	token := hex.EncodeToString(tokenBytes)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		if os.IsExist(err) {
-			if !reclaimCloseoutToken(path) {
+	lockDir := closeoutTokenPath(dir, sessionID)
+	for range 2 {
+		if err := os.Mkdir(lockDir, 0o755); err != nil {
+			if !os.IsExist(err) || !reclaimCloseoutToken(lockDir) {
 				return "", false
 			}
-			f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-			if err != nil {
-				return "", false
-			}
-		} else {
+			continue
+		}
+		token, err := randomCloseoutToken()
+		if err != nil {
+			_ = os.Remove(lockDir)
 			return "", false
 		}
+		marker := filepath.Join(lockDir, token)
+		if err := os.WriteFile(marker, nil, 0o400); err != nil {
+			_ = os.Remove(lockDir)
+			return "", false
+		}
+		return token, true
 	}
-	if _, err := f.WriteString(token); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return "", false
-	}
-	_ = f.Close()
-	return token, true
+	return "", false
 }
 
 func releaseCloseoutToken(sessionID, token string) {
-	path := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
-	b, err := os.ReadFile(path)
-	if err == nil && string(b) == token {
-		_ = os.Remove(path)
+	lockDir := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
+	if !validCloseoutToken(token) {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(lockDir, token)); err == nil {
+		_ = os.Remove(filepath.Join(lockDir, token))
+		_ = os.Remove(lockDir)
 	}
 }
 
@@ -118,15 +115,36 @@ func reclaimCloseoutToken(path string) bool {
 	if err != nil || time.Since(st.ModTime()) < closeoutTokenTTL {
 		return false
 	}
-	return os.Remove(path) == nil
+	suffix, err := randomCloseoutToken()
+	if err != nil {
+		return false
+	}
+	quarantine := path + ".stale-" + suffix
+	if err := os.Rename(path, quarantine); err != nil {
+		return false
+	}
+	return os.RemoveAll(quarantine) == nil
 }
 
 func validateCloseoutToken(sessionID, token string) bool {
-	if token == "" {
+	if !validCloseoutToken(token) {
 		return false
 	}
-	b, err := os.ReadFile(closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID))
-	return err == nil && string(b) == token
+	_, err := os.Stat(filepath.Join(closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID), token))
+	return err == nil
+}
+
+func validCloseoutToken(token string) bool {
+	b, err := hex.DecodeString(token)
+	return err == nil && len(b) == 32
+}
+
+func randomCloseoutToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // maybeSpawnIngest fires a detached self-invocation of `rawclaw ingest [session]`
