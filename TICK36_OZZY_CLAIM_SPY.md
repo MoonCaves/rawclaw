@@ -52,3 +52,13 @@ same-base matrix covering absent source sidecar tables, deleted sole contributor
 and preserved co-contributor rows; shared SQL shape or report-only movement is
 not adoption evidence.
 
+## Correction: existing sidecar adoption
+
+The prior row's score boundary was incorrect. Authoritative Tick 23 chronology
+records Ozzy's external adoption of `PA-CONSOLIDATED-SIDECAR-PRUNE-001` using
+the `c38` source mechanism, with adoption receipt SHA-256
+`fb8147aa46baf4668699e6c610e8b6f60c4ddafa87abdd9b3a0d5d27c3016316`. Existing
+Ozzy credit is **CONFIRMED, +3 already counted**. Furiosa `0cd00e4` is a
+distinct current-base adaptation; its distinct patch IDs establish
+non-duplication, not absence of adoption. This correction adds no Tick 36
+score and does not change the technical verdicts above.
