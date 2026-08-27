@@ -2,24 +2,6 @@ Issue #41 is caused by removing refresh-cache eviction while retaining refresh D
 
 ## Issue #57 findings
 
-## Finding #7 — ACCEPT
-
-`internal/store/stats.go:GetCorpusStats` has six independent aggregate queries.
-Replace them with exactly two conditional-aggregation queries: one over
-`sessions`, one over `messages`. Preserve zero-row counts, `MIN`/`MAX` NULL
-handling, the existing zero-stats-on-scan-error behavior, and the public
-`CorpusStats` result. Reuse `database/sql`; add no abstraction or dependency.
-
-## Finding #19 — ACCEPT
-
-`first10` only receives documented ASCII ISO timestamps. Replace the rune-slice
-allocation with `s[:min(len(s), 10)]`; preserve empty and short-string behavior.
-
-## Scope fence
-
-Only `internal/store/stats.go` and its directly corresponding store stats test
-are in scope. No GitHub, graphify, or mailbox state is modified.
-=======
 - `internal/cli/cli.go` wires `--include-path` as a regex over project working
   directories, and passes it into `agentproto.SearchOpts.IncludePath`.
 - `internal/query.PathPredicate` applies the include/exclude pattern to the
@@ -57,3 +39,13 @@ allocation with `s[:min(len(s), 10)]`; preserve empty and short-string behavior.
 
 Only `internal/store/stats.go` and its directly corresponding store stats test
 are in scope. No GitHub, graphify, or mailbox state is modified.
+
+# Accepted Ponytail Finding 13
+
+Ruling: replace the duplicate hand-rolled `strings.IndexByte` fragment stripping
+in `internal/cli/cmd_ingest.go:backingPath` and
+`internal/index/containers.go:backingFilePath` with exact-equivalent
+`strings.Cut` calls. Keep the two local functions; add no shared helper or
+unrelated cleanup.
+
+Estimated net reduction: 4 lines.
