@@ -55,8 +55,10 @@ func TestRunCloseout_LaunchesOncePerSession(t *testing.T) {
 		closeoutNow = oldNow
 	})
 	var launches []string
-	spawnCloseout = func(sessionID string) error {
+	var launchToken string
+	spawnCloseout = func(sessionID, token string) error {
 		launches = append(launches, sessionID)
+		launchToken = token
 		return nil
 	}
 	closeoutNow = func() time.Time { return time.Unix(100, 0) }
@@ -74,6 +76,7 @@ func TestRunCloseout_LaunchesOncePerSession(t *testing.T) {
 	if !strings.Contains(second.String(), "already queued") {
 		t.Fatalf("duplicate output = %q", second.String())
 	}
+	releaseCloseoutToken(sid, launchToken)
 }
 
 func TestRunCloseout_ConcurrentParentsLaunchOnce(t *testing.T) {
@@ -81,12 +84,14 @@ func TestRunCloseout_ConcurrentParentsLaunchOnce(t *testing.T) {
 	writeCloseoutConfig(t, []string{"/absolute/tagger"})
 	sid := "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
 	oldSpawn := spawnCloseout
-	t.Cleanup(func() { spawnCloseout = oldSpawn; releaseCloseoutToken(sid) })
+	t.Cleanup(func() { spawnCloseout = oldSpawn })
 	var mu sync.Mutex
 	launches := 0
-	spawnCloseout = func(string) error {
+	var launchToken string
+	spawnCloseout = func(_, token string) error {
 		mu.Lock()
 		launches++
+		launchToken = token
 		mu.Unlock()
 		return nil
 	}
@@ -110,6 +115,7 @@ func TestRunCloseout_ConcurrentParentsLaunchOnce(t *testing.T) {
 	if launches != 1 {
 		t.Fatalf("launches = %d, want exactly one", launches)
 	}
+	releaseCloseoutToken(sid, launchToken)
 }
 
 func TestCloseoutToken_FailsClosedWhenDirectoryCannotBeCreated(t *testing.T) {
@@ -131,16 +137,16 @@ func TestRunCloseout_SpawnFailureReleasesToken(t *testing.T) {
 	writeCloseoutConfig(t, []string{"/absolute/tagger"})
 	sid := "eeeeeeee-ffff-0000-1111-222222222222"
 	oldSpawn := spawnCloseout
-	spawnCloseout = func(string) error { return errors.New("startup failed") }
-	t.Cleanup(func() { spawnCloseout = oldSpawn; releaseCloseoutToken(sid) })
+	spawnCloseout = func(string, string) error { return errors.New("startup failed") }
+	t.Cleanup(func() { spawnCloseout = oldSpawn })
 	if err := runCloseout(new(bytes.Buffer), sid); err == nil {
 		t.Fatal("runCloseout unexpectedly succeeded")
 	}
-	if release, ok := acquireCloseoutToken(sid); !ok {
+	token, ok := acquireCloseoutToken(sid)
+	if !ok {
 		t.Fatal("token remained held after spawn failure")
-	} else {
-		release()
 	}
+	releaseCloseoutToken(sid, token)
 }
 
 func TestCloseoutToken_ReclaimsDeadLeaseButNotLiveLease(t *testing.T) {
@@ -151,52 +157,47 @@ func TestCloseoutToken_ReclaimsDeadLeaseButNotLiveLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := closeoutTokenPath(dir, sid)
-	old := time.Now().Add(-2 * closeoutLeaseWindow)
-	writeLease := func(pid int) {
+	old := time.Now().Add(-2 * closeoutTokenTTL)
+	writeLease := func(value string, when time.Time) {
 		t.Helper()
-		data, err := json.Marshal(closeoutLease{PID: pid, CreatedAt: old.UnixNano()})
-		if err != nil {
+		if err := os.WriteFile(path, []byte(value), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, data, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chtimes(path, old, old); err != nil {
+		if err := os.Chtimes(path, when, when); err != nil {
 			t.Fatal(err)
 		}
 	}
-	writeLease(os.Getpid())
+	writeLease("live-token", time.Now())
 	if _, ok := acquireCloseoutToken(sid); ok {
 		t.Fatal("reclaimed a live closeout lease")
 	}
-	writeLease(999999)
-	if release, ok := acquireCloseoutToken(sid); !ok {
+	writeLease("stale-token", old)
+	if _, ok := acquireCloseoutToken(sid); !ok {
 		t.Fatal("did not reclaim a dead closeout lease")
-	} else {
-		release()
 	}
+	releaseCloseoutToken(sid, "stale-token")
 }
 
 func TestCloseoutTokenHeldUntilExplicitRelease(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sid := "cccccccc-dddd-eeee-ffff-000000000000"
-	release, ok := acquireCloseoutToken(sid)
+	token, ok := acquireCloseoutToken(sid)
 	if !ok {
 		t.Fatal("first closeout token acquisition failed")
 	}
-	defer release()
+	defer releaseCloseoutToken(sid, token)
 	if _, ok := acquireCloseoutToken(sid); ok {
 		t.Fatal("active closeout token was reacquired")
 	}
 	if _, ok := acquireCloseoutToken(sid); ok {
 		t.Fatal("active closeout token was reacquired after elapsed time")
 	}
-	release()
-	if next, ok := acquireCloseoutToken(sid); !ok {
+	releaseCloseoutToken(sid, token)
+	next, ok := acquireCloseoutToken(sid)
+	if !ok {
 		t.Fatal("closeout token was not recoverable after release")
-	} else {
-		next()
 	}
+	releaseCloseoutToken(sid, next)
 }
 
 func TestRunCloseoutChild_ReleasesTokenAfterCompletionOrFailure(t *testing.T) {
@@ -219,26 +220,26 @@ func TestRunCloseoutChild_ReleasesTokenAfterCompletionOrFailure(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			unlock, ok := acquireCloseoutToken(sid)
+			token, ok := acquireCloseoutToken(sid)
 			if !ok {
 				t.Fatal("acquireCloseoutToken failed")
 			}
-			defer unlock()
-			if err := runCloseoutChild(new(bytes.Buffer), sid); tc.name == "failure" && err == nil {
+			defer releaseCloseoutToken(sid, token)
+			if err := runCloseoutChild(new(bytes.Buffer), sid, token); tc.name == "failure" && err == nil {
 				t.Fatal("runCloseoutChild unexpectedly succeeded")
 			}
-			if next, ok := acquireCloseoutToken(sid); !ok {
+			next, ok := acquireCloseoutToken(sid)
+			if !ok {
 				t.Fatal("closeout token was not recoverable")
-			} else {
-				next()
 			}
+			releaseCloseoutToken(sid, next)
 		})
 	}
 }
 
 func TestRunCloseoutChild_RequiresOwnedLease(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	if err := runCloseoutChild(new(bytes.Buffer), "11111111-2222-3333-4444-555555555555"); err == nil {
+	if err := runCloseoutChild(new(bytes.Buffer), "11111111-2222-3333-4444-555555555555", "missing"); err == nil {
 		t.Fatal("ownerless closeout child unexpectedly proceeded")
 	}
 }
