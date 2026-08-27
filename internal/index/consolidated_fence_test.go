@@ -2,6 +2,7 @@ package index
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,5 +78,56 @@ func TestIsBusy_RecognizesConsolidatedFenceTimeout(t *testing.T) {
 	}
 	if !isBusy(fenceErr) {
 		t.Fatalf("isBusy(%v) = false, want true (a fence-wait timeout is a busy/contended store)", fenceErr)
+	}
+}
+
+func TestConsolidatedFence_LogsAcquireDurationOnTimeout(t *testing.T) {
+	isolateCache(t)
+	holder := flock.New(filepath.Join(store.CacheDir(), "consolidated.lock"))
+	locked, err := holder.TryLock()
+	if err != nil || !locked {
+		t.Fatalf("hold consolidated lock: locked=%t err=%v", locked, err)
+	}
+	defer holder.Unlock()
+
+	recorder := &testLogRecorder{}
+	original := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(original)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := AcquireConsolidatedFence(ctx); err == nil {
+		t.Fatal("AcquireConsolidatedFence succeeded while another writer held the lock")
+	}
+
+	recorder.mu.Lock()
+	records := append([]slog.Record(nil), recorder.records...)
+	recorder.mu.Unlock()
+	var started, completed bool
+	for _, rec := range records {
+		if rec.Message != "consolidated fence phase" {
+			continue
+		}
+		var phase, event string
+		var duration slog.Value
+		rec.Attrs(func(attr slog.Attr) bool {
+			switch attr.Key {
+			case "phase":
+				phase = attr.Value.String()
+			case "event":
+				event = attr.Value.String()
+			case "duration":
+				duration = attr.Value
+			}
+			return true
+		})
+		if phase == "acquire" {
+			started = started || event == "start"
+			completed = completed || duration.Kind() == slog.KindDuration
+		}
+	}
+	if !started || !completed {
+		t.Fatalf("failed acquire logs: started=%t completed=%t, want both", started, completed)
 	}
 }

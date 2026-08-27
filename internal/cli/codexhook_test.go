@@ -87,10 +87,21 @@ func TestCodexPrimeScript_EmitsValidHookJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Isolate HOME (and the catalog dir it feeds) as well as TMPDIR: the script
+	// writes a once-per-session dedup marker under
+	// ${RAWCLAW_CATALOG_DIR:-$HOME/.local/share/rawclaw/catalog}/<session_id>.
+	// A hardcoded literal session_id with a real, unisolated HOME means the
+	// FIRST run of this test on a machine emits valid JSON and writes the
+	// marker; every later run (another -count, another `go test`, ever) sees
+	// the marker, no-ops, and this test fails with empty stdout — a flaky,
+	// machine-state-dependent failure with nothing wrong in the script itself.
+	isolatedHome := t.TempDir()
 	cmd := exec.Command(sh, scriptPath)
 	cmd.Env = append(os.Environ(),
 		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"TMPDIR="+t.TempDir(),
+		"HOME="+isolatedHome,
+		"RAWCLAW_CATALOG_DIR="+filepath.Join(isolatedHome, "catalog"),
 	)
 	cmd.Stdin = strings.NewReader(`{"session_id":"regress-137"}`)
 	out, err := cmd.Output()

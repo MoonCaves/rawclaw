@@ -32,6 +32,11 @@ func runTagPrepCmdWithSources(
 	more agentproto.ScopeFn,
 	registrations []source.Registration,
 ) error {
+	if dump, ok := freshPrewarmDump(session8); ok {
+		_, err := io.WriteString(w, dump)
+		return err
+	}
+
 	dbp, fullSID, toFold, err := refreshTagSession(session8, scope, more, registrations)
 	if err != nil {
 		return err
@@ -67,6 +72,22 @@ func runTagPrepCmdWithSources(
 		}
 	}
 	return nil
+}
+
+func freshPrewarmDump(session8 string) (string, bool) {
+	dbp, fullSID, err := agentproto.LocateConsolidatedSession(session8)
+	if err != nil {
+		return "", false
+	}
+	dumpPath := index.PrewarmDumpPath(fullSID)
+	if !prewarmFresh(dumpPath, prewarmSourcePath(dbp, fullSID)) {
+		return "", false
+	}
+	dump, err := os.ReadFile(dumpPath)
+	if err != nil {
+		return "", false
+	}
+	return string(dump), true
 }
 
 func readConsolidatedTopics(sessionID string) []store.TopicSegment {
@@ -136,7 +157,7 @@ func refreshTagSession(
 	}
 	// No live source remains. Fall back to RawClaw's deliberately retained
 	// history, applying the caller's project scope only at this final read.
-	histDBP, histSID, histErr := agentproto.LocateSession(sessionArg, scope, more)
+	histDBP, histSID, histErr := agentproto.LocateSessionGuarded(sessionArg, scope, more)
 	if histErr != nil {
 		return "", "", nil, histErr
 	}

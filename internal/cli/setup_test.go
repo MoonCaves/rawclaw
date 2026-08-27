@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -691,7 +692,7 @@ func TestAddRawclawAntigravityHooksReplacesExistingAndKeepsSibling(t *testing.T)
 		t.Errorf("other-tool was mutated: %#v", toolGroup)
 	}
 
-	// rawclaw group must have exactly one PreInvocation entry with new path
+	// rawclaw group must have exactly one PreInvocation and Stop entry.
 	rawclawGroup, ok := data["rawclaw"].(map[string]any)
 	if !ok {
 		t.Fatalf("rawclaw group missing: %#v", data)
@@ -703,6 +704,13 @@ func TestAddRawclawAntigravityHooksReplacesExistingAndKeepsSibling(t *testing.T)
 	entry := arr[0].(map[string]any)
 	if entry["command"] != "/new/path/hooks/rawclaw/prime.sh" {
 		t.Errorf("command = %q, want new path", entry["command"])
+	}
+	stopArr, ok := rawclawGroup["Stop"].([]any)
+	if !ok || len(stopArr) != 1 || !containsRawclaw(stopArr[0]) {
+		t.Fatalf("Stop = %#v, want one rawclaw entry", rawclawGroup["Stop"])
+	}
+	if stopArr[0].(map[string]any)["command"] != "/new/path/hooks/rawclaw/prime.sh" {
+		t.Errorf("Stop command = %v, want shared prime script", stopArr[0].(map[string]any)["command"])
 	}
 }
 
@@ -724,6 +732,10 @@ func TestAddRawclawAntigravityHooksIdempotent(t *testing.T) {
 	arr := rawclawGroup["PreInvocation"].([]any)
 	if len(arr) != 1 {
 		t.Fatalf("PreInvocation len = %d, want 1", len(arr))
+	}
+	stopArr := rawclawGroup["Stop"].([]any)
+	if len(stopArr) != 1 {
+		t.Fatalf("Stop len = %d, want 1", len(stopArr))
 	}
 }
 
@@ -751,6 +763,10 @@ func TestInstallRawclawAntigravityHookWritesHooksJSON(t *testing.T) {
 	arr, ok := rawclawGroup["PreInvocation"].([]any)
 	if !ok || len(arr) != 1 {
 		t.Fatalf("PreInvocation = %#v, want 1 entry", rawclawGroup["PreInvocation"])
+	}
+	stopArr, ok := rawclawGroup["Stop"].([]any)
+	if !ok || len(stopArr) != 1 {
+		t.Fatalf("Stop = %#v, want 1 entry", rawclawGroup["Stop"])
 	}
 	if !containsRawclaw(arr[0]) {
 		t.Errorf("entry does not carry rawclaw marker: %#v", arr[0])
@@ -791,7 +807,7 @@ func TestEjectRawclawAntigravityHookWithSibling(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(hooksFile), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	seed := `{"other-tool":{"PreInvocation":[{"type":"command","command":"/opt/other-tool/hook.sh"}]}}`
+	seed := `{"other-tool":{"PreInvocation":[{"type":"command","command":"/opt/other-tool/hook.sh"}],"Stop":[{"type":"command","command":"/opt/other-tool/stop.sh"}]}}`
 	if err := os.WriteFile(hooksFile, []byte(seed), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -816,6 +832,11 @@ func TestEjectRawclawAntigravityHookWithSibling(t *testing.T) {
 	}
 	if _, ok := data["other-tool"]; !ok {
 		t.Errorf("other-tool was lost after eject: %#v", data)
+	}
+	otherTool := data["other-tool"].(map[string]any)
+	stopArr := otherTool["Stop"].([]any)
+	if len(stopArr) != 1 || !strings.Contains(stopArr[0].(map[string]any)["command"].(string), "/opt/other-tool/stop.sh") {
+		t.Errorf("foreign Stop hook was mutated: %#v", otherTool)
 	}
 	if _, ok := data["rawclaw"]; ok {
 		t.Errorf("rawclaw group was not removed: %#v", data)

@@ -16,18 +16,22 @@ import (
 // so the "unchanged" guarantee is asserted at the entry level:
 // deep-equal structure and values.
 func assertForeignEntryIntact(t *testing.T, seeded []byte, configFile string) {
+	assertForeignEventIntact(t, seeded, configFile, "SessionStart")
+}
+
+func assertForeignEventIntact(t *testing.T, seeded []byte, configFile, event string) {
 	t.Helper()
 	var want map[string]any
 	if err := json.Unmarshal(seeded, &want); err != nil {
 		t.Fatalf("unmarshal seeded config: %v", err)
 	}
-	wantEntry := want["hooks"].(map[string]any)["SessionStart"].([]any)[0]
+	wantEntry := want["hooks"].(map[string]any)[event].([]any)[0]
 
 	data, err := readJSONFile(configFile)
 	if err != nil {
 		t.Fatalf("read config for foreign-entry check: %v", err)
 	}
-	arr := data["hooks"].(map[string]any)["SessionStart"].([]any)
+	arr := data["hooks"].(map[string]any)[event].([]any)
 	for _, e := range arr {
 		if !containsRawclaw(e) {
 			if !reflect.DeepEqual(e, wantEntry) {
@@ -36,7 +40,7 @@ func assertForeignEntryIntact(t *testing.T, seeded []byte, configFile string) {
 			return
 		}
 	}
-	t.Errorf("foreign entry missing entirely: %#v", arr)
+	t.Errorf("foreign %s entry missing entirely: %#v", event, arr)
 }
 
 // seedForeignSessionStartHook pre-seeds configFile (either target's
@@ -53,6 +57,13 @@ func seedForeignSessionStartHook(t *testing.T, configFile string) []byte {
       {
         "hooks": [
           {"type": "command", "command": "/opt/foreign-tool/hooks/session.sh"}
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "/opt/foreign-tool/hooks/stop.sh"}
         ]
       }
     ]
@@ -107,6 +118,20 @@ func TestSetupCmd_Yes_AddsHookAndKeepsForeignEntry(t *testing.T) {
 		t.Errorf("want the foreign entry preserved, got %d foreign entries: %#v", foreignCount, arr)
 	}
 	assertForeignEntryIntact(t, seeded, settingsPath(cfg))
+	assertForeignEventIntact(t, seeded, settingsPath(cfg), "Stop")
+	stopArr := hooks["Stop"].([]any)
+	if len(stopArr) != 2 {
+		t.Fatalf("Stop = %#v, want one foreign and one rawclaw entry", stopArr)
+	}
+	var rawclawStopCount int
+	for _, e := range stopArr {
+		if containsRawclaw(e) {
+			rawclawStopCount++
+		}
+	}
+	if rawclawStopCount != 1 {
+		t.Errorf("want exactly 1 rawclaw Stop entry, got %d: %#v", rawclawStopCount, stopArr)
+	}
 
 	scriptPath := hookScriptPath(cfg)
 	b, serr := os.ReadFile(scriptPath)
@@ -155,6 +180,7 @@ func TestSetupCmd_Yes_IdempotentSecondRun(t *testing.T) {
 		t.Errorf("want the foreign entry still present after second run, got %d: %#v", foreignCount, arr)
 	}
 	assertForeignEntryIntact(t, seeded, settingsPath(cfg))
+	assertForeignEventIntact(t, seeded, settingsPath(cfg), "Stop")
 }
 
 // TestSetupCmd_InteractiveYes_AddsHook: without --yes, a 'y' on stdin
@@ -282,6 +308,20 @@ func TestSetupCmd_Yes_WiresCodexAndKeepsForeignEntry(t *testing.T) {
 		t.Errorf("want the foreign hooks.json entry preserved, got %d: %#v", foreignCount, arr)
 	}
 	assertForeignEntryIntact(t, codexSeeded, codexHooksPath(codexCfg))
+	assertForeignEventIntact(t, codexSeeded, codexHooksPath(codexCfg), "Stop")
+	stopArr := hooks["Stop"].([]any)
+	if len(stopArr) != 2 {
+		t.Fatalf("Codex Stop = %#v, want one foreign and one rawclaw entry", stopArr)
+	}
+	var rawclawStopCount int
+	for _, e := range stopArr {
+		if containsRawclaw(e) {
+			rawclawStopCount++
+		}
+	}
+	if rawclawStopCount != 1 {
+		t.Errorf("want exactly 1 rawclaw Stop entry in hooks.json, got %d: %#v", rawclawStopCount, stopArr)
+	}
 }
 
 // TestSetupCmd_Yes_CodexIdempotentSecondRun: running `setup --yes` twice with
@@ -392,6 +432,7 @@ func TestSetupCmd_ScriptContentContainsBanner(t *testing.T) {
 		`rawclaw "query"`,
 		"rawclaw read <ref>",
 		"rawclaw outline <sess8>",
+		"already fast if pre-warming",
 		"--json for structured output",
 		"offering to resume/fork it can help",
 	}
@@ -589,6 +630,7 @@ func TestSetupCmd_Eject_Global_RoundTripsSiblingIntactScriptGone(t *testing.T) {
 		t.Errorf("rawclaw entry should be gone after eject, got %#v", data["hooks"])
 	}
 	assertForeignEntryIntact(t, seeded, settingsPath(cfg))
+	assertForeignEventIntact(t, seeded, settingsPath(cfg), "Stop")
 }
 
 // TestSetupCmd_Eject_Project_RoundTrips: same round-trip guarantee as the
@@ -732,6 +774,8 @@ func TestSetupCmd_Eject_WiresBothTargets(t *testing.T) {
 
 	assertForeignEntryIntact(t, claudeSeeded, settingsPath(claudeCfg))
 	assertForeignEntryIntact(t, codexSeeded, codexHooksPath(codexCfg))
+	assertForeignEventIntact(t, claudeSeeded, settingsPath(claudeCfg), "Stop")
+	assertForeignEventIntact(t, codexSeeded, codexHooksPath(codexCfg), "Stop")
 
 	claudeData, err := readJSONFile(settingsPath(claudeCfg))
 	if err != nil {
