@@ -899,19 +899,29 @@ func reindexConsolidated(ctx context.Context, emb embed.Embedder) (int, error) {
 	return semantic.VecIndex(ctx, con, emb, 0)
 }
 
+type resumeCandidate struct {
+	hit paths.SessionHit
+	src string
+}
+
 // runResume prints the paste-ready resume command for a session id across all
 // runtimes (Claude, Codex, Antigravity, Goose). It collects candidate matches
 // across all registered sources; if matches span multiple sessions (even across
 // different runtimes), it reports global ambiguity. If local runtimes yield
 // no match, it falls back to archive replicas.
 func runResume(w io.Writer, o *Options) error {
-	type resumeCandidate struct {
-		hit paths.SessionHit
-		src string
-	}
 	var matches []resumeCandidate
 	for _, h := range paths.ResolveSession(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "claude"})
+		matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: resumeSource(h)})
+	}
+	consolidated := resumeConsolidatedHits(o.Resume)
+	for _, h := range consolidated {
+		matches = appendResumeCandidate(matches, h)
+	}
+	// Exact IDs are already unambiguous at the ID level. Prefixes must still
+	// run the old scope sweep so a second full ID cannot be hidden.
+	if isExactResumeID(o.Resume, matches) {
+		return emitResumeMatches(w, o, matches)
 	}
 	for _, entry := range []struct {
 		src    string
@@ -922,9 +932,79 @@ func runResume(w io.Writer, o *Options) error {
 		{"goose", gooseResumeScopes()},
 	} {
 		for _, h := range scopeResumeHits(entry.scopes, o.Resume) {
-			matches = append(matches, resumeCandidate{hit: h, src: entry.src})
+			matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: entry.src})
 		}
 	}
+	return emitResumeMatches(w, o, matches)
+}
+
+func resumeSource(h paths.SessionHit) string {
+	if h.Source != "" {
+		return h.Source
+	}
+	return "claude"
+}
+
+func isExactResumeID(prefix string, matches []resumeCandidate) bool {
+	if prefix == "" {
+		return false
+	}
+	for _, m := range matches {
+		if m.hit.SessionID == prefix && m.hit.Source != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func appendResumeCandidate(matches []resumeCandidate, candidate resumeCandidate) []resumeCandidate {
+	for _, existing := range matches {
+		if existing.src == candidate.src && existing.hit.SessionID == candidate.hit.SessionID {
+			return matches
+		}
+	}
+	return append(matches, candidate)
+}
+
+// resumeConsolidatedHits probes the already-built one-store catalog. The
+// bounded query keeps prefix lookups cheap while retaining enough rows to
+// detect a collision. A false second result means the store was unavailable,
+// empty, or unusable, so callers must use the old fallback.
+func resumeConsolidatedHits(prefix string) []resumeCandidate {
+	con, _, err := index.OpenConsolidated()
+	if err != nil {
+		return nil
+	}
+	defer con.Close()
+	rows, err := store.SessionRowsByPrefix(con, prefix, false, nil, 3)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	hits := make([]resumeCandidate, 0, len(rows))
+	for _, row := range rows {
+		backing, ok, err := store.SessionBackingFor(con, row.ID)
+		if err != nil || !ok || backing.SourceTool == "" {
+			return nil
+		}
+		var origin string
+		if err := con.QueryRow("SELECT COALESCE(origin_machine,'') FROM sessions WHERE id=?", row.ID).Scan(&origin); err != nil || origin != "" {
+			continue
+		}
+		candidate := resumeCandidate{
+			hit: paths.SessionHit{
+				SessionID: row.ID,
+				CWD:       backing.CWD,
+				Project:   row.Project,
+				Source:    backing.SourceTool,
+			},
+			src: backing.SourceTool,
+		}
+		hits = appendResumeCandidate(hits, candidate)
+	}
+	return hits
+}
+
+func emitResumeMatches(w io.Writer, o *Options, matches []resumeCandidate) error {
 
 	if len(matches) == 0 {
 		if handled, err := resumeForeign(w, o); handled {
@@ -1092,7 +1172,7 @@ func scopeResumeHits(scopeList []view.Scope, prefix string) []paths.SessionHit {
 			continue
 		}
 		for _, id := range ids {
-			out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project})
+			out = append(out, paths.SessionHit{SessionID: id, CWD: sc.CWD, Project: sc.Project, Source: sc.Source})
 		}
 	}
 	return out

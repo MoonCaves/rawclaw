@@ -816,7 +816,7 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 		SessionID:      fullSID,
 		TranscriptPath: transcriptPath,
 		CWD:            "/home/user/resume-proj",
-		Source:         "claude",
+		Source:         "codex",
 	}); err != nil {
 		t.Fatalf("WriteCatalogEntry: %v", err)
 	}
@@ -827,7 +827,89 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 		t.Fatalf("runResume: %v", err)
 	}
 
-	if !strings.Contains(out.String(), "claude --resume resume01-catalog-session-uuid") {
+	if !strings.Contains(out.String(), "codex resume resume01-catalog-session-uuid") {
+		t.Fatalf("runResume output missing catalog source's Codex command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeUsesConsolidatedCatalogForExactID(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(configDir, "cache"))
+
+	con, err := store.ConnectRW(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("ConnectRW consolidated: %v", err)
+	}
+	if err := store.Rebuild(con); err != nil {
+		con.Close()
+		t.Fatalf("Rebuild consolidated: %v", err)
+	}
+	const fullSID = "resume02-consolidated-session-uuid"
+	if _, err := con.Exec(`INSERT INTO sessions
+		(id, message_count, source_tool, project, cwd, is_subagent)
+		VALUES (?, 1, ?, ?, ?, 0)`, fullSID, "codex", "catalog-project", "/work/catalog"); err != nil {
+		con.Close()
+		t.Fatalf("insert consolidated session: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close consolidated: %v", err)
+	}
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: fullSID}); err != nil {
+		t.Fatalf("runResume: %v", err)
+	}
+	if !strings.Contains(out.String(), "codex resume "+fullSID) {
+		t.Fatalf("runResume output missing consolidated Codex command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeDeduplicatesCatalogAndConsolidatedHit(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(configDir, "cache"))
+
+	const fullSID = "resume03-shared-session-uuid"
+	transcriptPath := filepath.Join(configDir, "transcripts", fullSID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("mkdir transcript dir: %v", err)
+	}
+	writeTagSourceFile(t, transcriptPath, `{"cwd":"/work/shared"}`+"\n")
+	if err := paths.WriteCatalogEntry(filepath.Join(configDir, "catalog"), paths.CatalogEntry{
+		SessionID: fullSID, TranscriptPath: transcriptPath, CWD: "/work/shared", Source: "claude",
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	con, err := store.ConnectRW(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("ConnectRW consolidated: %v", err)
+	}
+	if err := store.Rebuild(con); err != nil {
+		con.Close()
+		t.Fatalf("Rebuild consolidated: %v", err)
+	}
+	if _, err := con.Exec(`INSERT INTO sessions
+		(id, message_count, source_tool, project, cwd, is_subagent)
+		VALUES (?, 1, ?, ?, ?, 0)`, fullSID, "claude", "shared", "/work/shared"); err != nil {
+		con.Close()
+		t.Fatalf("insert consolidated session: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close consolidated: %v", err)
+	}
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: fullSID}); err != nil {
+		t.Fatalf("runResume: %v", err)
+	}
+	if strings.Contains(out.String(), "sessions match") {
+		t.Fatalf("same Claude session was reported ambiguous across lookup layers:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "claude --resume "+fullSID) {
 		t.Fatalf("runResume output missing expected resume command:\n%s", out.String())
 	}
 }

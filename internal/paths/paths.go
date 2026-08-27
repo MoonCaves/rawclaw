@@ -22,6 +22,7 @@ type SessionHit struct {
 	Path      string // backing transcript file path
 	CWD       string // working dir recorded in the transcript (may be "")
 	Project   string // friendly project label
+	Source    string // source runtime recorded in the catalog, when available
 }
 
 // ProjectsRoot returns the Claude Code projects root: $CLAUDE_CONFIG_DIR/projects
@@ -385,6 +386,7 @@ func sessionHitFromCatalog(entry CatalogEntry) SessionHit {
 		Path:      entry.TranscriptPath,
 		CWD:       cwd,
 		Project:   proj,
+		Source:    entry.Source,
 	}
 }
 

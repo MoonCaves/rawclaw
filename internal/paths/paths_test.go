@@ -443,6 +443,9 @@ func TestResolveSession(t *testing.T) {
 		if h.Project != "proj" {
 			t.Errorf("Project = %q, want proj", h.Project)
 		}
+		if h.Source != "" {
+			t.Errorf("Source = %q, want empty for stem discovery", h.Source)
+		}
 	})
 
 	t.Run("no match returns empty non-nil", func(t *testing.T) {
@@ -644,6 +647,9 @@ func TestResolveSession_CatalogDirectHit(t *testing.T) {
 	if h.Project != "myproject" {
 		t.Errorf("Project = %q, want myproject", h.Project)
 	}
+	if h.Source != "claude" {
+		t.Errorf("Source = %q, want claude", h.Source)
+	}
 }
 
 func TestResolveSession_CatalogPrefixHit(t *testing.T) {
@@ -681,6 +687,9 @@ func TestResolveSession_CatalogPrefixHit(t *testing.T) {
 	}
 	if h.Project != "coolproj" {
 		t.Errorf("Project = %q, want coolproj", h.Project)
+	}
+	if h.Source != "claude" {
+		t.Errorf("Source = %q, want claude", h.Source)
 	}
 }
 
