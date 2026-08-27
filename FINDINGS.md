@@ -91,3 +91,8 @@ any user-visible strings.
 
 Expected production result: approximately -70 lines in `setup.go`, zero new
 dependencies, and byte-equivalent generated hook behavior.
+
+## Issue #45 findings
+
+Issue #45 root cause: scoped browse/search currently calls `scopes.All` without a path predicate, so Codex, Antigravity, and opted-in Goose index/fold every discovered CWD before `FilterByPath` can prune the result. The smallest safe seam is an optional predicate threaded through `allScope`/`scopes.All` into the shared `containerScopes` live-CWD grouping; leave Claude, archive, and orphan scopes in the existing post-filter path, and keep all no-argument callers unchanged. Discover still scans each adapter's configured tree globally; this change only avoids unrelated per-CWD indexing and write-through work after discovery.
+
