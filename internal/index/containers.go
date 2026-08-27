@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
@@ -24,6 +25,8 @@ import (
 // The index stays source-agnostic; the caller (cli) wires source → index.
 type MessagesFunc func(source.Container) ([]model.Message, error)
 
+const refreshCacheStaleAfter = 30 * 24 * time.Hour
+
 // RefreshDBPath returns the private per-container cache used by targeted live
 // refreshes. It lives below the cache root so normal scope/orphan discovery
 // never mistakes it for another searchable project database.
@@ -31,7 +34,57 @@ func RefreshDBPath(sourceID, sessionID, sourcePath string) string {
 	sum := sha1.Sum([]byte(sourceID + "\x00" + sessionID + "\x00" + realpath(sourcePath)))
 	dir := filepath.Join(store.CacheDir(), "refresh")
 	_ = os.MkdirAll(dir, 0o755)
-	return filepath.Join(dir, hex.EncodeToString(sum[:])+".db")
+	dbp := filepath.Join(dir, hex.EncodeToString(sum[:])+".db")
+	pruneStaleRefreshDBs(dir, dbp)
+	return dbp
+}
+
+func pruneStaleRefreshDBs(dir, keep string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".db" {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if path == keep {
+			continue
+		}
+		newest := time.Time{}
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			st, statErr := os.Stat(path + suffix)
+			if statErr == nil && st.ModTime().After(newest) {
+				newest = st.ModTime()
+			}
+		}
+		if !newest.IsZero() && now.Sub(newest) > refreshCacheStaleAfter {
+			evictStaleRefreshDB(path)
+		}
+	}
+}
+
+func evictStaleRefreshDB(dbPath string) {
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(0)")
+	if err != nil {
+		return
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("BEGIN IMMEDIATE"); err != nil {
+		_ = db.Close()
+		return
+	}
+	removeRefreshDBFiles(dbPath)
+	_, _ = db.Exec("ROLLBACK")
+	_ = db.Close()
+}
+
+func removeRefreshDBFiles(dbPath string) {
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(dbPath + suffix)
+	}
 }
 
 // PrewarmDumpPath returns the session-specific closeout dump cache path.

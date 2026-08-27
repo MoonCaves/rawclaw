@@ -645,6 +645,177 @@ func TestEnsureFreshContainer_PreservesRefreshDBOnPublishFailure(t *testing.T) {
 	}
 }
 
+func TestRefreshDBPath_PrunesStaleCacheButRetainsFreshAndReused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+
+	refreshDir := filepath.Join(store.CacheDir(), "refresh")
+	if err := os.MkdirAll(refreshDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(refreshDir, "stale.db")
+	staleDB, err := sql.Open("sqlite", "file:"+stale)
+	if err != nil {
+		t.Fatalf("open stale SQLite database: %v", err)
+	}
+	if _, err := staleDB.Exec("CREATE TABLE stale (value TEXT)"); err != nil {
+		staleDB.Close()
+		t.Fatalf("create stale SQLite database: %v", err)
+	}
+	if err := staleDB.Close(); err != nil {
+		t.Fatalf("close stale SQLite database: %v", err)
+	}
+	if err := os.WriteFile(stale+"-wal", []byte("wal"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-(refreshCacheStaleAfter + time.Hour))
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(stale+"-wal", old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := RefreshDBPath("claude", "fresh", "/fresh.jsonl")
+	if err := os.WriteFile(fresh, []byte("fresh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	RefreshDBPath("claude", "fresh", "/fresh.jsonl")
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("fresh refresh db was pruned: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale refresh db still exists, err=%v", err)
+	}
+	if _, err := os.Stat(stale + "-wal"); !os.IsNotExist(err) {
+		t.Fatalf("stale refresh WAL still exists, err=%v", err)
+	}
+
+	reused := RefreshDBPath("claude", "reused", "/reused.jsonl")
+	if err := os.WriteFile(reused, []byte("reused"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(reused, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := RefreshDBPath("claude", "reused", "/reused.jsonl"); got != reused {
+		t.Fatalf("reused refresh db path = %q, want %q", got, reused)
+	}
+	if _, err := os.Stat(reused); err != nil {
+		t.Fatalf("reused refresh db was pruned: %v", err)
+	}
+}
+
+func TestEvictStaleRefreshDB_RetainsActiveWriterAndDeletesAfterCommit(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "stale-refresh.db")
+	old := time.Now().Add(-(refreshCacheStaleAfter + time.Hour))
+
+	writerReady := make(chan error, 1)
+	releaseWriter := make(chan struct{})
+	writerClosed := make(chan error, 1)
+	go func() {
+		db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(0)")
+		if err != nil {
+			writerReady <- err
+			return
+		}
+		db.SetMaxOpenConns(1)
+		defer db.Close()
+		if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+			writerReady <- err
+			return
+		}
+		if _, err := db.Exec("CREATE TABLE writes (value TEXT NOT NULL)"); err != nil {
+			writerReady <- err
+			return
+		}
+		conn, err := db.Conn(context.Background())
+		if err != nil {
+			writerReady <- err
+			return
+		}
+		if _, err := conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+			conn.Close()
+			writerReady <- err
+			return
+		}
+		if _, err := conn.ExecContext(context.Background(), "INSERT INTO writes(value) VALUES ('committed writer value')"); err != nil {
+			conn.ExecContext(context.Background(), "ROLLBACK")
+			conn.Close()
+			writerReady <- err
+			return
+		}
+		writerReady <- nil
+		<-releaseWriter
+		_, commitErr := conn.ExecContext(context.Background(), "COMMIT")
+		conn.Close()
+		writerClosed <- commitErr
+	}()
+	if err := <-writerReady; err != nil {
+		t.Fatalf("start real SQLite writer: %v", err)
+	}
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		path := dbPath + suffix
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("age real SQLite file %s: %v", suffix, err)
+		}
+	}
+	// The writer's ready signal follows BEGIN IMMEDIATE and the uncommitted
+	// write, so eviction is synchronized on the actual SQLite lock.
+	evictStaleRefreshDB(dbPath)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if _, err := os.Stat(dbPath + suffix); err != nil {
+			t.Fatalf("active writer lost SQLite file %s: %v", suffix, err)
+		}
+	}
+
+	close(releaseWriter)
+	if err := <-writerClosed; err != nil {
+		t.Fatalf("commit real SQLite writer: %v", err)
+	}
+	reader, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(0)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value string
+	if err := reader.QueryRow("SELECT value FROM writes").Scan(&value); err != nil {
+		reader.Close()
+		t.Fatalf("read committed writer value: %v", err)
+	}
+	if value != "committed writer value" {
+		reader.Close()
+		t.Fatalf("committed value = %q, want committed writer value", value)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chtimes(dbPath, old, old); err != nil {
+		t.Fatalf("re-age committed SQLite database: %v", err)
+	}
+	evictStaleRefreshDB(dbPath)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if _, err := os.Stat(dbPath + suffix); !os.IsNotExist(err) {
+			t.Fatalf("inactive SQLite file %s still exists, err=%v", suffix, err)
+		}
+	}
+
+	corruptPath := filepath.Join(dir, "corrupt-refresh.db")
+	if err := os.WriteFile(corruptPath, []byte("not SQLite"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(corruptPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	evictStaleRefreshDB(corruptPath)
+	if _, err := os.Stat(corruptPath); err != nil {
+		t.Fatalf("corrupt SQLite file was deleted after non-busy begin error: %v", err)
+	}
+}
+
 func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing.T) {
 	cfg := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
