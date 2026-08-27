@@ -914,18 +914,15 @@ type resumeCandidate struct {
 
 func runResume(w io.Writer, o *Options) error {
 	var matches []resumeCandidate
-	complete := true
-	exact := false
 	if isFullResumeID(o.Resume) {
-		matches, exact, complete = resumeExactMetadata(o.Resume)
-		if exact && complete {
-			return emitResumeMatches(w, o, matches)
+		var complete, metadataGuard bool
+		matches, _, complete, metadataGuard = resumeExactMetadata(o.Resume)
+		if complete || metadataGuard {
+			return emitResumeMatches(w, o, matches, false)
 		}
 	}
-	if !exact || !complete {
-		for _, h := range paths.ResolveSession(o.Resume) {
-			matches = append(matches, resumeCandidate{hit: h, src: "claude"})
-		}
+	for _, h := range paths.ResolveSession(o.Resume) {
+		matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: "claude"})
 	}
 	for _, entry := range []struct {
 		src    string
@@ -936,17 +933,19 @@ func runResume(w io.Writer, o *Options) error {
 		{"goose", gooseResumeScopes()},
 	} {
 		for _, h := range scopeResumeHits(entry.scopes, o.Resume) {
-			matches = append(matches, resumeCandidate{hit: h, src: entry.src})
+			matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: entry.src})
 		}
 	}
 
-	return emitResumeMatches(w, o, matches)
+	return emitResumeMatches(w, o, matches, true)
 }
 
-func emitResumeMatches(w io.Writer, o *Options, matches []resumeCandidate) error {
+func emitResumeMatches(w io.Writer, o *Options, matches []resumeCandidate, allowArchiveFallback bool) error {
 	if len(matches) == 0 {
-		if handled, err := resumeForeign(w, o); handled {
-			return err
+		if allowArchiveFallback {
+			if handled, err := resumeForeign(w, o); handled {
+				return err
+			}
 		}
 		fmt.Fprintf(w, "No session id starts with '%s'. Use the 8-char id from search output, e.g. [… · a1b2c3d4 · …].\n", o.Resume)
 		return nil
@@ -985,7 +984,23 @@ func emitResumeMatches(w io.Writer, o *Options, matches []resumeCandidate) error
 	return nil
 }
 
-func isFullResumeID(id string) bool { return len(id) >= 32 && !strings.ContainsAny(id, "/\\") }
+func isFullResumeID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	for i, r := range id {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if r != '-' {
+				return false
+			}
+			continue
+		}
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
 
 func supportedResumeSource(id string) bool {
 	for _, r := range sources.Registered() {
@@ -998,23 +1013,29 @@ func supportedResumeSource(id string) bool {
 
 // resumeExactMetadata answers known full IDs without constructing scopes. The
 // durable vault is checked first because it survives source-file deletion.
-func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool) {
+func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool, bool) {
 	var matches []resumeCandidate
 	known := false
+	metadataGuard := false
 	if m, _, found := durable.Exact(id); found {
 		known = true
+		metadataGuard = m.OnlyCopySince != 0 || m.Origin != ""
 		if m.OnlyCopySince == 0 && supportedResumeSource(m.Source) && regularFile(m.SourcePath) {
 			matches = append(matches, resumeCandidate{hit: paths.SessionHit{SessionID: id, CWD: m.CWD, Project: filepath.Base(m.CWD)}, src: m.Source})
 		}
 	}
-	if hits, found := resumeConsolidatedHits(id); found {
+	if hits, found, guarded := resumeConsolidatedHits(id); found {
 		known = true
+		metadataGuard = metadataGuard || guarded
 		for _, hit := range hits {
 			matches = appendResumeCandidate(matches, hit)
 		}
 	}
 	complete := true
 	for _, r := range sources.Registered() {
+		if r.ID == "goose" && !scopes.GooseOptedIn("") {
+			continue
+		}
 		if r.Lookup == nil {
 			complete = false
 			continue
@@ -1030,13 +1051,13 @@ func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool) {
 			}
 		}
 	}
-	return matches, known || len(matches) > 0, complete
+	return matches, known || len(matches) > 0, complete, metadataGuard
 }
 
-func resumeConsolidatedHits(id string) ([]resumeCandidate, bool) {
+func resumeConsolidatedHits(id string) ([]resumeCandidate, bool, bool) {
 	con, _, err := index.OpenConsolidated()
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 	defer con.Close()
 	rows, err := con.Query(`SELECT session_id, COALESCE(project,''), COALESCE(source_tool,''),
@@ -1047,19 +1068,23 @@ func resumeConsolidatedHits(id string) ([]resumeCandidate, bool) {
 			COALESCE(cwd,''), COALESCE(origin_machine,''), only_copy_since, is_subagent
 		FROM sessions WHERE id=? AND NOT EXISTS (SELECT 1 FROM session_sources WHERE session_id=?)`, id, id, id)
 	if err != nil {
-		return nil, false
+		return nil, false, false
 	}
 	defer rows.Close()
 	var out []resumeCandidate
 	known := false
+	metadataGuard := false
 	for rows.Next() {
 		var sid, project, src, path, cwd, origin string
 		var onlyCopy sql.NullFloat64
 		var sub int
 		if err := rows.Scan(&sid, &project, &src, &path, &cwd, &origin, &onlyCopy, &sub); err != nil {
-			return nil, false
+			return nil, false, false
 		}
 		known = true
+		if onlyCopy.Valid || origin != "" {
+			metadataGuard = true
+		}
 		if onlyCopy.Valid || origin != "" || sub != 0 || src == "" {
 			continue
 		}
@@ -1072,9 +1097,9 @@ func resumeConsolidatedHits(id string) ([]resumeCandidate, bool) {
 		out = appendResumeCandidate(out, resumeCandidate{hit: paths.SessionHit{SessionID: sid, CWD: cwd, Project: project}, src: src})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false
+		return nil, false, false
 	}
-	return out, known
+	return out, known, metadataGuard
 }
 
 func regularFile(path string) bool {
