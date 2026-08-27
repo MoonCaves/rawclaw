@@ -3,11 +3,15 @@ package cli
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/store"
@@ -22,6 +26,11 @@ const ingestLogMax = 512 * 1024
 var ingestSpawnWindow = 1 * time.Minute
 
 const closeoutTokenTTL = closeoutChildTimeout * 2
+
+// closeoutTokenMu serializes stale-lease compare-and-swap in this process.
+// os.Rename is atomic, but stat-then-rename can otherwise let a stale waiter
+// rename a newly-created live lease at the same pathname.
+var closeoutTokenMu sync.Mutex
 
 // spawnIngest launches the detached ingest child — a seam so tests can
 // count or hook spawn decisions without forking processes.
@@ -62,6 +71,8 @@ func acquireIngestSpawnToken(sessionArg string, now time.Time) bool {
 // lifetime. Unlike the ingest throttle marker, this lock never expires: the
 // detached worker removes it only after completion or failure.
 func acquireCloseoutToken(sessionID string) (string, bool) {
+	closeoutTokenMu.Lock()
+	defer closeoutTokenMu.Unlock()
 	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", false
@@ -84,18 +95,26 @@ func acquireCloseoutToken(sessionID string) (string, bool) {
 			_ = os.Remove(lockDir)
 			return "", false
 		}
+		owner, err := json.Marshal(closeoutLease{PID: os.Getpid()})
+		if err != nil || os.WriteFile(filepath.Join(lockDir, ".owner"), owner, 0o400) != nil {
+			_ = os.RemoveAll(lockDir)
+			return "", false
+		}
 		return token, true
 	}
 	return "", false
 }
 
 func releaseCloseoutToken(sessionID, token string) {
+	closeoutTokenMu.Lock()
+	defer closeoutTokenMu.Unlock()
 	lockDir := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
 	if !validCloseoutToken(token) {
 		return
 	}
 	if _, err := os.Stat(filepath.Join(lockDir, token)); err == nil {
 		_ = os.Remove(filepath.Join(lockDir, token))
+		_ = os.Remove(filepath.Join(lockDir, ".owner"))
 		_ = os.Remove(lockDir)
 	}
 }
@@ -112,7 +131,16 @@ func closeoutTokenPath(dir, sessionID string) string {
 
 func reclaimCloseoutToken(path string) bool {
 	st, err := os.Stat(path)
-	if err != nil || time.Since(st.ModTime()) < closeoutTokenTTL {
+	if err != nil {
+		return false
+	}
+	owner, err := os.ReadFile(filepath.Join(path, ".owner"))
+	if err == nil {
+		var lease closeoutLease
+		if json.Unmarshal(owner, &lease) != nil || lease.PID <= 0 || closeoutProcessAlive(lease.PID) {
+			return false
+		}
+	} else if time.Since(st.ModTime()) < closeoutTokenTTL {
 		return false
 	}
 	suffix, err := randomCloseoutToken()
@@ -124,6 +152,21 @@ func reclaimCloseoutToken(path string) bool {
 		return false
 	}
 	return os.RemoveAll(quarantine) == nil
+}
+
+type closeoutLease struct {
+	PID int `json:"pid"`
+}
+
+func closeoutProcessAlive(pid int) bool {
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return process.Signal(syscall.Signal(0)) == nil
 }
 
 func validateCloseoutToken(sessionID, token string) bool {
