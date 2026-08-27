@@ -462,6 +462,246 @@ func TestConsolidate_FoldsTheTopicLayer(t *testing.T) {
 	}
 }
 
+func TestConsolidate_DeletesTopicsRemovedFromSource(t *testing.T) {
+	isolateCache(t)
+	src := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`,
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:01:00Z","uuid":"u-b1","message":{"role":"user","content":"then verify the payment"}}`)
+	sid := firstSessionID(t, src)
+	con, err := store.ConnectRW(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	if err := store.ReplaceSessionSegments(con, sid, []store.TopicSegment{
+		{SessionID: sid, StartUUID: "u-a1", EndUUID: "u-b1", Topic: "A", Summary: "first"},
+		{SessionID: sid, StartUUID: "u-b1", Topic: "B", Summary: "second"},
+	}); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+
+	con, err = store.ConnectRW(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceSessionSegments(con, sid, []store.TopicSegment{
+		{SessionID: sid, StartUUID: "u-a1", EndUUID: "u-b1", Topic: "A", Summary: "first"},
+	}); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("second consolidate: %v", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment WHERE session_id=? AND start_uuid='u-b1'", sid); got != "0" {
+		t.Fatalf("removed topic B remains in consolidated store: %s rows", got)
+	}
+}
+
+func TestConsolidate_DeletesSidecarsWhenSourceRemovesWholeSession(t *testing.T) {
+	isolateCache(t)
+	src := indexProject(t, "-w-ledger",
+		`{"type":"user","cwd":"/w/ledger","timestamp":"2026-06-01T10:00:00Z","uuid":"u-a1","message":{"role":"user","content":"reconcile the invoice totals"}}`)
+	sid := firstSessionID(t, src)
+	con, err := store.ConnectRW(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	if err := store.ReplaceSessionSegments(con, sid, []store.TopicSegment{{SessionID: sid, StartUUID: "u-a1", Topic: "invoice", Summary: "summary"}}); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	if err := store.UpsertVerdict(con, store.Verdict{SessionID: sid, Verdict: store.VerdictRoutine, Source: store.VerdictSourceFloor, TaggedAt: 1}); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+
+	con, err = store.ConnectRW(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("DELETE FROM sessions WHERE id=?", sid); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("second consolidate: %v", err)
+	}
+
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id=?", sid); got != "0" {
+		t.Errorf("removed session remains in consolidated store: %s rows", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment WHERE session_id=?", sid); got != "0" {
+		t.Errorf("topic sidecar for removed session remains: %s rows", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM session_verdict WHERE session_id=?", sid); got != "0" {
+		t.Errorf("verdict sidecar for removed session remains: %s rows", got)
+	}
+}
+
+func TestConsolidate_PrunesSidecarsWithoutSourceTablesAndPreservesCoContributor(t *testing.T) {
+	isolateCache(t)
+	shared := sessionRow{id: "shared-sidecar", project: "shared", cwd: "/shared", msgs: []msgRow{{"shared-u1", "user", "shared", 100}}}
+	orphan := sessionRow{id: "orphan-sidecar", project: "orphan", cwd: "/orphan", msgs: []msgRow{{"orphan-u1", "user", "orphan", 100}}}
+	a := seedSessionDB(t, "sidecar-a.db", shared, orphan)
+	b := seedSessionDB(t, "sidecar-b.db", shared)
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range [][2]string{{"shared-sidecar", "shared-u1"}, {"orphan-sidecar", "orphan-u1"}} {
+		if _, err := con.Exec("INSERT INTO topic_segment(session_id, start_uuid, topic, summary) VALUES (?, ?, 'topic', 'summary')", row[0], row[1]); err != nil {
+			con.Close()
+			t.Fatalf("seed topic sidecar: %v", err)
+		}
+		if _, err := con.Exec("INSERT INTO session_verdict(session_id, verdict, source) VALUES (?, 'routine', 'floor')", row[0]); err != nil {
+			con.Close()
+			t.Fatalf("seed verdict sidecar: %v", err)
+		}
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	con, err = store.ConnectRW(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("DELETE FROM sessions WHERE id IN (?, ?)", shared.id, orphan.id); err != nil {
+		con.Close()
+		t.Fatalf("remove source sessions: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("second consolidate: %v", err)
+	}
+
+	con = openConsolidated(t)
+	for _, table := range []string{"topic_segment", "session_verdict"} {
+		if got := scalar(t, con, "SELECT COUNT(*) FROM "+table+" WHERE session_id=?", orphan.id); got != "0" {
+			t.Errorf("%s orphan rows = %s, want 0", table, got)
+		}
+		if got := scalar(t, con, "SELECT COUNT(*) FROM "+table+" WHERE session_id=?", shared.id); got != "1" {
+			t.Errorf("%s co-contributor rows = %s, want 1", table, got)
+		}
+	}
+}
+
+func TestConsolidate_PreservesTopicsWhenCoContributorRemains(t *testing.T) {
+	isolateCache(t)
+	sid := "shared-topic-session"
+	a := seedSessionDB(t, "a.db", sessionRow{id: sid, project: "a", cwd: "/a", msgs: []msgRow{{"u-a", "user", "a", 100}}})
+	b := seedSessionDB(t, "b.db", sessionRow{id: sid, project: "b", cwd: "/b", msgs: []msgRow{{"u-b", "user", "b", 100}}})
+	for _, dbp := range []string{a, b} {
+		con, err := store.ConnectRW(dbp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EnsureTopicSchema(con); err != nil {
+			con.Close()
+			t.Fatal(err)
+		}
+		segs := []store.TopicSegment{{SessionID: sid, StartUUID: "u-a", Topic: "A"}, {SessionID: sid, StartUUID: "u-b", Topic: "B"}}
+		if err := store.ReplaceSessionSegments(con, sid, segs); err != nil {
+			con.Close()
+			t.Fatal(err)
+		}
+		con.Close()
+	}
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+	con, err := store.ConnectRW(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceSessionSegments(con, sid, []store.TopicSegment{{SessionID: sid, StartUUID: "u-a", Topic: "A"}}); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("second consolidate: %v", err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM topic_segment WHERE session_id=? AND start_uuid='u-b'", sid); got != "1" {
+		t.Fatalf("co-contributor topic B was removed: %s rows, want 1", got)
+	}
+}
+
+func TestConsolidate_DoesNotRewriteUnchangedSoleSourceTopics(t *testing.T) {
+	isolateCache(t)
+	a := seedSessionDB(t, "a.db", sessionRow{id: "session-a", project: "a", cwd: "/a", msgs: []msgRow{{"u-a", "user", "a", 100}}})
+	b := seedSessionDB(t, "b.db", sessionRow{id: "session-b", project: "b", cwd: "/b", msgs: []msgRow{{"u-b", "user", "b", 100}}})
+	for dbp, sid := range map[string]string{a: "session-a", b: "session-b"} {
+		con, err := store.ConnectRW(dbp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EnsureTopicSchema(con); err != nil {
+			con.Close()
+			t.Fatal(err)
+		}
+		segs := []store.TopicSegment{{SessionID: sid, StartUUID: "u-a", Topic: "A"}}
+		if sid == "session-b" {
+			segs[0].StartUUID = "u-b"
+		}
+		if err := store.ReplaceSessionSegments(con, sid, segs); err != nil {
+			con.Close()
+			t.Fatal(err)
+		}
+		con.Close()
+	}
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatal(err)
+	}
+	con := openConsolidated(t)
+	rowID := scalar(t, con, "SELECT id FROM topic_segment WHERE session_id='session-b'")
+	con.Close()
+	con, err := store.ConnectRW(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceSessionSegments(con, "session-a", nil); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	con.Close()
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatal(err)
+	}
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT id FROM topic_segment WHERE session_id='session-b'"); got != rowID {
+		t.Fatalf("unchanged sole-source topic rowid changed from %s to %s", rowID, got)
+	}
+}
+
 func TestConsolidate_RebuildPreservesStoreOnlyTags(t *testing.T) {
 	isolateCache(t)
 	a := indexProject(t, "-w-ledger",
