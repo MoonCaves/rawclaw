@@ -104,7 +104,6 @@ if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
 fi
 ` + rawclawSessionCatalogHead + `			printf '  "source": "claude"\n'
 ` + rawclawSessionCatalogTail + `
-
 cat <<'BANNER'
 ` + rawclawBanner + `
 BANNER
@@ -157,7 +156,6 @@ if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
 fi
 ` + rawclawSessionCatalogHead + `			printf '  "source": "codex"\n'
 ` + rawclawSessionCatalogTail + `
-
 # No python3 for JSON encoding — silent no-op rather than a hook error (a
 # dropped banner is strictly better than a failing SessionStart). Catalog write
 # runs before python3 guard: a session starting without python3 will not retry

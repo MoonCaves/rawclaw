@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +29,24 @@ func TestPrimeScripts_CatalogCompositionPreservesBytes(t *testing.T) {
 			}
 			if strings.Contains(script, "\n\n\t\t\tprintf '}") {
 				t.Fatal("catalog composition contains an extra blank line")
+			}
+		})
+	}
+}
+
+func TestPrimeScripts_RenderedBytesMatchBaseline(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tmpl string
+		want string
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript, want: "25ffa050257b967cce9cfd5b1a38339a36d620fd2977003427f2c3095475213f"},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "7f61fa571db867107744123cbe82f5fd47210788cf7044374a1cc85f2fdcbf09"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sha256.Sum256([]byte(renderHookScript(tc.tmpl, "'/usr/local/bin/rawclaw'")))
+			if fmt.Sprintf("%x", got) != tc.want {
+				t.Fatalf("rendered script hash = %x, want %s", got, tc.want)
 			}
 		})
 	}
