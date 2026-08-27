@@ -56,6 +56,17 @@ Estimated net reduction: 4 lines.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
+## Ponytail finding #14 audit
+
+Verdict: PARTIAL ACCEPT.
+
+- `internal/retention/retention.go:94,186-192`: `isMember` has one caller. Replace it with the native comma-ok lookup at that caller. A map read from a nil map remains safe and reports absent, so behavior is unchanged. Removing the wrapper and its comment while adding one local lookup is a net -7 lines.
+- `internal/index/index.go:925,1082,1275-1280`: REJECT in this fence. The wrapper has callers in `internal/index/rebuild.go:158` and `internal/index/containers.go:341`, in addition to the two callers in `index.go`. Removing it would require touching files outside the allowed fence; changing only the two local callers leaves the wrapper and does not shrink the code. Nil-map behavior is already safe.
+
+No test changes are needed: existing retention/index behavior tests cover the call paths, and the replacement is a direct map lookup with identical nil-map semantics.
+
+Net change after implementation: -7 lines in `internal/retention/retention.go`; no index change.
+
 # Ponytail findings: setup hook templates
 
 ## Ruling
