@@ -6,7 +6,6 @@ package store
 
 import (
 	"database/sql"
-	"strings"
 )
 
 // Msg is the (id, role, content) triple read by the window/bookend queries.
@@ -186,13 +185,11 @@ func MessagesForProjects(con *sql.DB, projects []string) ([]MessageRow, error) {
 	if len(projects) == 0 {
 		return AllMessages(con)
 	}
-	placeholders := make([]string, len(projects))
 	args := make([]any, len(projects))
 	for i, p := range projects {
-		placeholders[i] = "?"
 		args[i] = p
 	}
-	q := "SELECT m.id, m.session_id, m.content FROM messages m JOIN sessions s ON s.id=m.session_id WHERE s.project IN (" + strings.Join(placeholders, ",") + ")"
+	q := "SELECT m.id, m.session_id, m.content FROM messages m JOIN sessions s ON s.id=m.session_id WHERE s.project IN (" + placeholders(len(projects)) + ")"
 	rows, err := con.Query(q, args...)
 	if err != nil {
 		return nil, err
