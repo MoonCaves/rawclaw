@@ -938,30 +938,15 @@ func updateIndexWithOrigin(con *sql.DB, transcriptDir, origin string) error {
 		}
 
 		if found && prev.size > 0 && size > prev.size {
-			headFP := checkPrefixFingerprint(f, prev.size)
-			if headFP != "" && headFP == prev.fp {
-				sid, isSub, parent := provenance.SessionIDFor(f, transcriptDir)
-				c := source.Container{
-					ID:         sid,
-					Path:       f,
-					IsSubagent: isSub == 1,
-					ParentID:   parent,
-				}
-				tailMs, newOffset, ok := parseTailMessages(con, c, sourceClaude, f, prev.size, size)
-				if ok {
-					if len(tailMs) == 0 && newOffset == prev.size {
-						continue // writer has only supplied an incomplete trailing record
-					}
-					newFP := checkPrefixFingerprint(f, newOffset)
-					appendErr := appendContainer(con, c, tailMs, sourceClaude, origin, rp, prev.size, mtime, newOffset, newFP)
-					if errors.Is(appendErr, errAppendStale) {
-						continue // another scan committed this tail first
-					}
-					if appendErr == nil {
-						IncrementalIngestCount.Add(1)
-						continue
-					}
-				}
+			sid, isSub, parent := provenance.SessionIDFor(f, transcriptDir)
+			c := source.Container{
+				ID:         sid,
+				Path:       f,
+				IsSubagent: isSub == 1,
+				ParentID:   parent,
+			}
+			if appendTailIfPossible(con, c, sourceClaude, f, rp, origin, prev, mtime, size) {
+				continue
 			}
 		}
 

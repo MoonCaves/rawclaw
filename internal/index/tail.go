@@ -151,6 +151,35 @@ func parseTailMessages(con *sql.DB, c source.Container, sourceID, rawPath string
 	return msgs, newOffset, true
 }
 
+// appendTailIfPossible performs the shared append-only fast path. It returns
+// true when the caller should skip full reindexing, including incomplete tails
+// and stale-watermark races; false preserves the caller's full-reindex fallback.
+func appendTailIfPossible(con *sql.DB, c source.Container, sourceID, rawPath, rp, origin string, prev fileMeta, mtime float64, size int64) bool {
+	if prev.size <= 0 || size <= prev.size {
+		return false
+	}
+	headFP := checkPrefixFingerprint(rawPath, prev.size)
+	if headFP == "" || headFP != prev.fp {
+		return false
+	}
+	tailMs, newOffset, ok := parseTailMessages(con, c, sourceID, rawPath, prev.size, size)
+	if !ok {
+		return false
+	}
+	if len(tailMs) == 0 && newOffset == prev.size {
+		return true
+	}
+	newFP := checkPrefixFingerprint(rawPath, newOffset)
+	appendErr := appendContainer(con, c, tailMs, sourceID, origin, rp, prev.size, mtime, newOffset, newFP)
+	if errors.Is(appendErr, errAppendStale) || appendErr == nil {
+		if appendErr == nil {
+			IncrementalIngestCount.Add(1)
+		}
+		return true
+	}
+	return false
+}
+
 // parseClaudeTail parses newly appended Claude Code JSONL messages from chunk.
 func parseClaudeTail(chunk []byte) ([]model.Message, error) {
 	var out []model.Message
