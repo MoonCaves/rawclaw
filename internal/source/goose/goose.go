@@ -76,14 +76,8 @@ func lookup(id string) ([]source.Container, error) {
 			if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".db") {
 				return nil
 			}
-			cs, err := discoverDatabaseContainers(path)
-			if err != nil {
-				return nil
-			}
-			for _, c := range cs {
-				if c.ID == id && !c.IsSubagent {
-					out = append(out, c)
-				}
+			if c, ok := lookupDatabase(path, id); ok {
+				out = append(out, c)
 			}
 			return nil
 		})
@@ -92,6 +86,38 @@ func lookup(id string) ([]source.Container, error) {
 		}
 	}
 	return out, nil
+}
+
+func lookupDatabase(path, id string) (source.Container, bool) {
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(1000)", path))
+	if err != nil {
+		return source.Container{}, false
+	}
+	defer db.Close()
+	var exists int
+	if err := db.QueryRow("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='sessions'").Scan(&exists); err == nil && exists == 1 {
+		cols, err := tableColumns(db, "sessions")
+		if err != nil {
+			return source.Container{}, false
+		}
+		idCol := findMatchingCol(cols, "id", "session_id", "name")
+		if idCol == "" || !isSafeIdent(idCol) {
+			return source.Container{}, false
+		}
+		cwdCol := findMatchingCol(cols, "working_dir", "cwd", "workdir", "directory", "project_path")
+		if cwdCol == "" || !isSafeIdent(cwdCol) {
+			cwdCol = "''"
+		}
+		var gotID, cwd string
+		if err := db.QueryRow(fmt.Sprintf("SELECT %s, %s FROM sessions WHERE %s=? LIMIT 1", idCol, cwdCol, idCol), id).Scan(&gotID, &cwd); err != nil || gotID != id {
+			return source.Container{}, false
+		}
+		return source.Container{ID: id, Path: path + "#" + id, CWD: cwd}, true
+	}
+	if strings.TrimSuffix(filepath.Base(path), ".db") == id {
+		return source.Container{ID: id, Path: path + "#" + id}, true
+	}
+	return source.Container{}, false
 }
 
 // detect reports whether path lives under a Goose sessions tree.
