@@ -52,6 +52,16 @@ Estimated net reduction: 4 lines.
 
 # Accepted ponytail findings
 
+## Finding #9 — ACCEPT
+
+`internal/lifecycle/lifecycle.go:expandHome` duplicates the exact `~` and
+`~/...` expansion already implemented by `internal/paths/paths.go:expandHome`.
+Export the existing paths helper as `paths.ExpandHome`, update lifecycle to
+reuse it, and delete the lifecycle copy. Preserve unchanged non-home paths,
+the original input when the home directory is unavailable, and
+`filepath.Join` separator behavior. Add no new abstraction or unrelated
+modernization.
+
 - Finding 10 — ACCEPT: `internal/durable/durable.go:sanitize` can use `strings.Map` with the same portable-rune allowlist and `'-'` replacement; preserve dot-only prefixing and path containment.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
