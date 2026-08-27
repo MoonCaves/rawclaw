@@ -27,6 +27,11 @@ import (
 // a second time as an "orphaned" project scope).
 const ConsolidatedDBName = "consolidated.db"
 
+// consolidateAfterMergeHook is test-only fault injection. Production leaves it
+// nil; tests use a child process so os.Exit can model an abrupt close without
+// terminating the test runner.
+var consolidateAfterMergeHook func()
+
 // ConsolidatedPath returns the consolidated store's path in the cache dir.
 func ConsolidatedPath() string {
 	return filepath.Join(store.CacheDir(), ConsolidatedDBName)
@@ -413,8 +418,6 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 		if err != nil {
 			return st, fmt.Errorf("preserve consolidated tags: %w", err)
 		}
-	}
-	if rebuild {
 		prevLive = dst
 		// Build the replacement BESIDE the live store and swap only once it is
 		// complete. Deleting first meant any later failure — connect, schema,
@@ -450,11 +453,18 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	if err != nil {
 		return st, fmt.Errorf("open consolidated store: %w", err)
 	}
-	defer con.Close()
+	defer func() {
+		done := beginConsolidatePhase("", "connection-close")
+		_ = con.Close()
+		done()
+	}()
+	done := beginConsolidatePhase("", "schema-migrate")
 	if err := EnsureSchema(con, sourceClaude); err != nil {
+		done()
 		return st, fmt.Errorf("ensure consolidated schema: %w", err)
 	}
 	if err := healUpgradedConsolidatedStore(con); err != nil {
+		done()
 		// Healing MUST precede backfill: do not populate session_sources if healing did not succeed.
 		return st, fmt.Errorf("heal upgraded store: %w", err)
 	}
@@ -463,16 +473,20 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 	// against the one store can answer "nothing is tagged yet" instead of
 	// failing on a missing table.
 	if err := store.EnsureTopicSchema(con); err != nil {
+		done()
 		return st, fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 	if rebuild {
 		if err := restoreTagState(con, preserved); err != nil {
+			done()
 			return st, fmt.Errorf("restore consolidated tags: %w", err)
 		}
 	}
 	if err := migrateSessionSources(con); err != nil {
+		done()
 		return st, fmt.Errorf("migrate session sources: %w", err)
 	}
+	done()
 
 	for _, src := range srcPaths {
 		n, _, skipped, err := consolidateOne(con, src)
@@ -512,18 +526,23 @@ func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) 
 			return st, fmt.Errorf("recount messages: %w", err)
 		}
 	}
+	done = beginConsolidatePhase("", "tombstone-prune")
 	if err := pruneTombstoned(con); err != nil {
+		done()
 		return st, err
 	}
+	done()
 	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&st.Sessions); err != nil {
 		return st, fmt.Errorf("count sessions: %w", err)
 	}
 	if err := con.QueryRow("SELECT COUNT(*) FROM messages").Scan(&st.Messages); err != nil {
 		return st, fmt.Errorf("count messages: %w", err)
 	}
+	done = beginConsolidatePhase("", "watermark-stamp")
 	if err := StampIngestWatermark(con); err != nil {
 		slog.Debug("stamp ingest watermark failed", "err", err)
 	}
+	done()
 	return st, nil
 }
 
@@ -544,20 +563,30 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if err != nil {
 		return fmt.Errorf("open consolidated store: %w", err)
 	}
-	defer con.Close()
+	defer func() {
+		done := beginConsolidatePhase(srcPath, "connection-close")
+		_ = con.Close()
+		done()
+	}()
+	done := beginConsolidatePhase(srcPath, "schema-migrate")
 	if err := EnsureSchema(con, sourceClaude); err != nil {
+		done()
 		return fmt.Errorf("ensure consolidated schema: %w", err)
 	}
 	if err := healUpgradedConsolidatedStore(con); err != nil {
+		done()
 		// Healing MUST precede backfill: do not populate session_sources if healing did not succeed.
 		return fmt.Errorf("heal upgraded store: %w", err)
 	}
 	if err := store.EnsureTopicSchema(con); err != nil {
+		done()
 		return fmt.Errorf("ensure consolidated topic schema: %w", err)
 	}
 	if err := migrateSessionSources(con); err != nil {
+		done()
 		return fmt.Errorf("migrate session sources: %w", err)
 	}
+	done()
 	_, changed, skipped, err := consolidateOne(con, srcPath)
 	if err != nil {
 		return fmt.Errorf("consolidate %s: %w", filepath.Base(srcPath), err)
@@ -565,12 +594,17 @@ func SyncConsolidatedFrom(srcPath string) error {
 	if skipped || !changed {
 		return nil
 	}
+	done = beginConsolidatePhase(srcPath, "tombstone-prune")
 	if err := pruneTombstoned(con); err != nil {
+		done()
 		return err
 	}
+	done()
+	done = beginConsolidatePhase(srcPath, "watermark-stamp")
 	if err := StampIngestWatermark(con); err != nil {
 		slog.Debug("stamp ingest watermark failed", "err", err)
 	}
+	done()
 	return nil
 }
 
@@ -600,6 +634,18 @@ func writeThroughConsolidated(dbp string, indexErr error) {
 	fireVectorTopup(ConsolidatedPath())
 }
 
+func beginConsolidatePhase(src, name string) func() {
+	started := time.Now()
+	logger := slog.Default()
+	if src != "" {
+		logger = logger.With("source", filepath.Base(src))
+	}
+	logger.Info("consolidate fold phase", "phase", name, "event", "start")
+	return func() {
+		logger.Info("consolidate fold phase", "phase", name, "duration", time.Since(started))
+	}
+}
+
 // consolidateOne attaches src, merges its sessions and messages, and detaches.
 // It is atomic per source: if a merge fails, the detach still runs and the one
 // store's transaction rolls back. It does not modify src — the one store is a
@@ -610,12 +656,6 @@ func writeThroughConsolidated(dbp string, indexErr error) {
 // write it makes to a source is the additive column migration below, on its own
 // connection, before the read-only attach.
 func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped bool, err error) {
-	phase := func(name string) func() {
-		started := time.Now()
-		return func() {
-			slog.Info("consolidate fold phase", "source", filepath.Base(src), "phase", name, "duration", time.Since(started))
-		}
-	}
 	if _, err := os.Stat(src); err != nil {
 		return 0, false, true, fmt.Errorf("source unreadable: %w", err)
 	}
@@ -624,19 +664,22 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	// source is usable — but without this step a corpus indexed before the scope
 	// migration has no project/cwd columns anywhere and the whole pass skips
 	// every source while reporting success.
-	done := phase("source-migrate")
+	done := beginConsolidatePhase(src, "source-migrate")
 	if mErr := migrateSourceScope(src); mErr != nil {
 		slog.Debug("consolidate: source not migrated", "db", filepath.Base(src), "err", mErr)
 	}
 	done()
-	done = phase("attach")
+	done = beginConsolidatePhase(src, "attach")
 	if _, err := con.Exec("ATTACH DATABASE ? AS src", "file:"+src+"?mode=ro"); err != nil {
 		done()
 		return 0, false, true, fmt.Errorf("attach: %w", err)
 	}
 	done()
 	defer func() {
-		if _, dErr := con.Exec("DETACH DATABASE src"); dErr != nil && err == nil {
+		done := beginConsolidatePhase(src, "detach")
+		_, dErr := con.Exec("DETACH DATABASE src")
+		done()
+		if dErr != nil && err == nil {
 			err = fmt.Errorf("detach: %w", dErr)
 		}
 	}()
@@ -721,15 +764,20 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	}
 
 	srcID := sourceIdentity(src)
-	done = phase("prepare")
+	done = beginConsolidatePhase(src, "prepare")
 	if err := migrateSessionSources(con); err != nil {
 		done()
 		return 0, false, true, fmt.Errorf("migrate session sources: %w", err)
 	}
 	done()
 
-	done = phase("merge")
-	defer done()
+	done = beginConsolidatePhase(src, "merge")
+	defer func() {
+		done()
+		if consolidateAfterMergeHook != nil {
+			consolidateAfterMergeHook()
+		}
+	}()
 	tx, err := con.Begin()
 	if err != nil {
 		return 0, false, true, fmt.Errorf("begin fold: %w", err)
@@ -1097,7 +1145,25 @@ func pruneTombstoned(con *sql.DB) error {
 // pruneTombstonedIDs is the deletion core, split out so the wildcard-escaping
 // behaviour is testable without a tombstone sidecar on disk.
 func pruneTombstonedIDs(con *sql.DB, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := con.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tombstone prune: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+
 	for _, id := range ids {
+		var exists int
+		err := tx.QueryRow("SELECT 1 FROM sessions WHERE id=?", id).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("check tombstoned session: %w", err)
+		}
+
 		// Tombstones cover a session and the subagent threads beneath it, whose
 		// ids are "<parent>/<stem>".
 		//
@@ -1106,28 +1172,31 @@ func pruneTombstonedIDs(con *sql.DB, ids []string) error {
 		// match NEIGHBOURING sessions and delete their rows from all four tables
 		// on every consolidation pass. Escape the literal part, then anchor.
 		like := escapeLike(id) + "/%"
-		if _, err := con.Exec(`DELETE FROM messages WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
+		if _, err := tx.Exec(`DELETE FROM messages WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned messages: %w", err)
 		}
-		if _, err := con.Exec(`DELETE FROM sessions WHERE id = ? OR id LIKE ? ESCAPE '\'`, id, like); err != nil {
+		if _, err := tx.Exec(`DELETE FROM sessions WHERE id = ? OR id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned sessions: %w", err)
 		}
-		if _, err := con.Exec(`DELETE FROM session_sources WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
+		if _, err := tx.Exec(`DELETE FROM session_sources WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned session sources: %w", err)
 		}
-		if _, err := con.Exec(`DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
+		if _, err := tx.Exec(`DELETE FROM file_index WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil {
 			return fmt.Errorf("prune tombstoned file_index: %w", err)
 		}
 		// The tagging sidecars hold summaries OF the conversation — a user
 		// delete that leaves them behind keeps exactly the content the delete
 		// was meant to remove. They are created on demand, so tolerate their
 		// absence rather than requiring the topic schema to exist.
-		if _, err := con.Exec(`DELETE FROM topic_segment WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
+		if _, err := tx.Exec(`DELETE FROM topic_segment WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
 			return fmt.Errorf("prune tombstoned topic segments: %w", err)
 		}
-		if _, err := con.Exec(`DELETE FROM session_verdict WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
+		if _, err := tx.Exec(`DELETE FROM session_verdict WHERE session_id = ? OR session_id LIKE ? ESCAPE '\'`, id, like); err != nil && !isNoSuchTable(err) {
 			return fmt.Errorf("prune tombstoned session verdicts: %w", err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tombstone prune: %w", err)
 	}
 	return nil
 }

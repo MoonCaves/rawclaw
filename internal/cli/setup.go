@@ -23,7 +23,8 @@ const rawclawMarker = "hooks/rawclaw/"
 
 // rawclawPrimeScript is the TEMPLATE installed at <configDir>/hooks/rawclaw/
 // prime.sh (via renderHookScript) and registered as a Claude Code SessionStart
-// hook. POSIX sh only — a SessionStart hook runs with no guaranteed bash. It
+// hook. POSIX sh only — a SessionStart or Stop hook runs with no guaranteed
+// bash. It
 // resolves the rawclaw binary from the absolute path `setup` bakes in — a
 // SessionStart hook does NOT inherit an interactive login PATH, so a bare
 // `command -v rawclaw` silently fails even when rawclaw is installed (binary
@@ -45,34 +46,55 @@ set -eu
 
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+
+if [ "$hook_event_name" = "Stop" ]; then
+	if [ -n "$session_id" ]; then
+		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
+	exit 0
+fi
 
 # Session catalog & once-per-session dedup: write a durable catalog entry under
 # the rawclaw data home at session birth, and exit if this session already ran.
-if [ -n "$session_id" ]; then
-	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
-	mkdir -p "$catalog_dir" 2>/dev/null || true
-	entry="$catalog_dir/$session_id"
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
-	if [ -f "$entry" ]; then
-		exit 0
+	if [ -n "$session_id" ]; then
+		catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
+		mkdir -p "$catalog_dir" 2>/dev/null || true
+		entry="$catalog_dir/$session_id"
+		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
+		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
+		cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+		# The source basename is the session ID, so linking to the catalog
+		# directory attempts exactly catalog/<session_id>. An existing directory
+		# or symlink cannot become ln's destination directory.
+		tmp_dir="$catalog_dir/.tmp.$session_id.$$"
+		tmp_entry="$tmp_dir/$session_id"
+		claimed=0
+		if mkdir "$tmp_dir" 2>/dev/null; then
+			{
+				printf '{\n'
+				printf '  "session_id": "%s",\n' "$esc_session_id"
+				printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+				printf '  "cwd": "%s",\n' "$esc_cwd"
+				printf '  "source": "claude"\n'
+				printf '}\n'
+			} > "$tmp_entry" 2>/dev/null || true
+			if ln "$tmp_entry" "$catalog_dir" 2>/dev/null; then
+				claimed=1
+			fi
+			rm -f "$tmp_entry" 2>/dev/null || true
+			rmdir "$tmp_dir" 2>/dev/null || true
+		fi
+		if [ "$claimed" -eq 1 ]; then
+			nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+		elif [ -e "$entry" ] || [ -L "$entry" ]; then
+			exit 0
+		else
+			nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+		fi
 	fi
-	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
-	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
-	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
-	# Fallback ladder uses 'true >' not ': >': ':' is a POSIX special builtin, so
-	# its redirection failure exits dash (Linux /bin/sh) despite the '|| true'.
-	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
-	{
-		printf '{\n'
-		printf '  "session_id": "%s",\n' "$esc_session_id"
-		printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
-		printf '  "cwd": "%s",\n' "$esc_cwd"
-		printf '  "source": "claude"\n'
-		printf '}\n'
-	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
-fi
 
 cat <<'BANNER'
 [rawclaw] Raw transcript history for context — the receipts + thought process behind past
@@ -88,8 +110,9 @@ If the user seems to want to pick up a past session, offering to resume/fork it 
 
 Session closeout: whenever the user signals that the current session is ending or should be
 closed out, immediately delegate tagging to a background subagent so the main agent stays
-available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + `, chooses a few topic segments,
-then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
+available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + ` (already fast if pre-warming
+ran, no extra step needed there), chooses a few topic segments, then runs
+` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
 what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
 systems own current truth. RawClaw only points to where something was discussed.
 BANNER
@@ -124,32 +147,53 @@ set -eu
 
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 
-if [ -n "$session_id" ]; then
-	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
-	mkdir -p "$catalog_dir" 2>/dev/null || true
-	entry="$catalog_dir/$session_id"
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
-	if [ -f "$entry" ]; then
-		exit 0
+if [ "$hook_event_name" = "Stop" ]; then
+	if [ -n "$session_id" ]; then
+		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
 	fi
-	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
-	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
-	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
-	# Fallback ladder uses 'true >' not ': >': ':' is a POSIX special builtin, so
-	# its redirection failure exits dash (Linux /bin/sh) despite the '|| true'.
-	tmp_entry="$catalog_dir/.tmp.$session_id.$$"
-	{
-		printf '{\n'
-		printf '  "session_id": "%s",\n' "$esc_session_id"
-		printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
-		printf '  "cwd": "%s",\n' "$esc_cwd"
-		printf '  "source": "codex"\n'
-		printf '}\n'
-	} > "$tmp_entry" 2>/dev/null && mv -f "$tmp_entry" "$entry" 2>/dev/null || printf '{"session_id":"%s"}\n' "$esc_session_id" > "$entry" 2>/dev/null || true > "$entry" 2>/dev/null || true
+	exit 0
 fi
+
+	if [ -n "$session_id" ]; then
+		catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
+		mkdir -p "$catalog_dir" 2>/dev/null || true
+		entry="$catalog_dir/$session_id"
+		esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
+		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
+		cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+		esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
+		# The source basename is the session ID, so linking to the catalog
+		# directory attempts exactly catalog/<session_id>. An existing directory
+		# or symlink cannot become ln's destination directory.
+		tmp_dir="$catalog_dir/.tmp.$session_id.$$"
+		tmp_entry="$tmp_dir/$session_id"
+		claimed=0
+		if mkdir "$tmp_dir" 2>/dev/null; then
+			{
+				printf '{\n'
+				printf '  "session_id": "%s",\n' "$esc_session_id"
+				printf '  "transcript_path": "%s",\n' "$esc_transcript_path"
+				printf '  "cwd": "%s",\n' "$esc_cwd"
+				printf '  "source": "codex"\n'
+				printf '}\n'
+			} > "$tmp_entry" 2>/dev/null || true
+			if ln "$tmp_entry" "$catalog_dir" 2>/dev/null; then
+				claimed=1
+			fi
+			rm -f "$tmp_entry" 2>/dev/null || true
+			rmdir "$tmp_dir" 2>/dev/null || true
+		fi
+		if [ "$claimed" -eq 1 ]; then
+			nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+		elif [ -e "$entry" ] || [ -L "$entry" ]; then
+			exit 0
+		else
+			nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+		fi
+	fi
 
 # No python3 for JSON encoding — silent no-op rather than a hook error (a
 # dropped banner is strictly better than a failing SessionStart). Catalog write
@@ -174,8 +218,9 @@ If the user seems to want to pick up a past session, offering to resume/fork it 
 
 Session closeout: whenever the user signals that the current session is ending or should be
 closed out, immediately delegate tagging to a background subagent so the main agent stays
-available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + `, chooses a few topic segments,
-then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
+available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + ` (already fast if pre-warming
+ran, no extra step needed there), chooses a few topic segments, then runs
+` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
 what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
 systems own current truth. RawClaw only points to where something was discussed.
 BANNER
@@ -195,8 +240,9 @@ If the user seems to want to pick up a past session, offering to resume/fork it 
 
 Session closeout: whenever the user signals that the current session is ending or should be
 closed out, immediately delegate tagging to a background subagent so the main agent stays
-available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + `, chooses a few topic segments,
-then runs ` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
+available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + ` (already fast if pre-warming
+ran, no extra step needed there), chooses a few topic segments, then runs
+` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
 what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
 systems own current truth. RawClaw only points to where something was discussed.`
 
@@ -221,6 +267,18 @@ set -eu
 
 input=$(cat)
 inv_num=$(printf '%s' "$input" | sed -n 's/.*"invocationNum"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+
+# Stop invokes this same script with terminationReason and without invocationNum.
+# Pre-warm the session closeout data in the background and keep Stop synchronous
+# work empty.
+termination_reason=$(printf '%s' "$input" | sed -n 's/.*"terminationReason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+if [ -n "$termination_reason" ] && [ -z "$inv_num" ]; then
+	session_id=$(printf '%s' "$input" | sed -n 's/.*"conversationId"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
+	if [ -n "$session_id" ]; then
+		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
+	exit 0
+fi
 
 # Gated to invocationNum 0 (first invocation in conversation). If unparseable, fall back to emitting.
 if [ -n "$inv_num" ] && [ "$inv_num" -ne 0 ]; then
@@ -663,7 +721,10 @@ func installRawclawHookAt(configDir, configFile, primeTemplate string) error {
 	if err := writeHookScript(scriptPath, renderHookScript(primeTemplate, quotedBin)); err != nil {
 		return fmt.Errorf("install hook script: %w", err)
 	}
-	entries := map[string]string{"SessionStart": scriptPath}
+	entries := map[string]string{
+		"SessionStart": scriptPath,
+		"Stop":         scriptPath,
+	}
 
 	data, err := readJSONFile(configFile)
 	if err != nil {
@@ -862,13 +923,19 @@ func removeRawclawAntigravityHooks(data map[string]any) {
 	}
 }
 
-// addRawclawAntigravityHooks registers rawclaw's named PreInvocation group in
-// Antigravity's hooks.json map. Existing rawclaw entries are stripped first
-// so the operation is idempotent.
+// addRawclawAntigravityHooks registers rawclaw's named PreInvocation and Stop
+// hooks in Antigravity's hooks.json map. Existing rawclaw entries are stripped
+// first so the operation is idempotent.
 func addRawclawAntigravityHooks(data map[string]any, scriptPath string) error {
 	removeRawclawAntigravityHooks(data)
 	data["rawclaw"] = map[string]any{
 		"PreInvocation": []any{
+			map[string]any{
+				"type":    "command",
+				"command": scriptPath,
+			},
+		},
+		"Stop": []any{
 			map[string]any{
 				"type":    "command",
 				"command": scriptPath,
@@ -891,7 +958,6 @@ func installRawclawAntigravityHook(configDir string) error {
 	if err := writeHookScript(scriptPath, scriptContent); err != nil {
 		return fmt.Errorf("install antigravity hook script: %w", err)
 	}
-
 	configFile := antigravityHooksPath(configDir)
 	data, err := readJSONFile(configFile)
 	if err != nil {

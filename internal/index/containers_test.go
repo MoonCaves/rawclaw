@@ -588,122 +588,60 @@ func TestEnsureIndexedContainers_ReindexFailure_WrapsContextWithoutLogging(t *te
 	}
 }
 
-// TestEnsureFreshContainer_PruneStaleLeftovers proves that stale leftovers (>24h old)
-// in the refresh cache directory are pruned on the next run, while active and
-// failed-sync refresh dbs are preserved for incremental watermark reuse and recovery.
-func TestEnsureFreshContainer_PruneStaleLeftovers(t *testing.T) {
-	cfg := t.TempDir()
-	t.Setenv("HOME", cfg)
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+// TestEnsureFreshContainer_PreservesRefreshDBOnPublishFailure proves that a
+// failed consolidated publish does not discard the successfully refreshed
+// per-container database needed for retry/recovery.
+func TestEnsureFreshContainer_PreservesRefreshDBOnPublishFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 
-	f1 := filepath.Join(cfg, "sess1.jsonl")
-	if err := os.WriteFile(f1, []byte("msg1\n"), 0o644); err != nil {
+	path := filepath.Join(home, "session.jsonl")
+	if err := os.WriteFile(path, []byte("message\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	c1 := source.Container{ID: "sess-fresh", Path: f1, CWD: "/work"}
-	msgs1 := func(_ source.Container) ([]model.Message, error) {
-		return []model.Message{
-			{Role: "user", Text: "fresh msg", TS: 1, TSISO: "2026-08-25T00:00:00Z", UUID: "u1"},
-		}, nil
+	c := source.Container{ID: "sess-seed", Path: path, CWD: "/work"}
+	msgs := func(source.Container) ([]model.Message, error) {
+		return []model.Message{{Role: "user", Text: "retry me", TS: 1, TSISO: "2026-08-25T00:00:00Z", UUID: "u1"}}, nil
 	}
-	dbp1 := RefreshDBPath("claude", c1.ID, c1.Path)
-
-	// Create a stale leftover file (>24h old) and a fresh leftover file in refresh dir
-	refreshDir := filepath.Join(store.CacheDir(), "refresh")
-	staleFile := filepath.Join(refreshDir, "stale-leftover.db")
-	if err := os.WriteFile(staleFile, []byte("stale"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	staleWal := filepath.Join(refreshDir, "stale-leftover.db-wal")
-	if err := os.WriteFile(staleWal, []byte("stale-wal"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	staleTime := time.Now().Add(-48 * time.Hour)
-	if err := os.Chtimes(staleFile, staleTime, staleTime); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(staleWal, staleTime, staleTime); err != nil {
-		t.Fatal(err)
+	seedDB := RefreshDBPath("claude", c.ID, c.Path)
+	if _, err := EnsureFreshContainer(seedDB, c, msgs, "claude"); err != nil {
+		t.Fatalf("seed EnsureFreshContainer: %v", err)
 	}
 
-	freshLeftover := filepath.Join(refreshDir, "fresh-leftover.db")
-	if err := os.WriteFile(freshLeftover, []byte("fresh"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Mixed-age group: an old .db whose -wal is fresh is a LIVE database mid-write
-	// (WAL holds unlanded pages) — the whole group must survive the prune.
-	mixedDB := filepath.Join(refreshDir, "active-mixed.db")
-	if err := os.WriteFile(mixedDB, []byte("old-db"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(mixedDB, staleTime, staleTime); err != nil {
-		t.Fatal(err)
-	}
-	mixedWal := filepath.Join(refreshDir, "active-mixed.db-wal")
-	if err := os.WriteFile(mixedWal, []byte("fresh-wal"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// 1. Successful run: EnsureFreshContainer prunes staleFile and staleWal on next run,
-	// while keeping freshLeftover and creating dbp1 for incremental watermarks.
-	n, err := EnsureFreshContainer(dbp1, c1, msgs1, "claude")
-	if err != nil {
-		t.Fatalf("EnsureFreshContainer success case: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("messages = %d, want 1", n)
-	}
-	if _, err := os.Stat(staleFile); !os.IsNotExist(err) {
-		t.Errorf("stale leftover %s still exists, want pruned on next run", staleFile)
-	}
-	if _, err := os.Stat(mixedDB); err != nil {
-		t.Errorf("mixed-age db %s pruned, want kept (fresh -wal marks it live)", mixedDB)
-	}
-	if _, err := os.Stat(mixedWal); err != nil {
-		t.Errorf("mixed-age wal %s pruned, want kept", mixedWal)
-	}
-	if _, err := os.Stat(staleWal); !os.IsNotExist(err) {
-		t.Errorf("stale leftover wal %s still exists, want pruned on next run", staleWal)
-	}
-	if _, err := os.Stat(freshLeftover); err != nil {
-		t.Errorf("fresh leftover %s was unexpectedly removed: %v", freshLeftover, err)
-	}
-	if _, err := os.Stat(dbp1); err != nil {
-		t.Errorf("active refresh db %s missing: %v", dbp1, err)
-	}
-
-	// 2. Failed sync: make consolidated store fail during sync (e.g. invalid table trigger)
-	conConsolidated, err := store.ConnectRW(ConsolidatedPath())
+	con, err := store.ConnectRW(ConsolidatedPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conConsolidated.Exec("CREATE TRIGGER test_fail_sync BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'injected sync failure'); END;"); err != nil {
-		conConsolidated.Close()
+	if _, err := con.Exec("CREATE TRIGGER fail_publish BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'injected publish failure'); END;"); err != nil {
+		con.Close()
 		t.Fatal(err)
 	}
-	conConsolidated.Close()
-
-	f2 := filepath.Join(cfg, "sess2.jsonl")
-	if err := os.WriteFile(f2, []byte("msg2\n"), 0o644); err != nil {
+	if err := con.Close(); err != nil {
 		t.Fatal(err)
 	}
-	c2 := source.Container{ID: "sess-failed", Path: f2, CWD: "/work"}
-	msgs2 := func(_ source.Container) ([]model.Message, error) {
-		return []model.Message{
-			{Role: "user", Text: "failed sync msg", TS: 2, TSISO: "2026-08-25T00:00:01Z", UUID: "u2"},
-		}, nil
-	}
-	dbp2 := RefreshDBPath("claude", c2.ID, c2.Path)
 
-	_, err = EnsureFreshContainer(dbp2, c2, msgs2, "claude")
-	if err == nil {
-		t.Fatal("EnsureFreshContainer succeeded, want failure from injected consolidated error")
+	failurePath := filepath.Join(home, "failed-session.jsonl")
+	if err := os.WriteFile(failurePath, []byte("message\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c = source.Container{ID: "sess-publish-failure", Path: failurePath, CWD: "/work"}
+	dbp := RefreshDBPath("claude", c.ID, c.Path)
+	if _, err := EnsureFreshContainer(dbp, c, msgs, "claude"); err == nil {
+		t.Fatal("EnsureFreshContainer succeeded, want consolidated publish failure")
 	}
 
-	// The failed sync MUST leave dbp2 on disk
-	if _, err := os.Stat(dbp2); err != nil {
-		t.Errorf("failed-sync refresh db %s does not exist, want kept: %v", dbp2, err)
+	refresh, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatalf("open refresh db after publish failure: %v", err)
+	}
+	defer refresh.Close()
+	var count int
+	if err := refresh.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id=?", c.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("refresh db message count = %d, want 1 after failed publish", count)
 	}
 }
 
@@ -723,6 +661,14 @@ func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing
 		}, nil
 	}
 	dbp := RefreshDBPath("claude", c.ID, c.Path)
+	stalePath := filepath.Join(store.CacheDir(), "refresh", "unrelated-stale.db")
+	if err := os.WriteFile(stalePath, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staleTime := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(stalePath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
 
 	n, err := PrepareFreshContainer(dbp, c, msgs, "claude")
 	if err != nil {
@@ -730,6 +676,9 @@ func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing
 	}
 	if n != 1 {
 		t.Errorf("PrepareFreshContainer n = %d, want 1", n)
+	}
+	if _, err := os.Stat(stalePath); err != nil {
+		t.Fatalf("PrepareFreshContainer pruned unrelated stale refresh db: %v", err)
 	}
 
 	// Refresh DB exists and has the message

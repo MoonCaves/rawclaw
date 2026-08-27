@@ -28,10 +28,16 @@ var runConsolidatedLsof = func(paths []string) ([]byte, error) {
 }
 
 type ConsolidatedFence struct {
-	lock *flock.Flock
+	lock       *flock.Flock
+	acquiredAt time.Time
 }
 
 func AcquireConsolidatedFence(ctx context.Context) (*ConsolidatedFence, error) {
+	started := time.Now()
+	slog.Info("consolidated fence phase", "phase", "acquire", "event", "start")
+	defer func() {
+		slog.Info("consolidated fence phase", "phase", "acquire", "duration", time.Since(started))
+	}()
 	lockPath := filepath.Join(store.CacheDir(), "consolidated.lock")
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create consolidated lock directory: %w", err)
@@ -40,7 +46,6 @@ func AcquireConsolidatedFence(ctx context.Context) (*ConsolidatedFence, error) {
 	lock := flock.New(lockPath)
 	waitCtx, cancel := context.WithTimeout(ctx, consolidatedLockWait)
 	defer cancel()
-	started := time.Now()
 	reportedHolder := false
 	// One timer, reused with Reset across retries — the lock is polled every
 	// consolidatedLockRetry for up to consolidatedLockWait (up to ~1200 ticks
@@ -56,7 +61,7 @@ func AcquireConsolidatedFence(ctx context.Context) (*ConsolidatedFence, error) {
 			return nil, fmt.Errorf("acquire consolidated lock: %w", err)
 		}
 		if locked {
-			return &ConsolidatedFence{lock: lock}, nil
+			return &ConsolidatedFence{lock: lock, acquiredAt: time.Now()}, nil
 		}
 		if !reportedHolder && time.Since(started) >= consolidatedLockWaitThreshold {
 			logConsolidatedLockHolder()
@@ -75,7 +80,11 @@ func (f *ConsolidatedFence) Close() error {
 	if f == nil || f.lock == nil {
 		return nil
 	}
-	return f.lock.Unlock()
+	started := time.Now()
+	slog.Info("consolidated fence phase", "phase", "release", "event", "start")
+	err := f.lock.Unlock()
+	slog.Info("consolidated fence phase", "phase", "release", "duration", time.Since(started), "held", time.Since(f.acquiredAt))
+	return err
 }
 
 func logConsolidatedLockHolder() {

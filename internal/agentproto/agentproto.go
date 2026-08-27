@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
@@ -1757,6 +1759,14 @@ func (e *ErrSessionNotFound) Error() string {
 // Returns an *ErrAmbiguousSession on ≥2 DISTINCT matching ids, an
 // *ErrSessionNotFound on none. A failing project is skipped.
 func locateSession(scope []view.Scope, more ScopeFn, session8 string) (dbp, fullSID, proj string, err error) {
+	return locateSessionWithCatalog(scope, more, session8, false)
+}
+
+func locateSessionGuarded(scope []view.Scope, more ScopeFn, session8 string) (dbp, fullSID, proj string, err error) {
+	return locateSessionWithCatalog(scope, more, session8, true)
+}
+
+func locateSessionWithCatalog(scope []view.Scope, more ScopeFn, session8 string, guarded bool) (dbp, fullSID, proj string, err error) {
 	everywhere := scope == nil
 	// A scope built and found EMPTY means "this directory has no history", not
 	// "search everything": callers build it deliberately, so it must resolve
@@ -1769,10 +1779,42 @@ func locateSession(scope []view.Scope, more ScopeFn, session8 string) (dbp, full
 	if cands := oneStoreCands(scope, session8); len(cands) > 0 {
 		return decideSession(cands, session8)
 	}
+	if guarded {
+		if cands := catalogCands(scope, session8); len(cands) > 0 {
+			return decideSession(cands, session8)
+		}
+	}
 	if everywhere {
 		scope = resolveScope(more)
 	}
 	return decideSession(sweepScopes(scope, session8), session8)
+}
+
+func catalogCands(scope []view.Scope, session8 string) []sessionCand {
+	hits := paths.ResolveSession(session8)
+	if len(hits) == 0 {
+		return nil
+	}
+	projects := scopeProjects(scope)
+	var narrowed []view.Scope
+	for _, hit := range hits {
+		if projects != nil && !slices.Contains(projects, hit.Project) {
+			continue
+		}
+		tdir := paths.ProjectDirOf(hit.Path)
+		if tdir == "" {
+			// SessionHit does not retain the catalog source. A path outside
+			// Claude's project tree cannot safely be reconstructed as a Claude
+			// scope. Abandon catalog narrowing entirely so a mixed Claude/foreign
+			// prefix stays ambiguous in the source-aware fallback.
+			return nil
+		}
+		narrowed = append(narrowed, view.Scope{Project: hit.Project, TDir: tdir})
+	}
+	if len(narrowed) == 0 {
+		return nil
+	}
+	return sweepScopes(narrowed, session8)
 }
 
 // decideSession turns candidate rows into the verb's answer: exactly one row
@@ -1839,6 +1881,13 @@ func oneStoreCands(scope []view.Scope, session8 string) []sessionCand {
 	return cands
 }
 
+// LocateConsolidatedSession resolves a session using only the consolidated
+// store, without falling back to per-project indexes.
+func LocateConsolidatedSession(session8 string) (dbp, fullSID string, err error) {
+	dbp, fullSID, _, err = decideSession(oneStoreCands(nil, session8), session8)
+	return dbp, fullSID, err
+}
+
 // scopeProjects lists the project labels a scope narrows to — the one store's
 // equivalent of "which project databases would the sweep have opened". A scope
 // carrying no label cannot be expressed as a label filter, so one such scope
@@ -1846,6 +1895,9 @@ func oneStoreCands(scope []view.Scope, session8 string) []sessionCand {
 // ambiguity the caller can see and break, whereas under-matching would hide a
 // session that is reachable today.
 func scopeProjects(scope []view.Scope) []string {
+	if scope == nil {
+		return nil
+	}
 	out := make([]string, 0, len(scope))
 	seen := make(map[string]bool, len(scope))
 	for _, sc := range scope {
@@ -1937,6 +1989,14 @@ func firstRowPerSession(cands []sessionCand) []sessionCand {
 // and Outline.
 func LocateSession(session8 string, scope []view.Scope, more ScopeFn) (dbPath, fullSID string, err error) {
 	dbp, sid, _, err := locateSession(scope, more, normalizeSessionArg(session8))
+	return dbp, sid, err
+}
+
+// LocateSessionGuarded resolves through the consolidated store, then the
+// durable session catalog's single project, before allowing the full scope
+// sweep. It is for callers where discovery must remain a last resort.
+func LocateSessionGuarded(session8 string, scope []view.Scope, more ScopeFn) (dbPath, fullSID string, err error) {
+	dbp, sid, _, err := locateSessionGuarded(scope, more, normalizeSessionArg(session8))
 	return dbp, sid, err
 }
 

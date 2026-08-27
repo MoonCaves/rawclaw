@@ -261,6 +261,16 @@ func commit(dst string, data []byte) error {
 	return nil
 }
 
+// WriteAtomic atomically replaces dst by staging it beside dst, syncing the
+// file, renaming it into place, and best-effort syncing the containing
+// directory.
+func WriteAtomic(dst string, data []byte) error {
+	if err := commit(dst, data); err != nil {
+		return err
+	}
+	return fsyncDir(filepath.Dir(dst))
+}
+
 // fsyncDir flushes a directory entry so a rename survives a crash. Failure is
 // non-fatal on filesystems that refuse to open a directory for sync.
 func fsyncDir(dir string) error {

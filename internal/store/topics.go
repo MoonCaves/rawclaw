@@ -196,7 +196,11 @@ func TopicsForSession(con *sql.DB, sessionID string) ([]TopicSegment, error) {
 // set the archive tag-ingest walks to attach pulled tags to their message-bearing
 // session. A missing table reads as none (non-fatal).
 func SessionIDsIn(con *sql.DB) ([]string, error) {
-	rows, err := con.Query("SELECT id FROM sessions")
+	return sessionIDsQuery(con, "SELECT id FROM sessions", "scan session id", "iterate session ids")
+}
+
+func sessionIDsQuery(con *sql.DB, query, scanLabel, iterateLabel string) ([]string, error) {
+	rows, err := con.Query(query)
 	if err != nil {
 		return nil, nil
 	}
@@ -205,12 +209,12 @@ func SessionIDsIn(con *sql.DB) ([]string, error) {
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan session id: %w", err)
+			return nil, fmt.Errorf("%s: %w", scanLabel, err)
 		}
 		out = append(out, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate session ids: %w", err)
+		return nil, fmt.Errorf("%s: %w", iterateLabel, err)
 	}
 	return out, nil
 }
@@ -220,27 +224,11 @@ func SessionIDsIn(con *sql.DB) ([]string, error) {
 // these to write one tag file per tagged session. Missing tables read as "none"
 // (non-fatal): a db that predates the topic sidecar simply exports no tags.
 func TaggedSessionIDs(con *sql.DB) ([]string, error) {
-	rows, err := con.Query(`
+	return sessionIDsQuery(con, `
 SELECT session_id FROM topic_segment
 UNION
 SELECT session_id FROM session_verdict
-ORDER BY session_id`)
-	if err != nil {
-		return nil, nil // missing sidecar tables read as no tagged sessions
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var sid string
-		if err := rows.Scan(&sid); err != nil {
-			return nil, fmt.Errorf("scan tagged session id: %w", err)
-		}
-		out = append(out, sid)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tagged session ids: %w", err)
-	}
-	return out, nil
+ORDER BY session_id`, "scan tagged session id", "iterate tagged session ids")
 }
 
 // MatchTopics runs an FTS query over topic_fts and, for each matched segment,

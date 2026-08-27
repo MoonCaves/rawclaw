@@ -2,15 +2,84 @@ package index
 
 import (
 	"database/sql"
+	"fmt"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
+
+func TestConsolidate_LogsPhaseStartsAndDurations(t *testing.T) {
+	isolateCache(t)
+	src := seedSessionDB(t, "phase-logs.db", sessionRow{
+		id: "phase-log-session", project: "phase-logs", cwd: "/w/phase-logs",
+		msgs: []msgRow{{"phase-log-message", "user", "log this fold", 100}},
+	})
+	recorder := &testLogRecorder{}
+	original := slog.Default()
+	slog.SetDefault(slog.New(recorder))
+	defer slog.SetDefault(original)
+
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("ConsolidateFrom: %v", err)
+	}
+
+	recorder.mu.Lock()
+	records := append([]slog.Record(nil), recorder.records...)
+	recorder.mu.Unlock()
+
+	type phaseKey struct {
+		message string
+		phase   string
+	}
+	starts := make(map[phaseKey]bool)
+	durations := make(map[phaseKey]bool)
+	for _, rec := range records {
+		var phase, event string
+		var duration slog.Value
+		rec.Attrs(func(attr slog.Attr) bool {
+			switch attr.Key {
+			case "phase":
+				phase = attr.Value.String()
+			case "event":
+				event = attr.Value.String()
+			case "duration":
+				duration = attr.Value
+			}
+			return true
+		})
+		key := phaseKey{message: rec.Message, phase: phase}
+		starts[key] = starts[key] || event == "start"
+		durations[key] = durations[key] || duration.Kind() == slog.KindDuration
+	}
+
+	assertLogged := func(message, phase string) {
+		t.Helper()
+		key := phaseKey{message: message, phase: phase}
+		if !starts[key] {
+			t.Errorf("%s phase %q has no start log", message, phase)
+		}
+		if !durations[key] {
+			t.Errorf("%s phase %q has no duration log", message, phase)
+		}
+	}
+	for _, phase := range []string{
+		"schema-migrate", "source-migrate", "attach", "prepare", "merge",
+		"detach", "tombstone-prune", "watermark-stamp", "connection-close",
+	} {
+		assertLogged("consolidate fold phase", phase)
+	}
+	for _, phase := range []string{"acquire", "release"} {
+		assertLogged("consolidated fence phase", phase)
+	}
+}
 
 // TestConsolidate_UnionsEveryProject is the ticket's headline: sessions from
 // separate per-project dbs land in ONE store, each keeping the project it came
@@ -1724,6 +1793,120 @@ func TestConsolidate_RollsBackAMidFoldFailure(t *testing.T) {
 	}
 }
 
+// TestConsolidate_FaultInjectionHelper is the child half of
+// TestConsolidate_RetryAfterAbruptPostMergeExit. It must exit from the merge
+// phase defer so the enclosing DETACH and connection cleanup defers do not run.
+func TestConsolidate_FaultInjectionHelper(t *testing.T) {
+	if os.Getenv("RAWCLAW_CONSOLIDATE_FAULT_CHILD") != "1" {
+		return
+	}
+	src := os.Getenv("RAWCLAW_CONSOLIDATE_FAULT_SOURCE")
+	if src == "" {
+		t.Fatal("missing RAWCLAW_CONSOLIDATE_FAULT_SOURCE")
+	}
+	home := os.Getenv("RAWCLAW_CONSOLIDATE_FAULT_HOME")
+	if home == "" {
+		t.Fatal("missing RAWCLAW_CONSOLIDATE_FAULT_HOME")
+	}
+	// TestMain gives every test process its own HOME. Restore the parent's
+	// isolated home here so the child and parent truly share one store.
+	t.Setenv("HOME", home)
+	consolidateAfterMergeHook = func() { os.Exit(124) }
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("fault-injected consolidation: %v", err)
+	}
+	t.Fatal("fault injection did not exit")
+}
+
+// TestConsolidate_RetryAfterAbruptPostMergeExit models issue #32's kill-then-
+// retry sequence. The child exits after the merge timing log and before the
+// DETACH defer; the parent then folds the same source and records the timing.
+func TestConsolidate_RetryAfterAbruptPostMergeExit(t *testing.T) {
+	home := isolateCache(t)
+	src := seedSessionDB(t, "fault-repro.db", sessionRow{
+		id: "fault-repro-session", project: "ledger", cwd: "/w/ledger",
+		msgs: []msgRow{{"fault-repro-message", "user", "reproduce the retry", 100}},
+	})
+
+	cmd := exec.Command(os.Args[0], "-test.run", "^TestConsolidate_FaultInjectionHelper$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"RAWCLAW_CONSOLIDATE_FAULT_CHILD=1",
+		"RAWCLAW_CONSOLIDATE_FAULT_SOURCE="+src,
+		"RAWCLAW_CONSOLIDATE_FAULT_HOME="+home,
+	)
+	childOutput, childErr := cmd.CombinedOutput()
+	if childErr == nil {
+		t.Fatalf("fault child exited successfully; output:\n%s", childOutput)
+	}
+	exitErr, ok := childErr.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 124 {
+		t.Fatalf("fault child error = %v, want exit status 124; output:\n%s", childErr, childOutput)
+	}
+	if !strings.Contains(string(childOutput), "phase=merge duration=") {
+		t.Fatalf("fault child output has no merge completion log:\n%s", childOutput)
+	}
+	if strings.Contains(string(childOutput), "phase=detach") {
+		t.Fatalf("fault child ran DETACH after forced exit:\n%s", childOutput)
+	}
+	t.Logf("fault child output:\n%s", childOutput)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		path := ConsolidatedPath() + suffix
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Logf("post-exit artifact %s: absent (%v)", filepath.Base(path), statErr)
+			continue
+		}
+		t.Logf("post-exit artifact %s: present size=%d", filepath.Base(path), info.Size())
+	}
+	lockPath := filepath.Join(store.CacheDir(), "consolidated.lock")
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("post-exit consolidated lock artifact missing: %v", err)
+	}
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM sessions WHERE id='fault-repro-session'"); got != "1" {
+		t.Fatalf("post-exit committed session count = %s, want 1", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM meta WHERE key LIKE 'sync:%'"); got != "1" {
+		t.Fatalf("post-exit sync watermark count = %s, want 1", got)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close post-exit assertion connection: %v", err)
+	}
+
+	// Change the same source after the child committed. An unchanged source
+	// would be a watermark no-op and would make the retry timing meaningless.
+	sourceCon, err := store.ConnectRW(src)
+	if err != nil {
+		t.Fatalf("open source for retry mutation: %v", err)
+	}
+	if _, err := sourceCon.Exec(
+		"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
+		"fault-repro-session", "assistant", "retry must fold this new row", 200, "", "fault-repro-retry-message",
+	); err != nil {
+		sourceCon.Close()
+		t.Fatalf("append source message: %v", err)
+	}
+	if _, err := sourceCon.Exec(
+		"UPDATE sessions SET last_ts=200, message_count=2 WHERE id=?", "fault-repro-session",
+	); err != nil {
+		sourceCon.Close()
+		t.Fatalf("update source message count: %v", err)
+	}
+	if err := sourceCon.Close(); err != nil {
+		t.Fatalf("close mutated source: %v", err)
+	}
+
+	started := time.Now()
+	st, err := ConsolidateFrom([]string{src}, false)
+	if err != nil {
+		t.Fatalf("retry consolidation: %v", err)
+	}
+	if st.Messages != 2 {
+		t.Fatalf("retry consolidated messages = %d, want 2; retry may have been a watermark no-op", st.Messages)
+	}
+	t.Logf("retry after post-merge exit completed in %s", time.Since(started))
+}
+
 // TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour covers issue #15: the
 // tombstone prune built a LIKE pattern by concatenating a session id, so an id
 // containing SQLite's single-char wildcard (_) matched NEIGHBOURING ids and
@@ -1742,7 +1925,7 @@ func TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour(t *testing.T) {
 	// "vic_im" is tombstoned. "vicXim" is an UNRELATED live session whose id
 	// differs only where the wildcard would match. Its subagent thread is the
 	// row that an unescaped LIKE "vic_im/%" wrongly sweeps up.
-	for _, id := range []string{"vic_im/sub", "vicXim/sub"} {
+	for _, id := range []string{"vic_im", "vic_im/sub", "vicXim/sub"} {
 		if _, err := con.Exec(`
 			INSERT INTO sessions (
 				id, started_at, last_ts, message_count, is_subagent, parent_id,
@@ -1771,6 +1954,83 @@ func TestPruneTombstoned_UnderscoreIdDoesNotDeleteNeighbour(t *testing.T) {
 	}
 	if neighbour != 1 {
 		t.Errorf("UNRELATED neighbour session deleted: count = %d, want 1", neighbour)
+	}
+}
+
+func TestPruneTombstonedIDs_SkipsMissingIDsQuicklyAndPrunesExistingThreads(t *testing.T) {
+	isolateCache(t)
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated: %v", err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("ensure topic schema: %v", err)
+	}
+
+	for _, id := range []string{"victim", "victim/agent-1"} {
+		if _, err := con.Exec(`INSERT INTO sessions (id) VALUES (?)`, id); err != nil {
+			t.Fatalf("seed session %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO messages (session_id, uuid) VALUES (?, ?)`, id, id+"-u"); err != nil {
+			t.Fatalf("seed message %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO session_sources (session_id, source_db) VALUES (?, ?)`, id, "source.db"); err != nil {
+			t.Fatalf("seed source %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO file_index (path, session_id) VALUES (?, ?)`, "/tmp/"+id, id); err != nil {
+			t.Fatalf("seed file %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO topic_segment (session_id, start_uuid) VALUES (?, ?)`, id, id+"-u"); err != nil {
+			t.Fatalf("seed topic %s: %v", id, err)
+		}
+		if _, err := con.Exec(`INSERT INTO session_verdict (session_id, verdict, source) VALUES (?, 'routine', 'floor')`, id); err != nil {
+			t.Fatalf("seed verdict %s: %v", id, err)
+		}
+	}
+
+	bulk, err := con.Begin()
+	if err != nil {
+		t.Fatalf("begin bulk seed: %v", err)
+	}
+	for i := range 20000 {
+		id := fmt.Sprintf("unrelated-%d", i)
+		if _, err := bulk.Exec(`INSERT INTO messages (session_id, uuid) VALUES (?, ?)`, id, id+"-u"); err != nil {
+			bulk.Rollback()
+			t.Fatalf("seed unrelated message: %v", err)
+		}
+	}
+	if err := bulk.Commit(); err != nil {
+		t.Fatalf("commit bulk seed: %v", err)
+	}
+
+	ids := make([]string, 2000)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("missing-%d", i)
+	}
+	ids = append(ids, "victim")
+	started := time.Now()
+	if err := pruneTombstonedIDs(con, ids); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("pruning mostly missing IDs took %s", elapsed)
+	}
+
+	for _, query := range []string{
+		"SELECT COUNT(*) FROM messages WHERE session_id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM sessions WHERE id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM session_sources WHERE session_id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM file_index WHERE session_id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM topic_segment WHERE session_id LIKE 'victim%'",
+		"SELECT COUNT(*) FROM session_verdict WHERE session_id LIKE 'victim%'",
+	} {
+		if got := scalar(t, con, query); got != "0" {
+			t.Errorf("rows survived query %q: %s", query, got)
+		}
 	}
 }
 

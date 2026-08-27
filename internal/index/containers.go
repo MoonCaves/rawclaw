@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"time"
-
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -26,9 +24,6 @@ import (
 // The index stays source-agnostic; the caller (cli) wires source → index.
 type MessagesFunc func(source.Container) ([]model.Message, error)
 
-// refreshStaleAfter is the maximum age for leftover temporary refresh dbs.
-var refreshStaleAfter = 24 * time.Hour
-
 // RefreshDBPath returns the private per-container cache used by targeted live
 // refreshes. It lives below the cache root so normal scope/orphan discovery
 // never mistakes it for another searchable project database.
@@ -39,39 +34,12 @@ func RefreshDBPath(sourceID, sessionID, sourcePath string) string {
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".db")
 }
 
-func pruneStaleRefreshDBs() {
-	dir := filepath.Join(store.CacheDir(), "refresh")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	mtimes := make(map[string]time.Time, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if info, err := entry.Info(); err == nil {
-			mtimes[entry.Name()] = info.ModTime()
-		}
-	}
-	now := time.Now()
-	// A db and its WAL/SHM sidecars age as one group: a fresh -wal means the
-	// database is still live even when the .db file itself has an old mtime.
-	for name, mt := range mtimes {
-		base := strings.TrimSuffix(strings.TrimSuffix(name, "-wal"), "-shm")
-		if !strings.HasSuffix(base, ".db") {
-			continue
-		}
-		newest := mt
-		for _, sib := range []string{base, base + "-wal", base + "-shm"} {
-			if t, ok := mtimes[sib]; ok && t.After(newest) {
-				newest = t
-			}
-		}
-		if now.Sub(newest) > refreshStaleAfter {
-			_ = os.Remove(filepath.Join(dir, name))
-		}
-	}
+// PrewarmDumpPath returns the session-specific closeout dump cache path.
+func PrewarmDumpPath(sessionID string) string {
+	sum := sha1.Sum([]byte(sessionID))
+	dir := filepath.Join(store.CacheDir(), "prewarm")
+	_ = os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, hex.EncodeToString(sum[:])+".dump")
 }
 
 // PrepareFreshContainer incrementally refreshes one live container and proves
@@ -83,8 +51,6 @@ func PrepareFreshContainer(
 	msgs MessagesFunc,
 	sourceID string,
 ) (int, error) {
-	pruneStaleRefreshDBs()
-
 	var loadErr error
 	strictMessages := func(got source.Container) ([]model.Message, error) {
 		ms, err := msgs(got)
@@ -567,8 +533,7 @@ func appendContainer(con *sql.DB, c source.Container, ms []model.Message, source
 	return nil
 }
 
-// vaultContainer stores rawclaw's own copy of a container-sourced session.
-func vaultContainer(c source.Container, ms []model.Message, sourceID string, projectArg, cwdArg any) error {
+func containerMeta(c source.Container, sourceID string, projectArg, cwdArg any) (durable.Meta, string) {
 	m := durable.Meta{
 		ID:         c.ID,
 		Source:     sourceID,
@@ -584,26 +549,18 @@ func vaultContainer(c source.Container, ms []model.Message, sourceID string, pro
 		m.SourceSize = size
 		m.SourceFP = fp
 	}
+	return m, rawPath
+}
+
+// vaultContainer stores rawclaw's own copy of a container-sourced session.
+func vaultContainer(c source.Container, ms []model.Message, sourceID string, projectArg, cwdArg any) error {
+	m, _ := containerMeta(c, sourceID, projectArg, cwdArg)
 	return durable.StoreMessages(m, ms)
 }
 
 // vaultContainerAll vaults a complete session after append.
 func vaultContainerAll(tx *sql.Tx, c source.Container, sourceID string, projectArg, cwdArg any) error {
-	m := durable.Meta{
-		ID:         c.ID,
-		Source:     sourceID,
-		Project:    strOf(projectArg),
-		CWD:        strOf(cwdArg),
-		IsSubagent: c.IsSubagent,
-		ParentID:   c.ParentID,
-		SourcePath: realpath(c.Path),
-	}
-	rawPath := backingFilePath(c.Path)
-	if mtime, size, fp, err := backingFileState(rawPath); err == nil {
-		m.SourceMTime = mtime
-		m.SourceSize = size
-		m.SourceFP = fp
-	}
+	m, rawPath := containerMeta(c, sourceID, projectArg, cwdArg)
 	if sourceID == sourceClaude || sourceID == "" {
 		return durable.StoreFile(m, rawPath)
 	}

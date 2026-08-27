@@ -23,13 +23,17 @@ type CorpusStats struct {
 // CountSessions opens dbp read-only and returns the session count, or -1 on
 // error (callers must treat <0 as unknown).
 func CountSessions(dbp string) int {
+	return countSessions(dbp, "SELECT COUNT(*) FROM sessions")
+}
+
+func countSessions(dbp, query string) int {
 	con, err := ConnectRO(dbp)
 	if err != nil {
 		return -1
 	}
 	defer con.Close()
 	var n int
-	if err := con.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&n); err != nil {
+	if err := con.QueryRow(query).Scan(&n); err != nil {
 		return -1
 	}
 	return n
@@ -40,16 +44,7 @@ func CountSessions(dbp string) int {
 // raw CountSessions above includes subagent threads and is internal bookkeeping.
 // Returns -1 on error.
 func CountTopLevelSessions(dbp string) int {
-	con, err := ConnectRO(dbp)
-	if err != nil {
-		return -1
-	}
-	defer con.Close()
-	var n int
-	if err := con.QueryRow("SELECT COUNT(*) FROM sessions WHERE is_subagent=0").Scan(&n); err != nil {
-		return -1
-	}
-	return n
+	return countSessions(dbp, "SELECT COUNT(*) FROM sessions WHERE is_subagent=0")
 }
 
 // GetCorpusStats returns aggregate counts for one indexed project's db
