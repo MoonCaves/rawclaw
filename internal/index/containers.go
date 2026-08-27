@@ -71,6 +71,7 @@ func evictStaleRefreshDB(dbPath string) {
 	if err != nil {
 		return
 	}
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec("BEGIN IMMEDIATE"); err != nil {
 		_ = db.Close()
 		return
