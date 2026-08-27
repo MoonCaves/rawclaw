@@ -1,7 +1,9 @@
 package index
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +17,120 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
+
+func TestConsolidate_ContextCancellationDoesNotPublishAndRetryPublishesWatermark(t *testing.T) {
+	isolateCache(t)
+	src := seedSessionDB(t, "cancel-retry.db", sessionRow{
+		id: "cancel-retry-session", project: "cancel-retry", cwd: "/w/cancel-retry",
+		msgs: []msgRow{{"cancel-retry-initial", "user", "initial", 100}},
+	})
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("initial consolidate: %v", err)
+	}
+	con := openConsolidated(t)
+	priorWatermark := scalar(t, con, "SELECT value FROM meta WHERE key LIKE 'sync:%'")
+	con.Close()
+	source, err := store.ConnectRW(src)
+	if err != nil {
+		t.Fatalf("open source for mutation: %v", err)
+	}
+	if _, err := source.Exec("INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)", "cancel-retry-session", "assistant", "retry", 200, "", "cancel-retry-added"); err != nil {
+		source.Close()
+		t.Fatalf("append source message: %v", err)
+	}
+	if _, err := source.Exec("UPDATE sessions SET last_ts=200, message_count=2 WHERE id=?", "cancel-retry-session"); err != nil {
+		source.Close()
+		t.Fatalf("update source session: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close mutated source: %v", err)
+	}
+
+	holder, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open independent lock holder: %v", err)
+	}
+	defer holder.Close()
+	releaseWriter, err := acquireConsolidatedWriter(context.Background())
+	if err != nil {
+		t.Fatalf("acquire independent writer admission: %v", err)
+	}
+	holderTx, err := holder.Begin()
+	if err != nil {
+		t.Fatalf("begin lock holder: %v", err)
+	}
+	if _, err := holderTx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('t52-lock-holder','1')"); err != nil {
+		holderTx.Rollback()
+		t.Fatalf("acquire real SQLite writer lock: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	started := time.Now()
+	go func() { done <- SyncConsolidatedFromContext(ctx, src) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	var canceledErr error
+	select {
+	case canceledErr = <-done:
+		if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+			holderTx.Rollback()
+			releaseWriter()
+			t.Fatalf("canceled fold returned after %s, want <=250ms", elapsed)
+		}
+	case <-time.After(250 * time.Millisecond):
+		holderTx.Rollback()
+		releaseWriter()
+		canceledErr = <-done
+		t.Fatalf("canceled fold did not return by 250ms: %v", canceledErr)
+	}
+	if !errors.Is(canceledErr, context.Canceled) {
+		holderTx.Rollback()
+		releaseWriter()
+		t.Fatalf("canceled fold error = %v, want context.Canceled", canceledErr)
+	}
+
+	con = openConsolidated(t)
+	if got := scalar(t, con, "SELECT COUNT(*) FROM messages WHERE uuid='cancel-retry-added'"); got != "0" {
+		con.Close()
+		holderTx.Rollback()
+		releaseWriter()
+		t.Fatalf("canceled fold published %s retry messages, want 0", got)
+	}
+	if got := scalar(t, con, "SELECT last_ts FROM sessions WHERE id='cancel-retry-session'"); got != "100" {
+		con.Close()
+		holderTx.Rollback()
+		releaseWriter()
+		t.Fatalf("canceled fold changed session last_ts to %s, want 100", got)
+	}
+	if got := scalar(t, con, "SELECT value FROM meta WHERE key LIKE 'sync:%'"); got == "" {
+		con.Close()
+		holderTx.Rollback()
+		releaseWriter()
+		t.Fatal("canceled fold removed the prior sync watermark")
+	}
+	con.Close()
+	if err := holderTx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		releaseWriter()
+		t.Fatalf("release lock holder: %v", err)
+	}
+	releaseWriter()
+
+	if err := SyncConsolidatedFromContext(context.Background(), src); err != nil {
+		t.Fatalf("retry consolidate: %v", err)
+	}
+	con = openConsolidated(t)
+	defer con.Close()
+	if got := scalar(t, con, "SELECT COUNT(*) FROM messages WHERE uuid='cancel-retry-added'"); got != "1" {
+		t.Fatalf("retry consolidated added message count = %s, want 1", got)
+	}
+	if got := scalar(t, con, "SELECT COUNT(*) FROM meta WHERE key LIKE 'sync:%'"); got != "1" {
+		t.Fatalf("retry sync watermark count = %s, want exactly 1", got)
+	}
+	if got := scalar(t, con, "SELECT value FROM meta WHERE key LIKE 'sync:%'"); got == priorWatermark {
+		t.Fatalf("retry sync watermark = %q, want a new transaction-bound value", got)
+	}
+}
 
 func TestConsolidate_LogsPhaseStartsAndDurations(t *testing.T) {
 	isolateCache(t)

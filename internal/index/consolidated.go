@@ -32,6 +32,21 @@ const ConsolidatedDBName = "consolidated.db"
 // terminating the test runner.
 var consolidateAfterMergeHook func()
 
+var consolidatedWriterGate = make(chan struct{}, 1)
+
+func init() {
+	consolidatedWriterGate <- struct{}{}
+}
+
+func acquireConsolidatedWriter(ctx context.Context) (func(), error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-consolidatedWriterGate:
+		return func() { consolidatedWriterGate <- struct{}{} }, nil
+	}
+}
+
 // ConsolidatedPath returns the consolidated store's path in the cache dir.
 func ConsolidatedPath() string {
 	return filepath.Join(store.CacheDir(), ConsolidatedDBName)
@@ -400,6 +415,11 @@ UPDATE sessions SET message_count =
 // Sources are read through SQLite's ATTACH, so nothing is parsed twice: the
 // transcripts were already turned into rows once, and this moves those rows.
 func ConsolidateFrom(srcPaths []string, rebuild bool) (st SyncStats, err error) {
+	releaseWriter, err := acquireConsolidatedWriter(context.Background())
+	if err != nil {
+		return st, err
+	}
+	defer releaseWriter()
 	fence, err := AcquireConsolidatedFence(context.Background())
 	if err != nil {
 		return st, err
@@ -564,6 +584,11 @@ func SyncConsolidatedFromContext(ctx context.Context, srcPath string) error {
 	if IsConsolidatedDB(srcPath) {
 		return nil
 	}
+	releaseWriter, err := acquireConsolidatedWriter(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseWriter()
 	fence, err := AcquireConsolidatedFence(ctx)
 	if err != nil {
 		return err
@@ -696,7 +721,7 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 	}
 	done()
 	done = beginConsolidatePhase(src, "attach")
-	if _, err := con.Exec("ATTACH DATABASE ? AS src", "file:"+src+"?mode=ro"); err != nil {
+	if _, err := con.ExecContext(ctx, "ATTACH DATABASE ? AS src", "file:"+src+"?mode=ro"); err != nil {
 		done()
 		return 0, false, true, fmt.Errorf("attach: %w", err)
 	}
@@ -733,7 +758,7 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 	}
 
 	mark := ""
-	if err := con.QueryRow(
+	if err := con.QueryRowContext(ctx,
 		`SELECT (SELECT COUNT(*) FROM src.sessions) || ':' ||
 		        (SELECT COUNT(*) FROM src.messages) || ':' ||
 		        (SELECT COALESCE(MAX(id),0) FROM src.messages) || ':' ||
@@ -750,7 +775,7 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 	// alone would still miss it.
 	topicMark := "0"
 	if hasTopics {
-		if err := con.QueryRow(
+		if err := con.QueryRowContext(ctx,
 			`SELECT COUNT(*) || '@' || COALESCE(MAX(tagged_at),0) FROM src.topic_segment`,
 		).Scan(&topicMark); err != nil {
 			return 0, false, true, fmt.Errorf("read source topic watermark: %w", err)
@@ -759,14 +784,14 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 	mark += ":t" + topicMark
 	verdictMark := "0"
 	if hasVerdicts {
-		if err := con.QueryRow(
+		if err := con.QueryRowContext(ctx,
 			`SELECT COUNT(*) || '@' || COALESCE(MAX(tagged_at),0) FROM src.session_verdict`,
 		).Scan(&verdictMark); err != nil {
 			return 0, false, true, fmt.Errorf("read source verdict watermark: %w", err)
 		}
 	}
 	mark += ":v" + verdictMark
-	if err := con.QueryRow("SELECT COUNT(*) FROM src.sessions").Scan(&offered); err != nil {
+	if err := con.QueryRowContext(ctx, "SELECT COUNT(*) FROM src.sessions").Scan(&offered); err != nil {
 		return 0, false, true, fmt.Errorf("count source sessions: %w", err)
 	}
 	srcOrigin := false
@@ -817,15 +842,15 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 		}
 	}()
 
-	if _, err := tx.Exec(`CREATE TEMP TABLE IF NOT EXISTS consolidation_affected_sessions (
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS consolidation_affected_sessions (
 		session_id TEXT PRIMARY KEY
 	)`); err != nil {
 		return 0, false, true, fmt.Errorf("create affected session set: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM temp.consolidation_affected_sessions"); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM temp.consolidation_affected_sessions"); err != nil {
 		return 0, false, true, fmt.Errorf("clear affected session set: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO temp.consolidation_affected_sessions(session_id)
 		SELECT session_id FROM main.session_sources
 		WHERE source_db = ?
@@ -834,17 +859,17 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 		return 0, false, true, fmt.Errorf("record deleted session sources: %w", err)
 	}
 	// Inside tx: these writes must roll back with the fold, not survive it.
-	if _, err := tx.Exec(recordSessionSourcesSQL, srcID); err != nil {
+	if _, err := tx.ExecContext(ctx, recordSessionSourcesSQL, srcID); err != nil {
 		return 0, false, true, fmt.Errorf("record session sources: %w", err)
 	}
-	if _, err := tx.Exec("DELETE FROM main.session_sources WHERE source_db = ? AND session_id NOT IN (SELECT id FROM src.sessions)", srcID); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM main.session_sources WHERE source_db = ? AND session_id NOT IN (SELECT id FROM src.sessions)", srcID); err != nil {
 		return 0, false, true, fmt.Errorf("prune stale session sources: %w", err)
 	}
 	// A source's topic set is authoritative only when it is the sole surviving
 	// contributor for the session. With co-contributors, retain rows because the
 	// consolidated table has no per-source topic ownership column.
 	if hasTopics {
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(ctx, `
 				DELETE FROM main.topic_segment
 				WHERE session_id IN (
 				SELECT ss.session_id
@@ -864,17 +889,17 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 			return 0, false, true, fmt.Errorf("prune stale source topics: %w", err)
 		}
 	}
-	if _, err := tx.Exec(mergeSessionsSQL); err != nil {
+	if _, err := tx.ExecContext(ctx, mergeSessionsSQL); err != nil {
 		return 0, false, true, fmt.Errorf("merge sessions: %w", err)
 	}
-	if _, err := tx.Exec(mergeMessagesSQL); err != nil {
+	if _, err := tx.ExecContext(ctx, mergeMessagesSQL); err != nil {
 		return 0, false, true, fmt.Errorf("merge messages: %w", err)
 	}
 	if hasTopics {
-		if _, err := tx.Exec(mergeTopicsSQLFor(srcOrigin)); err != nil {
+		if _, err := tx.ExecContext(ctx, mergeTopicsSQLFor(srcOrigin)); err != nil {
 			return 0, false, true, fmt.Errorf("merge topics: %w", err)
 		}
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM main.topic_segment
 			WHERE session_id IN (SELECT session_id FROM temp.consolidation_affected_sessions)
 			  AND NOT EXISTS (
@@ -886,10 +911,10 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 		}
 	}
 	if hasVerdicts {
-		if _, err := tx.Exec(mergeVerdictsSQL); err != nil {
+		if _, err := tx.ExecContext(ctx, mergeVerdictsSQL); err != nil {
 			return 0, false, true, fmt.Errorf("merge verdicts: %w", err)
 		}
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM main.session_verdict
 			WHERE session_id IN (SELECT session_id FROM temp.consolidation_affected_sessions)
 			  AND NOT EXISTS (
@@ -900,7 +925,7 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 			return 0, false, true, fmt.Errorf("prune deleted session verdicts: %w", err)
 		}
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM main.messages
 		WHERE session_id IN (
 			SELECT a.session_id
@@ -912,7 +937,7 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("prune deleted session messages: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM main.sessions
 		WHERE id IN (
 			SELECT a.session_id
@@ -924,14 +949,14 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("prune deleted sessions: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE main.sessions SET message_count =
 		  (SELECT COUNT(*) FROM main.messages WHERE main.messages.session_id = main.sessions.id)
 		WHERE main.sessions.id IN (SELECT id FROM src.sessions)
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("recount source sessions: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO main.file_index(path,mtime,size,fp,session_id)
 		SELECT path,mtime,size,fp,session_id FROM src.file_index
 		WHERE true
@@ -943,7 +968,7 @@ func consolidateOneContext(ctx context.Context, con *sql.DB, src string) (offere
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("merge file_index: %w", err)
 	}
-	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
 		return 0, false, true, fmt.Errorf("stamp sync watermark: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
