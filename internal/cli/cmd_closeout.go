@@ -34,7 +34,8 @@ type closeoutTaggerConfig struct {
 // newCloseoutCmd wires the user-facing closeout entry point. The ordinary path
 // only claims a deduplicated detached child; all tagging work happens there.
 func newCloseoutCmd() *cobra.Command {
-	var child, childToken string
+	var child bool
+	var childToken string
 	cmd := &cobra.Command{
 		Use:   "closeout <full-session-id>",
 		Short: "Queue detached tagging for a completed session",
