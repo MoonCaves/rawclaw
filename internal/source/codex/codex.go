@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -81,12 +82,16 @@ func standardRolloutName(name string) bool {
 	if !isRollout(name) || len(name) < len("rollout-.jsonl")+36 {
 		return false
 	}
-	u := strings.TrimSuffix(name, ".jsonl")
-	u = u[len("rollout-"):]
-	if len(u) < 37 || u[len(u)-37] != '-' {
+	base := strings.TrimSuffix(name, ".jsonl")
+	rest := base[len("rollout-"):]
+	if len(rest) < len("2006-01-02T15-04-05")+1+36 || rest[len(rest)-37] != '-' {
 		return false
 	}
-	u = u[len(u)-36:]
+	stamp := rest[:len(rest)-37]
+	if _, err := time.Parse("2006-01-02T15-04-05", stamp); err != nil {
+		return false
+	}
+	u := rest[len(rest)-36:]
 	for i, r := range u {
 		if (i == 8 || i == 13 || i == 18 || i == 23) && r == '-' {
 			continue
