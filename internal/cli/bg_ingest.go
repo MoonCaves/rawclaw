@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +21,8 @@ const ingestLogMax = 512 * 1024
 // preventing process storms from concurrent reads on wholesale-stale stores.
 var ingestSpawnWindow = 1 * time.Minute
 
+const closeoutTokenTTL = closeoutChildTimeout * 2
+
 // spawnIngest launches the detached ingest child — a seam so tests can
 // count or hook spawn decisions without forking processes.
 var spawnIngest = spawnIngestChild
@@ -30,7 +34,7 @@ var spawnIngest = spawnIngestChild
 func acquireIngestSpawnToken(sessionArg string, now time.Time) bool {
 	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return true // best effort; do not block ingest spawn on dir error
+		return false
 	}
 	markerName := "_global.token"
 	if sessionArg != "" {
@@ -48,8 +52,99 @@ func acquireIngestSpawnToken(sessionArg string, now time.Time) bool {
 			return false // throttled: spawn already triggered within ingestSpawnWindow
 		}
 	}
-	_ = os.WriteFile(markerPath, []byte(now.UTC().Format(time.RFC3339)), 0o644)
+	if err := os.WriteFile(markerPath, []byte(now.UTC().Format(time.RFC3339)), 0o644); err != nil {
+		return false
+	}
 	return true
+}
+
+// acquireCloseoutToken atomically claims a session's closeout for its whole
+// lifetime. Unlike the ingest throttle marker, this lock never expires: the
+// detached worker removes it only after completion or failure.
+func acquireCloseoutToken(sessionID string) (string, bool) {
+	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", false
+	}
+	lockDir := closeoutTokenPath(dir, sessionID)
+	for range 2 {
+		if err := os.Mkdir(lockDir, 0o755); err != nil {
+			if !os.IsExist(err) || !reclaimCloseoutToken(lockDir) {
+				return "", false
+			}
+			continue
+		}
+		token, err := randomCloseoutToken()
+		if err != nil {
+			_ = os.Remove(lockDir)
+			return "", false
+		}
+		marker := filepath.Join(lockDir, token)
+		if err := os.WriteFile(marker, nil, 0o400); err != nil {
+			_ = os.Remove(lockDir)
+			return "", false
+		}
+		return token, true
+	}
+	return "", false
+}
+
+func releaseCloseoutToken(sessionID, token string) {
+	lockDir := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
+	if !validCloseoutToken(token) {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(lockDir, token)); err == nil {
+		_ = os.Remove(filepath.Join(lockDir, token))
+		_ = os.Remove(lockDir)
+	}
+}
+
+func closeoutTokenPath(dir, sessionID string) string {
+	safeID := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, sessionID)
+	return filepath.Join(dir, "closeout-"+safeID+".lock")
+}
+
+func reclaimCloseoutToken(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || time.Since(st.ModTime()) < closeoutTokenTTL {
+		return false
+	}
+	suffix, err := randomCloseoutToken()
+	if err != nil {
+		return false
+	}
+	quarantine := path + ".stale-" + suffix
+	if err := os.Rename(path, quarantine); err != nil {
+		return false
+	}
+	return os.RemoveAll(quarantine) == nil
+}
+
+func validateCloseoutToken(sessionID, token string) bool {
+	if !validCloseoutToken(token) {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID), token))
+	return err == nil
+}
+
+func validCloseoutToken(token string) bool {
+	b, err := hex.DecodeString(token)
+	return err == nil && len(b) == 32
+}
+
+func randomCloseoutToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // maybeSpawnIngest fires a detached self-invocation of `rawclaw ingest [session]`

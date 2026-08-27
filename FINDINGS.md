@@ -1,5 +1,14 @@
 Issue #41 is caused by removing refresh-cache eviction while retaining refresh DBs for the prewarm/closeout cache. Eviction must therefore not run from PrepareFreshContainer, whose contract is to preserve fresh entries, and must allow sessions to outlive the old 24-hour window. The smallest shared fix is a 30-day inactivity TTL at RefreshDBPath, which is used whenever a refresh cache entry is acquired; protect the acquired path during that pass and remove SQLite sidecars with the database so reused/active entries survive while abandoned entries are eventually reclaimed.
 
+# Issue #24 findings
+
+- `tag-prep` already provides the exact bounded, incremental dump and fully-tagged marker; closeout should capture that output without altering it.
+- `tag-write` already validates and authoritatively writes segment arrays, then queues existing detached publication; closeout should invoke the same command path.
+- `bg_ingest.go` provides the detached self-invocation, per-session token, and append log primitives; closeout should reuse them and keep foreground work bounded to spawn.
+- The accepted config is a JSON argv array at `~/.cache/session-search/tagger-config.json`; use direct `exec.Command`, a 60-second child context, and preserve stderr in the closeout log.
+- Missing config, invalid output, nonzero exit, timeout, and empty output must be logged failures with no `tag-write`; only the exact JSON segment array may cross into `tag-write`.
+- Scope is limited to the CLI root wiring, background helper seam, new closeout implementation/tests, README, and this findings record. No storage/parser/dependency changes are needed.
+
 ## Issue #57 findings
 
 - `internal/cli/cli.go` wires `--include-path` as a regex over project working
