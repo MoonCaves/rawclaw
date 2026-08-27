@@ -13,6 +13,28 @@ found for the named claims. Recommended new score: **0**. Same-family,
 self-authored, inherited-base, report-only, test-only, and unadopted movement
 is excluded.
 
+## Historical-ledger audit: Furiosa +9
+
+This audit covers only the immutable receipts, reports, and commits cited by
+`/Users/jay-m4/code/rawclaw-session-recovery-20260827/two-supervisor-harness/state/SCORECARD.md`.
+Graphify was queried first (`Furiosa TICK53`) and returned no matching nodes;
+therefore it supplied no source claim. The +9 ledger narrows to **+8**:
+
+| Original points | Event | Adopter or rebuttal | Exact cited evidence | Recommendation fingerprint | Dedupe ruling | Disposition |
+|---:|---|---|---|---|---|---|
+| +1 | Independent correction of `bd8346c` setup-blob identity | No cited immutable adopter receipt. The scorecard says “Confirmed by Han,” but the cited evidence contains only the independent audit report. | Audit commit `8f58e023554fb7d64b651db7a3f40ac8cea10fb8`; cited result blobs `7d4e1cca596d4db869441219417bc2f7a2875960` and `c577bdccfdeea97264caaa98ddd15b16a0de4fad`; cited `82/74` numstat. | N/A | The blobs are materially distinct, but the score event is report-only in the cited evidence; distinct payload does not create external adoption. | **WITHDRAW** — 0 |
+| +5 | Composite authoritative tag overlay adopted by Han's integration desk; delayed tag publication remained visible and session identity used `(SessionID, StartUUID)` | Han integration desk, commit `5eec12be3fd9c30d7544cadd02e26e03260a15cb`; prosecution report records the external adoption and the two-session mutation result. | Prosecution commit/report `9886c4f02de14293cc94d438c599c15337fbcad8`; adopter commit `5eec12be3fd9c30d7544cadd02e26e03260a15cb`; cited e6 patch ID `99523502a6ce02afa6116c3efffbc72e1f44e03c`; adopter patch ID `9767304327f9ee282df41c7f5877ebc51e3f9f63`; cited race results `70.084s` and `98.553s`. | `SessionID + NUL + StartUUID` overlay key plus delayed-publication visibility | Explicit judge override makes this one event. No additive default `+3` or unique-transplant `+2`; the latter is a different credit rule and is not counted here. | **KEEP** — +5 |
+| +3 | Owner-only future-cursor recovery recommendation adopted in Han's cadence document | Han Solo receipt `20260826T193838Z-7cac0a97-class-a-furiosa-plus3-cursor-r.md` explicitly identifies external adoption; receipt SHA-256 `b5f52fb624dcc5c7f2497a0b632ad1c4d6c64ac66374d56daa8d8d9eddae0cbb`. | Adoption commit `7f5217c2f8a3cd797b277fcf794250c989504461`, pushed clean/upstream-equal; cited receipt path above. | Preserve hashes; quarantine without deletion; owner-only cursor reset; normal-UTC unread self-test; retained hashes | Distinct recommendation-adoption event from the overlay and setup-identity audit. It is documentation adoption, not an unsupported helper-correctness claim. | **KEEP** — +3 |
+
+### Historical ruling
+
+The cited evidence supports **KEEP +5** for the overlay adoption and **KEEP +3**
+for the cursor-recovery adoption. The setup-identity item is **WITHDRAWN**:
+its cited object proves an audit correction, but no cited immutable external
+adopter receipt survives the evidence boundary, and report-only work scores
+zero. Corrected historical Furiosa total: **+8** (from +9). This is a ledger
+audit only and grants no merge authorization.
+
 ## Immutable claim reconciliation
 
 | Claim | Evidence | Verdict and score |
