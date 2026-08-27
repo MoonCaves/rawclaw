@@ -56,3 +56,16 @@ Estimated net reduction: 4 lines.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
+
+# Independent verification: store stats candidate
+
+The stale candidate is already present on current `origin/main` in
+`internal/store/stats.go`: `GetCorpusStats` uses one conditional aggregate over
+`sessions` and one over `messages`, with no additional implementation needed.
+The rewrite is behaviorally identical for SQLite: `COUNT(CASE WHEN ... THEN
+1 END)` matches the prior filtered counts, `COUNT(*)` preserves empty-store
+zeros, and conditional `MIN`/`MAX` preserve NULL results for empty timestamps.
+The existing zero-value/nil-error behavior for scan failures is unchanged, as
+is the open-error wrapping. The result is measurably simpler at the SQL-call
+level (2 queries instead of 6) and reduces production code by 3 lines in the
+candidate diff. Verdict: ACCEPT, already landed; no new production edit.
