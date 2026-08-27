@@ -30,10 +30,26 @@ Replace them with exactly two conditional-aggregation queries: one over
 handling, the existing zero-stats-on-scan-error behavior, and the public
 `CorpusStats` result. Reuse `database/sql`; add no abstraction or dependency.
 
-## Finding #19 — ACCEPT
+## Finding #19 — REJECT (stale finding)
 
-`first10` only receives documented ASCII ISO timestamps. Replace the rune-slice
-allocation with `s[:min(len(s), 10)]`; preserve empty and short-string behavior.
+`internal/store/stats.go:86-87` already uses `s[:min(len(s), 10)]` on current
+`origin/main` (`ae8703b`). The prior `[]rune` implementation was removed by
+commit `05b08ea`.
+
+Under the actual timestamp contract, source adapters store ISO-8601 strings
+whose date prefix is ASCII `YYYY-MM-DD`; byte slicing is exact for valid stored
+timestamps and for empty/short strings (`min` prevents a panic). For malformed
+or non-ASCII database values, byte slicing and the former rune conversion are
+intentionally not equivalent: byte slicing preserves the raw stored prefix
+(which may be invalid UTF-8), while rune conversion rewrites invalid bytes and
+counts Unicode code points. No contract promises recovery or normalization for
+such corrupted values, so this is not a reason to resurrect the allocation.
+
+`internal/store/sessions_test.go:269-290` pins the intended normal ASCII
+`CorpusStats` behavior. There is no `internal/store/stats_test.go`; adding
+malformed-value tests would define a new policy outside this stale finding.
+
+Net production lines: 0.
 
 ## Scope fence
 
