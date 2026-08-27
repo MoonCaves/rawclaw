@@ -1,6 +1,6 @@
 # Canonical RawClaw Agent Registry
 
-Snapshot and run completion: **2026-08-27T04:45:27Z UTC / 2026-08-27T12:45:27+0800 WITA**. This reconciliation is read-only with respect to accepted source checkouts. It contains **198 identity/session rows**: **196 exact mailbox identity records**, plus **2 live-only identities** added only from independent process and CWD evidence. It grants no score, merge, cleanup, or product authorization.
+Source observation/snapshot cutoff: **2026-08-27T04:45:27Z UTC / 2026-08-27T12:45:27+0800 WITA**. Reconciliation completion: **2026-08-27T05:16:00Z UTC / 2026-08-27T13:16:00+0800 WITA**. This reconciliation is read-only with respect to accepted source checkouts. It contains **198 identity/session rows**: **196 exact mailbox identity records**, plus **2 live-only identities** added only from independent process and CWD evidence. It grants no score, merge, cleanup, or product authorization.
 
 ## Accepted inputs and integrity
 
@@ -14,7 +14,9 @@ Status counts: `reported-running=30, confirmed historical=59, completed=76, ambi
 
 Confidence counts: `medium=51, high=115, low=32`.
 
-## Current live and terminal roster
+## Snapshot live and terminal roster as of the cutoff
+
+Agents first observed after the cutoff, including Marie Curie and later T59 lanes, are intentionally outside this pinned snapshot and require a refresh; this reconciliation does not chase a moving target.
 
 - Sarah Connor: terminal receipt `d81b6de`, own-upstream 0/0 clean; patch-identical to adopted `0152683`; candidate baseline and two hostile mutants independently verified. Requested lint v2.13.1 is UNCERTAIN because only v2.12.2 was installed.
 - Ada Lovelace: terminal receipt `15bae63`; four independent real SQLite-writer variants remained blocked 351–354 ms after cancellation. Gate and `ExecContext` substitutions were insufficient; no product integration is authorized.
