@@ -286,6 +286,7 @@ func TestCloseoutToken_IndependentProcessesSingleWinner(t *testing.T) {
 	if os.Getenv("RAWCLAW_CLOSEOUT_HELPER") == "stale-taker" {
 		if _, ok := acquireCloseoutToken(os.Getenv("RAWCLAW_CLOSEOUT_SESSION")); ok {
 			fmt.Fprintln(os.Stdout, "acquired")
+			time.Sleep(2 * time.Second)
 		}
 		return
 	}
@@ -402,7 +403,7 @@ func TestRunCloseout_IndependentOwnerChildBlocksRetry(t *testing.T) {
 	})
 
 	retry := exec.Command(os.Args[0], "-test.run=^TestRunCloseout_IndependentOwnerChildBlocksRetry$")
-	retry.Env = append(os.Environ(), "HOME="+home, "RAWCLAW_CLOSEOUT_HELPER=retry-owner", "RAWCLAW_CLOSEOUT_SESSION="+sid)
+	retry.Env = append(os.Environ(), "HOME="+home, "RAWCLAW_CLOSEOUT_HOME="+home, "RAWCLAW_CLOSEOUT_HELPER=retry-owner", "RAWCLAW_CLOSEOUT_SESSION="+sid)
 	out, err := retry.CombinedOutput()
 	if err != nil {
 		t.Fatalf("retry = %v, output %q", err, out)
