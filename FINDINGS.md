@@ -1,9 +1,6 @@
-# Issue 45 scoped browse audit
+# Findings: scoped browse AND regression
 
-- `runBrowse` called `allScope` for every non-reindex scoped browse before the
-  consolidated query could run.
-- `runBrowseScoped` already uses `view.BrowseScoped`, which delegates to
-  `store.BrowseScopedSessions` for source/project/date/limit filtering.
-- The fix is a direct consolidated attempt for normal scoped reads, with the
-  existing discovery path retained for unavailable or empty stores and for
-  explicit `--reindex`.
+- `runBrowse` now sends `thisScope` directly to `runBrowseConsolidated` before the existing `runBrowseScoped` path filter runs.
+- `runBrowseConsolidated` converts that unfiltered scope into consolidated project labels, so `--this-project --include-path` can return the project even when the path predicate rejects it.
+- The shared correction is to apply `scopes.FilterByPath` inside `runBrowseConsolidated` before deriving project labels. An empty filtered scope must fall through so `runBrowseScoped` emits the established no-match message.
+- This preserves issue #45: matching scoped reads still use the consolidated store and avoid machine-wide discovery.

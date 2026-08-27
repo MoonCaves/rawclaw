@@ -1339,6 +1339,7 @@ func browsePathScopes(o *Options) []view.Scope {
 // store. handled is false when the store is unavailable or has no matching
 // rows, preserving discovery for first-ever source/path requests.
 func runBrowseConsolidated(w io.Writer, o *Options, scope []view.Scope) (handled bool, err error) {
+	scope = scopes.FilterByPath(scope, o.IncludePath, o.ExcludePath)
 	if o.pathScoped() && len(scope) == 0 {
 		return false, nil
 	}
