@@ -82,11 +82,7 @@ func GetCorpusStats(dbp string) (CorpusStats, error) {
 	return cs, nil
 }
 
-// first10 returns the first 10 runes of s (the date portion of an ISO string).
+// first10 returns the first 10 bytes of an ASCII ISO string (its date portion).
 func first10(s string) string {
-	r := []rune(s)
-	if len(r) > 10 {
-		return string(r[:10])
-	}
-	return string(r)
+	return s[:min(len(s), 10)]
 }
