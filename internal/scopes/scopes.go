@@ -15,7 +15,9 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/query"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
+	"github.com/MoonCaves/rawclaw/internal/source/goose"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -28,26 +30,33 @@ import (
 // runtime filter applies to them exactly as to local scopes. ctx bounds the
 // archive enumeration's git probes (see Archive) — pass the run's watchdog
 // context so those children die with the CLI.
+// An optional path predicate is applied only to live container CWDs before
+// their per-CWD indexes are ensured; Claude, archive, and orphan scopes remain
+// in the returned list for their existing later FilterByPath pass.
 //
 // This union is THE runtime-discovery site: a future runtime (a new source
 // tool with its own transcript-dir location) is added here — its known
 // location behind a Source adapter, unioned like Claude and Codex below.
 // Discovery is location-based only; an arbitrary jsonl-bearing folder never
 // enters implicitly (--dir is the explicit opt-in).
-func All(ctx context.Context, sourceFilter string, reindex bool) []view.Scope {
+func All(ctx context.Context, sourceFilter string, reindex bool, pathPreds ...func(string) bool) []view.Scope {
+	var pathPred func(string) bool
+	if len(pathPreds) > 0 {
+		pathPred = pathPreds[0]
+	}
 	var out []view.Scope
 	if sourceFilter == "" || sourceFilter == "claude" {
 		out = append(out, Claude()...)
 	}
 	if sourceFilter == "" || sourceFilter == "codex" {
-		out = append(out, Codex(reindex)...)
+		out = append(out, containerScopes(codex.Registration().ID, codex.New(), codexLabel, reindex, pathPred)...)
 	}
 	if sourceFilter == "" || sourceFilter == "antigravity" {
-		out = append(out, Antigravity(reindex)...)
+		out = append(out, containerScopes(antigravity.ID, antigravity.New(), antigravityLabel, reindex, pathPred)...)
 	}
 	if sourceFilter == "" || sourceFilter == "goose" {
 		if GooseOptedIn(sourceFilter) {
-			out = append(out, Goose(reindex)...)
+			out = append(out, containerScopes(goose.ID, goose.New(), gooseLabel, reindex, pathPred)...)
 		} else {
 			// Opted out skips the eager filesystem walk, but already-indexed
 			// history must still surface — an archive never hides what it

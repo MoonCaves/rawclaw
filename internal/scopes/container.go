@@ -17,8 +17,14 @@ import (
 // containerScopes discovers sessions from a ContainerAdapter, groups them by
 // recorded cwd, ingests each group into its own db (namespaced with "<sourceID>-"),
 // and returns eager scopes carrying that db + cwd — unioned with orphanContainerScopes
-// for retained history after transcript purge.
-func containerScopes(sourceID string, adapter source.Source, labelFn func(string) string, reindex bool) []view.Scope {
+// for retained history after transcript purge. An optional path predicate drops
+// nonmatching live CWDs before any per-CWD index is ensured; orphan discovery is
+// deliberately unchanged.
+func containerScopes(sourceID string, adapter source.Source, labelFn func(string) string, reindex bool, pathPreds ...func(string) bool) []view.Scope {
+	var pathPred func(string) bool
+	if len(pathPreds) > 0 {
+		pathPred = pathPreds[0]
+	}
 	containers, err := adapter.Discover()
 	if err != nil {
 		slog.Warn("scopes: "+sourceID+" discover failed", "err", err)
@@ -26,6 +32,9 @@ func containerScopes(sourceID string, adapter source.Source, labelFn func(string
 
 	byCWD := map[string][]source.Container{}
 	for _, c := range containers {
+		if pathPred != nil && !pathPred(c.CWD) {
+			continue
+		}
 		byCWD[c.CWD] = append(byCWD[c.CWD], c)
 	}
 	cwds := make([]string, 0, len(byCWD))
