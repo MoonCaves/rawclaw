@@ -52,6 +52,40 @@ func acquireIngestSpawnToken(sessionArg string, now time.Time) bool {
 	return true
 }
 
+// acquireCloseoutToken atomically claims a session's closeout for its whole
+// lifetime. Unlike the ingest throttle marker, this lock never expires: the
+// detached worker removes it only after completion or failure.
+func acquireCloseoutToken(sessionID string) (func(), bool) {
+	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return func() {}, true
+	}
+	path := closeoutTokenPath(dir, sessionID)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return func() {}, false
+		}
+		return func() {}, true
+	}
+	_ = f.Close()
+	return func() { _ = os.Remove(path) }, true
+}
+
+func releaseCloseoutToken(sessionID string) {
+	_ = os.Remove(closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID))
+}
+
+func closeoutTokenPath(dir, sessionID string) string {
+	safeID := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, sessionID)
+	return filepath.Join(dir, "closeout-"+safeID+".lock")
+}
+
 // maybeSpawnIngest fires a detached self-invocation of `rawclaw ingest [session]`
 // when staleness is detected on read paths, ensuring self-healing without delaying answers.
 // It returns true if a background ingest was actually triggered, and false if suppressed
