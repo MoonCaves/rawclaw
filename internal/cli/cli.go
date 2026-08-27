@@ -904,19 +904,27 @@ func reindexConsolidated(ctx context.Context, emb embed.Embedder) (int, error) {
 	return semantic.VecIndex(ctx, con, emb, 0)
 }
 
+type resumeCandidate struct {
+	hit paths.SessionHit
+	src string
+}
+
 // runResume prints the paste-ready resume command for a session id across all
 // runtimes (Claude, Codex, Antigravity, Goose). It collects candidate matches
 // across all registered sources; if matches span multiple sessions (even across
 // different runtimes), it reports global ambiguity. If local runtimes yield
 // no match, it falls back to archive replicas.
 func runResume(w io.Writer, o *Options) error {
-	type resumeCandidate struct {
-		hit paths.SessionHit
-		src string
-	}
 	var matches []resumeCandidate
 	for _, h := range paths.ResolveSession(o.Resume) {
 		matches = append(matches, resumeCandidate{hit: h, src: "claude"})
+	}
+	consolidated, consolidatedKnown := resumeConsolidatedHits(o.Resume)
+	for _, h := range consolidated {
+		matches = append(matches, resumeCandidate{hit: h.hit, src: h.src})
+	}
+	if len(matches) > 0 || consolidatedKnown {
+		return emitResumeMatches(w, o, matches)
 	}
 	for _, entry := range []struct {
 		src    string
@@ -930,6 +938,39 @@ func runResume(w io.Writer, o *Options) error {
 			matches = append(matches, resumeCandidate{hit: h, src: entry.src})
 		}
 	}
+	return emitResumeMatches(w, o, matches)
+}
+
+// resumeConsolidatedHits probes the already-built one-store catalog. The
+// bounded query avoids source discovery for the common case while retaining
+// enough rows to report ambiguity. A false second result means the store was
+// unavailable or had no matching row, so callers must use the old fallback.
+func resumeConsolidatedHits(prefix string) (hits []resumeCandidate, known bool) {
+	con, _, err := index.OpenConsolidated()
+	if err != nil {
+		return nil, false
+	}
+	defer con.Close()
+	rows, err := store.SessionRowsByPrefix(con, prefix, false, nil, 3)
+	if err != nil || len(rows) == 0 {
+		return nil, false
+	}
+	hits = make([]resumeCandidate, 0, len(rows))
+	for _, row := range rows {
+		backing, ok, err := store.SessionBackingFor(con, row.ID)
+		if err != nil || !ok || backing.SourceTool == "" {
+			return nil, false
+		}
+		var origin string
+		if err := con.QueryRow("SELECT COALESCE(origin_machine,'') FROM sessions WHERE id=?", row.ID).Scan(&origin); err != nil || origin != "" {
+			continue
+		}
+		hits = append(hits, resumeCandidate{hit: paths.SessionHit{SessionID: row.ID, CWD: backing.CWD, Project: row.Project}, src: backing.SourceTool})
+	}
+	return hits, len(hits) > 0
+}
+
+func emitResumeMatches(w io.Writer, o *Options, matches []resumeCandidate) error {
 
 	if len(matches) == 0 {
 		if handled, err := resumeForeign(w, o); handled {

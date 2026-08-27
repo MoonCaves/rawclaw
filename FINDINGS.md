@@ -1,14 +1,13 @@
 # Issue #50 findings
 
-- `runResume` resolves Claude through the durable catalog, but eagerly builds
-  Codex, Antigravity, and Goose scopes before it knows whether the requested
-  prefix is already present in the consolidated store.
-- The consolidated store has the bounded prefix rows and source/backing data
-  needed by resume output. A CLI-local fast path is sufficient; no
-  `agentproto` interface change is required.
-- The fast path must preserve global ambiguity, deduplicate one session found
-  by both Claude catalog and consolidated lookup, ignore foreign archive rows,
-  and fall back to discovery when the store is unavailable, stale, or cannot
-  safely map a row to a local source.
-- Baseline: `CGO_ENABLED=0 go test -race -count=1 ./internal/cli -run
-  'TestRunResume|TestResume_'` passed, wall `27.60s`.
+- `runResume` eagerly builds Codex, Antigravity, and Goose scopes before it
+  knows whether the requested prefix is already indexed.
+- `agentproto.LocateConsolidatedSession` exposes only one ID and cannot carry
+  the source/CWD/project fields needed by resume output. The existing store
+  APIs provide the same bounded prefix lookup plus `SessionBackingFor`, so a
+  CLI-local fast path is sufficient and avoids an `agentproto` API change.
+- The fast path will query the consolidated store for up to three top-level
+  rows, preserving the existing ambiguity behavior. It will use the recorded
+  source, CWD, and project to build resume candidates, and fall back to the
+  current container-scope discovery only when Claude catalog and consolidated
+  lookups both miss.

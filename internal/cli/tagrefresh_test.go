@@ -832,6 +832,39 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 	}
 }
 
+func TestRunResumeUsesConsolidatedCatalogBeforeScopeDiscovery(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(configDir, "cache"))
+
+	con, err := store.ConnectRW(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("ConnectRW consolidated: %v", err)
+	}
+	if err := store.Rebuild(con); err != nil {
+		t.Fatalf("Rebuild consolidated: %v", err)
+	}
+	if _, err := con.Exec(`INSERT INTO sessions
+		(id, message_count, source_tool, project, cwd, is_subagent)
+		VALUES (?, 1, ?, ?, ?, 0)`,
+		"resume02-consolidated-session-uuid", "codex", "catalog-project", "/work/catalog"); err != nil {
+		con.Close()
+		t.Fatalf("insert consolidated session: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close consolidated: %v", err)
+	}
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: "resume02"}); err != nil {
+		t.Fatalf("runResume: %v", err)
+	}
+	if !strings.Contains(out.String(), "codex resume resume02-consolidated-session-uuid") {
+		t.Fatalf("runResume output missing consolidated Codex command:\n%s", out.String())
+	}
+}
+
 func TestRunTagPrepCmd_ContentionSpawnsDetachedFoldAndFoldsOnNextTouch(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
