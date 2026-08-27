@@ -1,7 +1,7 @@
 # Tick 41 external-mechanism delta
 
 - `run_timestamp`: `2026-08-27T02:06:10Z`
-- `completion_utc`: captured after commit with `date -u`
+- `completion_utc`: `2026-08-27T02:08:42Z` (captured with `date -u` after commit)
 - `base`: `ef2eebf414e77086be06281539c5a50ba036a32a`
 - `prior_watermark`: `20260827T020554Z` (supervisor-confirmed processed Tick 42 boundary)
 - `new_watermark`: `20260827T020554Z` (no later valid receipt read; mailbox intentionally untouched)
@@ -14,7 +14,7 @@ Graphify orientation found `SyncConsolidatedFrom -> AcquireConsolidatedFence -> 
 ### PA-GO-CONTEXT-WRITER-TOKEN-001
 
 - URL/title: <https://github.com/jackc/pgx/blob/v5.7.6/pgxpool/pool.go> — `pgxpool.Pool.Acquire` / `AcquireFunc`
-- immutable revision: tag `v5.7.6`, commit `a2fca037434a0a7096b095d4ed87cdffb03b626e`; date unavailable; accessed `2026-08-27T02:00:xxZ`
+- immutable revision: tag `v5.7.6`, commit `a2fca037434a0a7096b095d4ed87cdffb03b626e`; date unavailable; accessed `2026-08-27T02:00:00Z`
 - mechanism: `Acquire(ctx)` selects capacity versus `ctx.Done()`; cancellation is admission failure; `AcquireFunc` scopes release.
 - fit/blocker: pure-Go shape before `BeginTx`; a one-token buffered channel preserves it without dependency and prevents modernc busy waiting after admission. It cannot replace the cross-process fence; every direct writer must use it.
 - ruling: **NARROWED comparator, score 0**. Use a stdlib token `select` before every consolidated writer; retain `AcquireConsolidatedFence`; do not add pgx or `x/sync`.
@@ -24,7 +24,7 @@ Graphify orientation found `SyncConsolidatedFrom -> AcquireConsolidatedFence -> 
 ### PA-SQLITE-INTERRUPT-ROLLBACK-PUBLISH-001
 
 - URL/title: <https://sqlite.org/c3ref/interrupt.html> — `Interrupt A Long-Running Query`
-- immutable revision: SQLite documentation page; Fossil revision unavailable; accessed `2026-08-27T02:00:xxZ`
+- immutable revision: SQLite documentation page; Fossil revision unavailable; accessed `2026-08-27T02:00:00Z`
 - mechanism: `sqlite3_interrupt()` returns `SQLITE_INTERRUPT`; interrupted INSERT/UPDATE/DELETE in an explicit transaction rolls back that transaction. It may race completion.
 - fit/blocker: exact detached-maintenance rule: cancellation is incomplete and watermark/receipt advances only after commit. modernc v1.45.0 exposes no supported public raw-connection interrupt seam; interrupt does not cancel busy admission or create retry ownership.
 - ruling: **CONFIRMED transaction semantics, score 0**. Treat cancellation, `SQLITE_INTERRUPT`, and pre-commit death as incomplete; only commit publishes. No new implementation until a public modernc seam exists.
@@ -34,7 +34,7 @@ Graphify orientation found `SyncConsolidatedFrom -> AcquireConsolidatedFence -> 
 ### SQLite benchmark verification (duplicate of PA-SEMANTIC-BENCH-COUNTER-001)
 
 - URL/title: <https://sqlite.org/src/raw/test/speedtest1.c?ci=trunk> — SQLite `speedtest1.c`
-- immutable revision: Fossil trunk endpoint; revision unavailable; accessed `2026-08-27T02:01:xxZ`
+- immutable revision: Fossil trunk endpoint; revision unavailable; accessed `2026-08-27T02:01:00Z`
 - mechanism: verification mode (`bVerify`) records deterministic result bytes/hash and calls `fatal_error` on mismatch, separating semantic correctness from timing.
 - fit/blocker: seed a fixture, assert expected post-prune aggregate/non-zero work, then report latency. C source and result hashing do not alone prove minimum work.
 - ruling: **CONFIRMED validity precedent, duplicate, score 0**. Enrich `PA-SEMANTIC-BENCH-COUNTER-001`; no second ID.
