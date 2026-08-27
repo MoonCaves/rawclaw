@@ -41,6 +41,14 @@ func TestNewRootCmd(t *testing.T) {
 			t.Errorf("root missing flag --%s", name)
 		}
 	}
+	for _, want := range []string{
+		"rawclaw [--this-project|--all] [--limit N]",
+		"recent sessions, newest first (no query)",
+	} {
+		if !strings.Contains(cmd.Long, want) {
+			t.Errorf("root Long help missing %q:\n%s", want, cmd.Long)
+		}
+	}
 }
 
 // TestPrintResults checks the human-readable per-project result rendering byte-for-byte.
