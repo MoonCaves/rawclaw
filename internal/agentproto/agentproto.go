@@ -718,7 +718,7 @@ func buildWarnings(in warningInputs) []Warning {
 		out = append(out, Warning{
 			Code:    WarnIncludePathNoMatch,
 			Facts:   map[string]any{"include_path": in.includePath},
-			Message: fmt.Sprintf("--include-path matched no project working directory; it filters paths, not session IDs — did you mean `rawclaw read %s` or `rawclaw outline %s`?", in.includePath, in.includePath),
+			Message: fmt.Sprintf("--include-path matched no project working directory; it filters paths, not session IDs — did you mean `rawclaw outline %s` or `rawclaw --resume %s`?", in.includePath, in.includePath),
 		})
 	}
 

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/MoonCaves/rawclaw/internal/agentproto"
 )
 
 // writeIndexedSession writes a real (parseable) transcript under
@@ -206,6 +208,45 @@ func TestBrowseIncludePathNoMatchIsHonest(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("unmatched path scope missing %q in its honest empty:\n%s", want, out)
 		}
+	}
+}
+
+func TestSearchIncludePathSessionIDHintPreservesJSON(t *testing.T) {
+	root := newCfgRoot(t)
+	const sessionID = "aaaa1111-0000-0000-0000-000000000001"
+	writeIndexedSession(t, root, "-home-u-proj-a", sessionID,
+		"2026-06-01T10:00:00Z", "question about apples")
+
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "apples", "--include-path", sessionID, "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("search --include-path session ID: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"filters paths, not session IDs",
+		"rawclaw outline " + sessionID,
+		"rawclaw --resume " + sessionID,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("session-ID hint missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "rawclaw read ") {
+		t.Errorf("session-ID hint recommends read without a message reference:\n%s", out)
+	}
+
+	out, err = runCmd(t, NewRootCmd(BuildInfo{}), "", "apples", "--include-path", sessionID, "--json", "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("search --include-path session ID --json: %v\n%s", err, out)
+	}
+	var env agentproto.SearchEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("session-ID hint corrupted JSON: %v\n%s", err, out)
+	}
+	if len(env.Warnings) == 0 || env.Warnings[0].Code != agentproto.WarnIncludePathNoMatch {
+		t.Fatalf("warnings = %+v, want include-path no-match first", env.Warnings)
+	}
+	if strings.Contains(env.Warnings[0].Message, "rawclaw read ") {
+		t.Errorf("JSON hint recommends read without a message reference: %q", env.Warnings[0].Message)
 	}
 }
 

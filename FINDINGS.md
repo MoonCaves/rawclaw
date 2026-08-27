@@ -14,7 +14,8 @@ Issue #41 is caused by removing refresh-cache eviction while retaining refresh D
 - `rawclaw read <session8>:<uuid8>`, `rawclaw outline <session8>`, and
   `rawclaw --resume <session8>` resolve session IDs/prefixes. There is no
   search or browse flag that scopes a result set to one session ID.
-- The minimal fix is an additive human-readable hint on an empty path scope
-  when `--include-path` looks like a bare UUID/session ID. It should point to
-  `rawclaw read <id>` / `rawclaw outline <id>` and preserve the existing
-  path-filter semantics.
+- The minimal fix is an additive hint on an empty path scope when
+  `--include-path` looks like a bare UUID/session ID. It should point to
+  `rawclaw outline <id>` / `rawclaw --resume <id>` and preserve the existing
+  path-filter and JSON-output semantics. `read` is not valid recovery because
+  it requires a `<session8>:<uuid8>` message reference, not a session ID.

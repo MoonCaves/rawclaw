@@ -16,7 +16,9 @@ func TestBuildWarningsIncludePathSessionHint(t *testing.T) {
 		t.Fatalf("warnings = %+v, want include-path session hint first", warnings)
 	}
 	if !strings.Contains(warnings[0].Message, "filters paths, not session IDs") ||
-		!strings.Contains(warnings[0].Message, "rawclaw read a1b2c3d4-0000-0000-0000-000000000001") {
+		!strings.Contains(warnings[0].Message, "rawclaw outline a1b2c3d4-0000-0000-0000-000000000001") ||
+		!strings.Contains(warnings[0].Message, "rawclaw --resume a1b2c3d4-0000-0000-0000-000000000001") ||
+		strings.Contains(warnings[0].Message, "rawclaw read") {
 		t.Fatalf("warning = %q, want path/session guidance", warnings[0].Message)
 	}
 }
