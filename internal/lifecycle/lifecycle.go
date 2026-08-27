@@ -27,6 +27,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/MoonCaves/rawclaw/internal/paths"
 )
 
 // ErrNoFilter is returned by Delete when the caller supplies no filter. Deleting
@@ -112,7 +114,7 @@ func Archive(sessionPathOrID, archiveDir string) (string, error) {
 	if archiveDir == "" {
 		archiveDir = defaultArchiveDir()
 	}
-	archiveDir = expandHome(archiveDir)
+	archiveDir = paths.ExpandHome(archiveDir)
 
 	src, err := resolveSessionPath(sessionPathOrID)
 	if err != nil {
@@ -198,7 +200,7 @@ func TombstonePath(cacheDir string) string {
 	if cacheDir == "" {
 		cacheDir = defaultCacheDir()
 	}
-	return filepath.Join(expandHome(cacheDir), ".deleted")
+	return filepath.Join(paths.ExpandHome(cacheDir), ".deleted")
 }
 
 // TombstoneIDs appends each id in ids to the tombstone sidecar under cacheDir,
@@ -260,7 +262,7 @@ func IsTombstoned(cacheDir, sessionID string) (bool, error) {
 // matchSessions walks projectsRoot for top-level *.jsonl sessions and returns
 // those satisfying every set filter, sorted by path for deterministic plans.
 func matchSessions(projectsRoot string, opts DeleteOpts) ([]PlanItem, error) {
-	root := expandHome(projectsRoot)
+	root := paths.ExpandHome(projectsRoot)
 	dirs, err := projectDirs(root)
 	if err != nil {
 		return nil, err
@@ -327,7 +329,7 @@ func matchInDir(dir string, opts DeleteOpts) ([]PlanItem, error) {
 // treated as a session id and looked up among top-level sessions in the
 // projects tree.
 func resolveSessionPath(pathOrID string) (string, error) {
-	cand := expandHome(pathOrID)
+	cand := paths.ExpandHome(pathOrID)
 	if fileExists(cand) {
 		return cand, nil
 	}
@@ -467,22 +469,6 @@ func sameFile(a, b string) bool {
 	return ra == rb
 }
 
-func defaultArchiveDir() string   { return expandHome("~/.claude/archive") }
-func defaultProjectsRoot() string { return expandHome("~/.claude/projects") }
-func defaultCacheDir() string     { return expandHome("~/.cache/session-search") }
-
-// expandHome replaces a leading "~" with the user's home dir ("~" and "~/..."
-// forms only). Other inputs are returned unchanged.
-func expandHome(path string) string {
-	if path != "~" && !strings.HasPrefix(path, "~/") {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return path
-	}
-	if path == "~" {
-		return home
-	}
-	return filepath.Join(home, path[2:])
-}
+func defaultArchiveDir() string   { return paths.ExpandHome("~/.claude/archive") }
+func defaultProjectsRoot() string { return paths.ExpandHome("~/.claude/projects") }
+func defaultCacheDir() string     { return paths.ExpandHome("~/.cache/session-search") }

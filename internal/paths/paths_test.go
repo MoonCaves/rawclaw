@@ -471,8 +471,8 @@ func TestExpandUser(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := expandHome(tt.in); got != tt.want {
-				t.Fatalf("expandHome(%q) = %q, want %q", tt.in, got, tt.want)
+			if got := ExpandHome(tt.in); got != tt.want {
+				t.Fatalf("ExpandHome(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

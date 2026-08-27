@@ -34,7 +34,7 @@ func ProjectsRoot() string {
 			return candidate
 		}
 	}
-	return expandHome("~/.claude/projects")
+	return ExpandHome("~/.claude/projects")
 }
 
 // ConfigDir returns the Claude Code config dir: $CLAUDE_CONFIG_DIR if set, else
@@ -45,14 +45,14 @@ func ConfigDir() string {
 	if cc := os.Getenv("CLAUDE_CONFIG_DIR"); cc != "" {
 		return cc
 	}
-	return expandHome("~/.claude")
+	return ExpandHome("~/.claude")
 }
 
 func rawclawDataDir(subdir string) string {
 	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
 		return filepath.Join(x, "rawclaw", subdir)
 	}
-	return expandHome(filepath.Join("~/.local/share/rawclaw", subdir))
+	return ExpandHome(filepath.Join("~/.local/share/rawclaw", subdir))
 }
 
 // TranscriptsRoot is the durable home for rawclaw's OWN copy of every session
@@ -136,7 +136,7 @@ func WriteCatalogEntry(catalogDir string, entry CatalogEntry) error {
 // folder like /tmp index the folder itself into the cache. Arbitrary-folder
 // indexing is the explicit --dir opt-in: FindTranscriptDirExplicit.
 func FindTranscriptDir(cwd string) string {
-	target := realpath(expandHome(cwd))
+	target := realpath(ExpandHome(cwd))
 	root := ProjectsRoot()
 
 	// Footgun guard: if the caller already passed a transcripts dir (a child of
@@ -180,7 +180,7 @@ func FindTranscriptDirExplicit(dir string) string {
 	if td := FindTranscriptDir(dir); td != "" {
 		return td
 	}
-	target := realpath(expandHome(dir))
+	target := realpath(ExpandHome(dir))
 	if isDir(target) {
 		if hits, _ := filepath.Glob(filepath.Join(target, "*.jsonl")); len(hits) > 0 {
 			return target
@@ -494,10 +494,10 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// expandHome replaces a leading "~" with the user's home directory, handling
+// ExpandHome replaces a leading "~" with the user's home directory, handling
 // the "~" and "~/..." forms. Other forms are returned unchanged (we never see
 // "~user" here).
-func expandHome(path string) string {
+func ExpandHome(path string) string {
 	if path != "~" && !strings.HasPrefix(path, "~/") {
 		return path
 	}
