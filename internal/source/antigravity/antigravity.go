@@ -66,8 +66,15 @@ func lookup(id string) ([]source.Container, error) {
 	if p == "" {
 		return nil, nil
 	}
+	hdr, _ := inspectSessionHeaderAndSubagents(p)
+	if hdr.isSub {
+		return nil, nil
+	}
 	cwd := loadHistory(filepath.Join(a.root, "history.jsonl"))[id]
-	return []source.Container{{ID: id, Path: p, CWD: cwd}}, nil
+	if cwd == "" {
+		cwd = hdr.cwd
+	}
+	return []source.Container{{ID: id, Path: p, CWD: cwd, ParentID: hdr.parentID}}, nil
 }
 
 // detect reports whether path lives under an Antigravity tree.

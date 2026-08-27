@@ -51,9 +51,18 @@ func lookup(id string) ([]source.Container, error) {
 		return nil, nil
 	}
 	root := SessionsRoot()
+	if root == "" {
+		return nil, nil
+	}
+	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+		return nil, nil
+	}
 	var out []source.Container
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !isRollout(d.Name()) {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		if standardRolloutName(d.Name()) && !strings.Contains(d.Name(), id) {
 			return nil
 		}
 		m, ok := readMeta(path)
@@ -66,6 +75,27 @@ func lookup(id string) ([]source.Container, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func standardRolloutName(name string) bool {
+	if !isRollout(name) || len(name) < len("rollout-.jsonl")+36 {
+		return false
+	}
+	u := strings.TrimSuffix(name, ".jsonl")
+	u = u[len("rollout-"):]
+	if len(u) < 37 || u[len(u)-37] != '-' {
+		return false
+	}
+	u = u[len(u)-36:]
+	for i, r := range u {
+		if (i == 8 || i == 13 || i == 18 || i == 23) && r == '-' {
+			continue
+		}
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // detect reports whether path lives under a Codex sessions tree.

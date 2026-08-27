@@ -48,18 +48,23 @@ func lookup(id string) ([]source.Container, error) {
 	if id == "" || strings.ContainsAny(id, "/\\") {
 		return nil, nil
 	}
-	e, err := paths.ReadCatalogEntry(filepath.Join(paths.CatalogDir(), id))
-	if err != nil || e.SessionID != id || e.TranscriptPath == "" {
-		return nil, nil
+	var out []source.Container
+	if e, err := paths.ReadCatalogEntry(filepath.Join(paths.CatalogDir(), id)); err == nil && e.SessionID == id && e.TranscriptPath != "" {
+		if fi, statErr := os.Stat(e.TranscriptPath); statErr == nil && fi.Mode().IsRegular() {
+			cwd := e.CWD
+			if cwd == "" {
+				cwd = paths.FileCWD(e.TranscriptPath)
+			}
+			out = append(out, source.Container{ID: id, Path: e.TranscriptPath, CWD: cwd})
+		}
 	}
-	if fi, err := os.Stat(e.TranscriptPath); err != nil || fi.IsDir() {
-		return nil, nil
+	for _, dir := range paths.AllProjectDirs() {
+		p := filepath.Join(dir, id+".jsonl")
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+			out = append(out, source.Container{ID: id, Path: p, CWD: paths.ProjectCWD(dir)})
+		}
 	}
-	cwd := e.CWD
-	if cwd == "" {
-		cwd = paths.FileCWD(e.TranscriptPath)
-	}
-	return []source.Container{{ID: id, Path: e.TranscriptPath, CWD: cwd}}, nil
+	return out, nil
 }
 
 // detect reports whether path lives under a Claude Code projects tree.
