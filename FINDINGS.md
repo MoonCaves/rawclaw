@@ -1,3 +1,5 @@
+# Existing audit records
+
 Issue #41 is caused by removing refresh-cache eviction while retaining refresh DBs for the prewarm/closeout cache. Eviction must therefore not run from PrepareFreshContainer, whose contract is to preserve fresh entries, and must allow sessions to outlive the old 24-hour window. The smallest shared fix is a 30-day inactivity TTL at RefreshDBPath, which is used whenever a refresh cache entry is acquired; protect the acquired path during that pass and remove SQLite sidecars with the database so reused/active entries survive while abandoned entries are eventually reclaimed.
 
 ## Issue #57 findings
@@ -56,3 +58,48 @@ Estimated net reduction: 4 lines.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
+
+# Ponytail finding #15: `cacheHome` versus `os.UserCacheDir`
+
+## Verdict: REJECT
+
+Replacing `internal/store/cacheHome` with `os.UserCacheDir` is not behaviorally
+compatible and is not a net-negative change.
+
+## Evidence
+
+- Current source (`internal/store/store.go:269-286`) resolves the store root to
+  `$HOME/.cache`, with a relative `.cache` fallback when `os.UserHomeDir` cannot
+  resolve a home directory. `CacheDir` therefore remains
+  `$HOME/.cache/session-search`.
+- Go 1.26.3's `os.UserCacheDir` documentation and implementation return
+  `$HOME/Library/Caches` on Darwin, regardless of `XDG_CACHE_HOME`. On this
+  Darwin/arm64 host, the proposed replacement would move RawClaw's state to
+  `~/Library/Caches/session-search`, orphaning the existing
+  `~/.cache/session-search` corpus and sidecars.
+- On non-Darwin Unix, `os.UserCacheDir` honors `XDG_CACHE_HOME` and errors for a
+  relative value. That would change RawClaw's current deliberate behavior,
+  including test isolation assumptions and the fallback behavior when the
+  environment is incomplete.
+- The standard-library targeted tests passed with
+  `HOME=/tmp/rawclaw-pony15-home XDG_CACHE_HOME=/tmp/rawclaw-pony15-xdg`:
+  `go test "$(go env GOROOT)/src/os" -run
+  'TestUserCacheDir(XDGConfigDirEnvVar)?$' -count=1`.
+  The Go source explicitly skips the XDG test on Darwin and implements the
+  Darwin `HOME/Library/Caches` branch.
+- Existing repository tests and comments consistently refer to and isolate
+  `$HOME/.cache/session-search`; there is no migration or dual-location lookup
+  that could preserve existing indexes, tombstones, machine identity, refresh
+  databases, or consolidated state.
+
+## Recommendation
+
+Keep `cacheHome` unchanged. A migration would need an explicit product decision,
+compatibility plan, and broad changes outside this finding's file fence; it is
+not a one-line standard-library cleanup.
+
+## Scope
+
+No production or test code was changed. There is no `internal/store/store_test.go`
+in this checkout, so no new test is warranted for a rejected, incompatible
+replacement.
