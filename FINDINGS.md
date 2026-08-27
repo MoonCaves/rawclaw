@@ -56,3 +56,19 @@ Estimated net reduction: 4 lines.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
+
+# Ponytail Finding #8 — REJECT
+
+The repeated `SessionID` extraction in `internal/cli/cmd_lifecycle.go` is not
+one shared operation. The ambiguity path needs the concatenated IDs from live
+and retained matches in display order; retained tombstoning needs only retained
+IDs; vault eviction needs IDs from the completed live plan plus retained rows.
+
+A helper for either concrete slice type would merely move the existing loop
+without reducing production lines. A helper spanning both concrete types would
+need a callback or a second helper and would hide the distinct lifecycle
+semantics. Each current loop allocates only the IDs required by its operation;
+combining them would allocate more or retain IDs longer. No implementation is
+warranted.
+
+Net production lines: 0 saved. Verdict: REJECT.
