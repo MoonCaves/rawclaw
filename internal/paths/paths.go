@@ -120,7 +120,23 @@ func WriteCatalogEntry(catalogDir string, entry CatalogEntry) error {
 	target := filepath.Join(catalogDir, entry.SessionID)
 	tmp := filepath.Join(catalogDir, fmt.Sprintf(".tmp.%s.%d", entry.SessionID, os.Getpid()))
 	defer func() { _ = os.Remove(tmp) }()
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	// fsync before rename: without it, os.Rename can make the temp file's
+	// NAME durable while its CONTENT is still only in the page cache, so a
+	// crash between write and rename can leave target as a 0-byte or
+	// truncated file instead of the old or new content.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, target)
