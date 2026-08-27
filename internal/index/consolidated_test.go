@@ -63,7 +63,6 @@ func TestConsolidate_ContextCancellationDoesNotPublishAndRetryPublishesWatermark
 		holderTx.Rollback()
 		t.Fatalf("acquire real SQLite writer lock: %v", err)
 	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	started := time.Now()

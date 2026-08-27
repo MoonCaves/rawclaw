@@ -4,7 +4,7 @@ Base: `48661f403f880e2c1dac7615f39bbb8264eeafe7`
 
 ## Contract
 
-`TestConsolidate_ContextCancellationDoesNotPublishAndRetryPublishesWatermark` uses two independently opened RW pools. One holds a real SQLite transaction on `consolidated.db`; the other runs `SyncConsolidatedFromContext` with cancellation at 200 ms. The canceled operation must return `context.Canceled` by 250 ms, leave the new message and session state unpublished, and retain the prior sync watermark. After the lock and admission token are released, one retry must fold the message once and replace the sync watermark only through the committed transaction.
+`TestConsolidate_ContextCancellationDoesNotPublishAndRetryPublishesWatermark` uses two independently opened RW pools. One holds a real SQLite transaction on `consolidated.db`; the other runs `SyncConsolidatedFromContext` with cancellation at 200 ms while writer admission is occupied. The canceled operation must return `context.Canceled` by 250 ms, leave the new message and session state unpublished, and retain the prior sync watermark. After the lock and admission token are released, one retry must fold the message once and replace the sync watermark only through the committed transaction.
 
 ## Evidence
 
@@ -15,7 +15,7 @@ Base: `48661f403f880e2c1dac7615f39bbb8264eeafe7`
 
 ## Mechanism
 
-`consolidatedWriterGate` is a process-local, context-aware one-token admission gate placed before the existing cross-process `consolidated.lock`. The context-aware fold path uses `ExecContext` and `QueryRowContext` for its SQLite operations, while the sync watermark remains inside the fold transaction and is published only after `Commit` succeeds. No new dependency, global test hook, or second publication store was added.
+`consolidatedWriterGate` is a process-local, context-aware one-token admission gate placed before the existing cross-process `consolidated.lock`; this prevents RawClaw writers from entering the driver's unbounded SQLite busy-wait after cancellation becomes possible. The context-aware fold path uses `ExecContext` and `QueryRowContext` for its SQLite operations, while the sync watermark remains inside the fold transaction and is published only after `Commit` succeeds. No new dependency, global test hook, or second publication store was added.
 
 ## Routed method application
 
