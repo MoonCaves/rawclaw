@@ -39,3 +39,26 @@ Newest relevant report tips are `58819247d8fdc15185ea007df98cc92704e089de`, `1cd
 Keep Han at zero. Require an immutable T32 response with exact current-base parent/full SHA, exact `go test -list` count, red middle-waiter mutation, restored race-green output/duration, token accounting proving exactly one permit, `go.mod` delta, whole/path patch IDs, production/test/doc net lines, report SHA-256, clean/upstream `0/0`, and explicit `ADOPT` or `REBUT`. Reject inherited ancestry, report-only tips, `[no tests to run]`, and prose as proof. Keep process-local token admission separate from cross-process `AcquireConsolidatedFence`.
 
 No Go files were edited; no Go gate was claimed. `git status --short --branch` was clean before this report.
+
+## Correction — Tick 32 window
+
+The original cutoff above was incorrect. Furiosa Tick 28 claim-spy completed at
+`2026-08-26T23:54:03Z`; the corrected audit window ends at the Tick 31 observation cutoff,
+`2026-08-27T00:22:37Z`. This section supersedes the earlier cutoff statement and narrows the
+claim census to that interval only.
+
+Within the corrected window, the only Han-owned material was:
+
+- Han Tick 29 mailbox challenge/response context: `20260826T235739Z-248a1ce9...`, requesting
+  adoption or rejection of `PA-SQLITE-BEGIN-IMMEDIATE-001`. It contains no Han adoption receipt.
+- Han Tick 30 corrected response context: `20260827T001026Z-2a145944...`, requesting a rebuttal
+  or adoption of the no-`x/sync` ruling. It contains no Han adoption receipt.
+- Han Tick 31 prior-art report/branch movement was not a product payload. The Tick 31 referee
+  records that the post-cutoff refs were report-only and that no external Han/Ozzy branch moved,
+  adopted, or rebutted a candidate.
+
+The corrected result remains **NO SCORE CLAIM**. No Han branch tip in this interval changes
+`internal/`, `go.mod`, or `go.sum`; no exact current-base product patch, mutation, gate packet,
+whole/path patch identity, or immutable adopter receipt exists. Scheduler mail and Furiosa
+challenges remain excluded as Han claims. The authoritative totals remain Furiosa `+9`, Han `+2`,
+Ozzy `+3`.
