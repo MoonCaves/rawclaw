@@ -61,29 +61,32 @@ func pruneStaleRefreshDBs(dir, keep string) {
 			}
 		}
 		if !newest.IsZero() && now.Sub(newest) > refreshCacheStaleAfter {
-			if isLockedOrActive(path) {
-				continue
-			}
-			for _, suffix := range []string{"", "-wal", "-shm"} {
-				_ = os.Remove(path + suffix)
-			}
+			evictStaleRefreshDB(path)
 		}
 	}
 }
 
-func isLockedOrActive(dbPath string) bool {
+func evictStaleRefreshDB(dbPath string) {
 	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(0)")
 	if err != nil {
-		return true
+		return
 	}
-	defer db.Close()
-	if _, err := db.Exec("BEGIN IMMEDIATE; ROLLBACK;"); err != nil && isBusy(err) {
-		return true
+	if _, err := db.Exec("BEGIN IMMEDIATE"); err != nil {
+		_ = db.Close()
+		if !isBusy(err) {
+			removeRefreshDBFiles(dbPath)
+		}
+		return
 	}
-	if info, err := os.Stat(dbPath); err == nil && time.Since(info.ModTime()) <= refreshCacheStaleAfter {
-		return true
+	_, _ = db.Exec("ROLLBACK")
+	_ = db.Close()
+	removeRefreshDBFiles(dbPath)
+}
+
+func removeRefreshDBFiles(dbPath string) {
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(dbPath + suffix)
 	}
-	return false
 }
 
 // PrewarmDumpPath returns the session-specific closeout dump cache path.
