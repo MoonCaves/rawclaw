@@ -865,6 +865,54 @@ func TestRunResumeUsesConsolidatedCatalogBeforeScopeDiscovery(t *testing.T) {
 	}
 }
 
+func TestRunResumeDeduplicatesCatalogAndConsolidatedHit(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(configDir, "cache"))
+
+	const fullSID = "resume03-shared-session-uuid"
+	transcriptPath := filepath.Join(configDir, "transcripts", fullSID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcriptPath), 0o755); err != nil {
+		t.Fatalf("mkdir transcript dir: %v", err)
+	}
+	writeTagSourceFile(t, transcriptPath, `{"cwd":"/work/shared"}`+"\n")
+	if err := paths.WriteCatalogEntry(filepath.Join(configDir, "catalog"), paths.CatalogEntry{
+		SessionID: fullSID, TranscriptPath: transcriptPath, CWD: "/work/shared", Source: "claude",
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	con, err := store.ConnectRW(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("ConnectRW consolidated: %v", err)
+	}
+	if err := store.Rebuild(con); err != nil {
+		con.Close()
+		t.Fatalf("Rebuild consolidated: %v", err)
+	}
+	if _, err := con.Exec(`INSERT INTO sessions
+		(id, message_count, source_tool, project, cwd, is_subagent)
+		VALUES (?, 1, ?, ?, ?, 0)`, fullSID, "claude", "shared", "/work/shared"); err != nil {
+		con.Close()
+		t.Fatalf("insert consolidated session: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("close consolidated: %v", err)
+	}
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: "resume03"}); err != nil {
+		t.Fatalf("runResume: %v", err)
+	}
+	if strings.Contains(out.String(), "sessions match") {
+		t.Fatalf("same Claude session was reported ambiguous across lookup layers:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "claude --resume "+fullSID) {
+		t.Fatalf("runResume output missing expected resume command:\n%s", out.String())
+	}
+}
+
 func TestRunTagPrepCmd_ContentionSpawnsDetachedFoldAndFoldsOnNextTouch(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)

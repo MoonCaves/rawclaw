@@ -917,11 +917,11 @@ type resumeCandidate struct {
 func runResume(w io.Writer, o *Options) error {
 	var matches []resumeCandidate
 	for _, h := range paths.ResolveSession(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "claude"})
+		matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: "claude"})
 	}
 	consolidated, consolidatedKnown := resumeConsolidatedHits(o.Resume)
 	for _, h := range consolidated {
-		matches = append(matches, resumeCandidate{hit: h.hit, src: h.src})
+		matches = appendResumeCandidate(matches, h)
 	}
 	if len(matches) > 0 || consolidatedKnown {
 		return emitResumeMatches(w, o, matches)
@@ -935,10 +935,19 @@ func runResume(w io.Writer, o *Options) error {
 		{"goose", gooseResumeScopes()},
 	} {
 		for _, h := range scopeResumeHits(entry.scopes, o.Resume) {
-			matches = append(matches, resumeCandidate{hit: h, src: entry.src})
+			matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: entry.src})
 		}
 	}
 	return emitResumeMatches(w, o, matches)
+}
+
+func appendResumeCandidate(matches []resumeCandidate, candidate resumeCandidate) []resumeCandidate {
+	for _, existing := range matches {
+		if existing.src == candidate.src && existing.hit.SessionID == candidate.hit.SessionID {
+			return matches
+		}
+	}
+	return append(matches, candidate)
 }
 
 // resumeConsolidatedHits probes the already-built one-store catalog. The
@@ -965,7 +974,7 @@ func resumeConsolidatedHits(prefix string) (hits []resumeCandidate, known bool) 
 		if err := con.QueryRow("SELECT COALESCE(origin_machine,'') FROM sessions WHERE id=?", row.ID).Scan(&origin); err != nil || origin != "" {
 			continue
 		}
-		hits = append(hits, resumeCandidate{hit: paths.SessionHit{SessionID: row.ID, CWD: backing.CWD, Project: row.Project}, src: backing.SourceTool})
+		hits = appendResumeCandidate(hits, resumeCandidate{hit: paths.SessionHit{SessionID: row.ID, CWD: backing.CWD, Project: row.Project}, src: backing.SourceTool})
 	}
 	return hits, len(hits) > 0
 }
