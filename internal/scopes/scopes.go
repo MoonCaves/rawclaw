@@ -15,7 +15,9 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/query"
+	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
+	"github.com/MoonCaves/rawclaw/internal/source/goose"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -34,20 +36,31 @@ import (
 // location behind a Source adapter, unioned like Claude and Codex below.
 // Discovery is location-based only; an arbitrary jsonl-bearing folder never
 // enters implicitly (--dir is the explicit opt-in).
-func All(ctx context.Context, sourceFilter string, reindex bool) []view.Scope {
+func All(ctx context.Context, sourceFilter string, reindex bool, paths ...string) []view.Scope {
+	var include, exclude string
+	if len(paths) > 0 {
+		include = paths[0]
+	}
+	if len(paths) > 1 {
+		exclude = paths[1]
+	}
+	var pathPred func(string) bool
+	if include != "" || exclude != "" {
+		pathPred = query.PathPredicate(include, exclude)
+	}
 	var out []view.Scope
 	if sourceFilter == "" || sourceFilter == "claude" {
 		out = append(out, Claude()...)
 	}
 	if sourceFilter == "" || sourceFilter == "codex" {
-		out = append(out, Codex(reindex)...)
+		out = append(out, Codex(reindex, pathPred)...)
 	}
 	if sourceFilter == "" || sourceFilter == "antigravity" {
-		out = append(out, Antigravity(reindex)...)
+		out = append(out, containerScopes(antigravity.ID, antigravity.New(), antigravityLabel, reindex, pathPred)...)
 	}
 	if sourceFilter == "" || sourceFilter == "goose" {
 		if GooseOptedIn(sourceFilter) {
-			out = append(out, Goose(reindex)...)
+			out = append(out, containerScopes(goose.ID, goose.New(), gooseLabel, reindex, pathPred)...)
 		} else {
 			// Opted out skips the eager filesystem walk, but already-indexed
 			// history must still surface — an archive never hides what it
@@ -188,8 +201,8 @@ func orphanLabel(dbFileName string) string {
 // see index.EnsureIndexedContainers' complete-set contract), and returns eager
 // scopes carrying that db + cwd — unioned with orphanCodexScopes (D8: the same
 // 30-day-purge store-driven discovery Claude() does via orphanClaudeScopes).
-func Codex(reindex bool) []view.Scope {
-	return containerScopes(codex.Registration().ID, codex.New(), codexLabel, reindex)
+func Codex(reindex bool, pathPreds ...func(string) bool) []view.Scope {
+	return containerScopes(codex.Registration().ID, codex.New(), codexLabel, reindex, pathPreds...)
 }
 
 // RefreshCodexCWD refreshes the Codex index db for a given working dir.
