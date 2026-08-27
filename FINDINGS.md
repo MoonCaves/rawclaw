@@ -50,6 +50,17 @@ unrelated cleanup.
 
 Estimated net reduction: 4 lines.
 
+## Independent stale-finding verification — 2026-08-28
+
+The public-main base already contains the ruled change in commit `40fc130`;
+the two helpers now use `p, _, _ = strings.Cut(p, "#")`. No further source
+edit is warranted. `strings.Cut` returns the prefix before the first `#`,
+including an empty prefix, exactly matching `IndexByte` plus slicing for
+empty strings, leading/trailing/multiple fragments, and paths with no `#`.
+The two helpers remain local because they belong to separate packages and
+their call-site semantics are unchanged. The confirmed source delta is -4
+lines versus the pre-`40fc130` implementation; this lane adds 0 product lines.
+
 # Accepted ponytail findings
 
 - Finding 10 — ACCEPT: `internal/durable/durable.go:sanitize` can use `strings.Map` with the same portable-rune allowlist and `'-'` replacement; preserve dot-only prefixing and path containment.
