@@ -74,5 +74,15 @@ Observed green gates:
 - focused `CGO_ENABLED=0 go test -race -count=1 ./internal/index` gate;
 - `gofmt` applied to both touched Go files.
 
-Full race, lint/finder checks, graph refresh, and final clean/upstream checks
-remain required before handoff. No score or merge authorization is claimed.
+Final observed gates:
+
+- `/Users/jay-m4/go/bin/dupl -t 100 internal/index/consolidated.go
+  internal/index/consolidated_test.go`: zero clone groups;
+- `/Users/jay-m4/go/bin/golangci-lint run ./internal/index`: zero issues;
+- `CGO_ENABLED=0 go test -race -count=1 ./...`: passed for every package;
+- final `gofmt` and `git diff --check`: clean.
+
+`graphify update .` was intentionally not run after the edit because its
+required output changes `graphify-out/`, which is outside the exact four-file
+task fence. The graph was refreshed and used before source inspection. No
+score or merge authorization is claimed.
