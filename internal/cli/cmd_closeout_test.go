@@ -182,6 +182,81 @@ func TestCloseoutToken_ReclaimsDeadLeaseButNotLiveLease(t *testing.T) {
 	// The newly acquired token is intentionally released by its owner only.
 }
 
+func TestCloseoutToken_ConcurrentStaleTakeoverHasOneWinner(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sid := "12121212-3434-5656-7878-909090909090"
+	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := closeoutTokenPath(dir, sid)
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "stale-token"), nil, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * closeoutTokenTTL)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var tokens []string
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if token, ok := acquireCloseoutToken(sid); ok {
+				mu.Lock()
+				tokens = append(tokens, token)
+				mu.Unlock()
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if len(tokens) != 1 {
+		t.Fatalf("stale takeover winners = %d, want exactly one", len(tokens))
+	}
+	releaseCloseoutToken(sid, tokens[0])
+}
+
+func TestCloseoutToken_ReclaimsExitedOwnerImmediately(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sid := "abababab-cdcd-efef-0101-232323232323"
+	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := closeoutTokenPath(dir, sid)
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "stale-token"), nil, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := json.Marshal(closeoutLease{PID: 999999})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, ".owner"), owner, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	token, ok := acquireCloseoutToken(sid)
+	if !ok {
+		t.Fatal("did not reclaim exited owner lease")
+	}
+	defer releaseCloseoutToken(sid, token)
+	if elapsed := time.Since(started); elapsed >= closeoutTokenTTL {
+		t.Fatalf("reclaim took %s; want immediate takeover", elapsed)
+	}
+}
+
 func TestCloseoutTokenHeldUntilExplicitRelease(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	sid := "cccccccc-dddd-eeee-ffff-000000000000"
