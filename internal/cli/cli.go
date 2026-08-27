@@ -949,6 +949,11 @@ func resumeSource(h paths.SessionHit) (string, bool) {
 }
 
 func supportedResumeSource(src string) bool {
+	switch src {
+	case "claude", "codex", "antigravity", "goose":
+	default:
+		return false
+	}
 	for _, registration := range sources.Registered() {
 		if registration.ID == src {
 			return true
