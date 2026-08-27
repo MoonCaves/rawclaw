@@ -655,8 +655,16 @@ func TestRefreshDBPath_PrunesStaleCacheButRetainsFreshAndReused(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale := filepath.Join(refreshDir, "stale.db")
-	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
-		t.Fatal(err)
+	staleDB, err := sql.Open("sqlite", "file:"+stale)
+	if err != nil {
+		t.Fatalf("open stale SQLite database: %v", err)
+	}
+	if _, err := staleDB.Exec("CREATE TABLE stale (value TEXT)"); err != nil {
+		staleDB.Close()
+		t.Fatalf("create stale SQLite database: %v", err)
+	}
+	if err := staleDB.Close(); err != nil {
+		t.Fatalf("close stale SQLite database: %v", err)
 	}
 	if err := os.WriteFile(stale+"-wal", []byte("wal"), 0o644); err != nil {
 		t.Fatal(err)
