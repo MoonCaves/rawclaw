@@ -1275,18 +1275,6 @@ CREATE INDEX IF NOT EXISTS idx_session_sources_session ON session_sources(sessio
 		return fmt.Errorf("ensure session_sources schema: %w", err)
 	}
 
-	// Rename missing_since on session_sources if table predates rename
-	sHave, sErr := tableColumns(con, "session_sources")
-	if sErr == nil {
-		if _, ok := sHave["missing_since"]; ok {
-			if _, ok := sHave["only_copy_since"]; !ok {
-				if _, err := con.Exec("ALTER TABLE session_sources RENAME COLUMN missing_since TO only_copy_since"); err != nil {
-					return fmt.Errorf("rename session_sources.missing_since to only_copy_since: %w", err)
-				}
-			}
-		}
-	}
-
 	var hasSessions int
 	if err := con.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'").Scan(&hasSessions); err != nil {
 		return fmt.Errorf("check sessions table: %w", err)
