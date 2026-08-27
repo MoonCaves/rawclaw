@@ -56,3 +56,30 @@ Estimated net reduction: 4 lines.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
+
+# Accepted Ponytail Finding: shared realpath helper
+
+## Verdict
+
+ACCEPTED — the duplicate `internal/index.realpath` matches the canonical
+`internal/paths.realpath` longest-existing-prefix behavior. Export the canonical
+helper and alias the package-local name so callers outside this narrow fence
+retain their behavior.
+
+## Contract check
+
+- Both implementations use `filepath.Abs`, resolve the longest existing prefix
+  with `filepath.EvalSymlinks`, and append missing path components.
+- Both return a cleaned/absolute path when no prefix resolves and never return
+  an error.
+- Index persistence and containment code intentionally stores/resolves
+  canonical paths; raw path fields and caller-visible paths remain untouched.
+- No caller requires the helper to remain a function rather than a callable
+  package-local value.
+
+## Minimal change
+
+Export `paths.Realpath`, remove the duplicate implementation from
+`internal/index/index.go`, and retain `var realpath = paths.Realpath` so all
+existing index-package call sites keep their behavior without edits outside the
+approved fence.
