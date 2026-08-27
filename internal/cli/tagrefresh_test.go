@@ -816,7 +816,7 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 		SessionID:      fullSID,
 		TranscriptPath: transcriptPath,
 		CWD:            "/home/user/resume-proj",
-		Source:         "claude",
+		Source:         "codex",
 	}); err != nil {
 		t.Fatalf("WriteCatalogEntry: %v", err)
 	}
@@ -827,8 +827,8 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 		t.Fatalf("runResume: %v", err)
 	}
 
-	if !strings.Contains(out.String(), "claude --resume resume01-catalog-session-uuid") {
-		t.Fatalf("runResume output missing expected resume command:\n%s", out.String())
+	if !strings.Contains(out.String(), "codex resume resume01-catalog-session-uuid") {
+		t.Fatalf("runResume output missing catalog source's Codex command:\n%s", out.String())
 	}
 }
 

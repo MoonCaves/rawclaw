@@ -917,7 +917,11 @@ type resumeCandidate struct {
 func runResume(w io.Writer, o *Options) error {
 	var matches []resumeCandidate
 	for _, h := range paths.ResolveSession(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "claude"})
+		src := h.Source
+		if src == "" {
+			src = "claude"
+		}
+		matches = append(matches, resumeCandidate{hit: h, src: src})
 	}
 	consolidated, consolidatedKnown := resumeConsolidatedHits(o.Resume)
 	for _, h := range consolidated {
