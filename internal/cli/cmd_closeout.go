@@ -227,9 +227,6 @@ func runCloseoutTaggerContext(parent context.Context, argv []string, prep []byte
 			return nil, fmt.Errorf("tagger exited unsuccessfully: %w", err)
 		}
 	case <-ctx.Done():
-		if ctx.Err() == context.DeadlineExceeded && parent.Err() != nil {
-			return nil, fmt.Errorf("closeout deadline exceeded: %w", parent.Err())
-		}
 		killErr := terminateCloseout(cmd)
 		select {
 		case <-done:
@@ -241,6 +238,9 @@ func runCloseoutTaggerContext(parent context.Context, argv []string, prep []byte
 			return nil, fmt.Errorf("tagger timed out after %s; process cleanup: %w", closeoutTaggerTimeout, killErr)
 		}
 		copyCloseoutStderr(stderrFile, stderr)
+		if parent.Err() != nil {
+			return nil, fmt.Errorf("closeout deadline exceeded: %w", parent.Err())
+		}
 		if killErr != nil {
 			return nil, fmt.Errorf("tagger timed out after %s; process cleanup: %w", closeoutTaggerTimeout, killErr)
 		}
