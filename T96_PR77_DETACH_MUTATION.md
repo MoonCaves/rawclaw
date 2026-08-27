@@ -102,3 +102,65 @@ needs a real subprocess test with a valid session and a controllable slow
 tagger, parent exit immediately after queueing, an independent success receipt
 assertion, and (where claimed) a terminal-signal/process-group survival check.
 
+## Addendum: current head `daffc5f50c306e09f7008b295262a7ccedab6cd3`
+
+This addendum audits the follow-up process-tree and closeout-lock changes. The
+original report above is unchanged.
+
+### Current filter and baseline
+
+Verified the filter first:
+
+```text
+go test ./internal/cli -list 'Closeout|Detach|TagPublish'
+```
+
+The current list includes the new `TestRunCloseout_ConcurrentParentsLaunchOnce`,
+`TestCloseoutTokenHeldUntilExplicitRelease`,
+`TestRunCloseoutChild_ReleasesTokenAfterCompletionOrFailure`, and
+`TestRunCloseoutTagger_TimeoutKillsDescendantHoldingStdio` tests.
+
+Current focused race baseline:
+
+```text
+go test -race -count=1 ./internal/cli -run 'TestRunCloseout_|TestDetach_|TestRunTagPublishChildHonorsCanceledContext'
+ok   github.com/MoonCaves/rawclaw/internal/cli  2.677s
+```
+
+### Current-head mutations
+
+| Mutation | Result | Compared with old head |
+|---|---|---|
+| Remove `detach(cmd)` from `spawnCloseoutChild` | Focused filter passed: `ok ... 0.919s` | Old survivor remains a survivor |
+| Remove `configureCloseoutProcess(cmd)` from `runCloseoutTagger` (no process group) | `TestRunCloseoutTagger_TimeoutKillsDescendantHoldingStdio` exceeded an 8-second harness timeout (`rc=124`) | **Old suite gap is now killed** by the new process-tree test |
+| Replace closeout child `go cmd.Wait()` with `cmd.Process.Release()` | Focused filter passed: `ok ... 0.875s` | Old survivor remains a survivor |
+| Return before `cmd.Start()` in `spawnCloseoutChild` | Focused filter passed: `ok ... 0.967s` | Old survivor remains a survivor |
+
+All mutations were disposable and the current source was restored exactly
+before the report branch was updated.
+
+### 20-way immediate-parent SIGKILL probe
+
+Built the current head, configured `/bin/true` as the absolute tagger, and ran
+20 unique closeout parents. Each parent was SIGKILLed 100ms after launch; after
+2 seconds the shared child log was counted:
+
+```text
+failure_receipts=20
+log_exists=yes
+```
+
+All 20 children emitted the expected `closeout: failed: tag-prep: exit status 1`
+receipt for the deliberately nonexistent session. This demonstrates that the
+child/log path survives an immediate parent kill once the parent has had time
+to queue the worker. It does not establish successful terminal completion,
+because the session is intentionally invalid; nor does it cover the narrower
+post-`Start`/pre-child-entry kill window.
+
+### Current-head verdict
+
+The follow-up correctly adds bounded process-group cleanup and closeout token
+ownership, and the new timeout mutation is killed. The three closeout-spawn
+mutations still survive, and the SIGKILL probe proves only failure receipt
+continuation. **REJECT remains the current-head verdict** for the stronger
+detached closeout / durable terminal-completion claim.
