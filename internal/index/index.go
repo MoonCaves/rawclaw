@@ -750,7 +750,7 @@ func parseTranscript(path, sid string) (rows []model.Message, started, last floa
 	// []byte is already lossless and json.Unmarshal tolerates invalid UTF-8 in
 	// strings, so no transform is needed.
 	var startedSet, lastSet bool
-	for _, line := range bytes.Split(data, []byte{'\n'}) {
+	for line := range bytes.SplitSeq(data, []byte{'\n'}) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
