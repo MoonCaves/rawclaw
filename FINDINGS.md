@@ -1,1 +1,17 @@
-Issue #41 is caused by removing refresh-cache eviction while retaining refresh DBs for the prewarm/closeout cache. Eviction must therefore not run from PrepareFreshContainer, whose contract is to preserve fresh entries, and must allow sessions to outlive the old 24-hour window. The smallest shared fix is a 30-day inactivity TTL at RefreshDBPath, which is used whenever a refresh cache entry is acquired; protect the acquired path during that pass and remove SQLite sidecars with the database so reused/active entries survive while abandoned entries are eventually reclaimed.
+# Issue #24 findings
+
+- `tag-prep` already provides the bounded, incremental untagged-window dump and
+  prints the manual `rawclaw tag-prep <session>` recovery instruction when a
+  window remains; reuse its testable core rather than duplicating window logic.
+- `tag-write` already owns authoritative writes and best-effort detached
+  publication; closeout must invoke its existing command/core and preserve that
+  contract.
+- `bg_ingest.go` provides detached self-invocation, logging, and a per-session
+  spawn-token pattern. Closeout needs a session/revision marker using that same
+  pattern, without changing ingest behavior.
+- The current tree has no configured headless tagger integration. The closeout
+  seam must therefore be optional and fail soft to the existing manual recovery
+  command when no configured tagger is present.
+- Scope is limited to `internal/cli/`: add the command, child orchestration,
+  focused tests, and root-command wiring. No core storage, parser, daemon, or
+  dependency redesign is warranted.

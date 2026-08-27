@@ -286,6 +286,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root.AddCommand(newTagWriteCmd())
 	root.AddCommand(newVectorTopupCmd())
 	root.AddCommand(newTagPublishCmd())
+	root.AddCommand(newCloseoutCmd())
 	archiveCmd := newArchiveCmd()
 	archiveCmd.AddCommand(newArchiveInitCmd())
 	archiveCmd.AddCommand(newArchivePushCmd())
