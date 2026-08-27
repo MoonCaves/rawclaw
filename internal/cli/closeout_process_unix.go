@@ -17,7 +17,3 @@ func terminateCloseoutProcess(cmd *exec.Cmd) error {
 	}
 	return nil
 }
-
-func closeoutProcessAlive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
-}
