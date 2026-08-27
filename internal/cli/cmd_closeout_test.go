@@ -285,9 +285,23 @@ func TestCloseoutTokenHeldUntilExplicitRelease(t *testing.T) {
 
 func TestCloseoutToken_IndependentProcessesSingleWinner(t *testing.T) {
 	if os.Getenv("RAWCLAW_CLOSEOUT_HELPER") == "stale-taker" {
+		ready := os.Getenv("RAWCLAW_CLOSEOUT_READY")
+		_ = os.WriteFile(filepath.Join(ready, strconv.Itoa(os.Getpid())), nil, 0o600)
+		for {
+			if _, err := os.Stat(os.Getenv("RAWCLAW_CLOSEOUT_START")); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
 		if _, ok := acquireCloseoutToken(os.Getenv("RAWCLAW_CLOSEOUT_SESSION")); ok {
 			fmt.Fprintln(os.Stdout, "acquired")
-			time.Sleep(2 * time.Second)
+		}
+		_ = os.WriteFile(filepath.Join(os.Getenv("RAWCLAW_CLOSEOUT_ATTEMPTED"), strconv.Itoa(os.Getpid())), nil, 0o600)
+		for {
+			if _, err := os.Stat(os.Getenv("RAWCLAW_CLOSEOUT_RELEASE")); err == nil {
+				break
+			}
+			time.Sleep(time.Millisecond)
 		}
 		return
 	}
@@ -312,17 +326,55 @@ func TestCloseoutToken_IndependentProcessesSingleWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	commands := make([]*exec.Cmd, 256)
+	readyDir := filepath.Join(os.Getenv("HOME"), "ready")
+	attemptedDir := filepath.Join(os.Getenv("HOME"), "attempted")
+	if err := os.MkdirAll(readyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(attemptedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	startPath := filepath.Join(os.Getenv("HOME"), "start")
+	releasePath := filepath.Join(os.Getenv("HOME"), "release")
+	commands := make([]*exec.Cmd, 32)
 	outputs := make([]*bytes.Buffer, len(commands))
 	for i := range commands {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestCloseoutToken_IndependentProcessesSingleWinner$")
-		cmd.Env = append(os.Environ(), "HOME="+os.Getenv("HOME"), "RAWCLAW_CLOSEOUT_HELPER=stale-taker", "RAWCLAW_CLOSEOUT_SESSION="+sid)
+		cmd.Env = append(os.Environ(), "HOME="+os.Getenv("HOME"), "RAWCLAW_CLOSEOUT_HELPER=stale-taker", "RAWCLAW_CLOSEOUT_SESSION="+sid, "RAWCLAW_CLOSEOUT_READY="+readyDir, "RAWCLAW_CLOSEOUT_ATTEMPTED="+attemptedDir, "RAWCLAW_CLOSEOUT_START="+startPath, "RAWCLAW_CLOSEOUT_RELEASE="+releasePath)
 		outputs[i] = new(bytes.Buffer)
 		cmd.Stdout = outputs[i]
 		commands[i] = cmd
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, _ := os.ReadDir(readyDir)
+		if len(entries) == len(commands) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if entries, _ := os.ReadDir(readyDir); len(entries) != len(commands) {
+		t.Fatalf("ready helpers = %d, want %d", len(entries), len(commands))
+	}
+	if err := os.WriteFile(startPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, _ := os.ReadDir(attemptedDir)
+		if len(entries) == len(commands) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if entries, _ := os.ReadDir(attemptedDir); len(entries) != len(commands) {
+		t.Fatalf("attempted helpers = %d, want %d", len(entries), len(commands))
+	}
+	if err := os.WriteFile(releasePath, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	winners := 0
 	for i, cmd := range commands {
