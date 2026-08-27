@@ -56,3 +56,26 @@ Estimated net reduction: 4 lines.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
+
+# Ponytail Finding 17 — REJECT
+
+`internal/index/index.go:1263` defines `absDiff(a, b)` as a hand-rolled
+absolute difference. Graph/source inspection finds six callers: two in
+`internal/index/index.go` (lines 933 and 1262), two in
+`internal/index/containers.go` (lines 218 and 347), and two in
+`internal/index/consolidated.go` (lines 1493 and 1605).
+
+For the actual callers, replacing `absDiff(a, b)` with `math.Abs(a-b)` is
+behavior-preserving: both produce the same threshold result for finite values,
+infinities, and NaNs. The helper can return `-0` for a signed-zero subtraction,
+while `math.Abs` returns `+0`, but every caller compares the result to `0.001`,
+so that representation difference is unobservable here.
+
+The finding is rejected under this task's file fence. Replacing all uses would
+require edits to `containers.go` and `consolidated.go`, which are out of scope.
+Replacing only the two uses in `index.go` would leave `absDiff` required by the
+other four callers and would add the `math` import without removing a
+production line. Replacing only the helper body would likewise retain the
+unnecessary wrapper and is not a net-negative production change.
+
+Verdict: REJECT. No production change.
