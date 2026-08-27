@@ -339,6 +339,26 @@ func Has(id string) bool {
 	return err == nil
 }
 
+// Exact returns metadata for one vaulted session without walking the vault.
+// found is true for a retained transcript too; callers must inspect Meta.
+func Exact(id string) (m Meta, transcript string, found bool) {
+	tp, err := PathFor(id)
+	if err != nil {
+		return Meta{}, "", false
+	}
+	if _, err := os.Stat(tp); err != nil {
+		return Meta{}, "", false
+	}
+	m, err = readMeta(metaPathOf(tp))
+	if err != nil {
+		return Meta{}, "", false
+	}
+	if m.ID == "" {
+		m.ID = id
+	}
+	return m, tp, true
+}
+
 // SetOnlyCopySince records (since > 0) or clears (since == 0) the retention
 // watermark on a vaulted session, indicating RawClaw is now the only copy after
 // the CLI deleted its transcript. A session that was never vaulted

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/paths"
@@ -26,6 +27,24 @@ type tagTestSource struct {
 	messagesErr   error
 	discoverCalls int
 	messagesCalls int
+}
+
+func TestRunResumeDoesNotEmitRetainedLocalCommand(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	id := "87783881-b4b8-4694-8095-12c180e13643"
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude", CWD: "/gone/project"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := durable.SetOnlyCopySince(id, 1780000000); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "claude --resume") {
+		t.Fatalf("retained session emitted runnable local command: %s", out.String())
+	}
 }
 
 func (s *tagTestSource) Discover() ([]source.Container, error) {

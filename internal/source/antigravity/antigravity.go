@@ -53,7 +53,21 @@ func Registration() source.Registration {
 		ID:     ID,
 		Detect: detect,
 		New:    func() source.Source { return New() },
+		Lookup: lookup,
 	}
+}
+
+func lookup(id string) ([]source.Container, error) {
+	if id == "" || strings.ContainsAny(id, "/\\") {
+		return nil, nil
+	}
+	a := New()
+	p := findTranscriptFile(filepath.Join(BrainRoot(a.root), id))
+	if p == "" {
+		return nil, nil
+	}
+	cwd := loadHistory(filepath.Join(a.root, "history.jsonl"))[id]
+	return []source.Container{{ID: id, Path: p, CWD: cwd}}, nil
 }
 
 // detect reports whether path lives under an Antigravity tree.

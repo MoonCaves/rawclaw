@@ -384,3 +384,18 @@ func TestLegacyMetaMissingSinceDecodes(t *testing.T) {
 		t.Errorf("OnlyCopySince = %v, want 1780000000", m.OnlyCopySince)
 	}
 }
+
+func TestExactReturnsRetainedMetadataWithoutWalk(t *testing.T) {
+	isolate(t)
+	id := "87783881-b4b8-4694-8095-12c180e13643"
+	if err := StoreMessages(Meta{ID: id, Source: "claude", CWD: "/gone/project"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetOnlyCopySince(id, 1780000000); err != nil {
+		t.Fatal(err)
+	}
+	m, path, found := Exact(id)
+	if !found || path == "" || m.ID != id || m.OnlyCopySince == 0 {
+		t.Fatalf("Exact = (%+v, %q, %v), want retained metadata", m, path, found)
+	}
+}

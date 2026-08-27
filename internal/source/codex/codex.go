@@ -42,7 +42,30 @@ func Registration() source.Registration {
 		ID:     "codex",
 		Detect: detect,
 		New:    func() source.Source { return New() },
+		Lookup: lookup,
 	}
+}
+
+func lookup(id string) ([]source.Container, error) {
+	if id == "" {
+		return nil, nil
+	}
+	root := SessionsRoot()
+	var out []source.Container
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !isRollout(d.Name()) {
+			return nil
+		}
+		m, ok := readMeta(path)
+		if ok && m.id == id && !m.isChild() {
+			out = append(out, source.Container{ID: id, Path: path, CWD: m.cwd})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // detect reports whether path lives under a Codex sessions tree.

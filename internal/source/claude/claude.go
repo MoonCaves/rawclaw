@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -39,7 +40,26 @@ func Registration() source.Registration {
 		ID:     "claude",
 		Detect: detect,
 		New:    func() source.Source { return New() },
+		Lookup: lookup,
 	}
+}
+
+func lookup(id string) ([]source.Container, error) {
+	if id == "" || strings.ContainsAny(id, "/\\") {
+		return nil, nil
+	}
+	e, err := paths.ReadCatalogEntry(filepath.Join(paths.CatalogDir(), id))
+	if err != nil || e.SessionID != id || e.TranscriptPath == "" {
+		return nil, nil
+	}
+	if fi, err := os.Stat(e.TranscriptPath); err != nil || fi.IsDir() {
+		return nil, nil
+	}
+	cwd := e.CWD
+	if cwd == "" {
+		cwd = paths.FileCWD(e.TranscriptPath)
+	}
+	return []source.Container{{ID: id, Path: e.TranscriptPath, CWD: cwd}}, nil
 }
 
 // detect reports whether path lives under a Claude Code projects tree.
