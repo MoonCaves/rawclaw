@@ -143,9 +143,9 @@ func TestFindTranscriptDir(t *testing.T) {
 		t.Setenv("CLAUDE_CONFIG_DIR", base)
 		encoded := filepath.Join(projects, "-home-user-myproj")
 		realCwd := t.TempDir() // an existing dir to be the recorded cwd
-		// Record the realpath so the match (realpath(rec) == realpath(target)) holds
+		// Record the realpath so the match (Realpath(rec) == Realpath(target)) holds
 		// regardless of macOS /tmp→/private/tmp symlinking.
-		writeJSONL(t, filepath.Join(encoded, "sess1.jsonl"), `{"cwd":"`+jsonEscape(realpath(realCwd))+`"}`)
+		writeJSONL(t, filepath.Join(encoded, "sess1.jsonl"), `{"cwd":"`+jsonEscape(Realpath(realCwd))+`"}`)
 
 		got := FindTranscriptDir(realCwd)
 		if got != encoded {
@@ -179,7 +179,7 @@ func TestFindTranscriptDir(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := FindTranscriptDir(child)
-		if got != child && got != realpath(child) {
+		if got != child && got != Realpath(child) {
 			t.Fatalf("FindTranscriptDir(projects child) = %q, want %q", got, child)
 		}
 	})
@@ -195,7 +195,7 @@ func TestFindTranscriptDir(t *testing.T) {
 		// to the REALPATH'd target (on macOS /home resolves via a firmlink), so
 		// derive the encoded name the same way the code does.
 		cwd := "/home/user/ghost.dir"
-		enc := encodePath(realpath(cwd))
+		enc := encodePath(Realpath(cwd))
 		encDir := filepath.Join(projects, enc)
 		if err := os.MkdirAll(encDir, 0o755); err != nil {
 			t.Fatal(err)
@@ -232,7 +232,7 @@ func TestFindTranscriptDirExplicit(t *testing.T) {
 		writeJSONL(t, filepath.Join(target, "x.jsonl"), `{"cwd":"/whatever"}`)
 
 		got := FindTranscriptDirExplicit(target)
-		if got != realpath(target) && got != target {
+		if got != Realpath(target) && got != target {
 			t.Fatalf("FindTranscriptDirExplicit(loose) = %q, want %q", got, target)
 		}
 	})
@@ -247,7 +247,7 @@ func TestFindTranscriptDirExplicit(t *testing.T) {
 		// files): the transcript whose recorded cwd matches must win, not the
 		// stray-file fallback.
 		writeJSONL(t, filepath.Join(workdir, "data.jsonl"), `{"k":"v"}`)
-		writeJSONL(t, filepath.Join(encoded, "sess1.jsonl"), `{"cwd":"`+jsonEscape(realpath(workdir))+`"}`)
+		writeJSONL(t, filepath.Join(encoded, "sess1.jsonl"), `{"cwd":"`+jsonEscape(Realpath(workdir))+`"}`)
 
 		got := FindTranscriptDirExplicit(workdir)
 		if got != encoded {
@@ -514,12 +514,12 @@ func jsonEscape(s string) string {
 	return string(out)
 }
 
-// containsResolved reports whether want (or its realpath) is present in got
+// containsResolved reports whether want (or its Realpath) is present in got
 // (comparing realpaths to survive macOS /tmp→/private/tmp symlinking).
 func containsResolved(got []string, want string) bool {
-	wantRP := realpath(want)
+	wantRP := Realpath(want)
 	for _, g := range got {
-		if g == want || realpath(g) == wantRP {
+		if g == want || Realpath(g) == wantRP {
 			return true
 		}
 	}
