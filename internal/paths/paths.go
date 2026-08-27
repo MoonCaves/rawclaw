@@ -16,7 +16,8 @@ import (
 
 // SessionHit is one result of ResolveSession: a top-level session whose id
 // starts with the requested prefix. It carries the full session id, the working
-// dir recorded in the transcript, and a friendly project label.
+// dir recorded in the transcript, a friendly project label, and catalog source
+// metadata when the durable catalog answered.
 type SessionHit struct {
 	SessionID string // full session id (the .jsonl stem == claude --resume id)
 	Path      string // backing transcript file path
