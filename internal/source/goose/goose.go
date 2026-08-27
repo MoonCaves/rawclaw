@@ -61,7 +61,37 @@ func Registration() source.Registration {
 		ID:     ID,
 		Detect: detect,
 		New:    func() source.Source { return New() },
+		Lookup: lookup,
 	}
+}
+
+func lookup(id string) ([]source.Container, error) {
+	if id == "" {
+		return nil, nil
+	}
+	a := New()
+	var out []source.Container
+	for _, root := range a.roots {
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".db") {
+				return nil
+			}
+			cs, err := discoverDatabaseContainers(path)
+			if err != nil {
+				return nil
+			}
+			for _, c := range cs {
+				if c.ID == id && !c.IsSubagent {
+					out = append(out, c)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // detect reports whether path lives under a Goose sessions tree.
