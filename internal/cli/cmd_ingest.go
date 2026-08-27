@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -281,7 +281,7 @@ func ingestContainerWithRetry(match tagSourceMatch) (int, error) {
 		lastErr = err
 
 		// Exponential backoff: 20ms, 40ms, 80ms, 160ms, 320ms + jitter up to 20ms
-		backoff := time.Duration(20*(1<<attempt))*time.Millisecond + time.Duration(rand.Intn(20))*time.Millisecond
+		backoff := time.Duration(20*(1<<attempt))*time.Millisecond + time.Duration(rand.IntN(20))*time.Millisecond
 		time.Sleep(backoff)
 	}
 
