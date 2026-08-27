@@ -42,6 +42,12 @@ are in scope. No GitHub, graphify, or mailbox state is modified.
 
 # Accepted Ponytail Finding 13
 
+# Issue #55 semantic regression test
+
+The existing traversal test uses `x/../../outside`; add a behavior-pinning test
+for the exact invalid session ID `../../outside`, covering both rendered Claude
+and Codex SessionStart scripts and preserving fail-soft detached ingest behavior.
+
 Ruling: replace the duplicate hand-rolled `strings.IndexByte` fragment stripping
 in `internal/cli/cmd_ingest.go:backingPath` and
 `internal/index/containers.go:backingFilePath` with exact-equivalent
