@@ -847,9 +847,14 @@ func TestRunResumeUsesConsolidatedCatalogForExactID(t *testing.T) {
 		t.Fatalf("Rebuild consolidated: %v", err)
 	}
 	const fullSID = "resume02-consolidated-session-uuid"
+	sourcePath := filepath.Join(configDir, "codex-source.db")
+	if err := os.WriteFile(sourcePath, []byte("source"), 0o644); err != nil {
+		con.Close()
+		t.Fatalf("write source path: %v", err)
+	}
 	if _, err := con.Exec(`INSERT INTO sessions
-		(id, message_count, source_tool, project, cwd, is_subagent)
-		VALUES (?, 1, ?, ?, ?, 0)`, fullSID, "codex", "catalog-project", "/work/catalog"); err != nil {
+		(id, message_count, source_tool, source_path, project, cwd, is_subagent)
+		VALUES (?, 1, ?, ?, ?, ?, 0)`, fullSID, "codex", sourcePath, "catalog-project", "/work/catalog"); err != nil {
 		con.Close()
 		t.Fatalf("insert consolidated session: %v", err)
 	}
@@ -892,9 +897,14 @@ func TestRunResumeDeduplicatesCatalogAndConsolidatedHit(t *testing.T) {
 		con.Close()
 		t.Fatalf("Rebuild consolidated: %v", err)
 	}
+	consolidatedSourcePath := filepath.Join(configDir, "claude-source.jsonl")
+	if err := os.WriteFile(consolidatedSourcePath, []byte("source"), 0o644); err != nil {
+		con.Close()
+		t.Fatalf("write consolidated source path: %v", err)
+	}
 	if _, err := con.Exec(`INSERT INTO sessions
-		(id, message_count, source_tool, project, cwd, is_subagent)
-		VALUES (?, 1, ?, ?, ?, 0)`, fullSID, "claude", "shared", "/work/shared"); err != nil {
+		(id, message_count, source_tool, source_path, project, cwd, is_subagent)
+		VALUES (?, 1, ?, ?, ?, ?, 0)`, fullSID, "claude", consolidatedSourcePath, "shared", "/work/shared"); err != nil {
 		con.Close()
 		t.Fatalf("insert consolidated session: %v", err)
 	}
@@ -911,6 +921,87 @@ func TestRunResumeDeduplicatesCatalogAndConsolidatedHit(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "claude --resume "+fullSID) {
 		t.Fatalf("runResume output missing expected resume command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeRejectsUnusableConsolidatedMetadata(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		sourcePath bool
+		retained   bool
+	}{
+		{name: "retained row", source: "codex", sourcePath: true, retained: true},
+		{name: "missing source path", source: "codex"},
+		{name: "unknown source", source: "unknown-runtime", sourcePath: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+			t.Setenv("HOME", configDir)
+			t.Setenv("XDG_CACHE_HOME", filepath.Join(configDir, "cache"))
+
+			con, err := store.ConnectRW(index.ConsolidatedPath())
+			if err != nil {
+				t.Fatalf("ConnectRW consolidated: %v", err)
+			}
+			if err := store.Rebuild(con); err != nil {
+				con.Close()
+				t.Fatalf("Rebuild consolidated: %v", err)
+			}
+			const fullSID = "resume04-unusable-session-uuid"
+			sourcePath := ""
+			if tt.sourcePath {
+				sourcePath = filepath.Join(configDir, "source.db")
+				if err := os.WriteFile(sourcePath, []byte("source"), 0o644); err != nil {
+					con.Close()
+					t.Fatalf("write source path: %v", err)
+				}
+			}
+			var onlyCopySince any
+			if tt.retained {
+				onlyCopySince = 1.0
+			}
+			if _, err := con.Exec(`INSERT INTO sessions
+				(id, message_count, source_tool, source_path, only_copy_since, is_subagent)
+				VALUES (?, 1, ?, ?, ?, 0)`, fullSID, tt.source, sourcePath, onlyCopySince); err != nil {
+				con.Close()
+				t.Fatalf("insert consolidated session: %v", err)
+			}
+			if err := con.Close(); err != nil {
+				t.Fatalf("close consolidated: %v", err)
+			}
+
+			var out strings.Builder
+			if err := runResume(&out, &Options{Resume: fullSID}); err != nil {
+				t.Fatalf("runResume: %v", err)
+			}
+			if strings.Contains(out.String(), "--resume "+fullSID) || strings.Contains(out.String(), "resume "+fullSID) {
+				t.Fatalf("unusable consolidated metadata produced runnable command:\n%s", out.String())
+			}
+		})
+	}
+}
+
+func TestRunResumeResolvesExactLegacyClaudeStem(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(configDir, "cache"))
+	projDir := filepath.Join(configDir, "projects", "-legacy-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	const fullSID = "resume05-legacy-claude-session"
+	writeTagSourceFile(t, filepath.Join(projDir, fullSID+".jsonl"), `{"cwd":"/work/legacy"}`+"\n")
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: fullSID}); err != nil {
+		t.Fatalf("runResume: %v", err)
+	}
+	if !strings.Contains(out.String(), "claude --resume "+fullSID) {
+		t.Fatalf("runResume output missing legacy Claude command:\n%s", out.String())
 	}
 }
 

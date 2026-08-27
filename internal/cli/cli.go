@@ -912,7 +912,9 @@ type resumeCandidate struct {
 func runResume(w io.Writer, o *Options) error {
 	var matches []resumeCandidate
 	for _, h := range paths.ResolveSession(o.Resume) {
-		matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: resumeSource(h)})
+		if src, ok := resumeSource(h); ok {
+			matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: src})
+		}
 	}
 	consolidated := resumeConsolidatedHits(o.Resume)
 	for _, h := range consolidated {
@@ -938,11 +940,21 @@ func runResume(w io.Writer, o *Options) error {
 	return emitResumeMatches(w, o, matches)
 }
 
-func resumeSource(h paths.SessionHit) string {
-	if h.Source != "" {
-		return h.Source
+func resumeSource(h paths.SessionHit) (string, bool) {
+	src := h.Source
+	if src == "" {
+		src = "claude"
 	}
-	return "claude"
+	return src, supportedResumeSource(src)
+}
+
+func supportedResumeSource(src string) bool {
+	for _, registration := range sources.Registered() {
+		if registration.ID == src {
+			return true
+		}
+	}
+	return false
 }
 
 func isExactResumeID(prefix string, matches []resumeCandidate) bool {
@@ -950,7 +962,7 @@ func isExactResumeID(prefix string, matches []resumeCandidate) bool {
 		return false
 	}
 	for _, m := range matches {
-		if m.hit.SessionID == prefix && m.hit.Source != "" {
+		if m.hit.SessionID == prefix {
 			return true
 		}
 	}
@@ -983,11 +995,15 @@ func resumeConsolidatedHits(prefix string) []resumeCandidate {
 	hits := make([]resumeCandidate, 0, len(rows))
 	for _, row := range rows {
 		backing, ok, err := store.SessionBackingFor(con, row.ID)
-		if err != nil || !ok || backing.SourceTool == "" {
+		if err != nil || !ok || backing.SourceTool == "" || backing.SourcePath == "" || !supportedResumeSource(backing.SourceTool) {
+			return nil
+		}
+		if _, err := os.Stat(backing.SourcePath); err != nil {
 			return nil
 		}
 		var origin string
-		if err := con.QueryRow("SELECT COALESCE(origin_machine,'') FROM sessions WHERE id=?", row.ID).Scan(&origin); err != nil || origin != "" {
+		var retained bool
+		if err := con.QueryRow("SELECT COALESCE(origin_machine,''), only_copy_since IS NOT NULL FROM sessions WHERE id=?", row.ID).Scan(&origin, &retained); err != nil || origin != "" || retained {
 			continue
 		}
 		candidate := resumeCandidate{
