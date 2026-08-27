@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,9 +15,10 @@ import (
 )
 
 const (
-	closeoutTaggerTimeout = 60 * time.Second
-	closeoutMaxPasses     = 256
+	closeoutMaxPasses = 256
 )
+
+var closeoutTaggerTimeout = 60 * time.Second
 
 var closeoutNow = time.Now
 
@@ -69,11 +69,12 @@ func runCloseout(w io.Writer, sessionID string) error {
 		return err
 	}
 
-	if !acquireIngestSpawnToken("closeout-"+sessionID, closeoutNow()) {
+	if _, ok := acquireCloseoutToken(sessionID); !ok {
 		_, err := fmt.Fprintf(w, "closeout already queued for %s\n", sessionID)
 		return err
 	}
 	if err := spawnCloseout(sessionID); err != nil {
+		releaseCloseoutToken(sessionID)
 		return err
 	}
 	_, err = fmt.Fprintf(w, "closeout queued for %s\n", sessionID)
@@ -136,6 +137,7 @@ func loadCloseoutTaggerConfig() (closeoutTaggerConfig, bool, error) {
 }
 
 func runCloseoutChild(w io.Writer, sessionID string) error {
+	defer releaseCloseoutToken(sessionID)
 	cfg, exists, err := loadCloseoutTaggerConfig()
 	if err != nil {
 		return closeoutFailure(w, err)
@@ -173,19 +175,28 @@ func runCloseoutChild(w io.Writer, sessionID string) error {
 }
 
 func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), closeoutTaggerTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	configureCloseoutProcess(cmd)
 	cmd.Stdin = bytes.NewReader(prep)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("tagger timed out after %s: %w", closeoutTaggerTimeout, ctx.Err())
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start tagger: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	timer := time.NewTimer(closeoutTaggerTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, fmt.Errorf("tagger exited unsuccessfully: %w", err)
 		}
-		return nil, fmt.Errorf("tagger exited unsuccessfully: %w", err)
+	case <-timer.C:
+		terminateCloseoutProcess(cmd)
+		<-done
+		return nil, fmt.Errorf("tagger timed out after %s", closeoutTaggerTimeout)
 	}
 	trimmed := bytes.TrimSpace(stdout.Bytes())
 	if len(trimmed) == 0 {
