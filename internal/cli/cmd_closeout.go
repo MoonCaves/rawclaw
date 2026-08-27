@@ -240,7 +240,7 @@ func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, er
 	if len(segments) == 0 {
 		return nil, fmt.Errorf("tagger returned an empty segment array")
 	}
-	return stdout.Bytes(), nil
+	return stdout, nil
 }
 
 func copyCloseoutStderr(file *os.File, dst io.Writer) {
