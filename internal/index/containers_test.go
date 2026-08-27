@@ -655,17 +655,19 @@ func TestRefreshDBPath_PrunesStaleCacheButRetainsFreshAndReused(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale := filepath.Join(refreshDir, "stale.db")
-	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+	staleDB, err := store.ConnectRW(stale)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stale+"-wal", []byte("wal"), 0o644); err != nil {
+	if _, err := staleDB.Exec("CREATE TABLE stale (value TEXT)"); err != nil {
+		staleDB.Close()
+		t.Fatal(err)
+	}
+	if err := staleDB.Close(); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-(refreshCacheStaleAfter + time.Hour))
 	if err := os.Chtimes(stale, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(stale+"-wal", old, old); err != nil {
 		t.Fatal(err)
 	}
 
@@ -679,9 +681,6 @@ func TestRefreshDBPath_PrunesStaleCacheButRetainsFreshAndReused(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("stale refresh db still exists, err=%v", err)
-	}
-	if _, err := os.Stat(stale + "-wal"); !os.IsNotExist(err) {
-		t.Fatalf("stale refresh WAL still exists, err=%v", err)
 	}
 
 	reused := RefreshDBPath("claude", "reused", "/reused.jsonl")
@@ -739,6 +738,76 @@ func TestRefreshDBPath_RetainsInUseStaleSQLite(t *testing.T) {
 	RefreshDBPath("claude", "other", "/other.jsonl")
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("released stale refresh db still exists, err=%v", err)
+	}
+}
+
+func TestEvictStaleRefreshDB_RetainsUnreadableCache(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "notadb.db")
+	if err := os.WriteFile(path, []byte("not sqlite"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-(refreshCacheStaleAfter + time.Hour))
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	evictStaleRefreshDB(path)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("unreadable cache removed after failed probe: %v", err)
+	}
+}
+
+func TestRefreshCacheProbeReleaseBeforeRemoveLosesWALWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "race.db")
+	probe, err := store.ConnectRW(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probe.Exec("CREATE TABLE marker (value TEXT)"); err != nil {
+		probe.Close()
+		t.Fatal(err)
+	}
+	if _, err := probe.Exec("BEGIN IMMEDIATE"); err != nil {
+		probe.Close()
+		t.Fatal(err)
+	}
+	if _, err := probe.Exec("ROLLBACK"); err != nil {
+		probe.Close()
+		t.Fatal(err)
+	}
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	written := make(chan error, 1)
+	go func() {
+		writer, openErr := store.ConnectRW(path)
+		if openErr != nil {
+			written <- openErr
+			return
+		}
+		defer writer.Close()
+		close(started)
+		_, writeErr := writer.Exec("INSERT INTO marker(value) VALUES ('window-write')")
+		written <- writeErr
+	}()
+	<-started
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+	removeRefreshDBFiles(path)
+
+	reopened, err := store.ConnectRW(path)
+	if err != nil {
+		return // unlinking the database is the demonstrated loss
+	}
+	defer reopened.Close()
+	var count int
+	if err := reopened.QueryRow("SELECT COUNT(*) FROM marker WHERE value='window-write'").Scan(&count); err == nil && count != 0 {
+		t.Fatalf("reopened cache retained write that removal should lose: %d", count)
 	}
 }
 

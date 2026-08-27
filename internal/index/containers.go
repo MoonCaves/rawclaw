@@ -73,14 +73,16 @@ func evictStaleRefreshDB(dbPath string) {
 	}
 	if _, err := db.Exec("BEGIN IMMEDIATE"); err != nil {
 		_ = db.Close()
-		if !isBusy(err) {
-			removeRefreshDBFiles(dbPath)
-		}
+		// A failed probe is inconclusive: busy means an active writer, while
+		// NOTADB and I/O errors mean the cache could not be inspected safely.
 		return
 	}
+	// Keep the write transaction open through unlinking. Releasing it first
+	// creates a TOCTOU window in which a writer can commit data that removal
+	// immediately discards.
+	removeRefreshDBFiles(dbPath)
 	_, _ = db.Exec("ROLLBACK")
 	_ = db.Close()
-	removeRefreshDBFiles(dbPath)
 }
 
 func removeRefreshDBFiles(dbPath string) {
