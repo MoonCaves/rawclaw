@@ -9,8 +9,12 @@ import (
 // ingests each group into its own db (namespaced with prefix "antigravity-"),
 // and returns eager scopes carrying that db + cwd — unioned with
 // orphanAntigravityScopes for retained history after transcript purge.
-func Antigravity(reindex bool) []view.Scope {
-	return containerScopes(antigravity.ID, antigravity.New(), antigravityLabel, reindex)
+func Antigravity(reindex bool, pathPreds ...func(string) bool) []view.Scope {
+	var pathPred func(string) bool
+	if len(pathPreds) > 0 {
+		pathPred = pathPreds[0]
+	}
+	return containerScopes(antigravity.ID, antigravity.New(), antigravityLabel, reindex, pathPred)
 }
 
 // RefreshAntigravityCWD refreshes the Antigravity index db for a given working dir.

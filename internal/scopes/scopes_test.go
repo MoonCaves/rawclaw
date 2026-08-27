@@ -13,11 +13,40 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
+
+type scopedContainerSource struct {
+	containers []source.Container
+}
+
+func (s scopedContainerSource) Discover() ([]source.Container, error) { return s.containers, nil }
+func (scopedContainerSource) Messages(source.Container) ([]model.Message, error) {
+	return nil, nil
+}
+
+func TestContainerScopesFiltersCWDsBeforeIndexing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	matching := "/work/project"
+	nonMatching := "/work/other"
+	adapter := scopedContainerSource{containers: []source.Container{
+		{ID: "matching", CWD: matching, Path: filepath.Join(t.TempDir(), "matching.jsonl")},
+		{ID: "non-matching", CWD: nonMatching, Path: filepath.Join(t.TempDir(), "other.jsonl")},
+	}}
+
+	scopes := containerScopes("test", adapter, func(cwd string) string { return cwd }, false,
+		func(cwd string) bool { return cwd == matching })
+	if len(scopes) != 1 || scopes[0].CWD != matching {
+		t.Fatalf("containerScopes returned %+v, want only %q", scopes, matching)
+	}
+	if _, err := os.Stat(containerDBPath("test", nonMatching)); !os.IsNotExist(err) {
+		t.Fatalf("non-matching CWD database exists or stat failed: %v", err)
+	}
+}
 
 // writeCodexRollout writes a minimal one-message Codex rollout file (a
 // session_meta header + one user message) at path, for tests that seed a

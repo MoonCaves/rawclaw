@@ -12,8 +12,12 @@ import (
 // ingests each group into its own db (namespaced with prefix "goose-"),
 // and returns eager scopes carrying that db + cwd — unioned with
 // orphanGooseScopes for retained history after transcript purge.
-func Goose(reindex bool) []view.Scope {
-	return containerScopes(goose.ID, goose.New(), gooseLabel, reindex)
+func Goose(reindex bool, pathPreds ...func(string) bool) []view.Scope {
+	var pathPred func(string) bool
+	if len(pathPreds) > 0 {
+		pathPred = pathPreds[0]
+	}
+	return containerScopes(goose.ID, goose.New(), gooseLabel, reindex, pathPred)
 }
 
 // GooseOrphanScopes surfaces already-indexed goose-*.db files without
