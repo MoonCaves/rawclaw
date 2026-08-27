@@ -22,6 +22,35 @@ candidate was identified independently as `0cd0b9ce77e362b5bd4e973f948eb9981cdbf
 (`fix(index): bound consolidated writer cancellation`), but it was not merged or
 used as current-base evidence.
 
+## Candidate interleaving and implementation verdict
+
+The candidate's test does not exercise cancellation after SQLite admission. Its
+ordered interleaving is:
+
+1. The test acquires `consolidatedWriterGate` itself.
+2. The test starts `SyncConsolidatedFromContext` with the gate already occupied.
+3. `SyncConsolidatedFromContext` waits in `acquireConsolidatedWriter(ctx)` and
+   cancellation returns `context.Canceled` from that process-local admission
+   wait.
+4. Only separately, the test's independent SQLite transaction holds the
+   consolidated database writer lock; the canceled fold has not reached SQLite.
+5. Releasing the gate and SQLite transaction permits the retry to fold and stamp
+   its watermark.
+
+Commit `7d1ca1c643795a145db1e33d657192993ff8fd78` removes the unsupported direct
+modernc busy-wait cancellation probe and records this admission boundary. Thus
+`0cd0b9c`/`7d1ca1c` do not establish cancellation of an already-admitted SQLite
+write or driver busy wait. **Implementation direction: UNCERTAIN.** The candidate
+is not recommended on this evidence; a context-aware mutation must independently
+gate entry past admission before it can validate that claim.
+
+The current-base reproduction below intentionally bypasses that candidate gate:
+the untouched base has no `consolidatedWriterGate` and no context-aware API. It
+holds only an independent real SQLite writer lock, starts the non-context-aware
+`SyncConsolidatedFrom`, and observes the first-write wait, non-publication, then
+release-and-retry commit. That validates the current-base first-write gap, but it
+does not validate the candidate's gate-bypassing or SQLite-cancellation behavior.
+
 ## Deterministic lock-held reproduction
 
 Temporary test: `internal/index/tick53_current_base_cancel_test.go`  
@@ -72,9 +101,9 @@ function cannot return a context error because it cannot receive a context.
 - No production hook, sleep-based production seam, or asymmetric baseline was
   added. The 250 ms timer is only the bounded observation target; it does not
   cause the operation to return.
-- The candidate `0cd0b9c` was inspected for identity only. Its context-aware
-  implementation and tests were not transplanted, so no candidate behavior is
-  reported as current-base behavior.
+- The candidate `0cd0b9c` and correction `7d1ca1c` were inspected exactly. Their
+  test cancels while `consolidatedWriterGate` is occupied, before SQLite; no
+  candidate behavior is reported as current-base behavior.
 
 ## Source and command receipts
 
