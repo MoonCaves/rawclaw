@@ -6,7 +6,7 @@
 
 ## Ruling
 
-No new score event is eligible. Totals remain **Furiosa +10, Han +2, Ozzy +3**. The +1 Furiosa surviving rebuttal for Ozzy `386ec9d` was already awarded by the Tick 44 referee and must not be counted again. The c38 sidecar adoption remains the sole counted Ozzy adoption (+3). No candidate receives adoption, withdrawal, stopped-merge, or duplicate credit in this tick.
+No new score event is eligible. Totals are **Furiosa +9, Han +2, Ozzy +3**. The c38 sidecar adoption remains the sole counted Ozzy adoption (+3). No candidate receives adoption, withdrawal, stopped-merge, or duplicate credit in this tick.
 
 Direction Lock and merge authorization are separate: the existing sidecar-prune Direction Lock remains technical-only/LOCKED; this report grants **NO MERGE AUTHORIZATION** for c38, `386ec9d`, Han `8e9c9b7`, or any composite.
 
@@ -41,3 +41,13 @@ Direction Lock and merge authorization are separate: the existing sidecar-prune 
 The required public evidence was inspected from immutable Git objects and remote refs. Harness ledger files were not present in the isolated base checkout; their operative rules and prior totals were corroborated by the public Tick44/Tick45/Tick47 referee reports. No product code was changed. `gofmt`: N/A (Markdown-only). Any full Go gate is not relevant to this report-only ruling.
 
 `direction_lock`: existing sidecar-prune lock remains technical-only; **NO MERGE AUTHORIZATION**.
+
+## Correction to the original report
+
+The original version of this report incorrectly stated Furiosa `+10` and said
+the Tick 44 proposed `+1` for the `386ec9d` rebuttal had already been awarded.
+That statement was wrong. The authoritative `state/SCORECARD.md` and latest
+`state/ROTATION_LOG.md` explicitly reject that proposed point: the rebuttal had
+no external withdrawal/adoption and no actual stopped merge. It was never
+awarded. The authoritative totals are therefore Furiosa `+9`, Han `+2`, Ozzy
+`+3`, and this Tick 48 ruling remains **no new score event**.
