@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/gofrs/flock"
 )
 
 func writeCloseoutConfig(t *testing.T, argv []string) {
@@ -332,6 +334,73 @@ func TestCloseoutToken_IndependentProcessesSingleWinner(t *testing.T) {
 	}
 	if winners != 1 {
 		t.Fatalf("independent stale takeover winners = %d, want exactly one", winners)
+	}
+}
+
+func TestRunCloseout_UnrelatedSessionIgnoresGlobalGuard(t *testing.T) {
+	if os.Getenv("RAWCLAW_CLOSEOUT_HELPER") == "hold-guard" {
+		dir := filepath.Join(os.Getenv("HOME"), ".cache", "session-search", "ingest-spawns")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		guard := flock.New(filepath.Join(dir, "closeout.lock"))
+		if err := guard.Lock(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		defer guard.Unlock()
+		fmt.Fprintln(os.Stdout, "ready")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		return
+	}
+
+	oldSpawn := spawnCloseout
+	t.Cleanup(func() { spawnCloseout = oldSpawn })
+	t.Setenv("HOME", t.TempDir())
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("no true available")
+	}
+	writeCloseoutConfig(t, []string{truePath})
+
+	child := exec.Command(os.Args[0], "-test.run=^TestRunCloseout_UnrelatedSessionIgnoresGlobalGuard$")
+	child.Env = append(os.Environ(), "RAWCLAW_CLOSEOUT_HELPER=hold-guard", "HOME="+os.Getenv("HOME"))
+	childOut, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	childIn, err := child.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := bufio.NewReader(childOut).ReadString('\n')
+	if err != nil || strings.TrimSpace(ready) != "ready" {
+		t.Fatalf("guard helper handshake = %q, %v", ready, err)
+	}
+
+	var launches []string
+	var token string
+	spawnCloseout = func(sessionID, launchToken string) error {
+		launches = append(launches, sessionID)
+		token = launchToken
+		return nil
+	}
+	sid := "78787878-9090-abab-cdcd-efefefefefef"
+	var out bytes.Buffer
+	if err := runCloseout(&out, sid); err != nil {
+		t.Fatalf("runCloseout: %v", err)
+	}
+	if len(launches) != 1 || launches[0] != sid {
+		t.Fatalf("launches = %v, want unrelated session to launch", launches)
+	}
+	releaseCloseoutToken(sid, token)
+	_ = childIn.Close()
+	if err := child.Wait(); err != nil {
+		t.Fatalf("guard helper: %v", err)
 	}
 }
 
