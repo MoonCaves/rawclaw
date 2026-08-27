@@ -316,8 +316,8 @@ func TestIncrementalIngest_FallbackOnHeadRewrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Rewrite line 1 in place and append line 3 (file is larger, but head is modified)
-	msg1Rewritten := `{"type":"user","message":{"role":"user","content":"REWRITTEN line 1"},"uuid":"u-1","timestamp":"2026-08-20T10:00:00Z"}`
+	// Rewrite line 1 in place with the same length and append line 3.
+	msg1Rewritten := `{"type":"user","message":{"role":"user","content":"Updated line 1"},"uuid":"u-1","timestamp":"2026-08-20T10:00:00Z"}`
 	msg3 := `{"type":"user","message":{"role":"user","content":"Appended line 3"},"uuid":"u-3","timestamp":"2026-08-20T10:00:10Z"}`
 
 	time.Sleep(10 * time.Millisecond)
@@ -338,8 +338,8 @@ func TestIncrementalIngest_FallbackOnHeadRewrite(t *testing.T) {
 	}
 	defer con.Close()
 
-	if got := scalar(t, con, "SELECT content FROM messages WHERE session_id='session-rewrite' AND uuid='u-1'"); got != "REWRITTEN line 1" {
-		t.Errorf("content = %q, want 'REWRITTEN line 1'", got)
+	if got := scalar(t, con, "SELECT content FROM messages WHERE session_id='session-rewrite' AND uuid='u-1'"); got != "Updated line 1" {
+		t.Errorf("content = %q, want 'Updated line 1'", got)
 	}
 }
 
