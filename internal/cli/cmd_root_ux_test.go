@@ -351,21 +351,28 @@ func TestBrowseSourceScopesAcrossProjects(t *testing.T) {
 	}
 }
 
-// TestSourceThisProjectRefusedLoudly: --source cannot narrow --this-project's
-// single transcript dir (no runtime axis there), and both search and browse
-// used to drop the flag silently in that combo — browse's header even named
-// the source it was ignoring. The combo must error until the composable
-// filter exists, never answer a different question.
-func TestSourceThisProjectRefusedLoudly(t *testing.T) {
+// TestSourceThisProjectComposes: --source filters the already-resolved
+// --this-project scope for both browse and search. List and resume retain their
+// usage-error refusal because those shapes have no runtime axis to narrow.
+func TestSourceThisProjectComposes(t *testing.T) {
 	root := newCfgRoot(t)
 	writeIndexedSession(t, root, "-home-u-proj-a", "aaaa1111-0000-0000-0000-000000000001",
 		"2026-06-01T10:00:00Z", "question about apples")
 
+	tdir := filepath.Join(root, "-home-u-proj-a")
 	for _, args := range [][]string{
-		{"--this-project", "--source", "codex"},           // browse shape
-		{"--this-project", "--source", "codex", "apples"}, // search shape
-		{"--source", "codex", "--list"},                   // list has no runtime axis
-		{"--source", "codex", "--resume", "aaaa1111"},     // resume's id fixes the runtime
+		{"--this-project", "--source", "claude"},
+		{"--this-project", "--source", "claude", "apples"},
+	} {
+		out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", append(args, "--dir", tdir)...)
+		if err != nil || !strings.Contains(out, "aaaa1111") {
+			t.Errorf("args %v: want scoped Claude answer, got err=%v out:\n%s", args, err, out)
+		}
+	}
+
+	for _, args := range [][]string{
+		{"--source", "codex", "--list"},               // list has no runtime axis
+		{"--source", "codex", "--resume", "aaaa1111"}, // resume's id fixes the runtime
 	} {
 		out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", args...)
 		if err == nil || !strings.Contains(err.Error(), "--source") {

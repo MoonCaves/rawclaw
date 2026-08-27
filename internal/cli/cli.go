@@ -757,17 +757,12 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	if err := validateChoice("source", o.Source, registeredSourceIDs()...); err != nil {
 		return err
 	}
-	// --source narrows the runtime axis, so it only composes with shapes that
-	// HAVE one. --this-project resolves the cwd to ONE transcript dir with no
-	// runtime axis; --list enumerates Claude project dirs only; --resume
-	// resolves a session id whose runtime is already fixed. Each used to drop
-	// the flag silently (browse even printed the source it was ignoring).
-	// Until the composable filter exists, refuse loudly — exit 2, the
-	// usage-error convention — rather than answer a different question.
+	// --list enumerates Claude project dirs only; --resume resolves a session id
+	// whose runtime is already fixed. Both refuse --source because there is no
+	// runtime axis to narrow. --this-project resolves one project first, and
+	// browse/search apply --source as a runtime filter within that scope.
 	if o.Source != "" {
 		switch {
-		case o.ThisProject:
-			return ExitError{Code: 2, Msg: fmt.Sprintf("--source does not compose with --this-project yet; scope by path instead: --source %s --include-path <dir-regex>", o.Source)}
 		case o.List:
 			return ExitError{Code: 2, Msg: "--source does not apply to --list (it enumerates Claude project dirs); drop --source"}
 		case o.Resume != "":
