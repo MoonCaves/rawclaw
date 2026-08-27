@@ -1,1 +1,7 @@
 Issue #41 is caused by removing refresh-cache eviction while retaining refresh DBs for the prewarm/closeout cache. Eviction must therefore not run from PrepareFreshContainer, whose contract is to preserve fresh entries, and must allow sessions to outlive the old 24-hour window. The smallest shared fix is a 30-day inactivity TTL at RefreshDBPath, which is used whenever a refresh cache entry is acquired; protect the acquired path during that pass and remove SQLite sidecars with the database so reused/active entries survive while abandoned entries are eventually reclaimed.
+
+# Findings — issue 55
+
+- **Transplant disposition: SPLICED_FILES.** `internal/paths/paths.go:106-113` already validates a catalog session key with a clean round-trip, flat basename, local path, and rejection of `.`. The shell templates need the equivalent POSIX `case` guard before any catalog path construction.
+- Both `rawclawPrimeScript` and `rawclawCodexPrimeScript` duplicate the same catalog-claim flow. The smallest fix is to splice the same guard into each template, immediately after extracting `session_id`; invalid values become empty and take the existing no-session path, so neither claim paths nor detached ingest are attempted.
+- Regression coverage belongs beside `TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath` and should exercise both templates with slash/traversal IDs, asserting no detached ingest and no catalog filesystem activity.

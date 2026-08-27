@@ -232,6 +232,63 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 	}
 }
 
+func TestPrimeScripts_CatalogClaimRejectsUnsafeSessionID(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+
+	templates := []struct {
+		name string
+		tmpl string
+		json bool
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
+	}
+	for _, tc := range templates {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.json {
+				if _, err := exec.LookPath("python3"); err != nil {
+					t.Skip("python3 unavailable")
+				}
+			}
+			stubDir := t.TempDir()
+			logPath := filepath.Join(t.TempDir(), "rawclaw.log")
+			rawclawPath := stubRawclaw(t, stubDir)
+			if err := os.WriteFile(rawclawPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			catalogDir := filepath.Join(t.TempDir(), "catalog")
+			scriptPath := filepath.Join(t.TempDir(), "prime.sh")
+			if err := os.WriteFile(scriptPath, []byte("trap 'wait' 0\n"+renderHookScript(tc.tmpl, "''")), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, sessionID := range []string{"contains/slash", ".."} {
+				t.Run(sessionID, func(t *testing.T) {
+					cmd := exec.Command(sh, scriptPath)
+					cmd.Env = append(os.Environ(),
+						"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+						"RAWCLAW_CATALOG_DIR="+catalogDir,
+						"RAWCLAW_TEST_LOG="+logPath,
+					)
+					cmd.Stdin = strings.NewReader("{\"session_id\":\"" + sessionID + "\"}")
+					if out, err := cmd.Output(); err != nil {
+						t.Fatalf("hook rejected unsafe session ID: %v; output=%q", err, out)
+					}
+					if calls := readDetachedIngestCalls(t, logPath); len(calls) != 0 {
+						t.Fatalf("detached rawclaw calls for unsafe session ID = %q, want none", calls)
+					}
+					if _, err := os.Stat(catalogDir); !os.IsNotExist(err) {
+						t.Fatalf("catalog directory state for unsafe session ID = %v, want absent", err)
+					}
+				})
+			}
+		})
+	}
+}
+
 func readDetachedIngestCalls(t *testing.T, logPath string) []string {
 	t.Helper()
 	data, err := os.ReadFile(logPath)

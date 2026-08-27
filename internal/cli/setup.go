@@ -47,6 +47,11 @@ set -eu
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+# Catalog keys must be non-empty, flat, and local (the shell equivalent of
+# WriteCatalogEntry's filepath.Clean/Base/IsLocal validation).
+case "$session_id" in
+	""|.|..|*/*) session_id="" ;;
+esac
 
 if [ "$hook_event_name" = "Stop" ]; then
 	if [ -n "$session_id" ]; then
@@ -148,6 +153,11 @@ set -eu
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+# Catalog keys must be non-empty, flat, and local (the shell equivalent of
+# WriteCatalogEntry's filepath.Clean/Base/IsLocal validation).
+case "$session_id" in
+	""|.|..|*/*) session_id="" ;;
+esac
 
 if [ "$hook_event_name" = "Stop" ]; then
 	if [ -n "$session_id" ]; then
