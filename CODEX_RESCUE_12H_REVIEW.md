@@ -24,7 +24,7 @@ Audit capture boundary: **2026-08-26 16:15:26 UTC through 2026-08-27 04:15:26 UT
 | Production ship bundles at boundary | **2**, PR #35 and PR #40 | OBSERVED FACT |
 | Production PRs opened in-window | **1**, PR #40. PR #35 predated the window; #37 and #38 were older production PRs closed during it. | OBSERVED FACT |
 | Production PRs merged in-window | **0** | OBSERVED FACT |
-| GitHub issues changed in-window | **#19, #21, and #22 closed; #39 opened.** #21 was manually closed with no linked closing PR at 11:42:25 WITA, 4m34s before PR #40 opened. | OBSERVED FACT |
+| GitHub issues changed in-window | **#19, #21, and #22 closed as stale bookkeeping for fixes verified on existing `main`; #39 opened and remained open.** | OBSERVED FACT |
 | PR #35 wait | CI green by about **06:15 WITA**; still open at 12:15:26, approximately **6h00m** | OBSERVED FACT |
 | PR #40 assembly delay | composite source complete about **06:28 WITA**; PR opened 11:46:59, approximately **5h18m40s** | OBSERVED FACT |
 | Registered worktrees at boundary snapshot | **431** | OBSERVED FACT |
@@ -112,13 +112,13 @@ The actionable backlog at the boundary was not “57 things ready to merge.” T
 
 **OPINION —** Mail should be an eight-line decision record, not a report transport. Put evidence in the branch report and send only candidate, head, invariant, result, requested decision, and deadline.
 
-### 8. Issue closure got ahead of shipped reality
+### 8. Immutable evidence kept receiving new provenance and score work
 
-**OBSERVED FACT —** Issues #19, #21, and #22 were closed during the window and issue #39 was opened. Issue #21 was manually closed at 11:42:25 WITA with no linked closing PR, 4m34s before PR #40 opened and while zero production commits had merged during the window.
+**OBSERVED FACT —** At least 12 commit subjects explicitly re-opened duplicate, ancestry, containment, current-base, or prior-art regrade questions. `ROTATION_LOG.md` reached 999 lines.
 
-**INFERENCE —** The issue tracker represented candidate confidence as completion before the code was on `main`, making operational status look healthier than shipping status.
+**INFERENCE —** Provenance and score maintenance continued after it could no longer change the candidate or decision.
 
-**OPINION —** Close a product issue only when the fix is on `main`, or label it explicitly `resolved-on-branch` with the ship PR named. Branch completion is not release completion.
+**OPINION —** A verified stable patch ID, ancestry result, or reproduced mutation is immutable for that exact head. Re-open only on a new commit that touches the relevant files or a concrete contradictory reproduction.
 
 ### 9. Too many critiques ended as reports instead of PATCH, REJECT, or SHIP
 
