@@ -11,10 +11,11 @@ func configureCloseoutProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-func terminateCloseoutProcess(cmd *exec.Cmd) {
+func terminateCloseoutProcess(cmd *exec.Cmd) error {
 	if cmd.Process != nil {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
+	return nil
 }
 
 func closeoutProcessAlive(pid int) bool {

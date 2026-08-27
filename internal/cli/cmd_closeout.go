@@ -15,7 +15,8 @@ import (
 )
 
 const (
-	closeoutMaxPasses = 256
+	closeoutMaxPasses   = 256
+	closeoutSelfTimeout = 2 * time.Minute
 )
 
 var closeoutTaggerTimeout = 60 * time.Second
@@ -216,9 +217,20 @@ func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, er
 			return nil, fmt.Errorf("tagger exited unsuccessfully: %w", err)
 		}
 	case <-timer.C:
-		terminateCloseoutProcess(cmd)
-		<-done
+		killErr := terminateCloseoutProcess(cmd)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			copyCloseoutStderr(stderrFile, stderr)
+			if killErr == nil {
+				killErr = fmt.Errorf("process did not exit after termination")
+			}
+			return nil, fmt.Errorf("tagger timed out after %s; process cleanup: %w", closeoutTaggerTimeout, killErr)
+		}
 		copyCloseoutStderr(stderrFile, stderr)
+		if killErr != nil {
+			return nil, fmt.Errorf("tagger timed out after %s; process cleanup: %w", closeoutTaggerTimeout, killErr)
+		}
 		return nil, fmt.Errorf("tagger timed out after %s", closeoutTaggerTimeout)
 	}
 	if err := stdoutFile.Close(); err != nil {
@@ -256,7 +268,7 @@ func runCloseoutSelfCommand(name, sessionID string, input []byte, stderr io.Writ
 	if err != nil {
 		return nil, fmt.Errorf("resolve rawclaw executable: %w", err)
 	}
-	args := []string{"--timeout", "0", name, sessionID}
+	args := []string{"--timeout", closeoutSelfTimeout.String(), name, sessionID}
 	cmd := exec.Command(exe, args...)
 	cmd.Stdin = bytes.NewReader(input)
 	var stdout bytes.Buffer

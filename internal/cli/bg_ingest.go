@@ -132,20 +132,13 @@ func setCloseoutTokenOwner(sessionID string, pid int) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".closeout-lease-*")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(b); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	defer func() { _ = f.Close() }()
+	_, err = f.Write(b)
+	return err
 }
 
 func waitForCloseoutTokenOwner(sessionID string) bool {
@@ -154,7 +147,7 @@ func waitForCloseoutTokenOwner(sessionID string) bool {
 	for time.Now().Before(deadline) {
 		b, err := os.ReadFile(path)
 		if os.IsNotExist(err) {
-			return true
+			return false
 		}
 		var lease closeoutLease
 		if err == nil && json.Unmarshal(b, &lease) == nil && lease.PID == os.Getpid() {
