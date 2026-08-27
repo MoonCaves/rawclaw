@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_msg_session_uuid ON messages(session_id, uuid);
 CREATE TABLE IF NOT EXISTS file_index (path TEXT PRIMARY KEY, mtime REAL, size INTEGER, fp TEXT, session_id TEXT);
+CREATE INDEX IF NOT EXISTS idx_file_index_session ON file_index(session_id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 `
 
