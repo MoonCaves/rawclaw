@@ -41,8 +41,7 @@ const rawclawSessionCatalogHead = `if [ -n "$catalog_session_id" ]; then
 			printf '  "cwd": "%s",\n' "$esc_cwd"
 `
 
-const rawclawSessionCatalogTail = `
-			printf '}\n'
+const rawclawSessionCatalogTail = `			printf '}\n'
 		} > "$tmp_entry" 2>/dev/null || true
 		if ln "$tmp_entry" "$catalog_dir" 2>/dev/null; then
 			claimed=1

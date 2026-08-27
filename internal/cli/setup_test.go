@@ -9,6 +9,29 @@ import (
 	"testing"
 )
 
+func TestPrimeScripts_CatalogCompositionPreservesBytes(t *testing.T) {
+	want := "\t\t\tprintf '  \"cwd\": \"%s\",\\n' \"$esc_cwd\"\n"
+	for _, tc := range []struct {
+		name   string
+		tmpl   string
+		source string
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript, source: "claude"},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, source: "codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := renderHookScript(tc.tmpl, "''")
+			fragment := want + "\t\t\tprintf '  \"source\": \"" + tc.source + "\"\\n'\n\t\t\tprintf '}\\n'"
+			if !strings.Contains(script, fragment) {
+				t.Fatalf("catalog composition changed: missing exact fragment %q", fragment)
+			}
+			if strings.Contains(script, "\n\n\t\t\tprintf '}") {
+				t.Fatal("catalog composition contains an extra blank line")
+			}
+		})
+	}
+}
+
 // TestReadJSONFileToleratesLineCommentsAndTrailingCommas: settings files in
 // the wild carry JSONC-isms — a `//` line comment outside any string, plus
 // trailing commas before both a `]` and a `}`, must parse — and a `//`-looking
