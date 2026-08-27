@@ -50,3 +50,16 @@ CGO_ENABLED=0 go test -race -count=1 ./internal/index -run 'Test(EvictStaleRefre
 CGO_ENABLED=0 go test -race -count=1 ./internal/index
 git diff --check
 ```
+
+Graphify corroboration (canonical project `/Users/jay-m4/code/rawclaw`):
+
+- MCP `get_pr_impact(pr_number=43, repo="MoonCaves/rawclaw", project_path="/Users/jay-m4/code/rawclaw")` returned CI `SUCCESS`, base `main`, 37 nodes across 4 communities, and exactly `internal/index/containers.go` plus `internal/index/containers_test.go`.
+- MCP `query_graph(question="cache sqlite close remove lock busy stale database file evict", project_path="/Users/jay-m4/code/rawclaw", depth=2, token_budget=2500)` connected `CacheDir()` and `.Close()` context; source corroboration found `evictStaleRefreshDB` in `internal/index/containers.go`.
+
+## Verdict
+
+PR #43 as submitted: **REJECT / HOLD**. The patch is unsafe on failed probes and
+has a close-to-unlink TOCTOU. The worker patch at the final pushed HEAD fixes
+both within the original file fence. Merge remains subject to the owning
+package race gate being rerun without the unrelated consolidated-store
+holders.
