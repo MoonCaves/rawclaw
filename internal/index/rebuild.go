@@ -10,6 +10,7 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
+	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -203,7 +204,7 @@ func RebuildFromTranscripts(dbp string) (RebuildStats, error) {
 
 type restoreSessionParams struct {
 	session durable.Session
-	rows    []reindexRow
+	rows    []model.Message
 	started float64
 	last    float64
 	fileCWD string
@@ -241,7 +242,7 @@ func restoreSession(con *sql.DB, params restoreSessionParams) error {
 	for _, r := range rows {
 		if _, err := tx.Exec(
 			"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
-			v.ID, r.role, r.content, r.ts, r.tsISO, r.uuid,
+			v.ID, r.Role, r.Text, r.TS, r.TSISO, r.UUID,
 		); err != nil {
 			return fmt.Errorf("restore messages for %s: %w", v.ID, err)
 		}

@@ -82,9 +82,9 @@ func TestRestoreSession_RollbackOnFailure(t *testing.T) {
 		},
 	}
 
-	rows := []reindexRow{
-		{role: "user", content: "replacement message 1", ts: 3.0, tsISO: "2026-08-15T00:00:02Z", uuid: "u-new-1"},
-		{role: "fail", content: "replacement message 2", ts: 4.0, tsISO: "2026-08-15T00:00:03Z", uuid: "u-new-2"},
+	rows := []model.Message{
+		{Role: "user", Text: "replacement message 1", TS: 3.0, TSISO: "2026-08-15T00:00:02Z", UUID: "u-new-1"},
+		{Role: "fail", Text: "replacement message 2", TS: 4.0, TSISO: "2026-08-15T00:00:03Z", UUID: "u-new-2"},
 	}
 
 	err := restoreSession(con, restoreSessionParams{

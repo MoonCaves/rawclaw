@@ -4,6 +4,7 @@
 package index
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/lifecycle"
+	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/provenance"
@@ -568,15 +570,6 @@ func tableColumns(con *sql.DB, table string) (map[string]struct{}, error) {
 // generalized container path injects its source id alongside its MessagesFunc.
 const sourceClaude = "claude"
 
-// reindexRow is one parsed message ready for insertion.
-type reindexRow struct {
-	role    string
-	content string
-	ts      float64
-	tsISO   string
-	uuid    string
-}
-
 // originOr resolves the origin_machine to stamp: an explicit origin (a
 // replicated tree owned by another machine) wins; "" means this machine.
 func originOr(origin string) string {
@@ -629,7 +622,7 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scop
 	for _, r := range rows {
 		if _, err := tx.Exec(
 			"INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES(?,?,?,?,?,?)",
-			sid, r.role, r.content, r.ts, r.tsISO, r.uuid,
+			sid, r.Role, r.Text, r.TS, r.TSISO, r.UUID,
 		); err != nil {
 			return fmt.Errorf("session %s insert message: %w", sid, err)
 		}
@@ -749,7 +742,7 @@ func applyRetentionToVault(res retention.Result, now float64, origin string) {
 // land with a NULL scope. It is the session's own recorded value, never a
 // decode of the enclosing directory name — that decode is lossy for any path
 // segment containing "-" or ".".
-func parseTranscript(path, sid string) (rows []reindexRow, started, last float64, cwd string, ok bool) {
+func parseTranscript(path, sid string) (rows []model.Message, started, last float64, cwd string, ok bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, 0, 0, "", false
@@ -757,13 +750,13 @@ func parseTranscript(path, sid string) (rows []reindexRow, started, last float64
 	// []byte is already lossless and json.Unmarshal tolerates invalid UTF-8 in
 	// strings, so no transform is needed.
 	var startedSet, lastSet bool
-	for _, line := range splitLines(data) {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	for _, line := range bytes.Split(data, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
 			continue
 		}
 		var o map[string]any
-		if err := json.Unmarshal([]byte(line), &o); err != nil {
+		if err := json.Unmarshal(line, &o); err != nil {
 			continue // skip malformed / incomplete trailing line
 		}
 		if cwd == "" {
@@ -778,7 +771,7 @@ func parseTranscript(path, sid string) (rows []reindexRow, started, last float64
 		}
 		iso, _ := o["timestamp"].(string)
 		ts := parse.ISOToEpoch(iso)
-		rows = append(rows, reindexRow{role: parse.MsgRole(o), content: text, ts: ts, tsISO: iso, uuid: parse.MsgUUID(o)})
+		rows = append(rows, model.Message{Role: parse.MsgRole(o), Text: text, TS: ts, TSISO: iso, UUID: parse.MsgUUID(o)})
 		if ts != 0 {
 			if !startedSet || ts < started {
 				started, startedSet = ts, true
