@@ -80,4 +80,4 @@ consolidation lifecycle; only the rename block is dead duplication.
 Ruling: delete the rename block only. Do not reuse `store.Schema`, add a broad
 schema helper, or move the migration into `store`.
 
-Expected production diff: -9 lines (including the comment and error path).
+Expected production diff: -12 lines (including the comment and error path).
