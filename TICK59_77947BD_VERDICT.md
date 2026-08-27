@@ -1,6 +1,6 @@
 # T59 verdict: `77947bd`
 
-Date: 2026-08-27 WITA  
+Date: 2026-08-27 WITA
 Verifier: Clarice Starling, Luna Medium
 
 This is an independent evidence adjudication only. It grants no merge, score,
@@ -19,13 +19,20 @@ or release authorization.
 | Sarah report identity | **ACCEPT** | `d81b6deb427d6a0f78a8b7130967702093898eb0:TICK56_77947BD_HOSTILE_VERIFY.md` hashes to the supplied `726e44be0f2e96e9840fc6919f3ccc0c4cf6683dad59865ebf6692f03bbe4265`. Its product/test conclusions agree with the fresh gates above. |
 | Supplied restored full-race output identity | **HOLD** | The supplied hash `991fa9766d3640fb68fb7c6da27092b6433be1a66a915d41a8eb1803afec6730` was not independently reproduced. The fresh broad candidate run exceeded this session's 30-second command window before producing a receipt; Sarah's separately recorded `internal/index/...` race result is corroborating evidence, not this exact hash. |
 | Current `origin/main` relevance | **ACCEPT** | Live `origin/main` is `9fd82d3bf6ba0ce1027cdf84cec51efe3ba87b5c`. Candidate-to-main merge-base is `c818ea1212bb1f1110cefa65472f658b844840ef`; the candidate is not the current main tip and must be judged as a branch delta, not as already integrated main. |
+| Current-main integration of `48661f4..77947bd` | **REJECT** | On a clean detached worktree at `origin/main` `9fd82d3`, `git apply --check` of the combined production/test delta exited 1 at `internal/index/consolidated.go:874`. The production delta is `20/20`; the test delta is `54/0`. The test-only patch applies cleanly, so the reported test-hunk failure at `consolidated_test.go:559` is rebutted; the smallest demonstrated rework boundary is the production hunk conflict. |
 | Lint version claim | **ACCEPT** | Requested golangci-lint `2.13.1` was not available. Observed `/Users/jay-m4/go/bin/golangci-lint` is `2.12.2`; therefore a 2.13.1 lint result remains unavailable/UNCERTAIN. |
 | Worker checkout and upstream state | **ACCEPT** | Before this report, worker checkout was clean at selected base with no configured upstream branch. The report is the only intended product artifact. A push of this worker branch and final `0/0` state are required below. |
+
+## Current-main integration receipt
+
+Command: `git diff 48661f403f880e2c1dac7615f39bbb8264eeafe7 77947bd -- internal/index/consolidated.go internal/index/consolidated_test.go | git apply --check` against clean `origin/main` `9fd82d3`.
+
+Result: **REJECT**, exit `1`; `error: patch failed: internal/index/consolidated.go:874`. A separate test-only `git apply --check` exited `0`.
 
 ## Scope boundary
 
 The candidate's semantic contract is accepted: it deletes orphan topic and
 verdict sidecars even when source tables are absent, while retaining sidecars
 for a co-contributor. Historical byte-level mutant receipts that could not be
-reproduced are explicitly held rather than inferred. No merge authorization is
-given.
+reproduced are explicitly held rather than inferred. Current-main integration
+is rejected pending a production-hunk rework. No merge authorization is given.
