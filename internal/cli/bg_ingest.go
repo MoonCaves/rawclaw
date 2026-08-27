@@ -70,9 +70,8 @@ func acquireCloseoutToken(sessionID string) (string, bool) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", false
 	}
-	guard := flock.New(filepath.Join(dir, "closeout.lock"))
-	locked, err := guard.TryLock()
-	if err != nil || !locked {
+	guard := flock.New(closeoutGuardPath(dir, sessionID))
+	if err := guard.Lock(); err != nil {
 		return "", false
 	}
 	defer guard.Unlock()
@@ -106,9 +105,8 @@ func acquireCloseoutToken(sessionID string) (string, bool) {
 
 func releaseCloseoutToken(sessionID, token string) {
 	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
-	guard := flock.New(filepath.Join(dir, "closeout.lock"))
-	locked, err := guard.TryLock()
-	if err != nil || !locked {
+	guard := flock.New(closeoutGuardPath(dir, sessionID))
+	if err := guard.Lock(); err != nil {
 		return
 	}
 	defer guard.Unlock()
@@ -131,6 +129,10 @@ func closeoutTokenPath(dir, sessionID string) string {
 		return '_'
 	}, sessionID)
 	return filepath.Join(dir, "closeout-"+safeID+".lock")
+}
+
+func closeoutGuardPath(dir, sessionID string) string {
+	return closeoutTokenPath(dir, sessionID) + ".guard"
 }
 
 func reclaimCloseoutToken(path string) bool {
@@ -163,9 +165,8 @@ func setCloseoutTokenOwner(sessionID, token string, pid int) error {
 		return fmt.Errorf("invalid closeout owner")
 	}
 	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
-	guard := flock.New(filepath.Join(dir, "closeout.lock"))
-	locked, err := guard.TryLock()
-	if err != nil || !locked {
+	guard := flock.New(closeoutGuardPath(dir, sessionID))
+	if err := guard.Lock(); err != nil {
 		return fmt.Errorf("closeout ownership guard busy")
 	}
 	defer guard.Unlock()

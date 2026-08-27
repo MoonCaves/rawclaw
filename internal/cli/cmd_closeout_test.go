@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/gofrs/flock"
 )
 
 func writeCloseoutConfig(t *testing.T, argv []string) {
@@ -333,6 +334,26 @@ func TestCloseoutToken_IndependentProcessesSingleWinner(t *testing.T) {
 	if winners != 1 {
 		t.Fatalf("independent stale takeover winners = %d, want exactly one", winners)
 	}
+}
+
+func TestCloseoutToken_UnrelatedSessionsDoNotShareGuard(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first := "78787878-9090-abab-cdcd-efefefefefef"
+	second := "89898989-0101-bcbc-dede-f0f0f0f0f0f0"
+	guard := flock.New(closeoutGuardPath(dir, first))
+	if err := guard.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	defer guard.Unlock()
+	token, ok := acquireCloseoutToken(second)
+	if !ok {
+		t.Fatal("unrelated session was blocked by another session guard")
+	}
+	releaseCloseoutToken(second, token)
 }
 
 func TestRunCloseout_IndependentOwnerChildBlocksRetry(t *testing.T) {
