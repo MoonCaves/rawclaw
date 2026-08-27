@@ -163,9 +163,7 @@ func IsBusy(err error) bool {
 }
 
 func backingFilePath(p string) string {
-	if idx := strings.IndexByte(p, '#'); idx >= 0 {
-		return p[:idx]
-	}
+	p, _, _ = strings.Cut(p, "#")
 	return p
 }
 
