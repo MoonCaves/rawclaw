@@ -559,6 +559,60 @@ func TestConsolidate_DeletesSidecarsWhenSourceRemovesWholeSession(t *testing.T) 
 	}
 }
 
+func TestConsolidate_PrunesSidecarsWithoutSourceTablesAndPreservesCoContributor(t *testing.T) {
+	isolateCache(t)
+	shared := sessionRow{id: "shared-sidecar", project: "shared", cwd: "/shared", msgs: []msgRow{{"shared-u1", "user", "shared", 100}}}
+	orphan := sessionRow{id: "orphan-sidecar", project: "orphan", cwd: "/orphan", msgs: []msgRow{{"orphan-u1", "user", "orphan", 100}}}
+	a := seedSessionDB(t, "sidecar-a.db", shared, orphan)
+	b := seedSessionDB(t, "sidecar-b.db", shared)
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+
+	con, err := store.ConnectRW(ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range [][2]string{{"shared-sidecar", "shared-u1"}, {"orphan-sidecar", "orphan-u1"}} {
+		if _, err := con.Exec("INSERT INTO topic_segment(session_id, start_uuid, topic, summary) VALUES (?, ?, 'topic', 'summary')", row[0], row[1]); err != nil {
+			con.Close()
+			t.Fatalf("seed topic sidecar: %v", err)
+		}
+		if _, err := con.Exec("INSERT INTO session_verdict(session_id, verdict, source) VALUES (?, 'routine', 'floor')", row[0]); err != nil {
+			con.Close()
+			t.Fatalf("seed verdict sidecar: %v", err)
+		}
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	con, err = store.ConnectRW(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("DELETE FROM sessions WHERE id IN (?, ?)", shared.id, orphan.id); err != nil {
+		con.Close()
+		t.Fatalf("remove source sessions: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConsolidateFrom([]string{a, b}, false); err != nil {
+		t.Fatalf("second consolidate: %v", err)
+	}
+
+	con = openConsolidated(t)
+	for _, table := range []string{"topic_segment", "session_verdict"} {
+		if got := scalar(t, con, "SELECT COUNT(*) FROM "+table+" WHERE session_id=?", orphan.id); got != "0" {
+			t.Errorf("%s orphan rows = %s, want 0", table, got)
+		}
+		if got := scalar(t, con, "SELECT COUNT(*) FROM "+table+" WHERE session_id=?", shared.id); got != "1" {
+			t.Errorf("%s co-contributor rows = %s, want 1", table, got)
+		}
+	}
+}
+
 func TestConsolidate_PreservesTopicsWhenCoContributorRemains(t *testing.T) {
 	isolateCache(t)
 	sid := "shared-topic-session"

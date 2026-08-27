@@ -36,7 +36,7 @@ Base under review: `48661f403f880e2c1dac7615f39bbb8264eeafe7`.
   graph-vocabulary queries plus `explain` and `path`, and record whether the
   result was useful, a dead end, or corrected.
 
-## Preliminary current-base finding
+## Confirmed current-base finding
 
 `internal/index/consolidated.go` only prunes stale topic rows inside
 `if hasTopics` and stale verdict rows inside `if hasVerdicts`. Therefore a
@@ -46,8 +46,23 @@ ownership rule is narrower: delete a sidecar only when its source contribution
 is absent and no other `session_sources` contributor remains; preserve the
 sidecar when a co-contributor remains.
 
-This is a hypothesis until the exact-one regression test is discovered and
-run against the current base. No test or production edit has been run yet.
+The exact-one preflight initially matched zero tests and was treated as a
+failure. After adding the bounded regression, it matched exactly one test.
+The pre-fix focused race gate failed with both orphan sidecars still present
+(one topic row and one verdict row); the co-contributor rows also remained.
+Moving only the two post-merge cleanup statements outside the source-table
+guards makes the same gate pass. The production change is the minimal
+`c38f79a` mechanism, with no new interface or ownership model.
+
+## Gate receipts
+
+- Pre-fix exact-one list: failed, zero matches; not accepted as green.
+- Pre-fix focused race test: failed as expected on the confirmed bug.
+- Post-fix exact-one list: exactly one match,
+  `TestConsolidate_PrunesSidecarsWithoutSourceTablesAndPreservesCoContributor`.
+- Post-fix focused gate: `CGO_ENABLED=0 go test -race -count=1 ./internal/index
+  -run '^TestConsolidate_PrunesSidecarsWithoutSourceTablesAndPreservesCoContributor$'`
+  passed.
 
 ## Review boundaries
 
