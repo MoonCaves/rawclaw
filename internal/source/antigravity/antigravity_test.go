@@ -312,6 +312,35 @@ func TestDiscoverSubagentInHistory(t *testing.T) {
 	}
 }
 
+func TestLookupRejectsChildNamedByParentInvoke(t *testing.T) {
+	t.Setenv("ANTIGRAVITY_HOME", t.TempDir())
+	root := os.Getenv("ANTIGRAVITY_HOME")
+	t.Setenv("HOME", root)
+	writeJSONL(t, filepath.Join(root, "history.jsonl"),
+		`{"conversationId":"parent","workspace":"/workspace/main"}`,
+		`{"conversationId":"child","workspace":"/workspace/main"}`,
+	)
+	writeJSONL(t, filepath.Join(root, "brain", "parent", ".system_generated", "logs", "transcript.jsonl"),
+		`{"type":"INVOKE_SUBAGENT","content":"Created subagent: {\"conversationId\": \"child\"}"}`,
+	)
+	writeJSONL(t, filepath.Join(root, "brain", "child", ".system_generated", "logs", "transcript.jsonl"),
+		`{"type":"USER_INPUT","content":"child work"}`,
+	)
+
+	if got, err := lookup("child"); err != nil {
+		t.Fatalf("lookup child: %v", err)
+	} else if len(got) != 0 {
+		t.Fatalf("lookup returned parent-invoked child: %+v", got)
+	}
+	got, err := lookup("parent")
+	if err != nil {
+		t.Fatalf("lookup parent: %v", err)
+	}
+	if len(got) != 1 || got[0].CWD != "/workspace/main" || got[0].ParentID != "" {
+		t.Fatalf("parent lookup metadata mismatch: %+v", got)
+	}
+}
+
 // TestScanSpawnedSubagentsLargeLine verifies Bug 2 fix: a transcript with a JSON line
 // larger than the default bufio.Scanner 64KB buffer limit (e.g. 80KB) is not dropped.
 func TestScanSpawnedSubagentsLargeLine(t *testing.T) {

@@ -49,7 +49,7 @@ func lookup(id string) ([]source.Container, error) {
 		return nil, nil
 	}
 	var out []source.Container
-	if e, err := paths.ReadCatalogEntry(filepath.Join(paths.CatalogDir(), id)); err == nil && e.SessionID == id && e.TranscriptPath != "" {
+	if e, err := paths.ReadCatalogEntry(filepath.Join(paths.CatalogDir(), id)); err == nil && e.Source == "claude" && e.SessionID == id && e.TranscriptPath != "" {
 		if fi, statErr := os.Stat(e.TranscriptPath); statErr == nil && fi.Mode().IsRegular() {
 			cwd := e.CWD
 			if cwd == "" {
