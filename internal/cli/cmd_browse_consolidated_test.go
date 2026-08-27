@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -13,6 +14,25 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
+
+// TestBrowseScopedNormalReadsConsolidatedBeforeDiscovery pins the dispatch
+// boundary: an already-indexed scoped browse is answered without entering the
+// discovery/indexing path (including containerScopes).
+func TestBrowseScopedNormalReadsConsolidatedBeforeDiscovery(t *testing.T) {
+	t.Setenv("RAWCLAW_BACKGROUND_INGEST", "off")
+	_, _ = seedBrowseCorpus(t)
+
+	var out bytes.Buffer
+	opts := Options{All: true, Source: "claude", Limit: 10}
+	if err := runBrowse(context.Background(), &out, &opts); err != nil {
+		t.Fatalf("runBrowse: %v", err)
+	}
+	for _, want := range []string{"aaaa1111", "bbbb2222", "cccc3333", "aaaa2222"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("consolidated scoped browse missing %s:\n%s", want, out.String())
+		}
+	}
+}
 
 // seedBrowseCorpus creates 3 projects with distinct sessions and ensures they are
 // indexed and consolidated into consolidated.db.

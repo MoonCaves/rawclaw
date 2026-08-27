@@ -1235,6 +1235,21 @@ func runStatsFleet(ctx context.Context, w io.Writer, o *Options) error {
 // the universe by runtime.
 func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 	if o.pathScoped() || o.Source != "" || (o.All && !o.ThisProject) {
+		if !o.Reindex {
+			var directScope []view.Scope
+			if o.ThisProject {
+				sc, _, ok := thisScope(w, o)
+				if !ok {
+					return nil
+				}
+				directScope = sc
+			} else if o.pathScoped() {
+				directScope = browsePathScopes(o)
+			}
+			if handled, err := runBrowseConsolidated(w, o, directScope); err != nil || handled {
+				return err
+			}
+		}
 		var universe []view.Scope
 		if o.ThisProject {
 			sc, _, ok := thisScope(w, o)
@@ -1303,6 +1318,65 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 		fmt.Fprintf(w, "\nnote: %s\n", staleNote)
 	}
 	return nil
+}
+
+// browsePathScopes supplies project labels for the consolidated path query
+// without opening or indexing any project database. A missing or non-local
+// scope deliberately returns no direct rows and lets runBrowse fall back to
+// the complete discovery path.
+func browsePathScopes(o *Options) []view.Scope {
+	pred := query.PathPredicate(o.IncludePath, o.ExcludePath)
+	var out []view.Scope
+	for _, td := range paths.AllProjectDirs() {
+		if pred(paths.ProjectCWD(td)) {
+			out = append(out, view.Scope{Project: paths.ProjectLabel(td), TDir: td, Source: "claude"})
+		}
+	}
+	return out
+}
+
+// runBrowseConsolidated answers a scoped browse directly from the consolidated
+// store. handled is false when the store is unavailable or has no matching
+// rows, preserving discovery for first-ever source/path requests.
+func runBrowseConsolidated(w io.Writer, o *Options, scope []view.Scope) (handled bool, err error) {
+	if o.pathScoped() && len(scope) == 0 {
+		return false, nil
+	}
+	con, _, err := index.OpenConsolidated()
+	if err != nil {
+		return false, nil
+	}
+	defer con.Close()
+
+	var freshness *index.IndexFreshness
+	if f, fErr := index.CheckIndexFreshness(con); fErr == nil {
+		freshness = &f
+	}
+	var projects []string
+	if o.pathScoped() || o.ThisProject {
+		seen := make(map[string]bool, len(scope))
+		for _, sc := range scope {
+			if !seen[sc.Project] {
+				seen[sc.Project] = true
+				projects = append(projects, sc.Project)
+			}
+		}
+	}
+	rows, err := view.BrowseScoped(con, o.Limit, o.Since, o.Before, o.Source, projects)
+	if err != nil || len(rows) == 0 {
+		return false, nil
+	}
+	var staleNote string
+	var indexStale bool
+	if freshness != nil && !freshness.Fresh {
+		if freshness.Reason == "no_ingest_watermark" {
+			staleNote = freshnessUnknownNote()
+		} else {
+			indexStale = true
+			staleNote = staleIngestNote()
+		}
+	}
+	return true, renderBrowseScoped(w, o, len(scope), rows, indexStale, staleNote)
 }
 
 // runBrowseScoped is the cross-project shape of the no-query browse: recent
@@ -1390,8 +1464,12 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 		}
 	}
 
+	return renderBrowseScoped(w, o, len(scope), rows, indexStale, staleNote)
+}
+
+func renderBrowseScoped(w io.Writer, o *Options, projects int, rows []view.BrowseAllRow, indexStale bool, staleNote string) error {
 	if o.JSON {
-		return EmitJSON(w, browseScopeJSON(o, len(scope), rows, indexStale, staleNote))
+		return EmitJSON(w, browseScopeJSON(o, projects, rows, indexStale, staleNote))
 	}
 	if o.oneline() {
 		for _, r := range rows {
