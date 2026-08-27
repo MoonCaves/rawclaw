@@ -5,7 +5,7 @@ Audit scope: every `.agent-mailbox` directory found under `/Users/jay-m4/code` a
 - Mailbox directories scanned: **192**
 - Message files parsed: **4761**
 - Evidenced identity records: **196**
-- Reference time for age: **2026-08-27T04:40:00Z**
+- Run completion/reference time for age: **2026-08-27T04:45:27Z**
 
 ## Field interpretation
 
