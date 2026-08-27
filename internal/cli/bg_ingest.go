@@ -137,7 +137,7 @@ func setCloseoutTokenOwner(sessionID string, pid int) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err := tmp.Write(b); err != nil {
 		_ = tmp.Close()
 		return err
