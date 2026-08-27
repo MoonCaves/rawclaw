@@ -558,3 +558,79 @@ func TestSetupCmd_UpgradesLegacyPrimeScript(t *testing.T) {
 		t.Errorf("upgraded script still has legacy /tmp/rawclaw-prime marker: %s", string(b2))
 	}
 }
+
+func TestPrimeScripts_InvalidSessionIDPreservesOutsideAndCatalogState(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("no python3 available")
+	}
+
+	for _, tc := range []struct {
+		name string
+		tmpl string
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			catalogDir := filepath.Join(root, "catalog")
+			if err := os.Mkdir(catalogDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(root, "outside")
+			outsideBefore := []byte("outside sentinel")
+			if err := os.WriteFile(outside, outsideBefore, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			state := filepath.Join(catalogDir, "catalog-state")
+			stateBefore := []byte("catalog state")
+			if err := os.WriteFile(state, stateBefore, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			stubDir := t.TempDir()
+			stubRawclaw(t, stubDir)
+			script := "trap 'wait' 0\n" + renderHookScript(tc.tmpl, "''")
+			scriptPath := filepath.Join(t.TempDir(), "prime.sh")
+			if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			cmd := exec.Command(sh, scriptPath)
+			cmd.Env = append(os.Environ(),
+				"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"RAWCLAW_CATALOG_DIR="+catalogDir,
+			)
+			cmd.Stdin = strings.NewReader(`{"session_id":"../../outside"}`)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("hook failed: %v; output=%q", err, out)
+			}
+
+			outsideAfter, err := os.ReadFile(outside)
+			if err != nil {
+				t.Fatalf("outside sentinel was removed: %v", err)
+			}
+			if string(outsideAfter) != string(outsideBefore) {
+				t.Fatalf("outside sentinel changed to %q", outsideAfter)
+			}
+			stateAfter, err := os.ReadFile(state)
+			if err != nil {
+				t.Fatalf("catalog state was removed: %v", err)
+			}
+			if string(stateAfter) != string(stateBefore) {
+				t.Fatalf("catalog state changed to %q", stateAfter)
+			}
+			entries, err := os.ReadDir(catalogDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 1 || entries[0].Name() != "catalog-state" {
+				t.Fatalf("catalog artifacts changed: %v", entries)
+			}
+		})
+	}
+}
