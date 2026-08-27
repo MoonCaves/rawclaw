@@ -73,9 +73,6 @@ func evictStaleRefreshDB(dbPath string) {
 	}
 	if _, err := db.Exec("BEGIN IMMEDIATE"); err != nil {
 		_ = db.Close()
-		if !isBusy(err) {
-			removeRefreshDBFiles(dbPath)
-		}
 		return
 	}
 	_, _ = db.Exec("ROLLBACK")
