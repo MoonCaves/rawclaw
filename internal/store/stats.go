@@ -58,26 +58,23 @@ func GetCorpusStats(dbp string) (CorpusStats, error) {
 	defer con.Close()
 
 	var cs CorpusStats
-	scan := func(q string, dest ...any) error {
-		return con.QueryRow(q).Scan(dest...)
-	}
-	if err := scan("SELECT COUNT(*) FROM sessions WHERE is_subagent=0", &cs.Sessions); err != nil {
+	if err := con.QueryRow(`
+		SELECT
+			COUNT(CASE WHEN is_subagent=0 THEN 1 END),
+			COUNT(CASE WHEN is_subagent=1 THEN 1 END)
+		FROM sessions`).Scan(&cs.Sessions, &cs.Subagents); err != nil {
 		return CorpusStats{}, nil // a query error -> zero stats
 	}
-	if err := scan("SELECT COUNT(*) FROM sessions WHERE is_subagent=1", &cs.Subagents); err != nil {
-		return CorpusStats{}, nil
-	}
-	if err := scan("SELECT COUNT(*) FROM messages", &cs.Messages); err != nil {
-		return CorpusStats{}, nil
-	}
-	if err := scan("SELECT COUNT(*) FROM messages WHERE role='user'", &cs.User); err != nil {
-		return CorpusStats{}, nil
-	}
-	if err := scan("SELECT COUNT(*) FROM messages WHERE role='assistant'", &cs.Assistant); err != nil {
-		return CorpusStats{}, nil
-	}
 	var first, last sql.NullString
-	if err := scan("SELECT MIN(ts_iso), MAX(ts_iso) FROM messages WHERE length(ts_iso)>0", &first, &last); err != nil {
+	if err := con.QueryRow(`
+		SELECT
+			COUNT(*),
+			COUNT(CASE WHEN role='user' THEN 1 END),
+			COUNT(CASE WHEN role='assistant' THEN 1 END),
+			MIN(CASE WHEN length(ts_iso)>0 THEN ts_iso END),
+			MAX(CASE WHEN length(ts_iso)>0 THEN ts_iso END)
+		FROM messages`).Scan(
+		&cs.Messages, &cs.User, &cs.Assistant, &first, &last); err != nil {
 		return CorpusStats{}, nil
 	}
 	cs.First = first10(first.String)
