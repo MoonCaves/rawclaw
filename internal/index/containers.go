@@ -352,25 +352,8 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		}
 
 		// Fast path: incremental tail ingest if file grew append-only.
-		if found && prev.size > 0 && size > prev.size {
-			headFP := checkPrefixFingerprint(rawPath, prev.size)
-			if headFP != "" && headFP == prev.fp {
-				tailMs, newOffset, ok := parseTailMessages(con, c, sourceID, rawPath, prev.size, size)
-				if ok {
-					if len(tailMs) == 0 && newOffset == prev.size {
-						continue // writer has only supplied an incomplete trailing record
-					}
-					newFP := checkPrefixFingerprint(rawPath, newOffset)
-					appendErr := appendContainer(con, c, tailMs, sourceID, origin, rp, prev.size, mtime, newOffset, newFP)
-					if errors.Is(appendErr, errAppendStale) {
-						continue // another scan committed this tail first
-					}
-					if appendErr == nil {
-						IncrementalIngestCount.Add(1)
-						continue
-					}
-				}
-			}
+		if found && appendTailIfPossible(con, c, sourceID, rawPath, rp, origin, prev, mtime, size) {
+			continue
 		}
 
 		ms, mErr := msgs(c)
