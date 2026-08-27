@@ -56,3 +56,28 @@ Estimated net reduction: 4 lines.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
+
+# Ponytail Finding #6 — ACCEPT (narrow)
+
+`migrateSessionSources` in `internal/index/consolidated.go` has a redundant
+`missing_since` -> `only_copy_since` rename. Every production caller runs
+`EnsureSchema` first (`ConsolidateFrom`, `SyncConsolidatedFrom`, and the
+write-through prepare path); `EnsureSchema` runs `migrateDurabilityColumns`,
+which renames both `sessions` and an existing `session_sources` table before
+`migrateSessionSources` is reached. The existing
+`TestMigrateDurabilityColumns_OnlyCopySinceRename` covers the legacy rename and
+its idempotence.
+
+The `session_sources` DDL is intentionally retained. `store.Schema` already
+contains the same table/index DDL, but executing the whole schema here would
+also run unrelated `sessions`, `messages`, `file_index`, `meta`, and index DDL.
+That is not a safe replacement for a targeted repair after the consolidated
+table was dropped, and can fail on a current-version marker paired with an
+older table shape (for example, the `messages(session_id, uuid)` index). The
+targeted `CREATE TABLE IF NOT EXISTS`/index is idempotent and preserves the
+consolidation lifecycle; only the rename block is dead duplication.
+
+Ruling: delete the rename block only. Do not reuse `store.Schema`, add a broad
+schema helper, or move the migration into `store`.
+
+Expected production diff: -9 lines (including the comment and error path).
