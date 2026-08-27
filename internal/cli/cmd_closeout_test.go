@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
 func writeCloseoutConfig(t *testing.T, argv []string) {
@@ -106,6 +109,71 @@ func TestRunCloseout_ConcurrentParentsLaunchOnce(t *testing.T) {
 	defer mu.Unlock()
 	if launches != 1 {
 		t.Fatalf("launches = %d, want exactly one", launches)
+	}
+}
+
+func TestCloseoutToken_FailsClosedWhenDirectoryCannotBeCreated(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home-file")
+	if err := os.WriteFile(home, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if _, ok := acquireCloseoutToken("failed-dir"); ok {
+		t.Fatal("closeout token acquisition succeeded without a token directory")
+	}
+	if acquireIngestSpawnToken("failed-dir", time.Now()) {
+		t.Fatal("ingest token acquisition succeeded without a token directory")
+	}
+}
+
+func TestRunCloseout_SpawnFailureReleasesToken(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeCloseoutConfig(t, []string{"/absolute/tagger"})
+	sid := "eeeeeeee-ffff-0000-1111-222222222222"
+	oldSpawn := spawnCloseout
+	spawnCloseout = func(string) error { return errors.New("startup failed") }
+	t.Cleanup(func() { spawnCloseout = oldSpawn; releaseCloseoutToken(sid) })
+	if err := runCloseout(new(bytes.Buffer), sid); err == nil {
+		t.Fatal("runCloseout unexpectedly succeeded")
+	}
+	if release, ok := acquireCloseoutToken(sid); !ok {
+		t.Fatal("token remained held after spawn failure")
+	} else {
+		release()
+	}
+}
+
+func TestCloseoutToken_ReclaimsDeadLeaseButNotLiveLease(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sid := "ffffffff-0000-1111-2222-333333333333"
+	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := closeoutTokenPath(dir, sid)
+	old := time.Now().Add(-2 * closeoutLeaseWindow)
+	writeLease := func(pid int) {
+		t.Helper()
+		data, err := json.Marshal(closeoutLease{PID: pid, CreatedAt: old.UnixNano()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLease(os.Getpid())
+	if _, ok := acquireCloseoutToken(sid); ok {
+		t.Fatal("reclaimed a live closeout lease")
+	}
+	writeLease(999999)
+	if release, ok := acquireCloseoutToken(sid); !ok {
+		t.Fatal("did not reclaim a dead closeout lease")
+	} else {
+		release()
 	}
 }
 

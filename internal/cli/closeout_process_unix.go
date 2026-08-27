@@ -16,3 +16,7 @@ func terminateCloseoutProcess(cmd *exec.Cmd) {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 }
+
+func closeoutProcessAlive(pid int) bool {
+	return syscall.Kill(pid, 0) == nil
+}
