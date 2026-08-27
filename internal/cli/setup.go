@@ -55,6 +55,13 @@ if [ "$hook_event_name" = "Stop" ]; then
 	exit 0
 fi
 
+# Match paths.WriteCatalogEntry: only non-empty, clean, flat, local keys may
+# enter catalog paths. Invalid IDs skip catalog claim and detached ingest, but
+# the hook still succeeds and prints its normal discovery output.
+case "$session_id" in
+	""|"."|".."|*/*) session_id="" ;;
+esac
+
 # Session catalog & once-per-session dedup: write a durable catalog entry under
 # the rawclaw data home at session birth, and exit if this session already ran.
 	if [ -n "$session_id" ]; then
@@ -155,6 +162,13 @@ if [ "$hook_event_name" = "Stop" ]; then
 	fi
 	exit 0
 fi
+
+# Match paths.WriteCatalogEntry: only non-empty, clean, flat, local keys may
+# enter catalog paths. Invalid IDs skip catalog claim and detached ingest, but
+# the hook still succeeds and emits its normal discovery output.
+case "$session_id" in
+	""|"."|".."|*/*) session_id="" ;;
+esac
 
 	if [ -n "$session_id" ]; then
 		catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"

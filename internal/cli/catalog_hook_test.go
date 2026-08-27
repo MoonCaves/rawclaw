@@ -232,6 +232,89 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 	}
 }
 
+// TestPrimeScripts_InvalidSessionIDSkipsCatalogClaim verifies that slash and
+// dot session IDs never reach catalog path construction. The safe degradation
+// is a successful hook with its normal discovery output and no catalog/ingest.
+func TestPrimeScripts_InvalidSessionIDSkipsCatalogClaim(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+
+	for _, tc := range []struct {
+		name string
+		tmpl string
+		json bool
+	}{
+		{name: "claude", tmpl: rawclawPrimeScript},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
+	} {
+		if tc.json {
+			if _, err := exec.LookPath("python3"); err != nil {
+				t.Logf("python3 unavailable; skipping %s", tc.name)
+				continue
+			}
+		}
+		for _, id := range []struct {
+			name  string
+			value string
+		}{
+			{name: "slash traversal", value: "../outside/pwned"},
+			{name: "dot", value: "."},
+			{name: "dotdot", value: ".."},
+		} {
+			t.Run(tc.name+"/"+id.name, func(t *testing.T) {
+				root := t.TempDir()
+				stubDir := filepath.Join(root, "bin")
+				if err := os.MkdirAll(stubDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				callLog := filepath.Join(root, "calls.log")
+				rawclawPath := stubRawclaw(t, stubDir)
+				if err := os.WriteFile(rawclawPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+
+				scriptPath := filepath.Join(root, "prime.sh")
+				script := "trap 'wait' 0\n" + renderHookScript(tc.tmpl, "''")
+				if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				catalogDir := filepath.Join(root, "catalog")
+				outsideDir := filepath.Join(root, "outside")
+				if err := os.Mkdir(outsideDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+
+				cmd := exec.Command(sh, scriptPath)
+				cmd.Env = append(os.Environ(),
+					"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+					"RAWCLAW_CATALOG_DIR="+catalogDir,
+					"RAWCLAW_TEST_LOG="+callLog,
+				)
+				cmd.Stdin = strings.NewReader(`{"session_id":"` + id.value + `"}`)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("invalid session ID hook failed: %v; output=%q", err, out)
+				}
+				if strings.TrimSpace(string(out)) == "" {
+					t.Fatal("invalid session ID hook produced no discovery output")
+				}
+
+				if calls := readDetachedIngestCalls(t, callLog); len(calls) != 0 {
+					t.Fatalf("invalid session ID launched rawclaw: %q", calls)
+				}
+				if _, err := os.Stat(catalogDir); !os.IsNotExist(err) {
+					t.Fatalf("invalid session ID created catalog directory: %v", err)
+				}
+				if _, err := os.Stat(filepath.Join(outsideDir, "pwned")); !os.IsNotExist(err) {
+					t.Fatalf("invalid session ID touched outside path: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func readDetachedIngestCalls(t *testing.T, logPath string) []string {
 	t.Helper()
 	data, err := os.ReadFile(logPath)
