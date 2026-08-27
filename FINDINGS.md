@@ -55,6 +55,21 @@ Estimated net reduction: 4 lines.
 - Finding 10 — ACCEPT: `internal/durable/durable.go:sanitize` can use `strings.Map` with the same portable-rune allowlist and `'-'` replacement; preserve dot-only prefixing and path containment.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
+# Issue #50 findings
+
+- `runResume` resolves Claude's durable catalog and then eagerly discovers
+  Codex, Antigravity, and Goose scopes even when a full session ID is already
+  known. The existing consolidated store has the bounded session row and
+  `SessionBackingFor` metadata needed to answer that case without discovery.
+- `paths.SessionHit` currently drops `CatalogEntry.Source`, and `runResume`
+  hardcodes every path hit as Claude. A catalog entry for Codex, Antigravity,
+  or Goose therefore emits the wrong resume command. Preserve the source on
+  the hit, defaulting legacy stem resolution to Claude.
+- Fast-store hits must only short-circuit for an exact full ID. Prefix lookups
+  still run the existing scope discovery so cross-runtime ambiguity remains
+  visible. Merge fast and fallback candidates by source plus full ID so the
+  same candidate is not reported twice while distinct IDs remain ambiguous.
+
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
 ## Ponytail finding #14 audit
 
