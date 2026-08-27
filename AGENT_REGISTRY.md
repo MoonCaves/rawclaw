@@ -1,6 +1,6 @@
 # Canonical RawClaw Agent Registry
 
-Source observation/snapshot cutoff: **2026-08-27T04:45:27Z UTC / 2026-08-27T12:45:27+0800 WITA**. Reconciliation completion: **2026-08-27T05:16:00Z UTC / 2026-08-27T13:16:00+0800 WITA**. This reconciliation is read-only with respect to accepted source checkouts. It contains **198 identity/session rows**: **196 exact mailbox identity records**, plus **2 live-only identities** added only from independent process and CWD evidence. It grants no score, merge, cleanup, or product authorization.
+Source observation/snapshot cutoff: **2026-08-27T04:45:27Z UTC / 2026-08-27T12:45:27+0800 WITA**. Document finalized at **2026-08-27T05:14:25Z UTC / 2026-08-27T13:14:25+0800 WITA**. This reconciliation is read-only with respect to accepted source checkouts. It contains **198 identity/session rows**: **196 exact mailbox identity records**, plus **2 live-only identities** added only from independent process and CWD evidence. It grants no score, merge, cleanup, or product authorization.
 
 ## Accepted inputs and integrity
 
