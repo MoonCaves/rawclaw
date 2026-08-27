@@ -43,6 +43,30 @@ func TestNewRootCmd(t *testing.T) {
 	}
 }
 
+// TestRootHelpDescribesRecencyBrowse keeps the no-query path discoverable:
+// bare browse returns recent sessions, newest first.
+func TestRootHelpDescribesRecencyBrowse(t *testing.T) {
+	t.Parallel()
+
+	cmd := NewRootCmd(BuildInfo{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("root help: %v", err)
+	}
+
+	for _, want := range []string{
+		"rawclaw [--this-project|--all] [--limit N]",
+		"recent sessions, newest first (no query)",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("root help missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 // TestPrintResults checks the human-readable per-project result rendering byte-for-byte.
 func TestPrintResults(t *testing.T) {
 	t.Parallel()
