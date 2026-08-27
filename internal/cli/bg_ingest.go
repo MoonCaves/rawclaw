@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,8 @@ const ingestLogMax = 512 * 1024
 // preventing process storms from concurrent reads on wholesale-stale stores.
 var ingestSpawnWindow = 1 * time.Minute
 
+const closeoutLeaseWindow = 1 * time.Minute
+
 // spawnIngest launches the detached ingest child — a seam so tests can
 // count or hook spawn decisions without forking processes.
 var spawnIngest = spawnIngestChild
@@ -30,7 +33,7 @@ var spawnIngest = spawnIngestChild
 func acquireIngestSpawnToken(sessionArg string, now time.Time) bool {
 	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return true // best effort; do not block ingest spawn on dir error
+		return false
 	}
 	markerName := "_global.token"
 	if sessionArg != "" {
@@ -48,7 +51,9 @@ func acquireIngestSpawnToken(sessionArg string, now time.Time) bool {
 			return false // throttled: spawn already triggered within ingestSpawnWindow
 		}
 	}
-	_ = os.WriteFile(markerPath, []byte(now.UTC().Format(time.RFC3339)), 0o644)
+	if err := os.WriteFile(markerPath, []byte(now.UTC().Format(time.RFC3339)), 0o644); err != nil {
+		return false
+	}
 	return true
 }
 
@@ -58,15 +63,29 @@ func acquireIngestSpawnToken(sessionArg string, now time.Time) bool {
 func acquireCloseoutToken(sessionID string) (func(), bool) {
 	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return func() {}, true
+		return func() {}, false
 	}
 	path := closeoutTokenPath(dir, sessionID)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
+			if !reclaimCloseoutToken(path) {
+				return func() {}, false
+			}
+			f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+			if err != nil {
+				return func() {}, false
+			}
+		} else {
 			return func() {}, false
 		}
-		return func() {}, true
+	}
+	lease := closeoutLease{PID: os.Getpid(), CreatedAt: time.Now().UnixNano()}
+	b, _ := json.Marshal(lease)
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return func() {}, false
 	}
 	_ = f.Close()
 	return func() { _ = os.Remove(path) }, true
@@ -84,6 +103,66 @@ func closeoutTokenPath(dir, sessionID string) string {
 		return '_'
 	}, sessionID)
 	return filepath.Join(dir, "closeout-"+safeID+".lock")
+}
+
+type closeoutLease struct {
+	PID       int   `json:"pid"`
+	CreatedAt int64 `json:"created_at"`
+}
+
+func reclaimCloseoutToken(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || time.Since(st.ModTime()) < closeoutLeaseWindow {
+		return false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var lease closeoutLease
+	if json.Unmarshal(b, &lease) != nil || lease.PID <= 0 || closeoutProcessAlive(lease.PID) {
+		return false
+	}
+	return os.Remove(path) == nil
+}
+
+func setCloseoutTokenOwner(sessionID string, pid int) error {
+	path := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
+	b, err := json.Marshal(closeoutLease{PID: pid, CreatedAt: time.Now().UnixNano()})
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".closeout-lease-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+func waitForCloseoutTokenOwner(sessionID string) bool {
+	path := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			return true
+		}
+		var lease closeoutLease
+		if err == nil && json.Unmarshal(b, &lease) == nil && lease.PID == os.Getpid() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
 // maybeSpawnIngest fires a detached self-invocation of `rawclaw ingest [session]`

@@ -102,6 +102,11 @@ func spawnCloseoutChild(sessionID string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start closeout worker: %w", err)
 	}
+	if err := setCloseoutTokenOwner(sessionID, cmd.Process.Pid); err != nil {
+		terminateCloseoutProcess(cmd)
+		_ = cmd.Wait()
+		return fmt.Errorf("record closeout worker: %w", err)
+	}
 	go func() { _ = cmd.Wait() }()
 	return nil
 }
@@ -137,6 +142,9 @@ func loadCloseoutTaggerConfig() (closeoutTaggerConfig, bool, error) {
 }
 
 func runCloseoutChild(w io.Writer, sessionID string) error {
+	if !waitForCloseoutTokenOwner(sessionID) {
+		return closeoutFailure(w, fmt.Errorf("closeout worker ownership handshake timed out"))
+	}
 	defer releaseCloseoutToken(sessionID)
 	cfg, exists, err := loadCloseoutTaggerConfig()
 	if err != nil {
@@ -178,9 +186,22 @@ func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, er
 	cmd := exec.Command(argv[0], argv[1:]...)
 	configureCloseoutProcess(cmd)
 	cmd.Stdin = bytes.NewReader(prep)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = stderr
+	stdoutFile, err := os.CreateTemp("", "rawclaw-closeout-stdout-*")
+	if err != nil {
+		return nil, fmt.Errorf("create tagger stdout capture: %w", err)
+	}
+	stdoutPath := stdoutFile.Name()
+	defer os.Remove(stdoutPath)
+	defer stdoutFile.Close()
+	stderrFile, err := os.CreateTemp("", "rawclaw-closeout-stderr-*")
+	if err != nil {
+		return nil, fmt.Errorf("create tagger stderr capture: %w", err)
+	}
+	stderrPath := stderrFile.Name()
+	defer os.Remove(stderrPath)
+	defer stderrFile.Close()
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start tagger: %w", err)
 	}
@@ -191,14 +212,24 @@ func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, er
 	select {
 	case err := <-done:
 		if err != nil {
+			copyCloseoutStderr(stderrFile, stderr)
 			return nil, fmt.Errorf("tagger exited unsuccessfully: %w", err)
 		}
 	case <-timer.C:
 		terminateCloseoutProcess(cmd)
 		<-done
+		copyCloseoutStderr(stderrFile, stderr)
 		return nil, fmt.Errorf("tagger timed out after %s", closeoutTaggerTimeout)
 	}
-	trimmed := bytes.TrimSpace(stdout.Bytes())
+	if err := stdoutFile.Close(); err != nil {
+		return nil, fmt.Errorf("close tagger stdout capture: %w", err)
+	}
+	copyCloseoutStderr(stderrFile, stderr)
+	stdout, err := os.ReadFile(stdoutPath)
+	if err != nil {
+		return nil, fmt.Errorf("read tagger output: %w", err)
+	}
+	trimmed := bytes.TrimSpace(stdout)
 	if len(trimmed) == 0 {
 		return nil, fmt.Errorf("tagger returned empty output")
 	}
@@ -210,6 +241,14 @@ func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, er
 		return nil, fmt.Errorf("tagger returned an empty segment array")
 	}
 	return stdout.Bytes(), nil
+}
+
+func copyCloseoutStderr(file *os.File, dst io.Writer) {
+	if dst == nil {
+		return
+	}
+	_, _ = file.Seek(0, io.SeekStart)
+	_, _ = io.Copy(dst, file)
 }
 
 func runCloseoutSelfCommand(name, sessionID string, input []byte, stderr io.Writer) ([]byte, error) {
