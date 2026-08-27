@@ -1420,6 +1420,9 @@ func browseNoScopeMatch(w io.Writer, o *Options, universe int) error {
 	}
 	fmt.Fprintf(w, "No project matches %s (0 of %d searchable). Try --list to see their working dirs.\n",
 		pathScopePhrase(o), universe)
+	if o.IncludePath != "" && agentproto.LooksLikeSessionID(o.IncludePath) {
+		fmt.Fprintf(w, "Hint: --include-path filters project paths, not session IDs. Did you mean `rawclaw read %s` or `rawclaw outline %s`?\n", o.IncludePath, o.IncludePath)
+	}
 	return nil
 }
 

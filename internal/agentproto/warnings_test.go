@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func TestBuildWarningsIncludePathSessionHint(t *testing.T) {
+	warnings := buildWarnings(warningInputs{
+		pathNoMatch: true,
+		includePath: "a1b2c3d4-0000-0000-0000-000000000001",
+	})
+	if len(warnings) == 0 || warnings[0].Code != WarnIncludePathNoMatch {
+		t.Fatalf("warnings = %+v, want include-path session hint first", warnings)
+	}
+	if !strings.Contains(warnings[0].Message, "filters paths, not session IDs") ||
+		!strings.Contains(warnings[0].Message, "rawclaw read a1b2c3d4-0000-0000-0000-000000000001") {
+		t.Fatalf("warning = %q, want path/session guidance", warnings[0].Message)
+	}
+}
+
+func TestLooksLikeSessionID(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"a1b2c3d4", true},
+		{"a1b2c3d4-0000-0000-0000-000000000001", true},
+		{"project-a1b2c3d4", false},
+		{"short-1", false},
+	} {
+		if got := LooksLikeSessionID(tc.value); got != tc.want {
+			t.Errorf("LooksLikeSessionID(%q) = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
 // codes lists the warning codes in a built slice, in order — the shape most of
 // these assertions are about.
 func codes(ws []Warning) []string {
