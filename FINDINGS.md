@@ -49,3 +49,15 @@ in `internal/cli/cmd_ingest.go:backingPath` and
 unrelated cleanup.
 
 Estimated net reduction: 4 lines.
+
+# Ponytail ruling: store messages lane
+
+## Finding #16 — ACCEPT
+
+`internal/store/messages.go:MessagesForProjects` rebuilds the same positional
+placeholder list already provided by `internal/store/fts.go:placeholders`.
+Reuse that existing helper, preserving project argument order and query
+behavior; add no new helper or test unless existing coverage fails to pin the
+empty and multiple-project cases.
+
+Estimated net reduction: 5 lines.
