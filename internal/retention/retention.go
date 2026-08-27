@@ -90,8 +90,9 @@ func ReconcileRetention(con *sql.DB, onDisk, tombstoned map[string]struct{}, now
 	mid := provenance.MachineID()
 	for _, r := range all {
 		_, present := onDisk[r.path]
+		_, deleted := tombstoned[r.sessionID]
 		own := !r.origin.Valid || r.origin.String == mid
-		switch DecideRetention(present, isMember(tombstoned, r.sessionID), own, r.onlyCopy.Valid, mirror, replica) {
+		switch DecideRetention(present, deleted, own, r.onlyCopy.Valid, mirror, replica) {
 		case ActClear: // reappeared — un-flag
 			if _, err := con.Exec("UPDATE sessions SET only_copy_since=NULL WHERE id=?", r.sessionID); err != nil {
 				return res, fmt.Errorf("clear only_copy_since: %w", err)
@@ -181,12 +182,4 @@ func pruneSession(con *sql.DB, sessionID, path string) error {
 // silently turn deletion on.
 func RetentionMirror() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("RAWCLAW_RETENTION")), "mirror")
-}
-
-// isMember reports whether id is in set (comma-ok membership; a nil set is
-// simply empty and never panics on read). Duplicated from index rather than
-// imported: index imports this package, so the reverse would cycle.
-func isMember(set map[string]struct{}, id string) bool {
-	_, ok := set[id]
-	return ok
 }
