@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"database/sql"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -524,10 +526,8 @@ func writeTaggableSession(t *testing.T, root, project, id string, uuids ...strin
 	return dir
 }
 
-// TestRunTagWriteFoldsIntoTheOneStore locks the write-through: a topic tagged
-// today must be visible to the readers that query the consolidated store, not
-// only to the project db it was written into. Without the fold, `topics` would
-// keep missing every tag until the next full consolidate run.
+// TestRunTagWriteFoldsIntoTheOneStore verifies immediate authoritative state and
+// eventual detached visibility in the consolidated store.
 func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 	root := newCfgRoot(t)
 	sid := "9f3e1c20-aaaa-bbbb-cccc-0000000abcd1"
@@ -535,26 +535,47 @@ func TestRunTagWriteFoldsIntoTheOneStore(t *testing.T) {
 		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
 
 	scope := []view.Scope{{Project: "proj-tag", TDir: dir}}
+	publishDone := make(chan error, 1)
+	oldPublish := spawnTagPublish
+	spawnTagPublish = func(dbp, sid string) error {
+		go func() { publishDone <- runTagPublishChild(context.Background(), io.Discard, dbp, sid) }()
+		return nil
+	}
+	t.Cleanup(func() { spawnTagPublish = oldPublish })
 	jsonIn := `[{"start_uuid":"11111111","topic":"watermark","summary":"how the watermark is advanced"}]`
 	var out strings.Builder
 	if err := runTagWriteCmd(&out, strings.NewReader(jsonIn), sid[:8], scope, nil, false, "", false); err != nil {
 		t.Fatalf("runTagWriteCmd: %v\nout: %s", err, out.String())
 	}
+	if !strings.Contains(out.String(), "publication queued") {
+		t.Fatalf("output = %q, want eventual publication receipt", out.String())
+	}
+	auth, err := store.ConnectRO(index.RefreshDBPath("claude", sid, filepath.Join(dir, sid+".jsonl")))
+	if err != nil {
+		t.Fatalf("open authoritative store: %v", err)
+	}
+	segs, err := store.TopicsForSession(auth, sid)
+	_ = auth.Close()
+	if err != nil || len(segs) != 1 || segs[0].Topic != "watermark" {
+		t.Fatalf("authoritative topics = %#v, err=%v", segs, err)
+	}
 
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("tag publication: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("consolidated publisher did not finish")
+	}
 	con, err := store.ConnectRO(index.ConsolidatedPath())
 	if err != nil {
 		t.Fatalf("open consolidated store: %v", err)
 	}
 	defer con.Close()
 	hits, err := store.MatchTopics(con, "watermark", 8, nil)
-	if err != nil {
-		t.Fatalf("MatchTopics on the consolidated store: %v", err)
-	}
-	if len(hits) != 1 || hits[0].Topic != "watermark" {
-		t.Fatalf("consolidated store topic hits = %+v, want the freshly written watermark tag", hits)
-	}
-	if hits[0].Project != "proj-tag" {
-		t.Errorf("hit project = %q, want proj-tag", hits[0].Project)
+	if err != nil || len(hits) != 1 || hits[0].Project != "proj-tag" {
+		t.Fatalf("consolidated store topic hits = %+v, err=%v", hits, err)
 	}
 }
 
@@ -568,6 +589,13 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 		"11111111-aaaa-bbbb-cccc-000000000001", "22222222-aaaa-bbbb-cccc-000000000002")
 
 	scope := []view.Scope{{Project: "proj-routine", TDir: dir}}
+	publishDone := make(chan error, 1)
+	oldPublish := spawnTagPublish
+	spawnTagPublish = func(dbp, sid string) error {
+		go func() { publishDone <- runTagPublishChild(context.Background(), io.Discard, dbp, sid) }()
+		return nil
+	}
+	t.Cleanup(func() { spawnTagPublish = oldPublish })
 	var out strings.Builder
 	if err := runTagWriteCmd(&out, strings.NewReader(""), sid[:8], scope, nil, true, store.VerdictSourceAgent, false); err != nil {
 		t.Fatalf("runTagWriteCmd --routine: %v\nout: %s", err, out.String())
@@ -576,21 +604,37 @@ func TestRunTagWriteRoutine_MarksRoutineAndFolds(t *testing.T) {
 		t.Errorf("output missing expected confirmation: %q", out.String())
 	}
 
-	// Verify in the consolidated store
-	con, err := store.ConnectRO(index.ConsolidatedPath())
+	// The authoritative refresh DB is synchronous; consolidated visibility is
+	// eventual because publication is detached.
+	auth, err := store.ConnectRO(index.RefreshDBPath("claude", sid, filepath.Join(dir, sid+".jsonl")))
 	if err != nil {
-		t.Fatalf("open consolidated store: %v", err)
+		t.Fatalf("open authoritative store: %v", err)
 	}
-	defer con.Close()
-
-	v, ok, err := store.VerdictFor(con, sid)
+	v, ok, err := store.VerdictFor(auth, sid)
+	_ = auth.Close()
 	if err != nil || !ok {
 		t.Fatalf("VerdictFor(%s) = (%+v, %v, %v), want ok=true", sid, v, ok, err)
 	}
 	if v.Verdict != store.VerdictRoutine || v.Source != store.VerdictSourceAgent {
 		t.Errorf("verdict = %+v, want verdict=routine, source=agent", v)
 	}
+	if !strings.Contains(out.String(), "publication queued") {
+		t.Fatalf("output = %q, want eventual publication receipt", out.String())
+	}
 
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("routine publication: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("consolidated routine publisher did not finish")
+	}
+	con, err := store.ConnectRO(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatalf("open consolidated store: %v", err)
+	}
+	defer con.Close()
 	eff, err := store.IsEffectivelyRoutine(con, sid)
 	if err != nil || !eff {
 		t.Errorf("IsEffectivelyRoutine = %v, %v, want true, nil", eff, err)

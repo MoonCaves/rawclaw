@@ -1198,6 +1198,13 @@ func EnsureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions
 	return nSessions, status, err
 }
 
+// EnsureIndexedTreeSource refreshes one private source index without folding
+// it into consolidated.db. Callers that will author against the source use
+// this to make a TDir probe current without taking the consolidated fence.
+func EnsureIndexedTreeSource(dbp, tdir string) (nSessions int, status IndexStatus, err error) {
+	return ensureIndexedTree(dbp, tdir, false, "")
+}
+
 func ensureIndexedTree(dbp, tdir string, reindex bool, origin string) (nSessions int, status IndexStatus, err error) {
 	if reindex {
 		if _, statErr := os.Stat(dbp); statErr == nil {
