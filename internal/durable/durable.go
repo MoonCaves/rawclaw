@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -197,10 +198,8 @@ func render(m Meta, msgs []model.Message) ([]byte, error) {
 // recordType maps a message role onto an indexable record type, falling back to
 // "system" for roles the indexer does not recognize (see render).
 func recordType(role string) string {
-	for _, t := range parse.IndexableTypes {
-		if role == t {
-			return role
-		}
+	if slices.Contains(parse.IndexableTypes, role) {
+		return role
 	}
 	return "system"
 }
@@ -310,18 +309,16 @@ func relFor(id string) (string, error) {
 // portable set folds to "-", and a segment that is only dots is prefixed, since
 // "." and ".." would address the vault's own directories instead of a file.
 func sanitize(s string) string {
-	var b strings.Builder
-	for _, r := range s {
+	out := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
+			return r
 		case r == '.' || r == '_' || r == '-':
-			b.WriteRune(r)
+			return r
 		default:
-			b.WriteByte('-')
+			return '-'
 		}
-	}
-	out := b.String()
+	}, s)
 	if strings.Trim(out, ".") == "" {
 		return "_" + out
 	}
