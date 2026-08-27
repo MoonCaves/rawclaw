@@ -56,3 +56,29 @@ Estimated net reduction: 4 lines.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
+
+# Ponytail audit: `internal/durable/durable.go`
+
+Base audited: `ae8703bf5e0c4864d1af92ec6fb3e2d5eec8ed88`.
+
+## Candidate 1: `sanitize` → `strings.Map`
+
+**REJECT — superseded.** `sanitize` already uses `strings.Map` at
+`internal/durable/durable.go:311-323`. Commit `8a3184179b484e02c0e1ceaa986d9d2c9f885764`
+introduced the change, removing the manual `strings.Builder` loop by 2 net
+production lines. The current implementation preserves the existing rune
+mapping and dot-only prefix rule; applying the candidate again would produce
+no diff.
+
+## Candidate 2: `recordType` → `slices.Contains`
+
+**REJECT — superseded.** `recordType` already uses `slices.Contains` at
+`internal/durable/durable.go:200-205`. Commit `f4ffabc2bf6b8af966122e73c3a926b0e6224a96`
+introduced the change, removing the manual membership loop by 1 net
+production line (with the already-present `slices` import). The fallback to
+`"system"` and the recognized-role return are unchanged; applying the
+candidate again would produce no diff.
+
+## Verdict
+
+No implementation change is warranted. Net production lines: **0**.
