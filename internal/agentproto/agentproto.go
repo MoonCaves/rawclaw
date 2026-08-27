@@ -156,6 +156,9 @@ const (
 	// WarnRawHistory: the standing reminder that these are raw transcripts, not
 	// current truth. No facts — it is a property of the corpus, not of this query.
 	WarnRawHistory = "raw_history"
+	// WarnIncludePathNoMatch says that a path filter matched no project and may
+	// have been given a session id instead of a working-directory fragment.
+	WarnIncludePathNoMatch = "include_path_no_match"
 )
 
 // Warning is one advisory carried as data rather than prose (the "warnings are
@@ -535,13 +538,14 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	}
 
 	var (
-		cands      []retrieve.Anchor
-		reports    []ScopeReport
-		hitCeiling bool
-		vecCov     VectorCoverage
-		answered   bool
-		storeName  = StoreConsolidated
-		storeNote  string
+		cands       []retrieve.Anchor
+		reports     []ScopeReport
+		hitCeiling  bool
+		vecCov      VectorCoverage
+		answered    bool
+		storeName   = StoreConsolidated
+		storeNote   string
+		pathNoMatch bool
 	)
 
 	if scope == nil {
@@ -554,24 +558,15 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			scope = fallbackScope(opts)
 		}
 		if len(scope) == 0 {
-			return SearchEnvelope{
-				Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true,
-				Store: storeName, StoreNote: storeNote,
-				VectorCoverage: VectorCoverage{Ran: qvecFn != nil},
-			}
-		}
-		// Apply the same scope filtering the human path does: a path predicate drops
-		// whole projects whose working dir doesn't match include / does match exclude,
-		// BEFORE indexing them. Role / date bounds / min-messages push into the SQL
-		// WHERE via SearchParams. None of these flag VALUES reach the FTS5 query (#1).
-		if opts.IncludePath != "" || opts.ExcludePath != "" {
+			pathNoMatch = opts.IncludePath != ""
+		} else if opts.IncludePath != "" || opts.ExcludePath != "" {
+			// Apply the same scope filtering the human path does: a path predicate drops
+			// whole projects whose working dir doesn't match include / does match exclude,
+			// BEFORE indexing them. Role / date bounds / min-messages push into the SQL
+			// WHERE via SearchParams. None of these flag VALUES reach the FTS5 query (#1).
 			scope = scopes.FilterByPath(scope, opts.IncludePath, opts.ExcludePath)
 			if len(scope) == 0 {
-				return SearchEnvelope{
-					Results: []SearchRef{}, Scopes: []ScopeReport{}, Complete: true,
-					Store: storeName, StoreNote: storeNote,
-					VectorCoverage: VectorCoverage{Ran: qvecFn != nil},
-				}
+				pathNoMatch = opts.IncludePath != ""
 			}
 		}
 		cands, reports, hitCeiling, vecCov = collectCandidates(scope, rawQuery, fetch, p, qvecFn)
@@ -674,6 +669,8 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 			droppedTurn:    droppedTurn,
 			storeNote:      storeNote,
 			vectorCoverage: vecCov,
+			pathNoMatch:    pathNoMatch,
+			includePath:    opts.IncludePath,
 		}),
 		ExcludedCurrentTurn: droppedTurn,
 		Store:               storeName,
@@ -694,6 +691,8 @@ type warningInputs struct {
 	droppedTurn    int
 	storeNote      string
 	vectorCoverage VectorCoverage
+	pathNoMatch    bool
+	includePath    string
 }
 
 // broadQueryMatches is the distinct-match count at which a query is called
@@ -714,6 +713,14 @@ const recencySkewGap = 24 * time.Hour
 // with clean hits carries no advisories at all, which is the point.
 func buildWarnings(in warningInputs) []Warning {
 	var out []Warning
+
+	if in.pathNoMatch && LooksLikeSessionID(in.includePath) {
+		out = append(out, Warning{
+			Code:    WarnIncludePathNoMatch,
+			Facts:   map[string]any{"include_path": in.includePath},
+			Message: fmt.Sprintf("--include-path matched no project working directory; it filters paths, not session IDs — did you mean `rawclaw outline %s` or `rawclaw --resume %s`?", in.includePath, in.includePath),
+		})
+	}
 
 	// Recency skew: in the default relevance order, a much newer match can sit
 	// below an older one. Say so and name the one flag that reorders, rather than
@@ -845,6 +852,25 @@ func buildWarnings(in warningInputs) []Warning {
 		out = append(out, Warning{Code: WarnRawHistory, Message: freshnessNote})
 	}
 	return out
+}
+
+// looksLikeSessionID recognizes the bare hexadecimal/hyphen form used by
+// transcript session IDs, without treating arbitrary path fragments as IDs.
+func LooksLikeSessionID(s string) bool {
+	if len(s) < 8 {
+		return false
+	}
+	hex := 0
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f', r >= 'A' && r <= 'F':
+			hex++
+		case r == '-':
+		default:
+			return false
+		}
+	}
+	return hex >= 8
 }
 
 // searchOneStore answers a search from the consolidated store: one database, one
