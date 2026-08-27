@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -277,6 +280,150 @@ func TestCloseoutTokenHeldUntilExplicitRelease(t *testing.T) {
 		t.Fatal("closeout token was not recoverable after release")
 	}
 	releaseCloseoutToken(sid, next)
+}
+
+func TestCloseoutToken_IndependentProcessesSingleWinner(t *testing.T) {
+	if os.Getenv("RAWCLAW_CLOSEOUT_HELPER") == "stale-taker" {
+		if _, ok := acquireCloseoutToken(os.Getenv("RAWCLAW_CLOSEOUT_SESSION")); ok {
+			fmt.Fprintln(os.Stdout, "acquired")
+		}
+		return
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("independent process lease race uses POSIX mtime controls")
+	}
+	t.Setenv("HOME", t.TempDir())
+	sid := "56565656-7878-9090-abab-cdcdcdcdcdcd"
+	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := closeoutTokenPath(dir, sid)
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "stale-token"), nil, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * closeoutTokenTTL)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	commands := make([]*exec.Cmd, 256)
+	outputs := make([]*bytes.Buffer, len(commands))
+	for i := range commands {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestCloseoutToken_IndependentProcessesSingleWinner$")
+		cmd.Env = append(os.Environ(), "HOME="+os.Getenv("HOME"), "RAWCLAW_CLOSEOUT_HELPER=stale-taker", "RAWCLAW_CLOSEOUT_SESSION="+sid)
+		outputs[i] = new(bytes.Buffer)
+		cmd.Stdout = outputs[i]
+		commands[i] = cmd
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	winners := 0
+	for i, cmd := range commands {
+		err := cmd.Wait()
+		if err == nil && strings.Contains(outputs[i].String(), "acquired") {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("independent stale takeover winners = %d, want exactly one", winners)
+	}
+}
+
+func TestRunCloseout_IndependentOwnerChildBlocksRetry(t *testing.T) {
+	if os.Getenv("RAWCLAW_CLOSEOUT_HELPER") == "live-owner" {
+		liveOwnerHelper()
+		return
+	}
+	if os.Getenv("RAWCLAW_CLOSEOUT_HELPER") == "retry-owner" {
+		t.Setenv("HOME", os.Getenv("RAWCLAW_CLOSEOUT_HOME"))
+		var out bytes.Buffer
+		if err := runCloseout(&out, os.Getenv("RAWCLAW_CLOSEOUT_SESSION")); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		fmt.Fprint(os.Stdout, out.String())
+		return
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("live detached child test uses a POSIX shell helper")
+	}
+	home := t.TempDir()
+	sid := "67676767-8989-0101-bcbc-dededededede"
+	launchLog := filepath.Join(home, "launches")
+	pidFile := filepath.Join(home, "child.pid")
+	childScript := filepath.Join(home, "child.sh")
+	script := fmt.Sprintf("#!/bin/sh\necho $$ > %s\necho launch >> %s\nsleep 30\n", strconv.Quote(pidFile), strconv.Quote(launchLog))
+	if err := os.WriteFile(childScript, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".cache", "session-search", "tagger-config.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config, err := json.Marshal(closeoutTaggerConfig{Argv: []string{childScript}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, config, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	owner := exec.Command(os.Args[0], "-test.run=^TestRunCloseout_IndependentOwnerChildBlocksRetry$")
+	owner.Env = append(os.Environ(), "HOME="+home, "RAWCLAW_CLOSEOUT_HELPER=live-owner", "RAWCLAW_CLOSEOUT_SESSION="+sid, "RAWCLAW_CLOSEOUT_CHILD_SCRIPT="+childScript)
+	if out, err := owner.CombinedOutput(); err != nil {
+		t.Fatalf("live owner = %v, output %q", err, out)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(pidFile); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(pidFile); err != nil {
+		t.Fatal("detached child did not start")
+	}
+	t.Cleanup(func() {
+		pidBytes, err := os.ReadFile(pidFile)
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+		if err == nil {
+			if process, err := os.FindProcess(pid); err == nil {
+				_ = process.Kill()
+			}
+		}
+	})
+
+	retry := exec.Command(os.Args[0], "-test.run=^TestRunCloseout_IndependentOwnerChildBlocksRetry$")
+	retry.Env = append(os.Environ(), "HOME="+home, "RAWCLAW_CLOSEOUT_HELPER=retry-owner", "RAWCLAW_CLOSEOUT_SESSION="+sid)
+	out, err := retry.CombinedOutput()
+	if err != nil {
+		t.Fatalf("retry = %v, output %q", err, out)
+	}
+	if !strings.Contains(string(out), "already queued") {
+		t.Fatalf("retry output = %q, want already queued while child is live", out)
+	}
+	if launches, _ := os.ReadFile(launchLog); strings.Count(string(launches), "launch\n") != 1 {
+		t.Fatalf("child launches = %q, want one", launches)
+	}
+}
+
+func liveOwnerHelper() {
+	oldSelfExe := selfExe
+	selfExe = func() (string, error) { return os.Getenv("RAWCLAW_CLOSEOUT_CHILD_SCRIPT"), nil }
+	defer func() { selfExe = oldSelfExe }()
+	if err := runCloseout(io.Discard, os.Getenv("RAWCLAW_CLOSEOUT_SESSION")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	os.Exit(0)
 }
 
 func TestRunCloseoutChild_ReleasesTokenAfterCompletionOrFailure(t *testing.T) {
