@@ -19,9 +19,9 @@ fence and `pruneTombstoned` is called by both consolidation paths.
 The supervisor confirms it processed the conforming Tick 40 final receipt at
 `20260827T020038Z`; this is the only watermark advance in this delta. No
 independently adopted product receipt after `20260827T013550Z` was reported.
-The visible Tick 40
+The watermark therefore advances even though score eligibility does not. The visible Tick 40
 Han/Ozzy reports are report-only evidence; their mailbox receipts are outside
-scope. Therefore the watermark does not advance.
+scope.
 
 ## Cumulative recommendation regrade
 
@@ -99,3 +99,10 @@ Exact source and report receipts remain those already recorded in
 Go `x/sync`/`ReportMetric`; Tailscale SQLite HEAD
 `15a02b90c60613ae3b6caa4a07c945cb3c874611`; and the Tick 40 Han/Ozzy report
 SHAs above. No product code or shared ledger was changed.
+
+## Correction note — 2026-08-27T02:03:20Z
+
+The original wording incorrectly paired `new_watermark: 20260827T020038Z`
+with “the watermark does not advance.” The processed conforming receipt and
+later completion make the advance valid; only adoption and score remain
+unchanged.
