@@ -56,3 +56,18 @@ Estimated net reduction: 4 lines.
 - Finding 18 — ACCEPT: `internal/durable/durable.go:recordType` can use `slices.Contains(parse.IndexableTypes, role)`; preserve the `"system"` fallback.
 
 Both changes are localized to `internal/durable/durable.go`; existing durable path, rendering, and rebuild-contract tests are the guard.
+# Ponytail findings: setup hook templates
+
+## Ruling
+
+`internal/cli/setup.go` contains two near-identical Claude/Codex SessionStart
+catalog lifecycle blocks and two copies of the same `rawclawBanner`. Replace
+the shared catalog lifecycle with one POSIX fragment carrying a source
+placeholder, and compose both templates from that fragment. Compose both
+banner outputs from the existing `rawclawBanner`; retain Claude's plain
+heredoc and Codex's Python JSON envelope. Do not alter Antigravity, binary
+resolution, validation, hard-link claim, fail-soft ingest, Stop prewarm, or
+any user-visible strings.
+
+Expected production result: approximately -70 lines in `setup.go`, zero new
+dependencies, and byte-equivalent generated hook behavior.
