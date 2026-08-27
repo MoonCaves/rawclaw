@@ -184,6 +184,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 			"  rawclaw \"natural query\"         ranked hits, each with a read-ref\n" +
 			"  rawclaw read <sess8>:<uuid8>    bounded excerpt around a ref (--more to widen)\n" +
 			"  rawclaw outline <sess8>         a session's goal -> resolution arc\n\n" +
+			"  rawclaw [--this-project|--all] [--limit N]  recent sessions, newest first (no query)\n\n" +
 			"Searches every project by default; --this-project (with --dir) or --include-path <regex> to scope. " +
 			"Add --json for structured output. A search that finds nothing prints a no-matches note and exits 0 — " +
 			"empty is a valid answer, not an error. Results are raw session history — verify against current state before acting.\n\n" +
