@@ -15,3 +15,7 @@ T32 Han, Ozzy, and runtime worktrees all equal ef2eebf414e7, clean, no upstream,
 Exact action: retain stopped completed-idle reports; mark T29 Go and T30 fast benchmark interrupted/no-report with zero process credit; replace both T32 claim-spy snapshots with fresh branches from current supervisor base and require unique process, commit, report hash, clean state, and upstream 0/0. Keep ticker/watchdog; no restart indicated.
 
 Next risk: false completion attribution. The scheduler will continue ticking, but T32 claim-spy evidence does not exist until fresh lanes are launched and literally verified.
+
+## Correction after evidence freeze
+
+The matrix above is frozen at 2026-08-27T00:32:15Z. It intentionally reports the state observed then and does not retroactively credit later work. After that freeze, root independently observed Ozzy claim-spy commit 03e57f4f68b98e1b721f92159924cfceaa3503ff clean/upstream 0/0, and Han claim-spy commit 28074db pending cutoff correction. These are post-freeze completions and must be evaluated in the next runtime/claim-spy accounting window, not treated as evidence that existed at the freeze.
