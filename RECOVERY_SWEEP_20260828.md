@@ -8,17 +8,18 @@ Status: HOLD / UNCERTAIN. This report is intentionally bounded and report-only.
 - CONFIRMED WITA: 2026-08-28T00:17:47+0800.
 - CONFIRMED public-main orientation SHA: `029f60d77e7e03192bc966de3a835a4a32a00fe2` (assignment base). Live `/Users/jay-m4/code/rawclaw` was on `integrate/tagwrite-closeout-wave1` at `0d1da19`, behind its upstream by 1, and dirty; therefore its checkout is not a public-main witness.
 - CONFIRMED Graphify MCP: 3,712 nodes, 10,487 edges, 280 communities; 4 open main-targeting PRs.
-- HOLD: mailbox handshake nonce was not received. Supervisor cursor must not be advanced by this worker.
+- CONFIRMED handshake: `NONCE_FURIOSA_RECOVERY_5c2e9a71` echoed to Furiosa; supervisor cursor untouched.
 
 ## Active writers
 
 | State | Evidence |
 |---|---|
-| ACTIVE_WRITER — CONFIRMED | `furiosa-t85-issue26-index-audit-luna`, Codex PID 89842, tmux pane live. Do not resume. Queue thread ID is not present in the captured pane listing; Furiosa must resolve it from her registry. |
-| ACTIVE_WRITER — CONFIRMED | `furiosa-t85-ozzy89c8-currentbase-luna`, Codex PID 89822, tmux pane live. Do not resume. Resolve thread ID from Furiosa registry. |
-| ACTIVE_WRITER — CONFIRMED | `furiosa-t85-pr40-hostile-smoke-luna`, Codex PID 89832, tmux pane live. Do not resume. Resolve thread ID from Furiosa registry. |
-| ACTIVE_WRITER — CONFIRMED | `furiosa-t85-pr43-toctou-luna`, Codex PID 89819, tmux pane live. Do not resume. Resolve thread ID from Furiosa registry. |
-| ACTIVE_WRITER — CONFIRMED | Rival `han-t87-prior-art`, Codex PID 64007, tmux pane live. Do not resume or alter. |
+| COMPLETE_PRESERVE — CONFIRMED | `furiosa-t85-issue26-index-audit-luna`, session `01a043eb-d39d-73d3-a10b-34311eb112a1`, original worktree `/Users/jay-m4/code/rawclaw-furiosa-t85-issue26-index-audit`, commit `7185745`; no live Codex process now; clean, upstream 0/0. |
+| COMPLETE_PRESERVE — CONFIRMED | `furiosa-t85-ozzy89c8-currentbase-luna`, session `01a043eb-d54e-72d3-a631-ac2bc6d6ab54`, original worktree `/Users/jay-m4/code/rawclaw-furiosa-t85-ozzy89c8-currentbase`, commit `bfac240`; no live Codex process now; clean, ahead 2 / behind 0. |
+| COMPLETE_PRESERVE — CONFIRMED | `furiosa-t85-pr40-hostile-smoke-luna`, session `01a043eb-d502-7d60-ba2b-cf2b91795a68`, original worktree `/Users/jay-m4/code/rawclaw-furiosa-t85-pr40-hostile-smoke`, commit `0023160`; no live Codex process now; clean, upstream 0/0. |
+| COMPLETE_PRESERVE — CONFIRMED | `furiosa-t85-pr43-toctou-luna`, session `01a043eb-d285-7e61-b534-52805467503b`, original worktree `/Users/jay-m4/code/rawclaw-furiosa-t85-pr43-toctou`, commit `2f1992a`; no live Codex process now; clean, upstream 0/0. |
+| ACTIVE_WRITER — CONFIRMED | Rival `han-t87-prior-art`, session `01a043f8-4b39-7b00-9e5c-2ae2f8619f4d`, original worktree `/Users/jay-m4/code/rawclaw-han-t87-prior-art`, tmux pane and Codex PID 83814 live. Do not resume or alter. |
+| ACTIVE_WRITER — CONFIRMED | Ozzy migration source thread `01a03ca0-d617-7c90-bfa4-6dc2d0316f7e`, shared root `/Users/jay-m4/code/rawclaw`, Codex PID 17963 live. Queue, do not resume; new route is `/Users/jay-m4/code/rawclaw-supervisor-ozzy-c`. |
 
 ## Ranked recovery candidates
 
@@ -35,13 +36,14 @@ The following are candidates only; no resume or queue action was taken.
 | 7 | STALE_OR_DUPLICATE — HOLD | Numerous `conor/claim-spy-*` branches point at `0d1da19` or older and are not current public-main recovery targets. | Do not resume; compare only if a receipt names unique payload. |
 | 8 | UNCERTAIN — HOLD | Other `rawclaw-*` worktrees from the 48-hour census exist, but the mailbox guard prevented the required per-worktree status and session correlation. | Do not resume until per-worktree evidence is collected. |
 
-## Collision protection and recommendation
+## Second-pass mappings and recommendation
 
-- CONFIRMED collision set: four live Furiosa t85 panes plus rival Han t87 pane. Any candidate whose worktree or thread overlaps these must remain protected as ACTIVE_WRITER.
-- FIRST WAVE recommendation: HOLD all resumptions. Furiosa should first harvest the five live panes, resolve thread IDs, and clear the supervisor-owned mailbox guard. Only then inspect candidates 5, 6, and 8.
+- CONFIRMED collision set: four T85 panes are completed-idle and preserved; only Han t87 and Ozzy’s shared-root thread are live writers.
+- FIRST WAVE recommendation (6 max): preserve T85 issue26, T85 Ozzy, T85 PR40, T85 PR43, codex PR40 reconcile, and codex rescue; do not resume any. Queue Ozzy’s active thread before migration: `codex queue --thread 01a03ca0-d617-7c90-bfa4-6dc2d0316f7e --message 'Migrate this active thread to /Users/jay-m4/code/rawclaw-supervisor-ozzy-c; do not resume duplicate.'`
+- Exact inactive resume form (only if later required): `cd <original-worktree> && codex resume <session-id>`; no current candidate meets resume criteria because preserved commits exist.
 - Exact queue form once a thread ID is independently resolved: `codex queue --thread <id> --message 'Do not resume or duplicate this active writer; recovery sweep found live pane <pane>.'`
 - Exact resume form only after proving inactivity: `cd <original-worktree> && codex resume <session-id>`.
 
-## Blocker
+## Evidence boundary
 
-UNCERTAIN: the local mailbox pre-tool guard rejects every further shell command because `/Users/jay-m4/code/rawclaw-supervisor-furiosa-a/.agent-mailbox` contains my introduction and another unread message. This worker is forbidden to advance Furiosa’s cursor. Consequently no claim is made about unverified dirty/upstream state, rollout freshness, completion receipts, or exact session/worktree mappings.
+CONFIRMED: exact session-to-worktree mappings and current process/tmux state were independently inspected. UNCERTAIN: rollout freshness for older candidates outside the mapped sessions and remote tracking for Han (its worktree has no configured upstream). No claim is made beyond those limits.
