@@ -579,6 +579,16 @@ func TestRenderOutline(t *testing.T) {
 			},
 		},
 		{
+			name: "unanswered assistant note",
+			res: &OutlineResult{
+				Project: "proj", SessionID: "a1b2c3d4xx", ISO: "2026-06-18", MessageCount: 2,
+				Start:               []view.ViewMsg{{ID: 1, Role: "user", Text: "question"}},
+				End:                 []view.ViewMsg{{ID: 2, Role: "assistant", Text: "working on it"}},
+				UnansweredAssistant: true,
+			},
+			want: []string{"note: ends with an unanswered assistant message, no user reply"},
+		},
+		{
 			name: "no mid no end, empty iso",
 			res: &OutlineResult{
 				Project: "p", SessionID: "shortid", ISO: "", MessageCount: 2,
@@ -606,6 +616,42 @@ func TestRenderOutline(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOutlineDetectsUnansweredAssistant(t *testing.T) {
+	proj := t.TempDir()
+	scope := scopeFor(t, proj)
+	writeRichSession(t, proj, "unanswered", "2026-06-01", []msgSpec{
+		{role: "user", uuid: "user-1", content: "please investigate"},
+		{role: "assistant", uuid: "assistant-1", content: "I am investigating"},
+	})
+	if _, _, _, err := index.EnsureIndexed(proj, false); err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+
+	res, err := Outline("unanswered", scope, false)
+	if err != nil {
+		t.Fatalf("Outline: %v", err)
+	}
+	if !res.UnansweredAssistant {
+		t.Fatal("UnansweredAssistant = false, want true")
+	}
+
+	writeRichSession(t, proj, "answered", "2026-06-02", []msgSpec{
+		{role: "user", uuid: "user-2", content: "follow-up question"},
+		{role: "assistant", uuid: "assistant-2", content: "here is the answer"},
+		{role: "user", uuid: "user-3", content: "thanks, that resolves it"},
+	})
+	if _, _, _, err := index.EnsureIndexed(proj, false); err != nil {
+		t.Fatalf("EnsureIndexed answered: %v", err)
+	}
+	res, err = Outline("answered", scope, false)
+	if err != nil {
+		t.Fatalf("Outline answered: %v", err)
+	}
+	if res.UnansweredAssistant {
+		t.Fatal("answered session misclassified as unanswered assistant")
 	}
 }
 

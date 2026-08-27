@@ -275,8 +275,12 @@ type OutlineResult struct {
 	Start        []view.ViewMsg `json:"start"`
 	End          []view.ViewMsg `json:"end"`
 	MidCount     int            `json:"mid_count"`
-	Topics       []string       `json:"topics,omitempty"`    // topic-layer segment labels for this session, in order
-	Subagents    []SubagentInfo `json:"subagents,omitempty"` // child subagent threads for this session
+	// UnansweredAssistant is true when the last displayable event is an
+	// assistant message. It is a deliberately blunt end-of-transcript signal,
+	// not an intent or sentiment judgment.
+	UnansweredAssistant bool           `json:"unanswered_assistant,omitempty"`
+	Topics              []string       `json:"topics,omitempty"`    // topic-layer segment labels for this session, in order
+	Subagents           []SubagentInfo `json:"subagents,omitempty"` // child subagent threads for this session
 }
 
 // SearchOpts groups the optional search filters (keeps the signature small).
@@ -2060,6 +2064,7 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, opts OutlineOpts
 	// forty raw rows and swallow the whole tail of a short session.
 	startRows = view.FilterDisplayableWith(startRows, OutlineBookend, opts.IncludeTools, opts.IncludeThinking)
 	endRows = view.FilterDisplayableWith(endRows, OutlineBookend, opts.IncludeTools, opts.IncludeThinking) // DESC: nearest the end first
+	endsWithUnansweredAssistant := len(endRows) > 0 && endRows[0].Role == "assistant"
 
 	startIDs := map[int]struct{}{}
 	for _, r := range startRows {
@@ -2121,15 +2126,16 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, opts OutlineOpts
 	}
 
 	return &OutlineResult{
-		Project:      proj,
-		SessionID:    fullSID,
-		ISO:          iso,
-		MessageCount: nmsg,
-		Start:        startOut,
-		End:          endOut,
-		MidCount:     midCount,
-		Topics:       topics,
-		Subagents:    subagents,
+		Project:             proj,
+		SessionID:           fullSID,
+		ISO:                 iso,
+		MessageCount:        nmsg,
+		Start:               startOut,
+		End:                 endOut,
+		MidCount:            midCount,
+		UnansweredAssistant: endsWithUnansweredAssistant,
+		Topics:              topics,
+		Subagents:           subagents,
 	}, nil
 }
 
@@ -2395,6 +2401,9 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 		fmt.Fprintln(w, "  ── RESOLUTION (session close) ──")
 		for _, m := range r.End {
 			fmt.Fprintf(w, "     [%s #%d] %s\n", m.Role, m.ID, m.Text)
+		}
+		if r.UnansweredAssistant {
+			fmt.Fprintln(w, "     note: ends with an unanswered assistant message, no user reply")
 		}
 	}
 	if len(r.Subagents) > 0 {
