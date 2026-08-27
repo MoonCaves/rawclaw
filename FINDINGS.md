@@ -49,3 +49,22 @@ in `internal/cli/cmd_ingest.go:backingPath` and
 unrelated cleanup.
 
 Estimated net reduction: 4 lines.
+
+# Ponytail Finding #4 — ACCEPT
+
+`internal/index/index.go:updateIndexWithOrigin` and
+`internal/index/containers.go:updateContainers` duplicate the same incremental
+append decision tree: compare the prior watermark, verify the unchanged prefix,
+parse complete tail records, preserve an incomplete trailing record as a no-op,
+append under the stale-watermark guard, and count the successful fast path.
+
+Extract that decision tree into one helper in `internal/index/tail.go`. The
+helper must receive the explicit container, source ID, raw backing path,
+resolved file-index path, origin, prior watermark, and current mtime/size so the
+Claude directory walk keeps its raw path semantics while container refresh keeps
+its resolved/raw split and source-specific parsing. On any failed tail parse or
+append error, return control to the caller's existing full-reindex fallback.
+Preserve incomplete-tail and stale-watermark no-op behavior byte-for-byte.
+
+Ruling: ACCEPT. Estimated net reduction: about 22 lines; no new abstraction
+beyond the shared private helper and no test-contract changes.
