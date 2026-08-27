@@ -1,0 +1,6 @@
+diff --git a/bin/supervisor-24h-watchdog.sh b/bin/supervisor-24h-watchdog.sh
+--- a/bin/supervisor-24h-watchdog.sh
++++ b/bin/supervisor-24h-watchdog.sh
+@@
+-    "while :; do ${tick_script} ${tick_env}; sleep 600; done"
++    "while :; do gtimeout --signal=TERM --kill-after=5s 60s ${tick_script} ${tick_env} || true; sleep 600; done"
