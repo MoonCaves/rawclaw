@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,8 +16,9 @@ import (
 )
 
 const (
-	closeoutMaxPasses   = 256
-	closeoutSelfTimeout = 2 * time.Minute
+	closeoutMaxPasses    = 256
+	closeoutSelfTimeout  = 2 * time.Minute
+	closeoutChildTimeout = 5 * time.Minute
 )
 
 var closeoutTaggerTimeout = 60 * time.Second
@@ -32,7 +34,7 @@ type closeoutTaggerConfig struct {
 // newCloseoutCmd wires the user-facing closeout entry point. The ordinary path
 // only claims a deduplicated detached child; all tagging work happens there.
 func newCloseoutCmd() *cobra.Command {
-	var child bool
+	var child, childToken string
 	cmd := &cobra.Command{
 		Use:   "closeout <full-session-id>",
 		Short: "Queue detached tagging for a completed session",
@@ -45,13 +47,15 @@ func newCloseoutCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if child {
-				return runCloseoutChild(cmd.OutOrStdout(), args[0])
+				return runCloseoutChild(cmd.OutOrStdout(), args[0], childToken)
 			}
 			return runCloseout(cmd.OutOrStdout(), args[0])
 		},
 	}
 	cmd.Flags().BoolVar(&child, "child", false, "run the detached closeout worker (internal)")
+	cmd.Flags().StringVar(&childToken, "token", "", "closeout ownership token (internal)")
 	_ = cmd.Flags().MarkHidden("child")
+	_ = cmd.Flags().MarkHidden("token")
 	return cmd
 }
 
@@ -72,12 +76,13 @@ func runCloseout(w io.Writer, sessionID string) error {
 		return err
 	}
 
-	if _, ok := acquireCloseoutToken(sessionID); !ok {
+	token, ok := acquireCloseoutToken(sessionID)
+	if !ok {
 		_, err := fmt.Fprintf(w, "closeout already queued for %s\n", sessionID)
 		return err
 	}
-	if err := spawnCloseout(sessionID); err != nil {
-		releaseCloseoutToken(sessionID)
+	if err := spawnCloseout(sessionID, token); err != nil {
+		releaseCloseoutToken(sessionID, token)
 		return err
 	}
 	_, err = fmt.Fprintf(w, "closeout queued for %s\n", sessionID)
@@ -86,7 +91,7 @@ func runCloseout(w io.Writer, sessionID string) error {
 
 var spawnCloseout = spawnCloseoutChild
 
-func spawnCloseoutChild(sessionID string) error {
+func spawnCloseoutChild(sessionID, token string) error {
 	exe, err := selfExe()
 	if err != nil {
 		return fmt.Errorf("resolve rawclaw executable: %w", err)
@@ -97,18 +102,13 @@ func spawnCloseoutChild(sessionID string) error {
 	}
 	defer logf.Close()
 
-	cmd := exec.Command(exe, "--timeout", "0", "closeout", "--child", sessionID)
+	cmd := exec.Command(exe, "--timeout", "0", "closeout", "--child", "--token", token, sessionID)
 	detach(cmd)
 	cmd.Stdin = nil
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start closeout worker: %w", err)
-	}
-	if err := setCloseoutTokenOwner(sessionID, cmd.Process.Pid); err != nil {
-		terminateCloseoutProcess(cmd)
-		_ = cmd.Wait()
-		return fmt.Errorf("record closeout worker: %w", err)
 	}
 	go func() { _ = cmd.Wait() }()
 	return nil
@@ -144,11 +144,13 @@ func loadCloseoutTaggerConfig() (closeoutTaggerConfig, bool, error) {
 	return cfg, true, nil
 }
 
-func runCloseoutChild(w io.Writer, sessionID string) error {
-	if !waitForCloseoutTokenOwner(sessionID) {
-		return closeoutFailure(w, fmt.Errorf("closeout worker ownership handshake timed out"))
+func runCloseoutChild(w io.Writer, sessionID, token string) error {
+	if !validateCloseoutToken(sessionID, token) {
+		return closeoutFailure(w, fmt.Errorf("closeout worker ownership token is invalid"))
 	}
-	defer releaseCloseoutToken(sessionID)
+	defer releaseCloseoutToken(sessionID, token)
+	ctx, cancel := context.WithTimeout(context.Background(), closeoutChildTimeout)
+	defer cancel()
 	cfg, exists, err := loadCloseoutTaggerConfig()
 	if err != nil {
 		return closeoutFailure(w, err)
@@ -159,7 +161,7 @@ func runCloseoutChild(w io.Writer, sessionID string) error {
 	}
 
 	for range closeoutMaxPasses {
-		prep, err := runCloseoutSelfCommand("tag-prep", sessionID, nil, w)
+		prep, err := runCloseoutSelfCommand(ctx, "tag-prep", sessionID, nil, w)
 		if err != nil {
 			return closeoutFailure(w, fmt.Errorf("tag-prep: %w", err))
 		}
@@ -170,11 +172,11 @@ func runCloseoutChild(w io.Writer, sessionID string) error {
 			return nil
 		}
 
-		tags, err := runCloseoutTagger(cfg.Argv, prep, w)
+		tags, err := runCloseoutTaggerContext(ctx, cfg.Argv, prep, w)
 		if err != nil {
 			return closeoutFailure(w, err)
 		}
-		written, err := runCloseoutSelfCommand("tag-write", sessionID, tags, w)
+		written, err := runCloseoutSelfCommand(ctx, "tag-write", sessionID, tags, w)
 		if err != nil {
 			return closeoutFailure(w, fmt.Errorf("tag-write: %w", err))
 		}
@@ -186,6 +188,10 @@ func runCloseoutChild(w io.Writer, sessionID string) error {
 }
 
 func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, error) {
+	return runCloseoutTaggerContext(context.Background(), argv, prep, stderr)
+}
+
+func runCloseoutTaggerContext(parent context.Context, argv []string, prep []byte, stderr io.Writer) ([]byte, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	configureCloseoutProcess(cmd)
 	cmd.Stdin = bytes.NewReader(prep)
@@ -210,6 +216,8 @@ func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, er
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
+	ctx, cancel := context.WithTimeout(parent, closeoutTaggerTimeout)
+	defer cancel()
 	timer := time.NewTimer(closeoutTaggerTimeout)
 	defer timer.Stop()
 	select {
@@ -218,7 +226,10 @@ func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, er
 			copyCloseoutStderr(stderrFile, stderr)
 			return nil, fmt.Errorf("tagger exited unsuccessfully: %w", err)
 		}
-	case <-timer.C:
+	case <-ctx.Done():
+		if ctx.Err() == context.DeadlineExceeded && parent.Err() != nil {
+			return nil, fmt.Errorf("closeout deadline exceeded: %w", parent.Err())
+		}
 		killErr := terminateCloseout(cmd)
 		select {
 		case <-done:
@@ -265,13 +276,13 @@ func copyCloseoutStderr(file *os.File, dst io.Writer) {
 	_, _ = io.Copy(dst, file)
 }
 
-func runCloseoutSelfCommand(name, sessionID string, input []byte, stderr io.Writer) ([]byte, error) {
+func runCloseoutSelfCommand(ctx context.Context, name, sessionID string, input []byte, stderr io.Writer) ([]byte, error) {
 	exe, err := selfExe()
 	if err != nil {
 		return nil, fmt.Errorf("resolve rawclaw executable: %w", err)
 	}
 	args := []string{"--timeout", closeoutSelfTimeout.String(), name, sessionID}
-	cmd := exec.Command(exe, args...)
+	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Stdin = bytes.NewReader(input)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout

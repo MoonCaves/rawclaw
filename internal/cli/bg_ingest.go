@@ -1,7 +1,8 @@
 package cli
 
 import (
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,7 +21,7 @@ const ingestLogMax = 512 * 1024
 // preventing process storms from concurrent reads on wholesale-stale stores.
 var ingestSpawnWindow = 1 * time.Minute
 
-const closeoutLeaseWindow = 1 * time.Minute
+const closeoutTokenTTL = closeoutChildTimeout * 2
 
 // spawnIngest launches the detached ingest child — a seam so tests can
 // count or hook spawn decisions without forking processes.
@@ -60,39 +61,46 @@ func acquireIngestSpawnToken(sessionArg string, now time.Time) bool {
 // acquireCloseoutToken atomically claims a session's closeout for its whole
 // lifetime. Unlike the ingest throttle marker, this lock never expires: the
 // detached worker removes it only after completion or failure.
-func acquireCloseoutToken(sessionID string) (func(), bool) {
+func acquireCloseoutToken(sessionID string) (string, bool) {
 	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return func() {}, false
+		return "", false
 	}
 	path := closeoutTokenPath(dir, sessionID)
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", false
+	}
+	token := hex.EncodeToString(tokenBytes)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
 			if !reclaimCloseoutToken(path) {
-				return func() {}, false
+				return "", false
 			}
 			f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 			if err != nil {
-				return func() {}, false
+				return "", false
 			}
 		} else {
-			return func() {}, false
+			return "", false
 		}
 	}
-	lease := closeoutLease{PID: os.Getpid(), CreatedAt: time.Now().UnixNano()}
-	b, _ := json.Marshal(lease)
-	if _, err := f.Write(b); err != nil {
+	if _, err := f.WriteString(token); err != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
-		return func() {}, false
+		return "", false
 	}
 	_ = f.Close()
-	return func() { _ = os.Remove(path) }, true
+	return token, true
 }
 
-func releaseCloseoutToken(sessionID string) {
-	_ = os.Remove(closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID))
+func releaseCloseoutToken(sessionID, token string) {
+	path := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
+	b, err := os.ReadFile(path)
+	if err == nil && string(b) == token {
+		_ = os.Remove(path)
+	}
 }
 
 func closeoutTokenPath(dir, sessionID string) string {
@@ -105,57 +113,20 @@ func closeoutTokenPath(dir, sessionID string) string {
 	return filepath.Join(dir, "closeout-"+safeID+".lock")
 }
 
-type closeoutLease struct {
-	PID       int   `json:"pid"`
-	CreatedAt int64 `json:"created_at"`
-}
-
 func reclaimCloseoutToken(path string) bool {
 	st, err := os.Stat(path)
-	if err != nil || time.Since(st.ModTime()) < closeoutLeaseWindow {
-		return false
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	var lease closeoutLease
-	if json.Unmarshal(b, &lease) != nil || lease.PID <= 0 || closeoutProcessAlive(lease.PID) {
+	if err != nil || time.Since(st.ModTime()) < closeoutTokenTTL {
 		return false
 	}
 	return os.Remove(path) == nil
 }
 
-func setCloseoutTokenOwner(sessionID string, pid int) error {
-	path := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
-	b, err := json.Marshal(closeoutLease{PID: pid, CreatedAt: time.Now().UnixNano()})
-	if err != nil {
-		return err
+func validateCloseoutToken(sessionID, token string) bool {
+	if token == "" {
+		return false
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	_, err = f.Write(b)
-	return err
-}
-
-func waitForCloseoutTokenOwner(sessionID string) bool {
-	path := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		b, err := os.ReadFile(path)
-		if os.IsNotExist(err) {
-			return false
-		}
-		var lease closeoutLease
-		if err == nil && json.Unmarshal(b, &lease) == nil && lease.PID == os.Getpid() {
-			return true
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return false
+	b, err := os.ReadFile(closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID))
+	return err == nil && string(b) == token
 }
 
 // maybeSpawnIngest fires a detached self-invocation of `rawclaw ingest [session]`
