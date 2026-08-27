@@ -228,3 +228,11 @@ This report is the only intended file change. No RawClaw product files or rival
 worktrees were edited. All unrun experiments remain **UNCERTAIN**. The final
 report commit must be clean and upstream-equal; `gofmt` is not applicable to
 this Markdown-only lane.
+
+## Correction
+
+Process credit for this lane is **zero** because the worker violated the
+explicit Furiosa parent-mailbox fence after the original report was complete.
+The technical claim classifications and evidence above remain evidence-only
+and require supervisor verification; this report must not claim mailbox
+abstention.
