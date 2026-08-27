@@ -61,6 +61,17 @@ The candidate commit-local stats are also distinct: Ozzy `+46/-15` production an
 
 Green focused tests establish the stated retention behavior only. There is no candidate test that controls the probe/close/unlink interleaving, and no mutation run was claimed as empirical evidence. Therefore the concurrency verdict is `HOLD`, not a safety pass.
 
+## Graphify MCP corroboration
+
+The required MCP calls were run against `project_path=/Users/jay-m4/code/rawclaw` after `graphify reflect --if-stale` reported the graph current:
+
+- `query_graph(question="cache sqlite close remove lock busy stale database file evict", mode="bfs", depth=2, token_budget=4000)` returned 50 orientation nodes but did not surface `RefreshDBPath` or the eviction helpers.
+- `shortest_path(source="RefreshDBPath", target="removeRefreshDB", max_hops=6)` returned `No node matching target 'removeRefreshDB' found.`
+- `get_pr_impact(pr_number=42)` returned PR #42, CI `SUCCESS`, 44 nodes across 5 communities, and 3 changed files including `FINDINGS.md`.
+- `get_pr_impact(pr_number=43)` returned PR #43, CI `SUCCESS`, 37 nodes across 4 communities, and 2 changed files: `internal/index/containers.go` and `internal/index/containers_test.go`.
+
+These MCP results are orientation/impact evidence only. The missing eviction path is why the implementation claims above are corroborated against the commit snapshots and focused tests directly.
+
 ## Final disposition
 
 - Ozzy `89c8a284`: **REJECT** for current-base transplant: 24-hour TTL, later prune trigger, broader divergent diff, and probe-to-unlink TOCTOU.
