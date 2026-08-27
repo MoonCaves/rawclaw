@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -197,10 +198,8 @@ func render(m Meta, msgs []model.Message) ([]byte, error) {
 // recordType maps a message role onto an indexable record type, falling back to
 // "system" for roles the indexer does not recognize (see render).
 func recordType(role string) string {
-	for _, t := range parse.IndexableTypes {
-		if role == t {
-			return role
-		}
+	if slices.Contains(parse.IndexableTypes, role) {
+		return role
 	}
 	return "system"
 }
