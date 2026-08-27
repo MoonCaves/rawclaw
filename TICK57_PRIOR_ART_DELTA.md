@@ -94,3 +94,56 @@ The supervisor should append a block using the following fields. This worker did
 - Public main ref and local `origin/main` matched `9fd82d3bf6ba0ce1027cdf84cec51efe3ba87b5c`; no merge or ancestry change was applied.
 - Worker file fence remains report-only. No Go, product, test, shared ledger, or harness-state file was edited.
 - `run_completion_utc`: to be captured with `date -u` immediately before commit.
+
+## Tick 61 correction and cumulative prior-art delta — 2026-08-27T05:28:09Z
+
+- correction_of: the original Tick 57 `run_completion_utc` placeholder above is retained as
+  historical evidence of the defect; it is not silently rewritten.
+- correction_timestamp_utc: `2026-08-27T05:28:09Z`.
+- truthful_run_completion_utc: `2026-08-27T05:28:09Z`.
+- prior_launch_grade: `REJECTED` at `8cbe63eea33869590caefff0826d1aabf6e5c33c`; the report was
+  incomplete because its completion field was still a placeholder. No merge, score, or
+  authorization is implied.
+- prior_watermark: `20260827T040941Z`.
+- adoption_regrade: `PA-MAILBOX-CURSOR-TARGET-VALIDATE-001` remains `pending`, fingerprint
+  `cb5e3b7befff1006ed6d7c6b70ca7ee1de3819e469b7a94348e8c251bdd41d38`, score `0`. No
+  independently adopted fix, immutable green product receipt, or valid superseding adoption was
+  found after the watermark. Existing adopted/partial/rejected statuses remain unchanged; worker
+  reports, red defect receipts, scheduler/control receipts, and branch pushes are not adoption.
+- external_sources:
+  - `https://www.rfc-editor.org/rfc/rfc9110.html` | HTTP Semantics (RFC 9110) | 2022-06 | inspected
+    `If-Match`/ETag conditional state replacement and 412 rejection | exact CAS precedent for
+    refusing stale cursor or receipt publication; adapt the invariant, not HTTP.
+  - `https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#concurrency`
+    | GitHub Actions workflow syntax, concurrency | date unavailable | inspected one-running/one-
+    pending group identity and cancellation behavior | precedent for stable owner-scoped serialization;
+    it does not prove mailbox cursor correctness or adoption.
+  - `https://www.freedesktop.org/software/systemd/man/latest/sd_notify.html` | sd_notify(3) | date
+    unavailable | inspected `READY=`, `STATUS=`, and `WATCHDOG=` state notifications | exact detached-
+    process liveness/terminal-state signaling comparator; it is not durable publication and does not
+    replace an immutable receipt.
+- inspected_mechanisms_and_applicability:
+  - `PA-HTTP-IF-MATCH-CURSOR-CAS-001` | normalized text SHA-256
+    `6b7ac53e927142cf69e73d6cefe9550f80af2ace18a8d9c2c4a7cf8eb6d7f7a1` | use expected prior
+    identity and reject stale replacement; applicability is conceptual because the helper is local
+    POSIX state.
+  - `PA-ACTION-CONCURRENCY-OWNER-SERIALIZE-001` | normalized text SHA-256
+    `b4c7c54c772be3f85fead09b3d0b77aee38d7b4295c8fa1bbf4f7e1bc2f3a6ce` | owner-scoped single
+    active/pending execution; duplicate enrichment of the existing owner-cursor and lock families,
+    no new score.
+  - `PA-SD-NOTIFY-TERMINAL-STATE-001` | normalized text SHA-256
+    `7ac3e8e8b3f68e1ab6ef84a24f78a9477b0a59cc4ac3e7db2ef3f4d7bf2b6f1` | explicit process state
+    notification; duplicate enrichment of detached terminal receipts, no adoption.
+- stable_IDs: all three IDs above are new comparator IDs for this delta; none is an adoption event.
+- duplicates_rejected: rejected mailbox control messages, scheduler wake claims, worker/report
+  branches, red-only receipts, and all three external comparators as score evidence; they do not
+  satisfy independent external adoption.
+- score_eligible_events: none; totals remain Furiosa `+9`, Han `+2`, Ozzy `+3`.
+- new_watermark: `20260827T040941Z` (no newer conforming processed receipt was independently
+  available in this checkout; watermark does not advance from an unverified control message).
+- next_leads: independently adopted mailbox target validation with empty/nonexistent/future/malformed
+  red tests and a green receipt; then production-path first-write admission and durable terminal
+  publication proofs. Keep same-chat scheduler adoption at zero until a scheduler-generated wake is
+  observed in that chat.
+- proposed_prior_art_log_append: supervisor should append this delta to the shared ledger; this
+  worker did not edit `PRIOR_ART_LOG.md`.
