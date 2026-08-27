@@ -10,11 +10,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/gofrs/flock"
 )
 
 // ingestLogMax caps the background ingest log's growth (512KB).
@@ -26,11 +26,6 @@ const ingestLogMax = 512 * 1024
 var ingestSpawnWindow = 1 * time.Minute
 
 const closeoutTokenTTL = closeoutChildTimeout * 2
-
-// closeoutTokenMu serializes stale-lease compare-and-swap in this process.
-// os.Rename is atomic, but stat-then-rename can otherwise let a stale waiter
-// rename a newly-created live lease at the same pathname.
-var closeoutTokenMu sync.Mutex
 
 // spawnIngest launches the detached ingest child — a seam so tests can
 // count or hook spawn decisions without forking processes.
@@ -71,12 +66,16 @@ func acquireIngestSpawnToken(sessionArg string, now time.Time) bool {
 // lifetime. Unlike the ingest throttle marker, this lock never expires: the
 // detached worker removes it only after completion or failure.
 func acquireCloseoutToken(sessionID string) (string, bool) {
-	closeoutTokenMu.Lock()
-	defer closeoutTokenMu.Unlock()
 	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", false
 	}
+	guard := flock.New(filepath.Join(dir, "closeout.lock"))
+	locked, err := guard.TryLock()
+	if err != nil || !locked {
+		return "", false
+	}
+	defer guard.Unlock()
 	lockDir := closeoutTokenPath(dir, sessionID)
 	for range 2 {
 		if err := os.Mkdir(lockDir, 0o755); err != nil {
@@ -96,7 +95,7 @@ func acquireCloseoutToken(sessionID string) (string, bool) {
 			return "", false
 		}
 		owner, err := json.Marshal(closeoutLease{PID: os.Getpid()})
-		if err != nil || os.WriteFile(filepath.Join(lockDir, ".owner"), owner, 0o400) != nil {
+		if err != nil || os.WriteFile(filepath.Join(lockDir, ".owner"), owner, 0o600) != nil {
 			_ = os.RemoveAll(lockDir)
 			return "", false
 		}
@@ -106,9 +105,14 @@ func acquireCloseoutToken(sessionID string) (string, bool) {
 }
 
 func releaseCloseoutToken(sessionID, token string) {
-	closeoutTokenMu.Lock()
-	defer closeoutTokenMu.Unlock()
-	lockDir := closeoutTokenPath(filepath.Join(store.CacheDir(), "ingest-spawns"), sessionID)
+	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
+	guard := flock.New(filepath.Join(dir, "closeout.lock"))
+	locked, err := guard.TryLock()
+	if err != nil || !locked {
+		return
+	}
+	defer guard.Unlock()
+	lockDir := closeoutTokenPath(dir, sessionID)
 	if !validCloseoutToken(token) {
 		return
 	}
@@ -152,6 +156,35 @@ func reclaimCloseoutToken(path string) bool {
 		return false
 	}
 	return os.RemoveAll(quarantine) == nil
+}
+
+func setCloseoutTokenOwner(sessionID, token string, pid int) error {
+	if pid <= 0 || !validCloseoutToken(token) {
+		return fmt.Errorf("invalid closeout owner")
+	}
+	dir := filepath.Join(store.CacheDir(), "ingest-spawns")
+	guard := flock.New(filepath.Join(dir, "closeout.lock"))
+	locked, err := guard.TryLock()
+	if err != nil || !locked {
+		return fmt.Errorf("closeout ownership guard busy")
+	}
+	defer guard.Unlock()
+	path := filepath.Join(closeoutTokenPath(dir, sessionID), token)
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	owner, err := json.Marshal(closeoutLease{PID: pid})
+	if err != nil {
+		return err
+	}
+	ownerPath := filepath.Join(filepath.Dir(path), ".owner")
+	f, err := os.OpenFile(ownerPath, os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(owner)
+	return err
 }
 
 type closeoutLease struct {

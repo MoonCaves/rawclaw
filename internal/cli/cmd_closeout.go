@@ -111,6 +111,14 @@ func spawnCloseoutChild(sessionID, token string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start closeout worker: %w", err)
 	}
+	if err := setCloseoutTokenOwner(sessionID, token, cmd.Process.Pid); err != nil {
+		killErr := terminateCloseout(cmd)
+		_ = cmd.Wait()
+		if killErr != nil {
+			return fmt.Errorf("record closeout worker: %w; terminate child: %v", err, killErr)
+		}
+		return fmt.Errorf("record closeout worker: %w", err)
+	}
 	go func() { _ = cmd.Wait() }()
 	return nil
 }
