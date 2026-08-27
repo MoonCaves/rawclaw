@@ -75,9 +75,9 @@ func evictStaleRefreshDB(dbPath string) {
 		_ = db.Close()
 		return
 	}
+	removeRefreshDBFiles(dbPath)
 	_, _ = db.Exec("ROLLBACK")
 	_ = db.Close()
-	removeRefreshDBFiles(dbPath)
 }
 
 func removeRefreshDBFiles(dbPath string) {
