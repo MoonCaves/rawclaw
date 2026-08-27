@@ -268,15 +268,16 @@ type trimStat struct {
 
 // OutlineResult is a session's bookend arc.
 type OutlineResult struct {
-	Project      string         `json:"project"`
-	SessionID    string         `json:"session_id"`
-	ISO          string         `json:"iso"`
-	MessageCount int            `json:"message_count"`
-	Start        []view.ViewMsg `json:"start"`
-	End          []view.ViewMsg `json:"end"`
-	MidCount     int            `json:"mid_count"`
-	Topics       []string       `json:"topics,omitempty"`    // topic-layer segment labels for this session, in order
-	Subagents    []SubagentInfo `json:"subagents,omitempty"` // child subagent threads for this session
+	Project             string         `json:"project"`
+	SessionID           string         `json:"session_id"`
+	ISO                 string         `json:"iso"`
+	MessageCount        int            `json:"message_count"`
+	Start               []view.ViewMsg `json:"start"`
+	End                 []view.ViewMsg `json:"end"`
+	MidCount            int            `json:"mid_count"`
+	UnansweredAssistant bool           `json:"unanswered_assistant,omitempty"`
+	Topics              []string       `json:"topics,omitempty"`    // topic-layer segment labels for this session, in order
+	Subagents           []SubagentInfo `json:"subagents,omitempty"` // child subagent threads for this session
 }
 
 // SearchOpts groups the optional search filters (keeps the signature small).
@@ -2096,6 +2097,8 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, opts OutlineOpts
 	if cErr != nil {
 		midCount = 0
 	}
+	lastMessages, lErr := store.LastMessages(con, fullSID, 1)
+	unansweredAssistant := lErr == nil && len(lastMessages) > 0 && lastMessages[0].Role == "assistant"
 
 	// Topic layer: list the session's tagged segments (empty when untagged or the
 	// topic table is absent — a non-fatal "no topics").
@@ -2121,15 +2124,16 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, opts OutlineOpts
 	}
 
 	return &OutlineResult{
-		Project:      proj,
-		SessionID:    fullSID,
-		ISO:          iso,
-		MessageCount: nmsg,
-		Start:        startOut,
-		End:          endOut,
-		MidCount:     midCount,
-		Topics:       topics,
-		Subagents:    subagents,
+		Project:             proj,
+		SessionID:           fullSID,
+		ISO:                 iso,
+		MessageCount:        nmsg,
+		Start:               startOut,
+		End:                 endOut,
+		MidCount:            midCount,
+		UnansweredAssistant: unansweredAssistant,
+		Topics:              topics,
+		Subagents:           subagents,
 	}, nil
 }
 
@@ -2396,6 +2400,9 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 		for _, m := range r.End {
 			fmt.Fprintf(w, "     [%s #%d] %s\n", m.Role, m.ID, m.Text)
 		}
+	}
+	if r.UnansweredAssistant {
+		fmt.Fprintln(w, "\nnote: ends with an unanswered assistant message, no user reply")
 	}
 	if len(r.Subagents) > 0 {
 		fmt.Fprintln(w, "\n  ── SUBAGENTS ──")

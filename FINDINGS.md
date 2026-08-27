@@ -1,1 +1,6 @@
-Issue #41 is caused by removing refresh-cache eviction while retaining refresh DBs for the prewarm/closeout cache. Eviction must therefore not run from PrepareFreshContainer, whose contract is to preserve fresh entries, and must allow sessions to outlive the old 24-hour window. The smallest shared fix is a 30-day inactivity TTL at RefreshDBPath, which is used whenever a refresh cache entry is acquired; protect the acquired path during that pass and remove SQLite sidecars with the database so reused/active entries survive while abandoned entries are eventually reclaimed.
+# Issue #59 findings
+
+- `internal/agentproto.outline` builds the goal/resolution arc with `store.BookendMessages` and renders it through `renderOutline`.
+- The existing `store.LastMessages` tail reader already returns the newest stored event role, newest first. Reuse it rather than adding transcript parsing or sentiment detection.
+- Add an optional outline result flag populated from that tail. Render one note only for an assistant tail with no later user event; leave the existing closed-session output unchanged.
+- Graphify orientation was attempted with the supplied graph file; the checkout has no local `graphify-out/`, so source tracing was verified directly in the current tree.

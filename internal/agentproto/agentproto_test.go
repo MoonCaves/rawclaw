@@ -589,6 +589,16 @@ func TestRenderOutline(t *testing.T) {
 			want:    []string{"━━ ? · shortid · p · 2 messages ━━\n\n"},
 			notWant: []string{"messages in between", "RESOLUTION"},
 		},
+		{
+			name: "unanswered assistant note",
+			res: &OutlineResult{
+				Project: "p", SessionID: "shortid", MessageCount: 2,
+				Start:               []view.ViewMsg{{ID: 1, Role: "user", Text: "hi"}},
+				End:                 []view.ViewMsg{{ID: 2, Role: "assistant", Text: "answer"}},
+				UnansweredAssistant: true,
+			},
+			want: []string{"note: ends with an unanswered assistant message, no user reply"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -606,6 +616,29 @@ func TestRenderOutline(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOutlineDetectsUnansweredAssistant(t *testing.T) {
+	proj := t.TempDir()
+	scope := scopeFor(t, proj)
+	writeRichSession(t, proj, "sess59", "2026-06-01", []msgSpec{
+		{role: "user", uuid: "11111111-aaaa-bbbb-cccc-000000000001", content: "question"},
+		{role: "assistant", uuid: "11111111-aaaa-bbbb-cccc-000000000002", content: "answer"},
+	})
+
+	res, err := Outline("sess59", scope, false)
+	if err != nil {
+		t.Fatalf("Outline: %v", err)
+	}
+	if !res.UnansweredAssistant {
+		t.Fatal("UnansweredAssistant = false, want true")
+	}
+
+	var buf bytes.Buffer
+	renderOutline(&buf, res)
+	if !strings.Contains(buf.String(), "unanswered assistant message, no user reply") {
+		t.Fatalf("outline missing unanswered note:\n%s", buf.String())
 	}
 }
 
