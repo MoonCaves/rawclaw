@@ -21,6 +21,8 @@ const (
 
 var closeoutTaggerTimeout = 60 * time.Second
 
+var terminateCloseout = terminateCloseoutProcess
+
 var closeoutNow = time.Now
 
 type closeoutTaggerConfig struct {
@@ -217,7 +219,7 @@ func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, er
 			return nil, fmt.Errorf("tagger exited unsuccessfully: %w", err)
 		}
 	case <-timer.C:
-		killErr := terminateCloseoutProcess(cmd)
+		killErr := terminateCloseout(cmd)
 		select {
 		case <-done:
 		case <-time.After(time.Second):

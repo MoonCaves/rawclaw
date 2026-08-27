@@ -236,6 +236,13 @@ func TestRunCloseoutChild_ReleasesTokenAfterCompletionOrFailure(t *testing.T) {
 	}
 }
 
+func TestRunCloseoutChild_RequiresOwnedLease(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := runCloseoutChild(new(bytes.Buffer), "11111111-2222-3333-4444-555555555555"); err == nil {
+		t.Fatal("ownerless closeout child unexpectedly proceeded")
+	}
+}
+
 func TestRunCloseout_RequiresFullSessionID(t *testing.T) {
 	var out bytes.Buffer
 	if err := runCloseout(&out, "deadbeef"); err == nil {
@@ -295,5 +302,38 @@ func TestRunCloseoutTagger_TimeoutKillsDescendantHoldingStdio(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("timeout cleanup took %s; descendant likely held stdio", elapsed)
+	}
+}
+
+func TestRunCloseoutTagger_TimeoutReturnsWhenTerminationFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell helper")
+	}
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+	oldTimeout := closeoutTaggerTimeout
+	oldTerminate := terminateCloseout
+	t.Cleanup(func() {
+		closeoutTaggerTimeout = oldTimeout
+		terminateCloseout = oldTerminate
+	})
+	closeoutTaggerTimeout = 50 * time.Millisecond
+	var process *os.Process
+	terminateCloseout = func(cmd *exec.Cmd) error {
+		process = cmd.Process
+		return errors.New("synthetic termination failure")
+	}
+	started := time.Now()
+	_, err = runCloseoutTagger([]string{sh, "-c", "sleep 30"}, []byte("prep"), new(bytes.Buffer))
+	if process != nil {
+		_ = process.Kill()
+	}
+	if err == nil || !strings.Contains(err.Error(), "process cleanup") {
+		t.Fatalf("runCloseoutTagger error = %v, want bounded cleanup error", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("timeout failure path took %s", elapsed)
 	}
 }
