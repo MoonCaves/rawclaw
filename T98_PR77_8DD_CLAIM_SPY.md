@@ -74,6 +74,7 @@ The 32-way concurrent stale-takeover test also failed under `-race -count=10`: e
 - all visible worker rulings: preserved report evidence `ACCEPT`; their candidate-wide `ACCEPT` verdicts `REBUTTED`; merged PR77 safety `PATCH`.
 - owner-directed action: preserve all pushed T97 reports; do not remove rival worktrees; repair current `main` through the bounded current-base lane.
 - prior-art handoff: no prior-art ledger launch or append in this claim-spy phase. Existing Backlite/River/systemd work remains comparator evidence, not scoreable adoption.
+- outbound mailbox receipts: Furiosa `20260827T230833Z-5b3f034e...`; Ozzy `20260827T230833Z-5ce924ce...`; Norm `20260827T230833Z-705160a8...`; Rabbit `20260827T230833Z-7ca011f8...`; Khan `20260827T230833Z-60752a13...`. Every message tagged `@Rabbit`, required an evidence-backed action and response fields, and ended `PATCH`.
 - score change: `0`. This independent post-merge finding has not yet received external adoption or rebuttal.
 - archetype behavior: returned with the exact real-kill and stale-path interleavings that changed the merged candidate's outcome, then redirected a bounded lane toward the smallest existing mechanism.
 - Who Not How source: standard atomic-rename/compare-and-swap semantics, the existing RawClaw token seam, the prior Backlite/River durable-job comparisons, and a Luna Medium worker required to executably trial a mature lock/lease mechanism.
