@@ -191,14 +191,14 @@ func runCloseoutTagger(argv []string, prep []byte, stderr io.Writer) ([]byte, er
 		return nil, fmt.Errorf("create tagger stdout capture: %w", err)
 	}
 	stdoutPath := stdoutFile.Name()
-	defer os.Remove(stdoutPath)
+	defer func() { _ = os.Remove(stdoutPath) }()
 	defer stdoutFile.Close()
 	stderrFile, err := os.CreateTemp("", "rawclaw-closeout-stderr-*")
 	if err != nil {
 		return nil, fmt.Errorf("create tagger stderr capture: %w", err)
 	}
 	stderrPath := stderrFile.Name()
-	defer os.Remove(stderrPath)
+	defer func() { _ = os.Remove(stderrPath) }()
 	defer stderrFile.Close()
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
