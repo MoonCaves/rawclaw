@@ -1261,31 +1261,9 @@ func isBusy(err error) bool {
 		strings.Contains(msg, "(6)") // SQLITE_LOCKED
 }
 
-// realpath resolves a path without ever erroring: it resolves the existing
-// prefix and lexically appends any missing tail. Used by the paths port for
-// containment checks.
-func realpath(path string) string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		abs = filepath.Clean(path)
-	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved
-	}
-	tail := []string{}
-	cur := abs
-	for {
-		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(append([]string{resolved}, tail...)...)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return abs
-		}
-		tail = append([]string{filepath.Base(cur)}, tail...)
-		cur = parent
-	}
-}
+// Keep the existing package-local call sites stable while sharing the canonical
+// path implementation with internal/paths.
+var realpath = paths.Realpath
 
 // isMember reports whether id is in set (comma-ok membership; a nil set is
 // simply empty and never panics on read).

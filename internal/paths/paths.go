@@ -136,13 +136,13 @@ func WriteCatalogEntry(catalogDir string, entry CatalogEntry) error {
 // folder like /tmp index the folder itself into the cache. Arbitrary-folder
 // indexing is the explicit --dir opt-in: FindTranscriptDirExplicit.
 func FindTranscriptDir(cwd string) string {
-	target := realpath(expandHome(cwd))
+	target := Realpath(expandHome(cwd))
 	root := ProjectsRoot()
 
 	// Footgun guard: if the caller already passed a transcripts dir (a child of
 	// projects/), use it verbatim — don't re-encode an already-encoded path
 	// into nothing.
-	if isDir(target) && realpath(filepath.Dir(target)) == realpath(root) {
+	if isDir(target) && Realpath(filepath.Dir(target)) == Realpath(root) {
 		return target
 	}
 
@@ -157,7 +157,7 @@ func FindTranscriptDir(cwd string) string {
 			slices.Sort(files)
 			for _, f := range files { // check ALL top-level files, not just first
 				rec := firstCWD(f)
-				if rec != "" && realpath(rec) == target {
+				if rec != "" && Realpath(rec) == target {
 					return d
 				}
 			}
@@ -180,7 +180,7 @@ func FindTranscriptDirExplicit(dir string) string {
 	if td := FindTranscriptDir(dir); td != "" {
 		return td
 	}
-	target := realpath(expandHome(dir))
+	target := Realpath(expandHome(dir))
 	if isDir(target) {
 		if hits, _ := filepath.Glob(filepath.Join(target, "*.jsonl")); len(hits) > 0 {
 			return target
@@ -192,12 +192,12 @@ func FindTranscriptDirExplicit(dir string) string {
 // ContainedJSONL returns the recursive *.jsonl under transcriptDir, EXCLUDING
 // any whose realpath escapes the root (symlink-out containment).
 func ContainedJSONL(transcriptDir string) []string {
-	rootRP := strings.TrimRight(realpath(transcriptDir), string(os.PathSeparator))
+	rootRP := strings.TrimRight(Realpath(transcriptDir), string(os.PathSeparator))
 	out := []string{}
 
 	matches := globRecursiveJSONL(transcriptDir)
 	for _, f := range matches {
-		rp := realpath(f)
+		rp := Realpath(f)
 		// Containment check: rp == join(root, relpath(rp, root)) && rp startswith root+sep.
 		// The first clause holds whenever rp is lexically under rootRP; combined with
 		// the prefix check it rejects anything whose realpath escapes the root.
@@ -253,8 +253,8 @@ func DirCWD(tdir string) string {
 // that has since been purged from disk.
 func ProjectDirOf(jsonlPath string) string {
 	sep := string(os.PathSeparator)
-	root := strings.TrimRight(realpath(ProjectsRoot()), sep)
-	dir := realpath(filepath.Dir(jsonlPath))
+	root := strings.TrimRight(Realpath(ProjectsRoot()), sep)
+	dir := Realpath(filepath.Dir(jsonlPath))
 	for {
 		parent := filepath.Dir(dir)
 		if strings.TrimRight(parent, sep) == root {
@@ -511,12 +511,12 @@ func expandHome(path string) string {
 	return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 }
 
-// realpath canonicalizes a path, resolving symlinks for the components that
+// Realpath canonicalizes a path, resolving symlinks for the components that
 // exist and lexically normalizing the rest.
 // It never errors — a path that does not exist is returned cleaned/absolute.
 // filepath.EvalSymlinks errors on missing components, so we resolve the longest
 // existing prefix and re-append the non-existent tail.
-func realpath(path string) string {
+func Realpath(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = filepath.Clean(path)
