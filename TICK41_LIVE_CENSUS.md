@@ -2,14 +2,15 @@
 
 ## Run boundary
 
-- `run_timestamp`: `2026-08-27T02:01:33Z` (`date -u`; no future receipt accepted).
+- `run_timestamp`: `2026-08-27T02:01:33Z` (original census; no future receipt accepted).
 - Required current base: `ef2eebf414e77086be06281539c5a50ba036a32a`.
 - Worktree: `worker/furiosa-t41-live-census-20260827`, isolated from the shared checkout.
-- Report-only. No product, graph, scorecard, cursor, or mailbox was changed. The required
-  `PRIOR_ART_LOG.md` verification was **BLOCKED** by the pre-tool guard for an unread item in
-  `/Users/jay-m4/code/rawclaw-supervisor-furiosa-a/.agent-mailbox`; that mailbox was not read,
-  advanced, or answered. The last valid watermark supplied by the Tick 40 receipt is therefore
-  retained as `20260827T020038Z` (receipt `20260827T020038Z-37ab41ec-tick-40-final-claim-spy-receip.md`).
+- Report-only. No product, graph, scorecard, cursor, or mailbox was changed. The prior-art ledger
+  was subsequently read without touching mailboxes: its last recorded valid watermark is
+  `20260827T013550Z` (Tick 39 preliminary, ledger lines 844-854; ledger SHA-256 at read
+  `68f74f27f700d0bc266910138878a9494c284dd220342e15f1a3157d47504e9d`). The supervisor-confirmed
+  processed prefix advances this census to `20260827T020554Z` (Tick 42); no later valid receipt is
+  claimed.
 
 ## Verdict
 
@@ -54,8 +55,9 @@ family and does not supersede the locked sidecar contract.
   and a non-zero work oracle: **Ozzy +0**.
 - Score referee: `77248b7249060c153462ccf3cbb5be67b2ac7e9d`, report
   `deb9ed764ac8dc0f2c0e4651ed523f079a0d8338fcd2c103b9a64a1f05798f93`; no score change.
-- `new_watermark`: `20260827T020038Z`; do not use later-looking mailbox data because the mailbox
-  ledger read was blocked and future receipts are invalid by the ledger rule.
+- `prior_watermark`: `20260827T013550Z` (last entry actually present in the append-only ledger).
+- `new_watermark`: `20260827T020554Z` (supervisor-confirmed Tick 42 processed prefix). This is
+  reconciled as a monotonic advance from the ledger value; no adoption or score event was found.
 
 ## Direction Lock
 
@@ -74,11 +76,23 @@ receipt. `PA-DIRECTION-LOCK-001` remains partial for this reason.
    and the full race gate.
 2. Re-run `386ec9d` against an identical parent fixture with paired samples, `benchstat`, query
    plans, and a non-zero rows-examined/deleted/committed oracle; otherwise reject the speed claim.
-3. Resolve the blocked append-only ledger read through the mailbox owner, then verify that the next
-   watermark is conforming, monotonic, and no later than run completion.
+3. Keep future regrades append-only: start at `20260827T020554Z` and accept only conforming,
+   processed receipts no later than the fresh completion timestamp.
 
 ## Completion contract
 
-Only this report is owned. No Go files changed; `gofmt -w` is **N/A**. Commit/push this report,
-then verify clean worktree and upstream `0/0`, and record its SHA-256. This report grants no merge
-authorization.
+Only this report is owned. No Go files changed; `gofmt -w` is **N/A**. The initial completion was
+blocked by the supervisor mailbox guard; this correction reads the ledger without mailbox access.
+Commit/push this report, then capture a fresh `run_completion_utc` with `date -u`, verify clean
+worktree and upstream `0/0`, and record its SHA-256. This report grants no merge authorization.
+
+## Tick 42 ledger reconciliation correction
+
+- `prior_watermark`: `20260827T013550Z`, verified from the ledger's final recorded `new_watermark`.
+- `processed_watermark`: `20260827T020554Z`, supplied by the supervisor after Tick 42 processing.
+- `new_watermark`: `20260827T020554Z`; monotonic and later than the ledger value, with no future
+  receipt accepted and no mailbox read or mutation performed.
+- Status and scores are unchanged: sidecar-prune remains technically locked only; totals remain
+  Furiosa `+9`, Han `+2`, Ozzy `+3`; no score or merge authorization.
+- `run_completion_utc`: `2026-08-27T02:12:20Z`, captured with `date -u` after the ledger
+  reconciliation edit and final pre-commit validation.
