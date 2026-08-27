@@ -178,7 +178,7 @@ The actionable backlog at the boundary was not “57 things ready to merge.” T
 
 ### Next 2 hours
 
-**OPINION —** Resolve #40's post-#35 conflict, run CI and the one real-writer cancellation gate, and merge if green. If red, apply the smallest context-aware statement patch and rerun only that gate plus CI. Change the ticker to queue-draining mode, delete score credit for report/provenance work, and require the eight-line mailbox contract. Target: one production merge or one decisive production rejection, not another ledger.
+**OPINION —** Resolve #40's post-#35 conflict, run CI and the one real-writer cancellation gate, and merge if green. If red, remove or explicitly narrow the unproven bounded-cancellation delta from #40 and ship the remaining publication work after CI; do not hold the whole PR while inventing a driver-interrupt mechanism. Change the ticker to queue-draining mode, delete score credit for report/provenance work, and require the eight-line mailbox contract. Target: one production merge or one decisive production rejection, not another ledger.
 
 ### Next 24 hours
 
@@ -210,12 +210,15 @@ The single remaining hard gate is:
 4. Require bounded return with `context.Canceled` or `context.DeadlineExceeded`, no new session/message/topic/verdict rows, no watermark advancement, no partial publication, and no goroutine leak.
 5. Release the holder and require one retry to publish exactly once and advance the watermark.
 
-Independent Tick 46/47 probes already showed the existing fence-only test can stay green while the real first write remains blocked beyond 250 ms because the fold uses non-context `tx.Exec`. That is a concrete false-green and cancellation risk, so it is an appropriate hard gate. If the reconciled #40 passes, **SHIP**. If it fails, apply the smallest `ExecContext`/context-publication correction and rerun this gate plus CI; do not restart general review.
+Independent Tick 46/47 probes showed the existing fence-only test can stay green while the real first write remains blocked beyond 250 ms. A post-window Tick 56 comparator then tested the untouched path, the full Han writer-gate candidate, the candidate with its process-local gate removed, and a minimal 17/17-statement `tx.ExecContext` substitution. All four remained blocked about 351–354 ms after cancellation under the same independent SQLite writer transaction. This is a concrete false-green and driver-level cancellation risk, and it also falsifies “replace `Exec` with `ExecContext`” as a sufficient fix.
+
+If the reconciled #40 passes the exact-head gate, **SHIP**. If it fails, do not start another general review or an open-ended SQLite-interrupt project. Remove or narrow the unproven bounded-cancellation API/claim from #40 if it is separable from the detached tag-publication feature, retain the existing finite SQLite busy timeout and detached-child timeout as the explicit operational bound, and ship the remaining candidate after CI. If the cancellation delta is inseparable and required, reject that delta into one focused follow-up issue.
 
 ## Evidence corrections
 
 - **OBSERVED FACT —** `HAN_HARNESS_AUDIT.md` correctly reported missing ticker/watchdog activation when written, but that claim became stale after `HAN_TICKER_ACTIVATION.md` and live tmux/process evidence. The current harness has a ticker and watchdog; the remaining problem is that they measure arrivals and process presence better than decisions.
 - **OBSERVED FACT —** `PR35_VS_PR40_CONTAINMENT_AUDIT.md` correctly rejected ancestry identity and documented behavioral substitution. Its recommendation to preserve both independent review paths did not follow from those facts. Stable patch IDs established patch containment; one integrator still needed to select the desired behavior and close the other path.
+- **OBSERVED FACT —** Post-window `TICK56_EXECCONTEXT_MINIMAL_COMPARATOR.md` sharpened, rather than changed, the hard-gate finding: process-local admission and `ExecContext` substitution both failed to bound the real modernc SQLite writer wait. The rapid fallback is to remove the unproven cancellation delta from this ship candidate, not to hold unrelated publication work indefinitely.
 - **OBSERVED FACT —** The canonical Graphify graph was useful for locating `runTagWriteCmd`, `SyncConsolidatedFrom`, `AcquireConsolidatedFence`, and `StampIngestWatermark`, but it predated newer `origin/main`. All conclusions above were corroborated against live Git, source, GitHub, processes, tmux, worktrees, mailboxes, ticker state, and reports.
 
 ## Commands and primary evidence used
@@ -262,6 +265,7 @@ sed -n '1,240p' /Users/jay-m4/code/rawclaw-wt-pr35-vs-pr40-audit/PR35_VS_PR40_CO
 sed -n '1,320p' /Users/jay-m4/code/rawclaw-t46-db-cancel-mutation/TICK46_DB_CANCEL_MUTATION.md
 sed -n '1,360p' /Users/jay-m4/code/rawclaw-furiosa-t47-db-cancel-referee/TICK47_DB_CANCEL_REFEREE.md
 sed -n '1,380p' /Users/jay-m4/code/rawclaw-furiosa-t53-current-base-cancel/TICK53_CURRENT_BASE_CANCELLATION.md
+sed -n '1,420p' /Users/jay-m4/code/rawclaw-furiosa-t56-execcontext-minimal/TICK56_EXECCONTEXT_MINIMAL_COMPARATOR.md
 git show --no-ext-diff --unified=60 0cd0b9ce77e362b5bd4e973f948eb9981cdbf452 -- internal/index/consolidated.go internal/index/consolidated_test.go
 
 # Harness, mailbox, and process evidence
