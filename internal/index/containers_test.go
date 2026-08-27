@@ -645,6 +645,60 @@ func TestEnsureFreshContainer_PreservesRefreshDBOnPublishFailure(t *testing.T) {
 	}
 }
 
+func TestRefreshDBPath_PrunesStaleCacheButRetainsFreshAndReused(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+
+	refreshDir := filepath.Join(store.CacheDir(), "refresh")
+	if err := os.MkdirAll(refreshDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(refreshDir, "stale.db")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale+"-wal", []byte("wal"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-(refreshCacheStaleAfter + time.Hour))
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(stale+"-wal", old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := RefreshDBPath("claude", "fresh", "/fresh.jsonl")
+	if err := os.WriteFile(fresh, []byte("fresh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	RefreshDBPath("claude", "fresh", "/fresh.jsonl")
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("fresh refresh db was pruned: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale refresh db still exists, err=%v", err)
+	}
+	if _, err := os.Stat(stale + "-wal"); !os.IsNotExist(err) {
+		t.Fatalf("stale refresh WAL still exists, err=%v", err)
+	}
+
+	reused := RefreshDBPath("claude", "reused", "/reused.jsonl")
+	if err := os.WriteFile(reused, []byte("reused"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(reused, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := RefreshDBPath("claude", "reused", "/reused.jsonl"); got != reused {
+		t.Fatalf("reused refresh db path = %q, want %q", got, reused)
+	}
+	if _, err := os.Stat(reused); err != nil {
+		t.Fatalf("reused refresh db was pruned: %v", err)
+	}
+}
+
 func TestPrepareFreshContainer_ProvesFreshnessWithoutConsolidatedSync(t *testing.T) {
 	cfg := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
