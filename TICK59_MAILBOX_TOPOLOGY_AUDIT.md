@@ -1,7 +1,7 @@
 # TICK59 Mailbox Topology Audit
 
-Date: 2026-08-27 WITA  
-Worker: Beatrix Kiddo  
+Date: 2026-08-27 WITA
+Worker: Beatrix Kiddo
 Branch: `worker/furiosa-t59-mailbox-topology-20260827`
 
 ## Boundary and cursor safety
@@ -23,7 +23,7 @@ Branch: `worker/furiosa-t59-mailbox-topology-20260827`
 | `/Users/jay-m4/code/rawclaw-supervisor-furiosa-a/.agent-mailbox` | yes | 755 | 95809274 | present | distinct supervisor mailbox; cursor not read |
 | `/Users/jay-m4/code/rawclaw-supervisor-han-b/.agent-mailbox` | yes | 755 | 95809751 | present | distinct supervisor mailbox; cursor not read |
 | `/Users/jay-m4/code/rawclaw-wt-instant-closeout-spec/.agent-mailbox` | yes | 755 | 88782564 | present | distinct active-worker mailbox |
-| `/Users/jay-m4/code/rawclaw-khan-supervisor/.agent-mailbox` | yes | 755 | 104217250 | absent | non-steerable read boundary: no cursor exists |
+| `/Users/jay-m4/code/rawclaw-khan-supervisor/.agent-mailbox` | yes | 755 | 104217250 | absent | uninitialized cursor boundary; steerability **UNCERTAIN** |
 | `/Users/jay-m4/code/rawclaw-lenny-raid-phase/.agent-mailbox` | yes | 755 | 91638627 | present | verified active Lenny mailbox |
 
 All five advertised destinations have different directory inodes. No shared physical
@@ -70,9 +70,10 @@ These are distinct mechanisms and are not collapsed into the topology result:
    an older target; the independent boundary attack observed 96 regressions in 100 trials.
    This is separate from future-name validation and remains **OPEN**.
 
-3. **Bash 3.2 empty-array behavior:** Bash 3.2 syntax and seven fixture cases pass in the
-   available evidence, but there is no isolated empty-array reproduction hash. That narrow
-   claim is **UNCERTAIN**, not inferred green.
+3. **Bash 3.2 empty-array behavior:** an absent-cursor empty disposable mailbox crashes at
+   `MESSAGE_FILES[@]: unbound variable` on line 50 under `set -u`. The subsequent first-message
+   acknowledgement initializes the cursor successfully. The captured reproduction output SHA-256
+   is `cb133c0e1f1a531e1ba2a39dd20b46644f79bc29f7aea2b157ad80a8a54e11e9`.
 
 Audited helper: `/Users/jay-m4/org/builds/steering-kit/bin/agent-mailbox-mark-read.sh`,
 source commit `7e213da6dd61e282d5cbfa7345868152e8965750`, SHA-256
@@ -93,7 +94,8 @@ did not read a supervisor cursor or independently adjudicate that conflict.
 ## Verdict
 
 No missing or deleted referenced mailbox directory required repair. No cursor was changed
-outside Beatrix's own mailbox. Khan's mailbox directory exists but lacks a cursor and is the
-only exact target with an unestablished read boundary. The root RawClaw mailbox is shared by
+outside Beatrix's own mailbox. Khan's mailbox directory exists but lacks a cursor; because it
+contains messages, this audit classifies its boundary as uninitialized/UNCERTAIN rather than
+non-steerable. The root RawClaw mailbox is shared by
 multiple lanes and must not be used as a worker-owned replacement. The three cursor defects
 above remain separate control-plane findings; no helper was changed here.
