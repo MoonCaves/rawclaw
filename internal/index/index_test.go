@@ -415,6 +415,10 @@ func TestEnsureSchemaStampsVersion(t *testing.T) {
 	if _, err := con.Exec("SELECT 1 FROM messages_fts LIMIT 1"); err != nil {
 		t.Errorf("messages_fts missing after EnsureSchema: %v", err)
 	}
+	var indexName string
+	if err := con.QueryRow("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_file_index_session'").Scan(&indexName); err != nil {
+		t.Fatalf("file_index session index missing after fresh schema application: %v", err)
+	}
 	// Re-running EnsureSchema must be idempotent (no rebuild, no error).
 	if err := EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("second EnsureSchema: %v", err)
@@ -1019,9 +1023,16 @@ func TestEnsureSchemaAddsTrigramIndexInPlace(t *testing.T) {
 		DELETE FROM meta WHERE key='trigram_backfill_done';`); err != nil {
 		t.Fatalf("strip trigram objects: %v", err)
 	}
+	if _, err := con.Exec("DROP INDEX idx_file_index_session"); err != nil {
+		t.Fatalf("strip file_index session index: %v", err)
+	}
 
 	if err := EnsureSchema(con, "claude"); err != nil {
 		t.Fatalf("EnsureSchema must add the substring index in place, got: %v", err)
+	}
+	var indexName string
+	if err := con.QueryRow("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_file_index_session'").Scan(&indexName); err != nil {
+		t.Fatalf("file_index session index missing after existing schema application: %v", err)
 	}
 
 	// No rebuild: the pre-existing row survived and the version never moved.
