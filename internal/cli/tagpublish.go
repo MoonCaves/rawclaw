@@ -98,7 +98,7 @@ func runTagPublishChild(ctx context.Context, w io.Writer, dbp, sessionID string)
 	if err != nil {
 		return fmt.Errorf("acquire consolidated store lock: %w", err)
 	}
-	defer fence.Close()
+	defer func() { _ = fence.Close() }()
 	dst, err := store.ConnectRW(index.ConsolidatedPath())
 	if err != nil {
 		return err
@@ -120,7 +120,7 @@ func readTagSnapshot(ctx context.Context, con *sql.DB, sid string) ([]store.Topi
 	if err != nil {
 		return nil, store.Verdict{}, false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	rows, err := tx.QueryContext(ctx, "SELECT session_id,start_uuid,end_uuid,topic,summary,tagged_at,origin_machine FROM topic_segment WHERE session_id=? ORDER BY id", sid)
 	if err != nil {
 		return nil, store.Verdict{}, false, err
@@ -148,9 +148,10 @@ func readTagSnapshot(ctx context.Context, con *sql.DB, sid string) ([]store.Topi
 	var source, origin sql.NullString
 	var at sql.NullFloat64
 	err = tx.QueryRowContext(ctx, "SELECT session_id,verdict,source,origin_machine,tagged_at FROM session_verdict WHERE session_id=?", sid).Scan(&v.SessionID, &v.Verdict, &source, &origin, &at)
-	if err == sql.ErrNoRows {
+	switch err {
+	case sql.ErrNoRows:
 		err = nil
-	} else if err == nil {
+	case nil:
 		v.Source, v.OriginMachine, v.TaggedAt = source.String, origin.String, at.Float64
 	}
 	if err != nil {
@@ -198,7 +199,7 @@ func publishSession(ctx context.Context, con *sql.DB, sid string, segments []sto
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var existingOrigin string
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(origin_machine),'') FROM topic_segment WHERE session_id=?", sid).Scan(&existingOrigin); err != nil {
 		return err
@@ -236,9 +237,10 @@ func publishSession(ctx context.Context, con *sql.DB, sid string, segments []sto
 		var src string
 		var at sql.NullFloat64
 		err = tx.QueryRowContext(ctx, "SELECT source, tagged_at, origin_machine FROM session_verdict WHERE session_id=?", sid).Scan(&src, &at, &existing.OriginMachine)
-		if err == sql.ErrNoRows {
+		switch err {
+		case sql.ErrNoRows:
 			err = nil
-		} else if err == nil {
+		case nil:
 			existing.Source, existing.TaggedAt, ok = src, at.Float64, true
 		}
 		if err != nil {
