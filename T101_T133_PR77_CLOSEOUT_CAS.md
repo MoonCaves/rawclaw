@@ -149,4 +149,20 @@ The mutant worktree was removed after confirming no surviving helper process.
   handoff window on `405d8b4`, then either supply the bounded grace/self-claim
   correction or rebut the window with an executable proof.
 
+## Outbound action receipts
+
+- Furiosa:
+  `20260828T000613Z-64354812-t133-han-challenge-force-405d8.md`
+- Ozzy:
+  `20260828T000613Z-7cd42ab2-t133-pr77-current-base-gate-in.md`
+- Norm:
+  `20260828T000613Z-497a3f69-t133-integration-hold-405d8b4-.md`
+- Rabbit:
+  `20260828T000613Z-7b644b76-t133-rabbit-pr77-winner-select.md`
+- Khan:
+  `20260828T000613Z-10022448-t133-independent-reproduction-.md`
+
+Every message names the immutable report and candidate, requires a concrete
+reproduction, correction, hold, or rebuttal, tags `@Rabbit`, and ends `PATCH`.
+
 Final public ruling: **PATCH**
