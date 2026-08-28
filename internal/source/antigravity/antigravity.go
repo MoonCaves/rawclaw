@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -98,10 +99,8 @@ func findParentForChild(brainDir, childID, childPath string) string {
 		if parentPath == "" || filepath.Clean(parentPath) == filepath.Clean(childPath) {
 			continue
 		}
-		for _, spawned := range scanSpawnedSubagents(parentPath) {
-			if spawned == childID {
-				return parentID
-			}
+		if slices.Contains(scanSpawnedSubagents(parentPath), childID) {
+			return parentID
 		}
 	}
 	return ""
@@ -389,20 +388,20 @@ func conversationIDs(content string) []string {
 	for strings.Contains(content, "conversationId") {
 		key := strings.Index(content, "conversationId")
 		rest := content[key+len("conversationId"):]
-		colon := strings.IndexByte(rest, ':')
-		if colon < 0 {
+		_, rest, ok := strings.Cut(rest, ":")
+		if !ok {
 			break
 		}
-		value := strings.TrimSpace(rest[colon+1:])
+		value := strings.TrimSpace(rest)
 		value = strings.TrimPrefix(value, "\"")
-		if end := strings.IndexByte(value, '"'); end >= 0 {
-			if id := strings.TrimSpace(value[:end]); id != "" {
-				ids = append(ids, id)
-			}
-			content = value[end+1:]
-			continue
+		id, after, ok := strings.Cut(value, "\"")
+		if !ok {
+			break
 		}
-		break
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+		content = after
 	}
 	return ids
 }
