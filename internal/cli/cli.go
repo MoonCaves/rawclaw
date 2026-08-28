@@ -916,7 +916,7 @@ func runResume(w io.Writer, o *Options) error {
 	var matches []resumeCandidate
 	if isFullResumeID(o.Resume) {
 		var complete, metadataGuard bool
-		matches, _, complete, metadataGuard = resumeExactMetadata(o.Resume)
+		matches, complete, metadataGuard = resumeExactMetadata(o.Resume)
 		if complete || metadataGuard {
 			return emitResumeMatches(w, o, matches, false)
 		}
@@ -1004,7 +1004,7 @@ func isFullResumeID(id string) bool {
 
 // resumeExactMetadata answers known full IDs without constructing scopes. The
 // durable vault is checked first because it survives source-file deletion.
-func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool, bool) {
+func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool) {
 	regs := sources.Registered()
 	supported := make(map[string]bool, len(regs))
 	for _, r := range regs {
@@ -1012,27 +1012,23 @@ func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool, bool) {
 	}
 	meta := resumeMetadata{namedSources: make(map[string]struct{})}
 	if m, _, found := durable.Exact(id); found {
-		meta.found = true
 		classifyResumeMetadata(&meta, id, m.Source, m.SourcePath, m.CWD,
 			m.OnlyCopySince != 0, m.Origin != "", m.IsSubagent, m.ParentID, supported)
 	}
 	conMeta := resumeConsolidatedMetadata(id, supported)
-	if conMeta.found {
-		meta.found = true
-		meta.blocked = meta.blocked || conMeta.blocked
-		meta.unknown = meta.unknown || conMeta.unknown
-		for src := range conMeta.namedSources {
-			meta.namedSources[src] = struct{}{}
-		}
-		for _, candidate := range conMeta.matches {
-			meta.matches = appendResumeCandidate(meta.matches, candidate)
-		}
+	meta.blocked = meta.blocked || conMeta.blocked
+	meta.unknown = meta.unknown || conMeta.unknown
+	for src := range conMeta.namedSources {
+		meta.namedSources[src] = struct{}{}
+	}
+	for _, candidate := range conMeta.matches {
+		meta.matches = appendResumeCandidate(meta.matches, candidate)
 	}
 	if len(meta.matches) > 0 {
-		return meta.matches, true, true, true
+		return meta.matches, true, true
 	}
 	if meta.blocked {
-		return nil, true, true, true
+		return nil, true, true
 	}
 
 	complete := true
@@ -1060,12 +1056,11 @@ func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool, bool) {
 			}
 		}
 	}
-	return meta.matches, meta.found || len(meta.matches) > 0, complete && !meta.unknown, false
+	return meta.matches, complete && !meta.unknown, false
 }
 
 type resumeMetadata struct {
 	matches      []resumeCandidate
-	found        bool
 	blocked      bool
 	unknown      bool
 	namedSources map[string]struct{}
@@ -1112,7 +1107,6 @@ func resumeConsolidatedMetadata(id string, supported map[string]bool) resumeMeta
 		if err := rows.Scan(&sid, &project, &src, &path, &cwd, &origin, &onlyCopy, &sub, &parent); err != nil {
 			return resumeMetadata{namedSources: make(map[string]struct{})}
 		}
-		meta.found = true
 		before := len(meta.matches)
 		classifyResumeMetadata(&meta, sid, src, path, cwd, onlyCopy.Valid, origin != "", sub != 0, parent, supported)
 		if len(meta.matches) > before && project != "" {
