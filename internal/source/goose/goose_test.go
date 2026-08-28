@@ -242,6 +242,36 @@ func TestGooseStandaloneMetadataAndLookup(t *testing.T) {
 	}
 }
 
+func TestGooseLookupPreservesParentWithoutSubagentFlag(t *testing.T) {
+	isolateHome(t)
+	tmpDir := t.TempDir()
+	sessPath := filepath.Join(tmpDir, "sessions.db")
+	db, err := sql.Open("sqlite", sessPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT, parent_id TEXT, is_subagent INTEGER);
+		INSERT INTO sessions VALUES ('child-session', NULL, 'parent-session', 0);
+	`)
+	db.Close()
+	if err != nil {
+		t.Fatalf("setup database: %v", err)
+	}
+
+	t.Setenv("GOOSE_HOME", tmpDir)
+	got, err := lookup("child-session")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("lookup returned %d containers, want 1: %+v", len(got), got)
+	}
+	if got[0].ParentID != "parent-session" || got[0].IsSubagent {
+		t.Fatalf("lookup did not preserve parent-only metadata: %+v", got[0])
+	}
+}
+
 func TestGooseDiscoverySkipsUnrelatedDatabase(t *testing.T) {
 	isolateHome(t)
 	tmpDir := t.TempDir()
