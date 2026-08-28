@@ -1,11 +1,11 @@
 # PR #81 Command Timing Reproduction Report (Round 2)
 
 - **Worker:** `lenny-pr81-timing-r2`
-- **Date:** 2026-08-28T07:11:55Z
+- **Date:** 2026-08-28T07:14:45Z
 - **Candidate Commit:** `8323fd9f69c06669f0ad529686008b775e783052`
 - **Main Commit:** `719243b6005153c99fef571176c7e6dd6e3a2876`
 - **Target Session ID:** `87783881-b4b8-4694-8095-12c180e13643`
-- **Verdict:** **ACCEPT**
+- **Verdict:** **ACCEPT (Narrowed: Semantic Correctness & Modest Frozen-Fixture Latency Improvement)**
 
 ---
 
@@ -13,17 +13,18 @@
 
 An independent product-level timing and correctness reproduction was conducted to verify PR #81 (`8323fd9f69c06669f0ad529686008b775e783052`) against public `main` (`719243b6005153c99fef571176c7e6dd6e3a2876`).
 
-The evaluation tested the exact literal product command:
+The evaluation tested the exact literal product command under a frozen HOME snapshot:
 ```bash
 HOME=/tmp/frozen-home-lenny-pr81-timing-r2 RAWCLAW_BACKGROUND_INGEST=off /usr/bin/time -l <binary> --resume 87783881-b4b8-4694-8095-12c180e13643
 ```
 
-**Key Findings:**
-1. **Timing & Scaling:** In the frozen snapshot, Candidate executes in **8.8ms – 22.8ms** (mean ~13.7ms), providing immediate first useful output. In contrast, Main requires full discovery/scope scanning paths, which take **24.2ms – 26.3ms** on small isolated snapshots and scale up to **3.75s – 5.10s** when full cross-source catalogs are active. Candidate's exact metadata resolution provides an $O(1)$ fast path independent of total catalog size.
-2. **Memory Footprint:** Peak RSS is tightly bounded on Candidate (~17.6 MiB in frozen snapshot; ~21.2 MiB under full catalogs) without unbounded consolidation allocations.
-3. **Correctness & Output Class:** Candidate correctly identifies the retained non-local session (`Session 87783881-b4b8-4694-8095-12c180e13643 is known, but RawClaw cannot produce a safe local resume command for it.`) by consulting durable metadata directly. Main fails to inspect durable metadata, emitting a false negative search notice (`No session id starts with...`).
+**Narrowed Findings & Scope:**
+1. **Frozen-Fixture Timing:** In the controlled frozen snapshot, Candidate executes in **8.8ms – 22.8ms** (mean **13.67ms**, median **9.36ms**) compared to Main at **24.2ms – 26.3ms** (mean **24.99ms**, median **24.52ms**). This represents a modest speedup of **~1.83x (mean)** and **~2.62x (median)**.
+2. **Memory Footprint:** Peak RSS is comparable across both binaries in the frozen snapshot: Candidate at **18,432,000 – 18,530,304 bytes** (~17.6 MiB) versus Main at **17,776,640 – 18,300,928 bytes** (~17.2 MiB). There is **no memory reduction or unbounded allocation benefit** in the frozen benchmark.
+3. **Semantic Correctness:** Candidate correctly resolves and identifies the retained non-local session fixture via durable metadata (`Session 87783881-b4b8-4694-8095-12c180e13643 is known, but RawClaw cannot produce a safe local resume command for it.`). Main fails to inspect durable metadata, emitting a negative search notice (`No session id starts with...`).
+4. **Ineligible Exploratory Data:** Prior unconstrained live-HOME probes (where Main took 3.75s – 5.10s) are exploratory and ineligible for the frozen timing comparison; they cannot be used to claim asymptotic scaling benefits.
 
-The timing and correctness claims of PR #81 are **ACCEPTED**.
+Verdict is **ACCEPTED** narrowly for semantic correctness and modest latency reduction on the retained fixture.
 
 ---
 
@@ -43,7 +44,8 @@ The timing and correctness claims of PR #81 are **ACCEPTED**.
   - `.local/share/rawclaw/` (durable catalog and transcript store)
   - `.claude/` (claude project metadata)
   - `.config/goose/` (goose config)
-- **Omission Rationale:** `.codex/` (~4.6 GiB) was omitted to bound snapshot creation time and disk overhead without impacting transcript discovery.
+- **Omission Rationale:** `.codex/` (~4.6 GiB) was omitted to bound snapshot creation time and disk footprint.
+- **Results Artifact:** `frozen_home_results.json` (SHA-256: `2b2c624c6d8c5b153d64024eda03a2c629cf23b92c20211410b282de0b6887b2`)
 
 ### Fixture SHA-256 Manifest
 Location: `/tmp/frozen-home-lenny-pr81-timing-r2/.local/share/rawclaw/transcripts/`
@@ -72,6 +74,11 @@ All runs were executed serially with `RAWCLAW_BACKGROUND_INGEST=off` and `HOME=/
 | **3** | Candidate (`8323fd9`) | 0 | 0.0228 | 0.01 | 18,432,000 | 17.58 | 118 | Retained Non-Local Explanation |
 | **3** | Main (`719243b`) | 0 | 0.0245 | 0.01 | 17,776,640 | 16.95 | 135 | Negative ID Match Notice |
 
+### Statistical Summary (Frozen HOME)
+- **Candidate:** Mean: `13.67 ms` | Median: `9.36 ms` | RSS Mean: `18.48 MiB`
+- **Main:** Mean: `24.99 ms` | Median: `24.52 ms` | RSS Mean: `17.23 MiB`
+- **Speedup Factor:** Mean: `1.83x` | Median: `2.62x`
+
 ---
 
 ## 5. Output Verification & Semantic Comparison
@@ -80,7 +87,7 @@ All runs were executed serially with `RAWCLAW_BACKGROUND_INGEST=off` and `HOME=/
 ```text
 Session 87783881-b4b8-4694-8095-12c180e13643 is known, but RawClaw cannot produce a safe local resume command for it.
 ```
-- **Analysis:** Candidate's `resumeExactMetadata` parses full 36-character UUIDs and consults local consolidated/durable metadata. It recognizes that `87783881-b4b8-4694-8095-12c180e13643` is a retained non-local claude transcript (`only_copy_since` set), immediately returning a safe non-local explanation without triggering whole-disk searches.
+- **Analysis:** Candidate's `resumeExactMetadata` parses full 36-character UUIDs and consults local consolidated/durable metadata. It recognizes that `87783881-b4b8-4694-8095-12c180e13643` is a retained non-local claude transcript (`only_copy_since` set), immediately returning a safe non-local explanation without triggering unnecessary scope discovery.
 
 ### Main Stdout (135 bytes)
 ```text
