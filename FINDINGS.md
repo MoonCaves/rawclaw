@@ -91,3 +91,26 @@ any user-visible strings.
 
 Expected production result: approximately -70 lines in `setup.go`, zero new
 dependencies, and byte-equivalent generated hook behavior.
+
+# PR81 CI Lint Findings
+
+## Findings and Ponytail Ladder Rulings
+
+1. `internal/source/antigravity/antigravity.go:101`: `slicescontains: Loop can be simplified using slices.Contains (modernize)`
+   - **Ruling**: ACCEPT. Replace the manual linear scan loop over `scanSpawnedSubagents(parentPath)` with `if slices.Contains(scanSpawnedSubagents(parentPath), childID) { return parentID }`. Import `"slices"`.
+   - **Rationale**: Stdlib `slices.Contains` directly expresses membership without changing behavior.
+
+2. `internal/source/antigravity/antigravity.go:392,398`: `stringscut: strings.IndexByte can be simplified using strings.Cut (modernize)`
+   - **Ruling**: ACCEPT. In `conversationIDs`, replace the hand-rolled index extraction with `strings.Cut(rest, ":")` and `strings.Cut(value, "\"")`.
+   - **Rationale**: Direct stdlib `strings.Cut` replaces index arithmetic and simplifies string slicing while preserving exact parsing semantics.
+
+3. `internal/cli/cli.go:1002`: `QF1001: could apply De Morgan's law (staticcheck)`
+   - **Ruling**: ACCEPT. In `isFullResumeID`, replace `!((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F'))` with `(r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F')`.
+   - **Rationale**: Literal De Morgan simplification satisfies staticcheck QF1001 with zero helper extraction or behavioral drift.
+
+4. `internal/source/codex/codex.go:99`: `QF1001: could apply De Morgan's law (staticcheck)`
+   - **Ruling**: ACCEPT. In `isRolloutSessionName`, replace `!((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F'))` with `(r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F')`.
+   - **Rationale**: Literal De Morgan simplification satisfies staticcheck QF1001 with zero helper extraction or behavioral drift.
+
+## Scope Fence
+Touch only `FINDINGS.md`, `internal/source/antigravity/antigravity.go`, `internal/cli/cli.go`, and `internal/source/codex/codex.go`. No helper extractions, no unrelated modernizations, no public API changes.
