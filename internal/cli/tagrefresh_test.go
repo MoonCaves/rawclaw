@@ -30,7 +30,7 @@ type tagTestSource struct {
 }
 
 func TestRunResumeDoesNotEmitRetainedLocalCommand(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	isolateResume(t)
 	id := "87783881-b4b8-4694-8095-12c180e13643"
 	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude", CWD: "/gone/project"}, nil); err != nil {
 		t.Fatal(err)
@@ -110,6 +110,111 @@ func TestRunResumeFindsUncatalogedLiveExactHitWithEmptyStore(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "claude --resume "+id) {
 		t.Fatalf("uncataloged exact live hit was not resolved:\n%s", out.String())
+	}
+}
+
+func TestRunResumeAuthoritativeMetadataSkipsAdapterLookup(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-12345678900a"
+	sourcePath := filepath.Join(t.TempDir(), "live.jsonl")
+	writeTagSourceFile(t, sourcePath, "{}\n")
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "resume-live", CWD: "/live", SourcePath: sourcePath}, nil); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	registerResumeSources(t, source.Registration{
+		ID: "resume-live",
+		Lookup: func(string) ([]source.Container, error) {
+			called = true
+			return nil, nil
+		},
+	})
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("authoritative live metadata should not invoke adapter Lookup")
+	}
+	if !strings.Contains(out.String(), "claude --resume "+id) {
+		t.Fatalf("authoritative metadata did not produce a resume command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeParentMetadataSkipsAdapterLookup(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-12345678900c"
+	sourcePath := filepath.Join(t.TempDir(), "parent.jsonl")
+	writeTagSourceFile(t, sourcePath, "{}\n")
+	con, err := store.ConnectRW(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rebuild(con); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	if _, err := con.Exec(`INSERT INTO sessions
+		(id, is_subagent, parent_id, source_tool, source_path, project, cwd)
+		VALUES (?, 0, ?, 'resume-live', ?, 'fork', '/fork')`, id, "parent-id", sourcePath); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	registerResumeSources(t, source.Registration{
+		ID: "resume-live",
+		Lookup: func(string) ([]source.Container, error) {
+			called = true
+			return []source.Container{{ID: id, CWD: "/live"}}, nil
+		},
+	})
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("parent metadata should not invoke adapter Lookup")
+	}
+	if strings.Contains(out.String(), "--resume "+id) {
+		t.Fatalf("parent metadata emitted a runnable command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeStaleMetadataProbesOnlyNamedSource(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-12345678900b"
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "resume-a", CWD: "/stale", SourcePath: "/missing/live.jsonl"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	calledA, calledB := false, false
+	registerResumeSources(t,
+		source.Registration{
+			ID: "resume-a",
+			Lookup: func(string) ([]source.Container, error) {
+				calledA = true
+				return nil, nil
+			},
+		},
+		source.Registration{
+			ID: "resume-b",
+			Lookup: func(string) ([]source.Container, error) {
+				calledB = true
+				return nil, nil
+			},
+		},
+	)
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if !calledA || calledB {
+		t.Fatalf("stale metadata probes: named=%t unrelated=%t", calledA, calledB)
 	}
 }
 
@@ -207,7 +312,7 @@ func TestRunResumeLiveMetadataMissingSourcePathIsNotRunnable(t *testing.T) {
 	}
 }
 
-func TestRunResumeRetainedMetadataDoesNotHideLiveOtherSource(t *testing.T) {
+func TestRunResumeRetainedMetadataDoesNotProbeAnotherSource(t *testing.T) {
 	isolateResume(t)
 	id := "12345678-1234-4234-8234-123456789008"
 	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude", CWD: "/retained"}, nil); err != nil {
@@ -216,14 +321,51 @@ func TestRunResumeRetainedMetadataDoesNotHideLiveOtherSource(t *testing.T) {
 	if err := durable.SetOnlyCopySince(id, 1780000000); err != nil {
 		t.Fatal(err)
 	}
-	registerResumeSources(t, resumeLookupRegistration("resume-live", id, "/live"))
+	called := false
+	registerResumeSources(t, source.Registration{
+		ID: "resume-live",
+		Lookup: func(string) ([]source.Container, error) {
+			called = true
+			return []source.Container{{ID: id, CWD: "/live"}}, nil
+		},
+	})
 
 	var out strings.Builder
 	if err := runResume(&out, &Options{Resume: id}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "claude --resume "+id) {
-		t.Fatalf("live exact source was hidden by retained metadata:\n%s", out.String())
+	if called {
+		t.Fatal("retained metadata should not probe another source")
+	}
+	if strings.Contains(out.String(), "--resume "+id) {
+		t.Fatalf("retained metadata emitted a runnable command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeRejectsChildExactAdapterContainers(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-123456789009"
+	called := false
+	registerResumeSources(t, source.Registration{
+		ID: "resume-child",
+		Lookup: func(string) ([]source.Container, error) {
+			called = true
+			return []source.Container{
+				{ID: id, CWD: "/subagent", IsSubagent: true},
+				{ID: id, CWD: "/fork", ParentID: "parent"},
+			}, nil
+		},
+	})
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("exact source lookup was not used")
+	}
+	if strings.Contains(out.String(), "--resume "+id) {
+		t.Fatalf("child exact container emitted a runnable command:\n%s", out.String())
 	}
 }
 
