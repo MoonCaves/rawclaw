@@ -1002,37 +1002,46 @@ func isFullResumeID(id string) bool {
 	return true
 }
 
-func supportedResumeSource(id string) bool {
-	for _, r := range sources.Registered() {
-		if r.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
 // resumeExactMetadata answers known full IDs without constructing scopes. The
 // durable vault is checked first because it survives source-file deletion.
 func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool, bool) {
-	var matches []resumeCandidate
-	known := false
-	metadataGuard := false
+	regs := sources.Registered()
+	supported := make(map[string]bool, len(regs))
+	for _, r := range regs {
+		supported[r.ID] = true
+	}
+	meta := resumeMetadata{namedSources: make(map[string]struct{})}
 	if m, _, found := durable.Exact(id); found {
-		known = true
-		metadataGuard = m.OnlyCopySince != 0 || m.Origin != ""
-		if m.OnlyCopySince == 0 && supportedResumeSource(m.Source) && regularFile(m.SourcePath) {
-			matches = append(matches, resumeCandidate{hit: paths.SessionHit{SessionID: id, CWD: m.CWD, Project: filepath.Base(m.CWD)}, src: m.Source})
+		meta.found = true
+		classifyResumeMetadata(&meta, id, m.Source, m.SourcePath, m.CWD,
+			m.OnlyCopySince != 0, m.Origin != "", m.IsSubagent, m.ParentID, supported)
+	}
+	conMeta := resumeConsolidatedMetadata(id, supported)
+	if conMeta.found {
+		meta.found = true
+		meta.blocked = meta.blocked || conMeta.blocked
+		meta.unknown = meta.unknown || conMeta.unknown
+		for src := range conMeta.namedSources {
+			meta.namedSources[src] = struct{}{}
+		}
+		for _, candidate := range conMeta.matches {
+			meta.matches = appendResumeCandidate(meta.matches, candidate)
 		}
 	}
-	if hits, found, guarded := resumeConsolidatedHits(id); found {
-		known = true
-		metadataGuard = metadataGuard || guarded
-		for _, hit := range hits {
-			matches = appendResumeCandidate(matches, hit)
-		}
+	if len(meta.matches) > 0 {
+		return meta.matches, true, true, true
 	}
+	if meta.blocked {
+		return nil, true, true, true
+	}
+
 	complete := true
-	for _, r := range sources.Registered() {
+	for _, r := range regs {
+		if len(meta.namedSources) > 0 {
+			if _, ok := meta.namedSources[r.ID]; !ok {
+				continue
+			}
+		}
 		if r.ID == "goose" && !scopes.GooseOptedIn("") {
 			continue
 		}
@@ -1046,60 +1055,74 @@ func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool, bool) {
 			continue
 		}
 		for _, c := range containers {
-			if c.ID == id && !c.IsSubagent {
-				matches = appendResumeCandidate(matches, resumeCandidate{hit: paths.SessionHit{SessionID: id, CWD: c.CWD, Project: filepath.Base(c.CWD)}, src: r.ID})
+			if c.ID == id && !c.IsSubagent && c.ParentID == "" {
+				meta.matches = appendResumeCandidate(meta.matches, resumeCandidate{hit: paths.SessionHit{SessionID: id, CWD: c.CWD, Project: filepath.Base(c.CWD)}, src: r.ID})
 			}
 		}
 	}
-	return matches, known || len(matches) > 0, complete, metadataGuard
+	return meta.matches, meta.found || len(meta.matches) > 0, complete && !meta.unknown, false
 }
 
-func resumeConsolidatedHits(id string) ([]resumeCandidate, bool, bool) {
+type resumeMetadata struct {
+	matches      []resumeCandidate
+	found        bool
+	blocked      bool
+	unknown      bool
+	namedSources map[string]struct{}
+}
+
+func classifyResumeMetadata(meta *resumeMetadata, id, src, path, cwd string, retained, foreign, subagent bool, parent string, supported map[string]bool) {
+	switch {
+	case retained, foreign, subagent, parent != "":
+		meta.blocked = true
+	case src == "" || !supported[src]:
+		meta.unknown = true
+	default:
+		meta.namedSources[src] = struct{}{}
+		if regularFile(strings.Split(path, "#")[0]) {
+			meta.matches = appendResumeCandidate(meta.matches, resumeCandidate{hit: paths.SessionHit{SessionID: id, CWD: cwd, Project: filepath.Base(cwd)}, src: src})
+		}
+	}
+}
+
+func resumeConsolidatedMetadata(id string, supported map[string]bool) resumeMetadata {
+	meta := resumeMetadata{namedSources: make(map[string]struct{})}
 	con, _, err := index.OpenConsolidated()
 	if err != nil {
-		return nil, false, false
+		return meta
 	}
 	defer con.Close()
 	rows, err := con.Query(`SELECT session_id, COALESCE(project,''), COALESCE(source_tool,''),
 		COALESCE(source_path,''), COALESCE(cwd,''), COALESCE(origin_machine,''),
-		only_copy_since, is_subagent FROM session_sources WHERE session_id=?
+		only_copy_since, is_subagent, COALESCE(parent_id,'') FROM session_sources WHERE session_id=?
 		UNION ALL
 		SELECT id, COALESCE(project,''), COALESCE(source_tool,''), COALESCE(source_path,''),
-			COALESCE(cwd,''), COALESCE(origin_machine,''), only_copy_since, is_subagent
+			COALESCE(cwd,''), COALESCE(origin_machine,''), only_copy_since, is_subagent,
+			COALESCE(parent_id,'')
 		FROM sessions WHERE id=? AND NOT EXISTS (SELECT 1 FROM session_sources WHERE session_id=?)`, id, id, id)
 	if err != nil {
-		return nil, false, false
+		return meta
 	}
 	defer rows.Close()
-	var out []resumeCandidate
-	known := false
-	metadataGuard := false
 	for rows.Next() {
 		var sid, project, src, path, cwd, origin string
 		var onlyCopy sql.NullFloat64
 		var sub int
-		if err := rows.Scan(&sid, &project, &src, &path, &cwd, &origin, &onlyCopy, &sub); err != nil {
-			return nil, false, false
+		var parent string
+		if err := rows.Scan(&sid, &project, &src, &path, &cwd, &origin, &onlyCopy, &sub, &parent); err != nil {
+			return resumeMetadata{namedSources: make(map[string]struct{})}
 		}
-		known = true
-		if onlyCopy.Valid || origin != "" {
-			metadataGuard = true
+		meta.found = true
+		before := len(meta.matches)
+		classifyResumeMetadata(&meta, sid, src, path, cwd, onlyCopy.Valid, origin != "", sub != 0, parent, supported)
+		if len(meta.matches) > before && project != "" {
+			meta.matches[len(meta.matches)-1].hit.Project = project
 		}
-		if onlyCopy.Valid || origin != "" || sub != 0 || src == "" {
-			continue
-		}
-		if !supportedResumeSource(src) {
-			continue
-		}
-		if !regularFile(strings.Split(path, "#")[0]) {
-			continue
-		}
-		out = appendResumeCandidate(out, resumeCandidate{hit: paths.SessionHit{SessionID: sid, CWD: cwd, Project: project}, src: src})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, false
+		return resumeMetadata{namedSources: make(map[string]struct{})}
 	}
-	return out, known, metadataGuard
+	return meta
 }
 
 func regularFile(path string) bool {
