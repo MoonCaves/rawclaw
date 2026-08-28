@@ -372,11 +372,11 @@ func standaloneContainer(db *sql.DB, dbPath string) (source.Container, bool, err
 		rows.Close()
 	}
 
-	msgTable, err := findMessageTable(db)
-	if err != nil {
-		return source.Container{}, false, fmt.Errorf("find message table: %w", err)
-	}
 	if !metadataID {
+		msgTable, err := findMessageTable(db)
+		if err != nil {
+			return source.Container{}, false, fmt.Errorf("find message table: %w", err)
+		}
 		if msgTable == "" || !messageTableSupported(db, msgTable) {
 			return source.Container{}, false, nil
 		}
