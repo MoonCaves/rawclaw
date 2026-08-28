@@ -45,6 +45,9 @@ func TestRunResumeDoesNotEmitRetainedLocalCommand(t *testing.T) {
 	if strings.Contains(out.String(), "claude --resume") {
 		t.Fatalf("retained session emitted runnable local command: %s", out.String())
 	}
+	if !strings.Contains(out.String(), "cannot produce a safe local resume command") {
+		t.Fatalf("retained session did not explain why resume is unavailable: %s", out.String())
+	}
 }
 
 func isolateResume(t *testing.T) string {

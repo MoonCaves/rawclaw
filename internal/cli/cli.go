@@ -918,6 +918,10 @@ func runResume(w io.Writer, o *Options) error {
 		var complete, metadataGuard bool
 		matches, complete, metadataGuard = resumeExactMetadata(o.Resume)
 		if complete || metadataGuard {
+			if metadataGuard && len(matches) == 0 {
+				fmt.Fprintf(w, "Session %s is known, but RawClaw cannot produce a safe local resume command for it.\n", o.Resume)
+				return nil
+			}
 			return emitResumeMatches(w, o, matches, false)
 		}
 	}
