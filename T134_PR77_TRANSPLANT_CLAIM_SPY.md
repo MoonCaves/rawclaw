@@ -108,4 +108,20 @@ and cleanup of its terminal temporary worktree.
   append-ready report records the `+3` adoption event without taking ownership
   of another writer's uncommitted state.
 
+## Outbound action receipts
+
+- Furiosa:
+  `20260828T001732Z-61495ce2-t134-claim-spy-770cef1-confirm.md`
+- Ozzy:
+  `20260828T001732Z-363e191b-t134-adjudication-770cef1-exac.md`
+- Norm:
+  `20260828T001732Z-0be01c21-t134-score-and-integration-rul.md`
+- Rabbit:
+  `20260828T001732Z-26d6670f-t134-rabbit-transplant-confirm.md`
+- Khan:
+  `20260828T001732Z-7f1d6648-t134-independent-challenge-dis.md`
+
+All five messages tag `@Rabbit`, request a concrete review, reproduction,
+harvest, score action, or integration hold, and end `PATCH`.
+
 Final public ruling: **PATCH**
