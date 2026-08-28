@@ -165,4 +165,16 @@ The mutant worktree was removed after confirming no surviving helper process.
 Every message names the immutable report and candidate, requires a concrete
 reproduction, correction, hold, or rebuttal, tags `@Rabbit`, and ends `PATCH`.
 
+## Harness state handoff
+
+- `state/HARNESS_CHANGELOG.md` contains no `pending` or `proposed` status entry.
+- The canonical harness checkout is on shared `main` with concurrent uncommitted
+  changes in `ROTATION_LOG.md`, `PRIOR_ART_LOG.md`, `SCORECARD.md`, tick state,
+  and Graphify state. Copying those bytes into a new branch would take ownership
+  of another writer's uncommitted state; appending directly would violate the
+  isolated-branch rule. The canonical rotation log was therefore left untouched.
+- This pushed report is the append-ready Tick 133 receipt. The harness state
+  owner should append its compact ruling after committing or explicitly
+  transferring the shared state.
+
 Final public ruling: **PATCH**
