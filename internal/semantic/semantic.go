@@ -35,6 +35,15 @@ import (
 // MinChars skips trivial messages (greetings, acks).
 const MinChars = 12
 
+// DefaultBatchItems is the max items grouped into a single batch for embedding.
+const DefaultBatchItems = 512
+
+// DefaultBatchChars is the max characters per batch for embedding.
+const DefaultBatchChars = 500000
+
+// DefaultMaxWorkers is the max concurrent worker goroutines for embedding.
+const DefaultMaxWorkers = 24
+
 // RRFConstant is the reciprocal-rank-fusion k.
 const RRFConstant = 60
 
@@ -193,14 +202,14 @@ func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew 
 		return added, nil
 	}
 
-	// Batch path: group into batches bounded by 128 items OR 150000 characters.
+	// Batch path: group into batches bounded by DefaultBatchItems OR DefaultBatchChars.
 	var batches [][]embedItem
 	var currentBatch []embedItem
 	currentChars := 0
 
 	for _, item := range toEmbed {
 		itemChars := len(item.text)
-		if len(currentBatch) > 0 && (len(currentBatch) >= 128 || currentChars+itemChars > 150000) {
+		if len(currentBatch) > 0 && (len(currentBatch) >= DefaultBatchItems || currentChars+itemChars > DefaultBatchChars) {
 			batches = append(batches, currentBatch)
 			currentBatch = nil
 			currentChars = 0
@@ -212,13 +221,13 @@ func VecIndex(ctx context.Context, con *sql.DB, embedder embed.Embedder, maxNew 
 		batches = append(batches, currentBatch)
 	}
 
-	// Concurrent HTTP embedding (up to 8 batches) funneled back to single-threaded DB writes.
+	// Concurrent HTTP embedding (up to DefaultMaxWorkers batches) funneled back to single-threaded DB writes.
 	type vecResult struct {
 		item embedItem
 		vec  []float64
 	}
 
-	numWorkers := min(8, len(batches))
+	numWorkers := min(DefaultMaxWorkers, len(batches))
 
 	batchChan := make(chan []embedItem, len(batches))
 	for _, b := range batches {

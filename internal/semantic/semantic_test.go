@@ -765,3 +765,15 @@ func TestVecIndex_DBUpsertError_NoGoroutineLeak(t *testing.T) {
 		t.Fatal("expected error from VecIndex when chunk_vec table is dropped, got nil")
 	}
 }
+
+func TestVecIndex_BatchConstants(t *testing.T) {
+	if DefaultBatchItems != 512 {
+		t.Errorf("DefaultBatchItems = %d, want 512", DefaultBatchItems)
+	}
+	if DefaultBatchChars != 500000 {
+		t.Errorf("DefaultBatchChars = %d, want 500000", DefaultBatchChars)
+	}
+	if DefaultMaxWorkers != 24 {
+		t.Errorf("DefaultMaxWorkers = %d, want 24", DefaultMaxWorkers)
+	}
+}
