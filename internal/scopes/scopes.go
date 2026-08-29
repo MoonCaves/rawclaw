@@ -18,6 +18,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/source/goose"
+	"github.com/MoonCaves/rawclaw/internal/source/opencode"
 	"github.com/MoonCaves/rawclaw/internal/source/pi"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -57,6 +58,9 @@ func All(ctx context.Context, sourceFilter string, reindex bool, pathPreds ...fu
 	}
 	if sourceFilter == "" || sourceFilter == "pi" {
 		out = append(out, containerScopes(pi.ID, pi.New(), piLabel, reindex, pathPred)...)
+	}
+	if sourceFilter == "" || sourceFilter == "opencode" {
+		out = append(out, containerScopes(opencode.ID, opencode.New(), opencodeLabel, reindex, pathPred)...)
 	}
 	if sourceFilter == "" || sourceFilter == "goose" {
 		if GooseOptedIn(sourceFilter) {
@@ -163,6 +167,9 @@ func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 		if strings.HasPrefix(base, "pi-") {
 			continue // pi dbs are enumerated + reconciled by Pi()
 		}
+		if strings.HasPrefix(base, "opencode-") {
+			continue // opencode dbs are enumerated + reconciled by OpenCode()
+		}
 		if strings.HasPrefix(base, index.ArchiveDBPrefix) {
 			continue // archive-replica dbs are enumerated by Archive(); their
 			// live source is the clone's machine dir, never an orphaned project
@@ -238,6 +245,21 @@ func RefreshPiCWD(cwd string) {
 
 func piLabel(cwd string) string {
 	return defaultContainerLabel(pi.ID, cwd)
+}
+
+// OpenCode discovers OpenCode / Crush sessions, groups them by recorded cwd,
+// ingests each group into its OWN db, and returns eager scopes carrying that db + cwd.
+func OpenCode(reindex bool) []view.Scope {
+	return containerScopes(opencode.ID, opencode.New(), opencodeLabel, reindex)
+}
+
+// RefreshOpenCodeCWD refreshes the OpenCode index db for a given working dir.
+func RefreshOpenCodeCWD(cwd string) {
+	refreshContainerCWD(opencode.ID, opencode.New(), cwd)
+}
+
+func opencodeLabel(cwd string) string {
+	return defaultContainerLabel(opencode.ID, cwd)
 }
 
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope

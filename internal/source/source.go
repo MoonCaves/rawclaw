@@ -108,6 +108,8 @@ func DetectID(path string) string {
 // tool and session ID.
 func ResumeArgv(sourceTool, sessionID string) []string {
 	switch sourceTool {
+	case "opencode":
+		return []string{"opencode", "--session", sessionID}
 	case "pi":
 		return []string{"pi", "--session", sessionID}
 	case "codex":
