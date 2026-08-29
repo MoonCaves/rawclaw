@@ -228,13 +228,13 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.BoolVar(&opts.All, "all", false, "cover every project: the search default already, and the widener for bare browse and --stats")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
 	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
-	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|antigravity|goose); default searches all (goose discovery is opt-in: pass --source goose or set RAWCLAW_GOOSE=1)")
+	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|antigravity|goose|pi); default searches all (goose discovery is opt-in: pass --source goose or set RAWCLAW_GOOSE=1)")
 	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
 	f.BoolVar(&opts.IncludeTools, "include-tools", false, "also match/show tool calls + tool-only hits")
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
 	f.BoolVar(&opts.Reindex, "reindex", false, "force a full re-index before searching or browsing")
 	f.BoolVar(&opts.JSON, "json", false, "machine-readable JSON output (for agents/scripts)")
-	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready resume command (claude/codex/agy/goose) for a session id (use the 8-char id from search output)")
+	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready resume command (claude/codex/agy/goose/pi) for a session id (use the 8-char id from search output)")
 	f.BoolVar(&opts.Stats, "stats", false, "corpus overview (sessions/messages/date span) for this project, or --all for every project")
 	f.StringVar(&opts.Since, "since", "", "only results on/after this date")
 	f.StringVar(&opts.Before, "before", "", "only results on/before this date")
@@ -945,6 +945,7 @@ func runResume(w io.Writer, o *Options) error {
 	}{
 		{"codex", scopes.Codex(false)},
 		{"antigravity", scopes.Antigravity(false)},
+		{"pi", scopes.Pi(false)},
 		{"goose", gooseResumeScopes()},
 	} {
 		for _, h := range scopeResumeHits(entry.scopes, o.Resume) {
@@ -1843,6 +1844,9 @@ func refreshThisProject(o *Options) {
 	}
 	if o.Source == "" || o.Source == "codex" {
 		scopes.RefreshCodexCWD(expDir)
+	}
+	if o.Source == "" || o.Source == "pi" {
+		scopes.RefreshPiCWD(expDir)
 	}
 }
 
