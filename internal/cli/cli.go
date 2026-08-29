@@ -7,6 +7,7 @@ package cli
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/MoonCaves/rawclaw/internal/adapters"
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
+	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/embed"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
@@ -905,14 +907,26 @@ func reindexConsolidated(ctx context.Context, emb embed.Embedder) (int, error) {
 // across all registered sources; if matches span multiple sessions (even across
 // different runtimes), it reports global ambiguity. If local runtimes yield
 // no match, it falls back to archive replicas.
+type resumeCandidate struct {
+	hit paths.SessionHit
+	src string
+}
+
 func runResume(w io.Writer, o *Options) error {
-	type resumeCandidate struct {
-		hit paths.SessionHit
-		src string
-	}
 	var matches []resumeCandidate
+	if isFullResumeID(o.Resume) {
+		var complete, metadataGuard bool
+		matches, complete, metadataGuard = resumeExactMetadata(o.Resume)
+		if complete || metadataGuard {
+			if metadataGuard && len(matches) == 0 {
+				fmt.Fprintf(w, "Session %s is known, but RawClaw cannot produce a safe local resume command for it.\n", o.Resume)
+				return nil
+			}
+			return emitResumeMatches(w, o, matches, false)
+		}
+	}
 	for _, h := range paths.ResolveSession(o.Resume) {
-		matches = append(matches, resumeCandidate{hit: h, src: "claude"})
+		matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: "claude"})
 	}
 	for _, entry := range []struct {
 		src    string
@@ -923,13 +937,19 @@ func runResume(w io.Writer, o *Options) error {
 		{"goose", gooseResumeScopes()},
 	} {
 		for _, h := range scopeResumeHits(entry.scopes, o.Resume) {
-			matches = append(matches, resumeCandidate{hit: h, src: entry.src})
+			matches = appendResumeCandidate(matches, resumeCandidate{hit: h, src: entry.src})
 		}
 	}
 
+	return emitResumeMatches(w, o, matches, true)
+}
+
+func emitResumeMatches(w io.Writer, o *Options, matches []resumeCandidate, allowArchiveFallback bool) error {
 	if len(matches) == 0 {
-		if handled, err := resumeForeign(w, o); handled {
-			return err
+		if allowArchiveFallback {
+			if handled, err := resumeForeign(w, o); handled {
+				return err
+			}
 		}
 		fmt.Fprintf(w, "No session id starts with '%s'. Use the 8-char id from search output, e.g. [… · a1b2c3d4 · …].\n", o.Resume)
 		return nil
@@ -966,6 +986,158 @@ func runResume(w io.Writer, o *Options) error {
 	}
 	fmt.Fprintf(w, "Resume this session (%s):\n\n  %s\n", m.hit.Project, cmd)
 	return nil
+}
+
+func isFullResumeID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	for i, r := range id {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if r != '-' {
+				return false
+			}
+			continue
+		}
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// resumeExactMetadata answers known full IDs without constructing scopes. The
+// durable vault is checked first because it survives source-file deletion.
+func resumeExactMetadata(id string) ([]resumeCandidate, bool, bool) {
+	regs := sources.Registered()
+	supported := make(map[string]bool, len(regs))
+	for _, r := range regs {
+		supported[r.ID] = true
+	}
+	meta := resumeMetadata{namedSources: make(map[string]struct{})}
+	if m, _, found := durable.Exact(id); found {
+		classifyResumeMetadata(&meta, id, m.Source, m.SourcePath, m.CWD,
+			m.OnlyCopySince != 0, m.Origin != "", m.IsSubagent, m.ParentID, supported)
+	}
+	conMeta := resumeConsolidatedMetadata(id, supported)
+	meta.blocked = meta.blocked || conMeta.blocked
+	meta.unknown = meta.unknown || conMeta.unknown
+	for src := range conMeta.namedSources {
+		meta.namedSources[src] = struct{}{}
+	}
+	for _, candidate := range conMeta.matches {
+		meta.matches = appendResumeCandidate(meta.matches, candidate)
+	}
+	if len(meta.matches) > 0 {
+		return meta.matches, true, true
+	}
+	if meta.blocked {
+		return nil, true, true
+	}
+
+	complete := true
+	for _, r := range regs {
+		if len(meta.namedSources) > 0 {
+			if _, ok := meta.namedSources[r.ID]; !ok {
+				continue
+			}
+		}
+		if r.ID == "goose" && !scopes.GooseOptedIn("") {
+			continue
+		}
+		if r.Lookup == nil {
+			complete = false
+			continue
+		}
+		containers, err := r.Lookup(id)
+		if err != nil {
+			complete = false
+			continue
+		}
+		for _, c := range containers {
+			if c.ID == id && !c.IsSubagent && c.ParentID == "" {
+				meta.matches = appendResumeCandidate(meta.matches, resumeCandidate{hit: paths.SessionHit{SessionID: id, CWD: c.CWD, Project: filepath.Base(c.CWD)}, src: r.ID})
+			}
+		}
+	}
+	return meta.matches, complete && !meta.unknown, false
+}
+
+type resumeMetadata struct {
+	matches      []resumeCandidate
+	blocked      bool
+	unknown      bool
+	namedSources map[string]struct{}
+}
+
+func classifyResumeMetadata(meta *resumeMetadata, id, src, path, cwd string, retained, foreign, subagent bool, parent string, supported map[string]bool) {
+	switch {
+	case retained, foreign, subagent, parent != "":
+		meta.blocked = true
+	case src == "" || !supported[src]:
+		meta.unknown = true
+	default:
+		meta.namedSources[src] = struct{}{}
+		if regularFile(strings.Split(path, "#")[0]) {
+			meta.matches = appendResumeCandidate(meta.matches, resumeCandidate{hit: paths.SessionHit{SessionID: id, CWD: cwd, Project: filepath.Base(cwd)}, src: src})
+		}
+	}
+}
+
+func resumeConsolidatedMetadata(id string, supported map[string]bool) resumeMetadata {
+	meta := resumeMetadata{namedSources: make(map[string]struct{})}
+	con, _, err := index.OpenConsolidated()
+	if err != nil {
+		return meta
+	}
+	defer con.Close()
+	rows, err := con.Query(`SELECT session_id, COALESCE(project,''), COALESCE(source_tool,''),
+		COALESCE(source_path,''), COALESCE(cwd,''), COALESCE(origin_machine,''),
+		only_copy_since, is_subagent, COALESCE(parent_id,'') FROM session_sources WHERE session_id=?
+		UNION ALL
+		SELECT id, COALESCE(project,''), COALESCE(source_tool,''), COALESCE(source_path,''),
+			COALESCE(cwd,''), COALESCE(origin_machine,''), only_copy_since, is_subagent,
+			COALESCE(parent_id,'')
+		FROM sessions WHERE id=? AND NOT EXISTS (SELECT 1 FROM session_sources WHERE session_id=?)`, id, id, id)
+	if err != nil {
+		return meta
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sid, project, src, path, cwd, origin string
+		var onlyCopy sql.NullFloat64
+		var sub int
+		var parent string
+		if err := rows.Scan(&sid, &project, &src, &path, &cwd, &origin, &onlyCopy, &sub, &parent); err != nil {
+			return resumeMetadata{namedSources: make(map[string]struct{})}
+		}
+		before := len(meta.matches)
+		classifyResumeMetadata(&meta, sid, src, path, cwd, onlyCopy.Valid, origin != "", sub != 0, parent, supported)
+		if len(meta.matches) > before && project != "" {
+			meta.matches[len(meta.matches)-1].hit.Project = project
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return resumeMetadata{namedSources: make(map[string]struct{})}
+	}
+	return meta
+}
+
+func regularFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular()
+}
+
+func appendResumeCandidate(matches []resumeCandidate, candidate resumeCandidate) []resumeCandidate {
+	for _, m := range matches {
+		if m.src == candidate.src && m.hit.SessionID == candidate.hit.SessionID {
+			return matches
+		}
+	}
+	return append(matches, candidate)
 }
 
 // resumeCommand builds the paste-ready resume command for a session using the

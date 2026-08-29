@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -42,7 +43,64 @@ func Registration() source.Registration {
 		ID:     "codex",
 		Detect: detect,
 		New:    func() source.Source { return New() },
+		Lookup: lookup,
 	}
+}
+
+func lookup(id string) ([]source.Container, error) {
+	if id == "" {
+		return nil, nil
+	}
+	root := SessionsRoot()
+	if root == "" {
+		return nil, nil
+	}
+	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+		return nil, nil
+	}
+	var out []source.Container
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		if standardRolloutName(d.Name()) && !strings.Contains(d.Name(), id) {
+			return nil
+		}
+		m, ok := readMeta(path)
+		if ok && m.id == id && !m.isChild() {
+			out = append(out, source.Container{ID: id, Path: path, CWD: m.cwd})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func standardRolloutName(name string) bool {
+	if !isRollout(name) || len(name) < len("rollout-.jsonl")+36 {
+		return false
+	}
+	base := strings.TrimSuffix(name, ".jsonl")
+	rest := base[len("rollout-"):]
+	if len(rest) < len("2006-01-02T15-04-05")+1+36 || rest[len(rest)-37] != '-' {
+		return false
+	}
+	stamp := rest[:len(rest)-37]
+	if _, err := time.Parse("2006-01-02T15-04-05", stamp); err != nil {
+		return false
+	}
+	u := rest[len(rest)-36:]
+	for i, r := range u {
+		if (i == 8 || i == 13 || i == 18 || i == 23) && r == '-' {
+			continue
+		}
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // detect reports whether path lives under a Codex sessions tree.

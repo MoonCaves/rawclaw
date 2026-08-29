@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -39,7 +40,31 @@ func Registration() source.Registration {
 		ID:     "claude",
 		Detect: detect,
 		New:    func() source.Source { return New() },
+		Lookup: lookup,
 	}
+}
+
+func lookup(id string) ([]source.Container, error) {
+	if id == "" || strings.ContainsAny(id, "/\\") {
+		return nil, nil
+	}
+	var out []source.Container
+	if e, err := paths.ReadCatalogEntry(filepath.Join(paths.CatalogDir(), id)); err == nil && e.Source == "claude" && e.SessionID == id && e.TranscriptPath != "" {
+		if fi, statErr := os.Stat(e.TranscriptPath); statErr == nil && fi.Mode().IsRegular() {
+			cwd := e.CWD
+			if cwd == "" {
+				cwd = paths.FileCWD(e.TranscriptPath)
+			}
+			out = append(out, source.Container{ID: id, Path: e.TranscriptPath, CWD: cwd})
+		}
+	}
+	for _, dir := range paths.AllProjectDirs() {
+		p := filepath.Join(dir, id+".jsonl")
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+			out = append(out, source.Container{ID: id, Path: p, CWD: paths.ProjectCWD(dir)})
+		}
+	}
+	return out, nil
 }
 
 // detect reports whether path lives under a Claude Code projects tree.
