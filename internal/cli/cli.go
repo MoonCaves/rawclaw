@@ -841,8 +841,19 @@ func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool)
 // projects and/or Codex cwd-groups — via the scopes enumerator. source ""
 // spans all; "claude"/"codex" narrows. ctx (the run's watchdog context)
 // bounds the archive enumeration's git probes.
-func allScope(ctx context.Context, source string, reindex bool) []view.Scope {
-	return scopes.All(ctx, source, reindex)
+func allScope(ctx context.Context, source string, reindex bool, paths ...string) []view.Scope {
+	var pathPred func(string) bool
+	if len(paths) > 0 {
+		include := paths[0]
+		exclude := ""
+		if len(paths) > 1 {
+			exclude = paths[1]
+		}
+		if include != "" || exclude != "" {
+			pathPred = query.PathPredicate(include, exclude)
+		}
+	}
+	return scopes.All(ctx, source, reindex, pathPred)
 }
 
 // runReindexVectors builds/updates the semantic index for the scope.
@@ -1411,7 +1422,7 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 			}
 			universe = sc
 		} else {
-			universe = allScope(ctx, o.Source, o.Reindex)
+			universe = allScope(ctx, o.Source, o.Reindex, o.IncludePath, o.ExcludePath)
 		}
 		return runBrowseScoped(w, o, universe)
 	}
@@ -1728,7 +1739,9 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		sopts.ScopeFallback = func() []view.Scope { return sc }
 		label = "on " + paths.ProjectLabel(td)
 	} else {
-		sopts.ScopeFallback = func() []view.Scope { return allScope(ctx, o.Source, o.Reindex) }
+		sopts.ScopeFallback = func() []view.Scope {
+			return allScope(ctx, o.Source, o.Reindex, o.IncludePath, o.ExcludePath)
+		}
 		label = "across all projects"
 	}
 
