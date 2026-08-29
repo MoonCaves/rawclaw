@@ -236,16 +236,8 @@ func RefreshPiCWD(cwd string) {
 	refreshContainerCWD(pi.ID, pi.New(), cwd)
 }
 
-func piDBPath(cwd string) string {
-	return containerDBPath(pi.ID, cwd)
-}
-
 func piLabel(cwd string) string {
 	return defaultContainerLabel(pi.ID, cwd)
-}
-
-func piOrphanLabel(dbFileName string) string {
-	return containerOrphanLabel(pi.ID, dbFileName)
 }
 
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope

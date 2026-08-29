@@ -316,9 +316,10 @@ func (a *Adapter) convertRecord(sessionID string, rec MessageRecord, ordinal int
 			return model.Message{}, false
 		}
 		role := rec.Message.Role
-		if role == "" {
+		switch role {
+		case "":
 			role = "user"
-		} else if role == "toolResult" {
+		case "toolResult":
 			role = "assistant"
 		}
 
