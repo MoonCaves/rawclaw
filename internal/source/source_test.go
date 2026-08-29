@@ -45,6 +45,7 @@ func TestResumeCommand_QuotesHostileCWD(t *testing.T) {
 // only has to change here.
 func TestResumeCommand_PerSourceVerb(t *testing.T) {
 	for _, tc := range []struct{ src, want string }{
+		{"pi", "pi --session S"},
 		{"claude", "claude --resume S"},
 		{"codex", "codex resume S"},
 		{"antigravity", "agy --conversation S"},

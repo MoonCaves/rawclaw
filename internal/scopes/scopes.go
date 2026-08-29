@@ -18,6 +18,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/source/goose"
+	"github.com/MoonCaves/rawclaw/internal/source/pi"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -53,6 +54,9 @@ func All(ctx context.Context, sourceFilter string, reindex bool, pathPreds ...fu
 	}
 	if sourceFilter == "" || sourceFilter == "antigravity" {
 		out = append(out, containerScopes(antigravity.ID, antigravity.New(), antigravityLabel, reindex, pathPred)...)
+	}
+	if sourceFilter == "" || sourceFilter == "pi" {
+		out = append(out, containerScopes(pi.ID, pi.New(), piLabel, reindex, pathPred)...)
 	}
 	if sourceFilter == "" || sourceFilter == "goose" {
 		if GooseOptedIn(sourceFilter) {
@@ -156,6 +160,9 @@ func orphanClaudeScopes(liveDBs map[string]struct{}) []view.Scope {
 		if strings.HasPrefix(base, "goose-") {
 			continue // goose dbs are enumerated + reconciled by Goose()
 		}
+		if strings.HasPrefix(base, "pi-") {
+			continue // pi dbs are enumerated + reconciled by Pi()
+		}
 		if strings.HasPrefix(base, index.ArchiveDBPrefix) {
 			continue // archive-replica dbs are enumerated by Archive(); their
 			// live source is the clone's machine dir, never an orphaned project
@@ -216,6 +223,21 @@ func codexLabel(cwd string) string {
 
 func codexOrphanLabel(dbFileName string) string {
 	return containerOrphanLabel(codex.Registration().ID, dbFileName)
+}
+
+// Pi discovers Pi agent sessions, groups them by recorded cwd, ingests each
+// group into its OWN db, and returns eager scopes carrying that db + cwd.
+func Pi(reindex bool) []view.Scope {
+	return containerScopes(pi.ID, pi.New(), piLabel, reindex)
+}
+
+// RefreshPiCWD refreshes the Pi index db for a given working dir.
+func RefreshPiCWD(cwd string) {
+	refreshContainerCWD(pi.ID, pi.New(), cwd)
+}
+
+func piLabel(cwd string) string {
+	return defaultContainerLabel(pi.ID, cwd)
 }
 
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope
