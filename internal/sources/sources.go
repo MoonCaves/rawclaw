@@ -11,6 +11,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/claude"
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/source/goose"
+	"github.com/MoonCaves/rawclaw/internal/source/opencode"
 	"github.com/MoonCaves/rawclaw/internal/source/pi"
 )
 
@@ -26,5 +27,6 @@ func Registered() []source.Registration {
 	source.Register(antigravity.Registration())
 	source.Register(goose.Registration())
 	source.Register(pi.Registration())
+	source.Register(opencode.Registration())
 	return source.Registered()
 }
