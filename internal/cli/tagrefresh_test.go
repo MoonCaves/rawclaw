@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/paths"
@@ -26,6 +27,349 @@ type tagTestSource struct {
 	messagesErr   error
 	discoverCalls int
 	messagesCalls int
+}
+
+func TestRunResumeDoesNotEmitRetainedLocalCommand(t *testing.T) {
+	isolateResume(t)
+	id := "87783881-b4b8-4694-8095-12c180e13643"
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude", CWD: "/gone/project"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := durable.SetOnlyCopySince(id, 1780000000); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "claude --resume") {
+		t.Fatalf("retained session emitted runnable local command: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "cannot produce a safe local resume command") {
+		t.Fatalf("retained session did not explain why resume is unavailable: %s", out.String())
+	}
+}
+
+func isolateResume(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(home, "catalog"))
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(home, ".gemini", "antigravity-cli"))
+	t.Setenv("GOOSE_HOME", filepath.Join(home, ".goose"))
+	t.Setenv("RAWCLAW_GOOSE", "")
+	return home
+}
+
+func registerResumeSources(t *testing.T, regs ...source.Registration) {
+	t.Helper()
+	orig := source.Registered()
+	source.ResetForTesting(regs)
+	t.Cleanup(func() { source.ResetForTesting(orig) })
+}
+
+func resumeLookupRegistration(id, sid, cwd string) source.Registration {
+	return source.Registration{
+		ID: id,
+		Lookup: func(fullID string) ([]source.Container, error) {
+			if fullID != sid {
+				return nil, nil
+			}
+			return []source.Container{{ID: sid, CWD: cwd}}, nil
+		},
+	}
+}
+
+func TestRunResumePreservesCrossSourceAmbiguity(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-123456789001"
+	registerResumeSources(t,
+		resumeLookupRegistration("resume-a", id, "/project/a"),
+		resumeLookupRegistration("resume-b", id, "/project/b"),
+	)
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "2 sessions match") {
+		t.Fatalf("cross-source exact collision was not ambiguous:\n%s", out.String())
+	}
+}
+
+func TestRunResumeFindsUncatalogedLiveExactHitWithEmptyStore(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-123456789002"
+	registerResumeSources(t, resumeLookupRegistration("resume-live", id, "/project/live"))
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "claude --resume "+id) {
+		t.Fatalf("uncataloged exact live hit was not resolved:\n%s", out.String())
+	}
+}
+
+func TestRunResumeAuthoritativeMetadataSkipsAdapterLookup(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-12345678900a"
+	sourcePath := filepath.Join(t.TempDir(), "live.jsonl")
+	writeTagSourceFile(t, sourcePath, "{}\n")
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "resume-live", CWD: "/live", SourcePath: sourcePath}, nil); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	registerResumeSources(t, source.Registration{
+		ID: "resume-live",
+		Lookup: func(string) ([]source.Container, error) {
+			called = true
+			return nil, nil
+		},
+	})
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("authoritative live metadata should not invoke adapter Lookup")
+	}
+	if !strings.Contains(out.String(), "claude --resume "+id) {
+		t.Fatalf("authoritative metadata did not produce a resume command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeParentMetadataSkipsAdapterLookup(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-12345678900c"
+	sourcePath := filepath.Join(t.TempDir(), "parent.jsonl")
+	writeTagSourceFile(t, sourcePath, "{}\n")
+	con, err := store.ConnectRW(index.ConsolidatedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rebuild(con); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	if _, err := con.Exec(`INSERT INTO sessions
+		(id, is_subagent, parent_id, source_tool, source_path, project, cwd)
+		VALUES (?, 0, ?, 'resume-live', ?, 'fork', '/fork')`, id, "parent-id", sourcePath); err != nil {
+		con.Close()
+		t.Fatal(err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	registerResumeSources(t, source.Registration{
+		ID: "resume-live",
+		Lookup: func(string) ([]source.Container, error) {
+			called = true
+			return []source.Container{{ID: id, CWD: "/live"}}, nil
+		},
+	})
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("parent metadata should not invoke adapter Lookup")
+	}
+	if strings.Contains(out.String(), "--resume "+id) {
+		t.Fatalf("parent metadata emitted a runnable command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeStaleMetadataProbesOnlyNamedSource(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-12345678900b"
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "resume-a", CWD: "/stale", SourcePath: "/missing/live.jsonl"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	calledA, calledB := false, false
+	registerResumeSources(t,
+		source.Registration{
+			ID: "resume-a",
+			Lookup: func(string) ([]source.Container, error) {
+				calledA = true
+				return nil, nil
+			},
+		},
+		source.Registration{
+			ID: "resume-b",
+			Lookup: func(string) ([]source.Container, error) {
+				calledB = true
+				return nil, nil
+			},
+		},
+	)
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if !calledA || calledB {
+		t.Fatalf("stale metadata probes: named=%t unrelated=%t", calledA, calledB)
+	}
+}
+
+func TestRunResumeIncompleteExactLookupDeduplicatesCatalogFallback(t *testing.T) {
+	isolateResume(t)
+	configDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	transcriptDir := filepath.Join(configDir, "projects", "catalog-project")
+	if err := os.MkdirAll(transcriptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "12345678-1234-4234-8234-123456789003"
+	transcriptPath := filepath.Join(transcriptDir, id+".jsonl")
+	writeTagSourceFile(t, transcriptPath, `{"cwd":"/project/catalog"}`+"\n")
+	if err := paths.WriteCatalogEntry(os.Getenv("RAWCLAW_CATALOG_DIR"), paths.CatalogEntry{
+		SessionID:      id,
+		TranscriptPath: transcriptPath,
+		CWD:            "/project/catalog",
+		Source:         "claude",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registerResumeSources(t, source.Registration{
+		ID: "resume-broken",
+		Lookup: func(string) ([]source.Container, error) {
+			return nil, errors.New("lookup unavailable")
+		},
+	})
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "2 sessions match") || strings.Count(out.String(), "claude --resume "+id) != 1 {
+		t.Fatalf("incomplete exact lookup duplicated its catalog candidate:\n%s", out.String())
+	}
+}
+
+func TestRunResumeTreats32CharacterUUIDPrefixAsPrefix(t *testing.T) {
+	home := isolateResume(t)
+	projectDir := filepath.Join(home, ".claude", "projects", "prefix-project")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prefix := "12345678-1234-4234-8234-12345678"
+	for _, suffix := range []string{"0004", "0005"} {
+		writeTagSourceFile(t, filepath.Join(projectDir, prefix+suffix+".jsonl"), "{}\n")
+	}
+	if isFullResumeID(prefix) {
+		t.Fatalf("32-character UUID prefix treated as a full ID")
+	}
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: prefix}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "2 sessions match") {
+		t.Fatalf("UUID prefix did not preserve ambiguity:\n%s", out.String())
+	}
+}
+
+func TestRunResumeRetainedMetadataNeverBecomesRunnable(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-123456789006"
+	looksLive := filepath.Join(t.TempDir(), "still-present.jsonl")
+	writeTagSourceFile(t, looksLive, "{}\n")
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude", CWD: "/gone", SourcePath: looksLive}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := durable.SetOnlyCopySince(id, 1780000000); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "--resume "+id) {
+		t.Fatalf("retained metadata emitted a runnable command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeLiveMetadataMissingSourcePathIsNotRunnable(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-123456789007"
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude", CWD: "/missing-source"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "--resume "+id) {
+		t.Fatalf("metadata without a source path emitted a runnable command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeRetainedMetadataDoesNotProbeAnotherSource(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-123456789008"
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude", CWD: "/retained"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := durable.SetOnlyCopySince(id, 1780000000); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	registerResumeSources(t, source.Registration{
+		ID: "resume-live",
+		Lookup: func(string) ([]source.Container, error) {
+			called = true
+			return []source.Container{{ID: id, CWD: "/live"}}, nil
+		},
+	})
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("retained metadata should not probe another source")
+	}
+	if strings.Contains(out.String(), "--resume "+id) {
+		t.Fatalf("retained metadata emitted a runnable command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeRejectsChildExactAdapterContainers(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-123456789009"
+	called := false
+	registerResumeSources(t, source.Registration{
+		ID: "resume-child",
+		Lookup: func(string) ([]source.Container, error) {
+			called = true
+			return []source.Container{
+				{ID: id, CWD: "/subagent", IsSubagent: true},
+				{ID: id, CWD: "/fork", ParentID: "parent"},
+			}, nil
+		},
+	})
+
+	var out strings.Builder
+	if err := runResume(&out, &Options{Resume: id}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("exact source lookup was not used")
+	}
+	if strings.Contains(out.String(), "--resume "+id) {
+		t.Fatalf("child exact container emitted a runnable command:\n%s", out.String())
+	}
 }
 
 func (s *tagTestSource) Discover() ([]source.Container, error) {

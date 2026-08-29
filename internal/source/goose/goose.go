@@ -61,7 +61,91 @@ func Registration() source.Registration {
 		ID:     ID,
 		Detect: detect,
 		New:    func() source.Source { return New() },
+		Lookup: lookup,
 	}
+}
+
+func lookup(id string) ([]source.Container, error) {
+	if id == "" {
+		return nil, nil
+	}
+	a := New()
+	var out []source.Container
+	for _, root := range a.roots {
+		if root == "" {
+			continue
+		}
+		if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+			continue
+		}
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d == nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".db") {
+				return nil
+			}
+			if c, ok := lookupDatabase(path, id); ok {
+				out = append(out, c)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func lookupDatabase(path, id string) (source.Container, bool) {
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(1000)", path))
+	if err != nil {
+		return source.Container{}, false
+	}
+	defer db.Close()
+	var exists int
+	if err := db.QueryRow("SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name='sessions'").Scan(&exists); err == nil && exists == 1 {
+		cols, err := tableColumns(db, "sessions")
+		if err != nil {
+			return source.Container{}, false
+		}
+		idCol := findMatchingCol(cols, "id", "session_id", "name")
+		if idCol == "" || !isSafeIdent(idCol) {
+			return source.Container{}, false
+		}
+		cwdCol := findMatchingCol(cols, "working_dir", "cwd", "workdir", "directory", "project_path")
+		parentCol := findMatchingCol(cols, "parent_id", "parent_session_id", "parent", "parent_thread_id")
+		isSubCol := findMatchingCol(cols, "is_subagent", "subagent", "is_sub")
+		selectCols := []string{idCol}
+		if cwdCol != "" && isSafeIdent(cwdCol) {
+			selectCols = append(selectCols, cwdCol)
+		} else {
+			selectCols = append(selectCols, "NULL AS cwd")
+		}
+		if parentCol != "" && isSafeIdent(parentCol) {
+			selectCols = append(selectCols, parentCol)
+		} else {
+			selectCols = append(selectCols, "NULL AS parent_id")
+		}
+		if isSubCol != "" && isSafeIdent(isSubCol) {
+			selectCols = append(selectCols, isSubCol)
+		} else {
+			selectCols = append(selectCols, "NULL AS is_sub")
+		}
+		var gotID, cwd, parent, isSub any
+		if err := db.QueryRow(fmt.Sprintf("SELECT %s FROM sessions WHERE %s=? LIMIT 1", strings.Join(selectCols, ", "), idCol), id).Scan(&gotID, &cwd, &parent, &isSub); err != nil || parseString(gotID) != id {
+			return source.Container{}, false
+		}
+		return source.Container{
+			ID:         id,
+			Path:       path + "#" + id,
+			CWD:        parseString(cwd),
+			IsSubagent: parseBool(isSub),
+			ParentID:   parseString(parent),
+			ResumeArgv: []string{"goose", "session", "--resume", "--session-id", id},
+		}, true
+	}
+	if c, ok, err := standaloneContainer(db, path); err == nil && ok && c.ID == id {
+		return c, true
+	}
+	return source.Container{}, false
 }
 
 // detect reports whether path lives under a Goose sessions tree.
@@ -231,69 +315,117 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, error) {
 		}
 	}
 
-	// Standalone single-session database fallback
+	// Standalone single-session database fallback.
+	c, ok, err := standaloneContainer(db, dbPath)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	return []source.Container{c}, nil
+}
+
+// standaloneContainer identifies a per-session database and extracts its
+// optional metadata. Unrelated SQLite files are ignored unless they have a
+// recognizable Goose message table or session metadata table.
+func standaloneContainer(db *sql.DB, dbPath string) (source.Container, bool, error) {
 	defaultID := strings.TrimSuffix(filepath.Base(dbPath), ".db")
-	cwd := ""
-	parentID := ""
+	metaTable, idCol, valCol, err := findMetadataTable(db)
+	if err != nil {
+		return source.Container{}, false, err
+	}
+	cwd, parentID := "", ""
 	isSub := false
-
-	// Check if session_meta exists
-	var sessionMetaExists int
-	err = db.QueryRow("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name IN ('session_meta', 'metadata') LIMIT 1").Scan(&sessionMetaExists)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("check session_meta table: %w", err)
+	metadataID := false
+	metadata := metaTable != ""
+	if metadata {
+		rows, qErr := db.Query(fmt.Sprintf("SELECT %s, %s FROM %s LIMIT 10", idCol, valCol, metaTable))
+		if qErr != nil {
+			return source.Container{}, false, fmt.Errorf("query %s: %w", metaTable, qErr)
+		}
+		for rows.Next() {
+			var rawKey, rawValue any
+			if scanErr := rows.Scan(&rawKey, &rawValue); scanErr != nil {
+				continue
+			}
+			key := strings.ToLower(strings.TrimSpace(parseString(rawKey)))
+			value := parseString(rawValue)
+			switch key {
+			case "id", "session_id":
+				if value != "" {
+					defaultID = value
+					metadataID = true
+				}
+			case "cwd", "working_dir", "workdir", "directory", "project_path":
+				cwd = value
+			case "parent_id", "parent_session_id", "parent", "parent_thread_id":
+				parentID = value
+			case "is_subagent", "subagent", "is_sub":
+				isSub = parseBool(rawValue)
+			}
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			rows.Close()
+			return source.Container{}, false, fmt.Errorf("iterate %s: %w", metaTable, rowsErr)
+		}
+		rows.Close()
 	}
-	if sessionMetaExists == 1 {
-		cols, err := tableColumns(db, "session_meta")
+
+	if !metadataID {
+		msgTable, err := findMessageTable(db)
 		if err != nil {
-			return nil, fmt.Errorf("inspect session_meta table: %w", err)
+			return source.Container{}, false, fmt.Errorf("find message table: %w", err)
 		}
-		if len(cols) == 0 {
-			cols, err = tableColumns(db, "metadata")
-			if err != nil {
-				return nil, fmt.Errorf("inspect metadata table: %w", err)
-			}
-		}
-		idCol := findMatchingCol(cols, "id", "session_id", "key")
-		valCol := findMatchingCol(cols, "value", "val", "data")
-		if idCol != "" && valCol != "" && isSafeIdent(idCol) && isSafeIdent(valCol) {
-			rows, qErr := db.Query(fmt.Sprintf("SELECT %s, %s FROM session_meta LIMIT 10", idCol, valCol))
-			if qErr != nil {
-				return nil, fmt.Errorf("query session_meta: %w", qErr)
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var k, v string
-				if err := rows.Scan(&k, &v); err != nil {
-					continue
-				}
-				switch strings.ToLower(k) {
-				case "id", "session_id":
-					if v != "" {
-						defaultID = v
-					}
-				case "cwd", "working_dir", "workdir":
-					cwd = v
-				case "parent_id":
-					parentID = v
-				case "is_subagent":
-					isSub = v == "true" || v == "1"
-				}
-			}
-			if err := rows.Err(); err != nil {
-				return nil, fmt.Errorf("iterate session_meta: %w", err)
-			}
+		if msgTable == "" || !messageTableSupported(db, msgTable) {
+			return source.Container{}, false, nil
 		}
 	}
-
-	return []source.Container{{
+	if defaultID == "" {
+		return source.Container{}, false, nil
+	}
+	return source.Container{
 		ID:         defaultID,
 		Path:       dbPath,
 		CWD:        cwd,
 		IsSubagent: isSub,
 		ParentID:   parentID,
 		ResumeArgv: []string{"goose", "session", "--resume", "--session-id", defaultID},
-	}}, nil
+	}, true, nil
+}
+
+func findMetadataTable(db *sql.DB) (table, idCol, valCol string, err error) {
+	for _, candidate := range []string{"session_meta", "metadata"} {
+		var exists int
+		if qErr := db.QueryRow("SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name=? LIMIT 1", candidate).Scan(&exists); qErr != nil {
+			if errors.Is(qErr, sql.ErrNoRows) {
+				continue
+			}
+			return "", "", "", qErr
+		}
+		if exists != 1 {
+			continue
+		}
+		cols, qErr := tableColumns(db, candidate)
+		if qErr != nil {
+			return "", "", "", qErr
+		}
+		id := findMatchingCol(cols, "id", "session_id", "key")
+		value := findMatchingCol(cols, "value", "val", "data")
+		if id != "" && value != "" && isSafeIdent(id) && isSafeIdent(value) {
+			return candidate, id, value, nil
+		}
+	}
+	return "", "", "", nil
+}
+
+func messageTableSupported(db *sql.DB, table string) bool {
+	cols, err := tableColumns(db, table)
+	if err != nil {
+		return false
+	}
+	return findMatchingCol(cols, "role", "sender", "author", "type") != "" &&
+		findMatchingCol(cols, "content_json", "content", "text", "body", "message", "payload") != ""
 }
 
 type rowsIterator interface {

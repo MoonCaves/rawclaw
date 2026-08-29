@@ -318,6 +318,33 @@ func TestDiscoverSkipsUnreadableHeader(t *testing.T) {
 	}
 }
 
+func TestStandardRolloutNameRequiresTimestamp(t *testing.T) {
+	good := "rollout-2026-08-28T12-34-56-12345678-1234-1234-1234-123456789abc.jsonl"
+	if !standardRolloutName(good) {
+		t.Fatalf("standardRolloutName(%q) = false, want true", good)
+	}
+	bad := "rollout-not-a-timestamp-12345678-1234-1234-1234-123456789abc.jsonl"
+	if standardRolloutName(bad) {
+		t.Fatalf("standardRolloutName(%q) = true, want false", bad)
+	}
+}
+
+func TestLookupReadsRenamedRolloutHeader(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	targetID := "12345678-1234-1234-1234-123456789abc"
+	path := filepath.Join(home, "sessions", "2026", "08", "rollout-renamed-12345678-1234-1234-1234-123456789def.jsonl")
+	writeJSONL(t, path, `{"type":"session_meta","payload":{"id":"`+targetID+`","cwd":"/repo","thread_source":"user"}}`)
+
+	got, err := lookup(targetID)
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != targetID || got[0].CWD != "/repo" {
+		t.Fatalf("renamed rollout was not header-read: %+v", got)
+	}
+}
+
 // The minted-uuid ordinal counts only records normalize() indexes, so a record
 // it accepts-but-drops (empty text) must NOT consume an ordinal — otherwise every
 // later ref shifts. This locks the FOOTGUN documented on mintUUID.

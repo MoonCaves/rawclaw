@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/source"
 )
 
@@ -67,6 +68,29 @@ func TestMessagesMissingFile(t *testing.T) {
 	a := New()
 	if _, err := a.Messages(source.Container{Path: filepath.Join(t.TempDir(), "nope.jsonl")}); err == nil {
 		t.Fatal("want error for a missing file, got nil")
+	}
+}
+
+func TestLookupIgnoresForeignCatalogEntry(t *testing.T) {
+	t.Setenv("RAWCLAW_CATALOG_DIR", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+
+	transcript := filepath.Join(t.TempDir(), "session.jsonl")
+	writeJSONL(t, transcript, `{"type":"user","message":{"role":"user","content":"hello"}}`)
+	if err := paths.WriteCatalogEntry(paths.CatalogDir(), paths.CatalogEntry{
+		SessionID:      "session",
+		TranscriptPath: transcript,
+		Source:         "codex",
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry: %v", err)
+	}
+
+	got, err := lookup("session")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("lookup returned foreign catalog entry: %+v", got)
 	}
 }
 

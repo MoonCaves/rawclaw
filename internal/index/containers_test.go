@@ -722,7 +722,6 @@ func TestEvictStaleRefreshDB_RetainsActiveWriterAndDeletesAfterCommit(t *testing
 			return
 		}
 		db.SetMaxOpenConns(1)
-		defer db.Close()
 		if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 			writerReady <- err
 			return
@@ -751,6 +750,10 @@ func TestEvictStaleRefreshDB_RetainsActiveWriterAndDeletesAfterCommit(t *testing
 		<-releaseWriter
 		_, commitErr := conn.ExecContext(context.Background(), "COMMIT")
 		conn.Close()
+		closeErr := db.Close()
+		if commitErr == nil {
+			commitErr = closeErr
+		}
 		writerClosed <- commitErr
 	}()
 	if err := <-writerReady; err != nil {

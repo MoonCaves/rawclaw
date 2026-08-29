@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -53,7 +54,56 @@ func Registration() source.Registration {
 		ID:     ID,
 		Detect: detect,
 		New:    func() source.Source { return New() },
+		Lookup: lookup,
 	}
+}
+
+func lookup(id string) ([]source.Container, error) {
+	if id == "" || strings.ContainsAny(id, "/\\") {
+		return nil, nil
+	}
+	a := New()
+	p := findTranscriptFile(filepath.Join(BrainRoot(a.root), id))
+	if p == "" {
+		return nil, nil
+	}
+	hdr, _ := inspectSessionHeaderAndSubagents(p)
+	parentID := hdr.parentID
+	if parentID == "" {
+		parentID = findParentForChild(BrainRoot(a.root), id, p)
+	}
+	if hdr.isSub || parentID != "" {
+		return nil, nil
+	}
+	cwd := loadHistory(filepath.Join(a.root, "history.jsonl"))[id]
+	if cwd == "" {
+		cwd = hdr.cwd
+	}
+	return []source.Container{{ID: id, Path: p, CWD: cwd, ParentID: parentID}}, nil
+}
+
+// findParentForChild finds a parent transcript whose INVOKE_SUBAGENT step names
+// id. Exact lookup uses this small lineage scan so it can reject a child without
+// running the full discovery walk or reading message bodies.
+func findParentForChild(brainDir, childID, childPath string) string {
+	entries, err := os.ReadDir(brainDir)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		parentID := entry.Name()
+		parentPath := findTranscriptFile(filepath.Join(brainDir, parentID))
+		if parentPath == "" || filepath.Clean(parentPath) == filepath.Clean(childPath) {
+			continue
+		}
+		if slices.Contains(scanSpawnedSubagents(parentPath), childID) {
+			return parentID
+		}
+	}
+	return ""
 }
 
 // detect reports whether path lives under an Antigravity tree.
@@ -322,19 +372,7 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 			if err := json.Unmarshal([]byte(line), &rec); err == nil {
 				if stepType, _ := rec["type"].(string); stepType == "INVOKE_SUBAGENT" {
 					content, _ := rec["content"].(string)
-					if content != "" && strings.Contains(content, "conversationId") {
-						for _, l := range strings.Split(content, "\n") {
-							if strings.Contains(l, "conversationId") {
-								parts := strings.Split(l, ":")
-								if len(parts) >= 2 {
-									cid := strings.Trim(strings.TrimSpace(parts[1]), "\", \t\r")
-									if cid != "" {
-										children = append(children, cid)
-									}
-								}
-							}
-						}
-					}
+					children = append(children, conversationIDs(content)...)
 				}
 			}
 		}
@@ -343,6 +381,29 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 		slog.Warn("antigravity: scan transcript error", "path", path, "err", err)
 	}
 	return hdr, children
+}
+
+func conversationIDs(content string) []string {
+	var ids []string
+	for strings.Contains(content, "conversationId") {
+		key := strings.Index(content, "conversationId")
+		rest := content[key+len("conversationId"):]
+		_, rest, ok := strings.Cut(rest, ":")
+		if !ok {
+			break
+		}
+		value := strings.TrimSpace(rest)
+		value = strings.TrimPrefix(value, "\"")
+		id, after, ok := strings.Cut(value, "\"")
+		if !ok {
+			break
+		}
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+		content = after
+	}
+	return ids
 }
 
 // scanSpawnedSubagents scans a transcript for INVOKE_SUBAGENT steps.

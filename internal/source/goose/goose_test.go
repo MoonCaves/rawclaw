@@ -192,6 +192,119 @@ func TestGooseStandaloneDatabase(t *testing.T) {
 	}
 }
 
+func TestGooseStandaloneMetadataAndLookup(t *testing.T) {
+	isolateHome(t)
+	tmpDir := t.TempDir()
+	sessPath := filepath.Join(tmpDir, "on-disk-name.db")
+	db, err := sql.Open("sqlite", sessPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE metadata (key TEXT PRIMARY KEY, val TEXT);
+		INSERT INTO metadata (key, val) VALUES
+			('id', 'metadata-session'),
+			('cwd', NULL),
+			('parent_id', 'parent-session'),
+			('is_subagent', 'true');
+		CREATE TABLE messages (id INTEGER PRIMARY KEY, role TEXT, content TEXT);
+		INSERT INTO messages (role, content) VALUES ('user', 'hello');
+	`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("setup database: %v", err)
+	}
+	db.Close()
+
+	adapter := NewRoot(tmpDir)
+	containers, err := adapter.Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(containers) != 1 {
+		t.Fatalf("Discover returned %d containers, want 1: %+v", len(containers), containers)
+	}
+	c := containers[0]
+	if c.ID != "metadata-session" || c.CWD != "" || c.ParentID != "parent-session" || !c.IsSubagent {
+		t.Fatalf("metadata was not preserved: %+v", c)
+	}
+
+	t.Setenv("GOOSE_HOME", tmpDir)
+	got, err := lookup("metadata-session")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "metadata-session" || got[0].ParentID != "parent-session" || !got[0].IsSubagent {
+		t.Fatalf("lookup metadata mismatch: %+v", got)
+	}
+	if got, err := lookup("on-disk-name"); err != nil || len(got) != 0 {
+		t.Fatalf("lookup returned ghost filename identity: got=%+v err=%v", got, err)
+	}
+}
+
+func TestGooseLookupPreservesParentWithoutSubagentFlag(t *testing.T) {
+	isolateHome(t)
+	tmpDir := t.TempDir()
+	sessPath := filepath.Join(tmpDir, "sessions.db")
+	db, err := sql.Open("sqlite", sessPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	_, err = db.Exec(`
+		CREATE TABLE sessions (id TEXT PRIMARY KEY, working_dir TEXT, parent_id TEXT, is_subagent INTEGER);
+		INSERT INTO sessions VALUES ('child-session', NULL, 'parent-session', 0);
+	`)
+	db.Close()
+	if err != nil {
+		t.Fatalf("setup database: %v", err)
+	}
+
+	t.Setenv("GOOSE_HOME", tmpDir)
+	got, err := lookup("child-session")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("lookup returned %d containers, want 1: %+v", len(got), got)
+	}
+	if got[0].ParentID != "parent-session" || got[0].IsSubagent {
+		t.Fatalf("lookup did not preserve parent-only metadata: %+v", got[0])
+	}
+}
+
+func TestGooseDiscoverySkipsUnrelatedDatabase(t *testing.T) {
+	isolateHome(t)
+	tmpDir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(tmpDir, "unrelated.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if _, err := db.Exec("CREATE TABLE unrelated (value TEXT)"); err != nil {
+		db.Close()
+		t.Fatalf("create unrelated table: %v", err)
+	}
+	db.Close()
+
+	got, err := NewRoot(tmpDir).Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("unrelated database produced ghost containers: %+v", got)
+	}
+}
+
+func TestGooseLookupMissingRootIsEmpty(t *testing.T) {
+	t.Setenv("GOOSE_HOME", filepath.Join(t.TempDir(), "missing"))
+	got, err := lookup("missing-session")
+	if err != nil {
+		t.Fatalf("lookup missing root: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("lookup missing root returned containers: %+v", got)
+	}
+}
+
 // TestGooseJSONContentExtraction tests parsing structured JSON content payloads.
 func TestGooseJSONContentExtraction(t *testing.T) {
 	isolateHome(t)
