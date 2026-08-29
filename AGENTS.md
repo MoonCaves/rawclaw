@@ -91,3 +91,4 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [CONTRIBUTING.md](CONTRIBUTING.md) — clean checkout → green build: prerequisites, build, test, lint.
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
 - [docs/agents/session-closeout.md](docs/agents/session-closeout.md) — operational closeout semantics for supervisor and harness sessions.
+- [docs/agents/interactive-actions.md](docs/agents/interactive-actions.md) — specification and templates for mobile lockscreen action cards.
