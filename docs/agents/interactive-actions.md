@@ -7,15 +7,27 @@ All autonomous agents, background workers, supervisor harnesses, and CI gates mu
 ## 1. Invariants
 
 - **Never Send Flat Messages**: A notification must never be raw unformatted text. Always include a clear **Title**, contextual **Tags/Emojis**, appropriate **Priority**, and **Action Buttons**.
-- **Tactile Approvals**: Give the human direct 1-tap resolution options on their iPhone lockscreen and Apple Watch (e.g. \`🟢 Approve & Land\`, \`🔴 Hold & Reject\`, \`🔍 View Diff\`).
-- **Private Mesh Routing**: Broadcast exclusively via the private NetBird WireGuard instance at \`https://ntfy.remotelyhuman.com/rh-jay\`.
+- **Tactile Approvals**: Give the human direct 1-tap resolution options on their iPhone lockscreen and Apple Watch (e.g. `🟢 Approve & Land`, `🔴 Hold & Reject`, `🔍 View Diff`, `📋 Copy`).
+- **Private Mesh Routing**: Broadcast exclusively via the private NetBird WireGuard instance at `https://ntfy.remotelyhuman.com/rh-jay`.
 
 ---
 
-## 2. Standard Interactive Payloads
+## 2. The 5 Standard Action Types
+
+| Action Type | Syntax Example | Behavior |
+| :--- | :--- | :--- |
+| **1. HTTP Callback (`http`)** | `http, 🟢 Land PR, https://.../approve?pr=84, method=POST, clear=true` | Emits HTTP request to server in background and auto-dismisses card. |
+| **2. Deep-Link (`view`)** | `view, 🔍 View PR, https://github.com/MoonCaves/rawclaw/pull/84` | Opens web URL or native app scheme in Safari/browser. |
+| **3. Clipboard Copy (`copy`)** | `copy, 📋 Copy Command, rawclaw --stats, clear=true` | Copies text directly to iOS clipboard on tap. |
+| **4. iOS Shortcut (`view`)** | `view, 🎙️ Voice Reply, shortcuts://run-shortcut?name=AskFleet` | Triggers a native Siri Shortcut for ambient voice response. |
+| **5. Rich Attachment (`Attach`)** | `-H "Attach: https://.../graph.png"` | Renders expandable image/artifact directly on lockscreen. |
+
+---
+
+## 3. Production Payloads
 
 ### Pattern A: PR Ready / Code Merge Approval
-\`\`\`bash
+```bash
 curl -s \
   -H "Title: 🚀 PR #84 Passed Checks: Ready to Land" \
   -H "Priority: 4" \
@@ -25,38 +37,37 @@ curl -s \
                http, 🔴 Reject & Hold, https://coolify.remotelyhuman.com/api/agent/reject?pr=84, method=POST, clear=true" \
   -d "Adapter passed all race and conformance tests. Tap to merge into main." \
   "https://ntfy.remotelyhuman.com/rh-jay"
-\`\`\`
+```
 
-### Pattern B: Supervisor / Agent Task Stalled (Human Gate)
-\`\`\`bash
+### Pattern B: Supervisor Session Resume String (1-Tap Copy)
+```bash
 curl -s \
-  -H "Title: ⚠️ Agent Gate: Task Blocked" \
-  -H "Priority: 5" \
-  -H "Tags: warning,rotating_light" \
-  -H "Actions: http, ⚡ Relaunch Worker, https://coolify.remotelyhuman.com/api/agent/relaunch?task=task-123, method=POST, clear=true; \
-               http, 🛑 Kill & Abort, https://coolify.remotelyhuman.com/api/agent/kill?task=task-123, method=POST, clear=true; \
-               view, 📄 View Log, https://coolify.remotelyhuman.com/logs/task-123" \
-  -d "Task task-123 exceeded silence threshold (400s). Choose an action." \
-  "https://ntfy.remotelyhuman.com/rh-jay"
-\`\`\`
-
-### Pattern C: System Health / Uptime Alert
-\`\`\`bash
-curl -s \
-  -H "Title: 🔴 Service Degradation: Muppet Server" \
+  -H "Title: 🔑 Supervisor: Fresh Resume String" \
   -H "Priority: 4" \
-  -H "Tags: red_circle,server" \
-  -H "Actions: http, 🔄 Restart Service, https://coolify.remotelyhuman.com/api/restart?service=glances, method=POST, clear=true; \
-               view, 📊 Open Dashboard, https://glances.remotelyhuman.com" \
-  -d "Connection timeout on 100.78.145.132:443. Tap to restart container." \
+  -H "Tags: key,rocket,clipboard" \
+  -H "Actions: copy, 📋 Copy Resume Command, opencode --session ses_17591f41dffeWhwY35U2RuhERJ, clear=true; \
+               view, 🔍 View Session, https://github.com/MoonCaves/rawclaw/pull/83" \
+  -d "Tap to copy the exact CLI resume command to your clipboard." \
   "https://ntfy.remotelyhuman.com/rh-jay"
-\`\`\`
+```
 
----
-
-## 3. Action Syntax Reference
-
-Format: \`http, <Label>, <URL>, [method=POST], [headers.<Name>=<Value>], [body=<JSON>], [clear=true]\`
-- \`http\`: Emits an HTTP request on tap (background execution).
-- \`view\`: Opens a URL in mobile browser or deep-linked app.
-- \`clear=true\`: Clears the notification immediately after successful action execution.
+### Pattern C: Long-Running Task Completion Hook
+```bash
+notify_on_complete() {
+  local start=$(date +%s)
+  "$@"
+  local status=$?
+  local duration=$(( $(date +%s) - start ))
+  if [ $duration -gt 45 ]; then
+    local title="✅ Task Finished (${duration}s)"
+    [ $status -ne 0 ] && title="❌ Task Failed (${duration}s)"
+    curl -s \
+      -H "Title: $title" \
+      -H "Priority: 3" \
+      -H "Tags: hourglass_flowing_sand,gear" \
+      -d "Command: $* (Exit: $status)" \
+      "https://ntfy.remotelyhuman.com/rh-jay" >/dev/null
+  fi
+  return $status
+}
+```
