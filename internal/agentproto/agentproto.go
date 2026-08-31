@@ -582,11 +582,15 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	// full dedup lets us report Complete=false when the limit hid real candidates
 	// (#2), so an agent that sees N of many knows the set is incomplete.
 	seen := map[string]struct{}{}
-	all := []SearchRef{}
+	allocCap := len(cands)
+	if allocCap > 256 {
+		allocCap = 256
+	}
+	all := make([]SearchRef, 0, allocCap)
 	// picked stays index-parallel to all: the anchor each ref was built from,
 	// kept so the post-ranking topic pass can reach that anchor's database and
 	// message uuid without re-running the search.
-	picked := []retrieve.Anchor{}
+	picked := make([]retrieve.Anchor, 0, allocCap)
 	for _, r := range cands {
 		// A uuid-less anchor (e.g. a summary record) is searchable but not a
 		// citeable read anchor — skip it rather than emit an unresolvable ref.
@@ -620,10 +624,8 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 
 	// Topic labels and last-activity lines are attached HERE — after collection,
 	// fusion, sorting, dedup and capping have all finished — so neither can
-	// influence which conversations come back or in what order. See attachTopics
-	// and attachLastActivity.
-	attachTopics(results, picked)
-	attachLastActivity(results, picked)
+	// influence which conversations come back or in what order. See attachEnrichment.
+	attachEnrichment(results, picked)
 
 	// Never-silent truncation: an agent that sees N must learn the set is larger.
 	// total is the distinct count within the fetch window; if a scope hit the fetch
@@ -1357,13 +1359,15 @@ func currentTurnStart(dbp, sessionID string) int {
 // opens each project's database once. Any failure is silent: a missing topic
 // table or an unreadable database leaves the label empty, which renders exactly
 // as it did before topics existed.
-func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
+// attachEnrichment fills in each result's Topic label and Last activity line in a single pass,
+// opening each backing database exactly once to avoid redundant connection churn.
+func attachEnrichment(refs []SearchRef, anchors []retrieve.Anchor) {
 	if len(refs) == 0 || len(refs) != len(anchors) {
 		return
 	}
 	byDB := map[string][]int{}
 	for i := range anchors {
-		if anchors[i].DBP == "" || anchors[i].UUID == "" {
+		if anchors[i].DBP == "" || (anchors[i].UUID == "" && anchors[i].SessionID == "") {
 			continue
 		}
 		byDB[anchors[i].DBP] = append(byDB[anchors[i].DBP], i)
@@ -1373,15 +1377,32 @@ func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
 		if err != nil {
 			continue
 		}
+		cacheLast := map[string]string{}
 		for _, i := range idxs {
-			topic := store.TopicForMessage(con, anchors[i].SessionID, anchors[i].UUID)
-			if topic == "" {
-				topic = view.SessionPreview(con, anchors[i].SessionID, searchTitleCap)
+			if anchors[i].UUID != "" {
+				topic := store.TopicForMessage(con, anchors[i].SessionID, anchors[i].UUID)
+				if topic == "" {
+					topic = view.SessionPreview(con, anchors[i].SessionID, searchTitleCap)
+				}
+				refs[i].Topic = topic
 			}
-			refs[i].Topic = topic
+
+			if anchors[i].SessionID != "" {
+				sid := anchors[i].SessionID
+				last, done := cacheLast[sid]
+				if !done {
+					last = view.SessionLastActivity(con, sid)
+					cacheLast[sid] = last
+				}
+				refs[i].Last = last
+			}
 		}
 		_ = con.Close()
 	}
+}
+
+func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
+	attachEnrichment(refs, anchors)
 }
 
 // searchTitleCap is the header-line budget for the title. Shorter than a browse
@@ -1389,62 +1410,8 @@ func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
 // id and a project name.
 const searchTitleCap = 70
 
-// attachLastActivity fills in each result's Last line, in place. refs and
-// anchors are index-parallel, exactly as in attachTopics.
-//
-// A search hit is a point in the MIDDLE of a conversation. The hit line said
-// when the match happened and what it said, but never whether the session went
-// anywhere afterwards — in a long session the match can sit hours before the
-// real conclusion. This is the same question a browse row answers with its "now"
-// line, so it reuses the same reader: view.SessionLastActivity, the newest
-// message that still has content once tool runs and injected envelopes are
-// stripped, skipping the runtime's interruption marker. One definition of "real
-// activity", or the two surfaces drift.
-//
-// It carries ba0c430's honesty rule with it: when the whole scanned tail is
-// machinery the lookup returns "" and the hit gets no line, rather than being
-// captioned with a tool result.
-//
-// Like the topic label this is DISPLAY ONLY — run after collection, fusion,
-// sorting, dedup and capping, keyed on results already chosen, so it cannot
-// reach the ranking. TestLastActivityDoesNotAffectOrdering holds the property.
-// The tail is read for the hit's OWN session id, not its lineage root: the hit
-// names one session, and "where that session ended up" is the honest claim.
-//
-// Lookups are grouped by database, so a result set spanning several projects
-// opens each project's database once — this is a per-result query and the
-// grouping is what keeps it one connection per project rather than per hit. Any
-// failure is silent and renders as no line.
 func attachLastActivity(refs []SearchRef, anchors []retrieve.Anchor) {
-	if len(refs) == 0 || len(refs) != len(anchors) {
-		return
-	}
-	byDB := map[string][]int{}
-	for i := range anchors {
-		if anchors[i].DBP == "" || anchors[i].SessionID == "" {
-			continue
-		}
-		byDB[anchors[i].DBP] = append(byDB[anchors[i].DBP], i)
-	}
-	for dbp, idxs := range byDB {
-		con, err := store.ConnectRO(dbp)
-		if err != nil {
-			continue
-		}
-		// Sessions repeat across hits only when the dedup let them through; the
-		// cache spares the duplicate tail read either way.
-		cache := map[string]string{}
-		for _, i := range idxs {
-			sid := anchors[i].SessionID
-			last, done := cache[sid]
-			if !done {
-				last = view.SessionLastActivity(con, sid)
-				cache[sid] = last
-			}
-			refs[i].Last = last
-		}
-		_ = con.Close()
-	}
+	attachEnrichment(refs, anchors)
 }
 
 // sortCandidates orders the merged candidates: newest/oldest sort by ISO;

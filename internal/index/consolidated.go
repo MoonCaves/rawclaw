@@ -1529,7 +1529,7 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 			}
 		}
 		// Subagents: check known subagent transcript subdirectories if present
-		for _, subName := range []string{"subagents", ".claude", ".antigravity"} {
+		for _, subName := range []string{"subagents", ".claude", ".antigravity", ".codex", ".opencode"} {
 			subDir := filepath.Join(cleanTDir, subName)
 			if subEntries, err := os.ReadDir(subDir); err == nil {
 				for _, se := range subEntries {
