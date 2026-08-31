@@ -1757,9 +1757,10 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	// re-consolidation fold. Default search is answer-first: the O(1) per-project
 	// freshness check skips discovery entirely, and stale or UNKNOWN answers from
 	// the consolidated store while a throttled background ingest nudge repairs freshness.
-	if o.Reindex || o.DirSet {
+	switch {
+	case o.Reindex || o.DirSet:
 		refreshThisProject(o)
-	} else if o.ThisProject {
+	case o.ThisProject:
 		td := resolveTDir(o.Dir, o.DirSet)
 		projLabel := ""
 		if td != "" {
@@ -1774,7 +1775,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		if !fresh {
 			refreshThisProject(o)
 		}
-	} else {
+	default:
 		td := resolveTDir(o.Dir, o.DirSet)
 		projLabel := ""
 		if td != "" {
