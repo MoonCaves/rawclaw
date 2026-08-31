@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/MoonCaves/rawclaw/internal/paths"
 )
 
 // rawclawMarker identifies a rawclaw-owned entry by its installed script's
@@ -171,6 +173,85 @@ BANNER
 } | python3 -c 'import json,sys; sys.stdout.write(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext": sys.stdin.buffer.read().decode("utf-8","replace")}}))'
 `
 
+// rawclawPiCatalogExtension is installed in Pi's global extension directory.
+// Pi exposes the complete session identity and transcript path through its
+// session_start extension event, so the catalog claim can be written natively
+// without asking Pi to execute a shell hook.
+const rawclawPiCatalogExtension = `import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { spawn } from "node:child_process";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+const rawclaw = @@RAWCLAW_JSON@@;
+const catalogDir = process.env.RAWCLAW_CATALOG_DIR || join(process.env.XDG_DATA_HOME || join(process.env.HOME || "/tmp", ".local/share"), "rawclaw", "catalog");
+
+export default function (pi: ExtensionAPI) {
+  pi.on("session_start", async (_event, ctx) => {
+    const id = ctx.sessionManager.getSessionId();
+    if (!id || !/^[A-Za-z0-9._-]+$/.test(id)) return;
+    mkdirSync(catalogDir, { recursive: true, mode: 0o755 });
+    const target = join(catalogDir, id);
+    try {
+      writeFileSync(target, JSON.stringify({ session_id: id, transcript_path: ctx.sessionManager.getSessionFile() || "", cwd: ctx.cwd, source: "pi" }) + "\n", { flag: "wx", mode: 0o644 });
+      const child = spawn(rawclaw, ["ingest", id], { detached: true, stdio: "ignore" });
+      child.unref();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  });
+}
+`
+
+// rawclawOpenCodeCatalogPlugin is installed in OpenCode's global plugin
+// directory. OpenCode's session.created event supplies the new session id and
+// the plugin context supplies its working directory; the backing SQLite path
+// is the adapter's stable session URI.
+const rawclawOpenCodeCatalogPlugin = `import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+
+const rawclaw = @@RAWCLAW_JSON@@;
+const catalogDir = process.env.RAWCLAW_CATALOG_DIR || join(process.env.XDG_DATA_HOME || join(process.env.HOME || "/tmp", ".local/share"), "rawclaw", "catalog");
+
+export const RawclawCatalog = async ({ directory }) => ({
+  event: async ({ event }) => {
+    if (event?.type !== "session.created") return;
+    const id = event.properties?.info?.id || event.properties?.session?.id || event.properties?.id;
+    if (!id || !/^[A-Za-z0-9._-]+$/.test(id)) return;
+    mkdirSync(catalogDir, { recursive: true, mode: 0o755 });
+    const target = join(catalogDir, id);
+    try {
+      writeFileSync(target, JSON.stringify({ session_id: id, transcript_path: "opencode.db#" + id, cwd: directory || "", source: "opencode" }) + "\n", { flag: "wx", mode: 0o644 });
+      const child = spawn(rawclaw, ["ingest", id], { detached: true, stdio: "ignore" });
+      child.unref();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  },
+});
+`
+
+// rawclawGooseCatalogScript receives Goose's SessionStart payload. Goose does
+// not include a transcript filename in that payload; its durable session store
+// is therefore recorded as the conventional sessions.db#<id> URI.
+const rawclawGooseCatalogScript = `#!/bin/sh
+set -eu
+input=$(cat)
+session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
+cwd=$(printf '%s' "$input" | sed -n 's/.*"working_dir"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
+case "$session_id" in ''|.*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) exit 0;; esac
+catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
+mkdir -p "$catalog_dir" 2>/dev/null || true
+entry="$catalog_dir/$session_id"
+tmp="$catalog_dir/.tmp.$$.json"
+if (umask 077; set -C; printf '{"session_id":"%s","transcript_path":"sessions.db#%s","cwd":"%s","source":"goose"}\n' "$session_id" "$session_id" "$cwd" > "$tmp") 2>/dev/null; then
+  if mv "$tmp" "$entry" 2>/dev/null; then
+    nohup @@RAWCLAW@@ ingest "$session_id" </dev/null >/dev/null 2>&1 &
+  else rm -f "$tmp"; fi
+fi
+exit 0
+`
+
 const rawclawBanner = `[rawclaw] Raw transcript history for context — the receipts + thought process behind past
 sessions, across every project on this machine (not just this one's native session folder).
 Fast FTS5/BM25 search: cheaper than grepping your own agent's session folders (Claude Code
@@ -262,6 +343,75 @@ func rawclawBinQuoted() string {
 		exe = abs
 	}
 	return shellSingleQuote(exe)
+}
+
+func rawclawBinJSON() string {
+	b, _ := json.Marshal(strings.Trim(rawclawBinQuoted(), "'"))
+	return string(b)
+}
+
+func runtimeConfigPath(env, fallback string, parts ...string) string {
+	base := os.Getenv(env)
+	if base == "" {
+		base = paths.ExpandHome(fallback)
+	}
+	return filepath.Join(append([]string{base}, parts...)...)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func piExtensionPath() string {
+	return runtimeConfigPath("PI_CODING_AGENT_DIR", "~/.pi/agent", "extensions", "rawclaw-catalog.ts")
+}
+
+func goosePluginDir() string        { return filepath.Join(paths.ExpandHome("~/.agents/plugins"), "rawclaw") }
+func goosePluginHookPath() string   { return filepath.Join(goosePluginDir(), "hooks", "hooks.json") }
+func goosePluginScriptPath() string { return filepath.Join(goosePluginDir(), "scripts", "catalog.sh") }
+func openCodePluginPath() string {
+	return runtimeConfigPath("OPENCODE_CONFIG_DIR", "~/.config/opencode", "plugins", "rawclaw.js")
+}
+
+func renderRuntimeScript(tmpl string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(tmpl, "@@RAWCLAW_JSON@@", rawclawBinJSON()), "@@RAWCLAW@@", rawclawBinQuoted())
+}
+
+func installPiBirthHook() error {
+	if err := writeHookScript(piExtensionPath(), renderRuntimeScript(rawclawPiCatalogExtension)); err != nil {
+		return fmt.Errorf("install Pi catalog extension: %w", err)
+	}
+	return nil
+}
+
+func installOpenCodeBirthHook() error {
+	if err := writeHookScript(openCodePluginPath(), renderRuntimeScript(rawclawOpenCodeCatalogPlugin)); err != nil {
+		return fmt.Errorf("install OpenCode catalog plugin: %w", err)
+	}
+	return nil
+}
+
+func installGooseBirthHook() error {
+	if err := writeHookScript(goosePluginScriptPath(), renderRuntimeScript(rawclawGooseCatalogScript)); err != nil {
+		return fmt.Errorf("install Goose catalog hook: %w", err)
+	}
+	data, err := readJSONFile(goosePluginHookPath())
+	if err != nil {
+		return err
+	}
+	hooks, err := ensureHooksMap(data)
+	if err != nil {
+		return err
+	}
+	hooks["SessionStart"] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "${PLUGIN_ROOT}/scripts/catalog.sh"}}}}
+	return writeJSONFile(goosePluginHookPath(), data)
+}
+
+func ejectRuntimeBirthHooks() {
+	for _, p := range []string{piExtensionPath(), openCodePluginPath(), goosePluginScriptPath(), goosePluginHookPath()} {
+		_ = os.Remove(p)
+	}
 }
 
 // rawclawResolveHead is the POSIX-sh preamble every installed hook opens with.
