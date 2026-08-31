@@ -1241,3 +1241,72 @@ func TestAntigravityPrimeScript_MalformedPayloadsDeduplicateAcrossInvocations(t 
 	// Verify at most 1 background ingest call was launched across all 3 turns
 	assertSingleIngestCall(t, logPath, sessionID, "detached ingest did not run on turn 1")
 }
+
+func TestSetup_PiInstallAndEject(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", dir)
+
+	if err := installPiBirthHook(); err != nil {
+		t.Fatalf("installPiBirthHook: %v", err)
+	}
+	p := piExtensionPath()
+	if !fileExists(p) {
+		t.Fatalf("expected pi extension at %s", p)
+	}
+	content, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "pi.on(\"session_start\"") {
+		t.Fatalf("expected session_start in extension content: %s", string(content))
+	}
+
+	ejectPiBirthHook()
+	if fileExists(p) {
+		t.Fatalf("expected pi extension to be removed after eject")
+	}
+}
+
+func TestSetup_OpenCodeInstallAndEject(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENCODE_CONFIG_DIR", dir)
+
+	if err := installOpenCodeBirthHook(); err != nil {
+		t.Fatalf("installOpenCodeBirthHook: %v", err)
+	}
+	p := openCodePluginPath()
+	if !fileExists(p) {
+		t.Fatalf("expected opencode plugin at %s", p)
+	}
+	content, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "session.created") {
+		t.Fatalf("expected session.created in plugin content: %s", string(content))
+	}
+
+	ejectOpenCodeBirthHook()
+	if fileExists(p) {
+		t.Fatalf("expected opencode plugin to be removed after eject")
+	}
+}
+
+func TestSetup_GooseInstallAndEject(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOOSE_HOME", dir)
+
+	if err := installGooseBirthHook(); err != nil {
+		t.Fatalf("installGooseBirthHook: %v", err)
+	}
+	sp := goosePluginScriptPath()
+	hp := goosePluginHookPath()
+	if !fileExists(sp) || !fileExists(hp) {
+		t.Fatalf("expected goose files at %s and %s", sp, hp)
+	}
+
+	ejectGooseBirthHook()
+	if fileExists(sp) || fileExists(hp) {
+		t.Fatalf("expected goose files to be removed after eject")
+	}
+}

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	antigravitysrc "github.com/MoonCaves/rawclaw/internal/source/antigravity"
@@ -101,6 +102,10 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 		}
 	}
 
+	piDetected := !project && (isDir(paths.ExpandHome("~/.pi")) || os.Getenv("PI_CODING_AGENT_DIR") != "")
+	openCodeDetected := !project && (isDir(paths.ExpandHome("~/.config/opencode")) || isDir(paths.ExpandHome("~/.local/share/opencode")) || os.Getenv("OPENCODE_CONFIG_DIR") != "")
+	gooseDetected := !project && (isDir(paths.ExpandHome("~/.config/goose")) || isDir(paths.ExpandHome("~/.local/share/goose")) || os.Getenv("GOOSE_HOME") != "")
+
 	maybePrintProjectTrustWarning(out, targetClaudeCode, project)
 	if codexDetected {
 		maybePrintProjectTrustWarning(out, targetCodex, project)
@@ -121,6 +126,15 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 		fmt.Fprintf(out, "  register it as a PreInvocation hook in %s\n", antigravityHooksPath(antigravityDir))
 	} else {
 		fmt.Fprintf(out, "  Antigravity not detected (no config dir at %q) — skipping that target\n", antigravitysrc.ConfigDir())
+	}
+	if piDetected {
+		fmt.Fprintf(out, "  install Pi catalog extension at %s\n", piExtensionPath())
+	}
+	if openCodeDetected {
+		fmt.Fprintf(out, "  install OpenCode catalog plugin at %s\n", openCodePluginPath())
+	}
+	if gooseDetected {
+		fmt.Fprintf(out, "  install Goose catalog hook in %s\n", goosePluginDir())
 	}
 	fmt.Fprintf(out, "  (every other hook already registered in any file is left untouched)\n\n")
 
@@ -156,6 +170,25 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 		fmt.Fprintf(out, "Installed %s\nRegistered PreInvocation hook in %s\n", hookScriptPath(antigravityDir), antigravityHooksPath(antigravityDir))
 	} else {
 		fmt.Fprintln(out, "Antigravity not detected — skipped that target.")
+	}
+
+	if piDetected {
+		if err := installPiBirthHook(); err != nil {
+			return fmt.Errorf("install Pi hook: %w", err)
+		}
+		fmt.Fprintf(out, "Installed %s\n", piExtensionPath())
+	}
+	if openCodeDetected {
+		if err := installOpenCodeBirthHook(); err != nil {
+			return fmt.Errorf("install OpenCode hook: %w", err)
+		}
+		fmt.Fprintf(out, "Installed %s\n", openCodePluginPath())
+	}
+	if gooseDetected {
+		if err := installGooseBirthHook(); err != nil {
+			return fmt.Errorf("install Goose hook: %w", err)
+		}
+		fmt.Fprintf(out, "Installed Goose catalog hook in %s\n", goosePluginDir())
 	}
 
 	// Point at the optional cross-machine archive without provisioning it: setup
@@ -201,6 +234,10 @@ func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 		}
 	}
 
+	piDetected := !project && (isDir(paths.ExpandHome("~/.pi")) || os.Getenv("PI_CODING_AGENT_DIR") != "")
+	openCodeDetected := !project && (isDir(paths.ExpandHome("~/.config/opencode")) || isDir(paths.ExpandHome("~/.local/share/opencode")) || os.Getenv("OPENCODE_CONFIG_DIR") != "")
+	gooseDetected := !project && (isDir(paths.ExpandHome("~/.config/goose")) || isDir(paths.ExpandHome("~/.local/share/goose")) || os.Getenv("GOOSE_HOME") != "")
+
 	fmt.Fprintf(out, "rawclaw setup --eject will:\n")
 	fmt.Fprintf(out, "  remove the discovery-hook script at %s (if present)\n", scriptPath)
 	fmt.Fprintf(out, "  remove the legacy tagging-queue hook script at %s (if present)\n", legacyTagQueueScriptPath(configDir))
@@ -216,6 +253,15 @@ func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 		fmt.Fprintf(out, "  strip rawclaw's own entry out of %s (if present)\n", antigravityHooksPath(antigravityDir))
 	} else {
 		fmt.Fprintf(out, "  Antigravity not detected (no config dir at %q) — skipping that target\n", antigravitysrc.ConfigDir())
+	}
+	if piDetected {
+		fmt.Fprintf(out, "  remove Pi catalog extension at %s (if present)\n", piExtensionPath())
+	}
+	if openCodeDetected {
+		fmt.Fprintf(out, "  remove OpenCode catalog plugin at %s (if present)\n", openCodePluginPath())
+	}
+	if gooseDetected {
+		fmt.Fprintf(out, "  remove Goose catalog hook in %s (if present)\n", goosePluginDir())
 	}
 	fmt.Fprintf(out, "  (every sibling hook already registered in any file is left untouched)\n\n")
 
@@ -257,6 +303,34 @@ func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 		anyRemoved = anyRemoved || antigravityOutcome.didAnything()
 	} else {
 		fmt.Fprintln(out, "Antigravity not detected — skipped that target.")
+	}
+
+	if piDetected {
+		if fileExists(piExtensionPath()) {
+			ejectPiBirthHook()
+			fmt.Fprintf(out, "Pi: removed %s\n", piExtensionPath())
+			anyRemoved = true
+		} else {
+			fmt.Fprintln(out, "Pi: nothing to remove (already clean).")
+		}
+	}
+	if openCodeDetected {
+		if fileExists(openCodePluginPath()) {
+			ejectOpenCodeBirthHook()
+			fmt.Fprintf(out, "OpenCode: removed %s\n", openCodePluginPath())
+			anyRemoved = true
+		} else {
+			fmt.Fprintln(out, "OpenCode: nothing to remove (already clean).")
+		}
+	}
+	if gooseDetected {
+		if fileExists(goosePluginScriptPath()) || fileExists(goosePluginHookPath()) {
+			ejectGooseBirthHook()
+			fmt.Fprintf(out, "Goose: removed %s\n", goosePluginDir())
+			anyRemoved = true
+		} else {
+			fmt.Fprintln(out, "Goose: nothing to remove (already clean).")
+		}
 	}
 
 	if !anyRemoved {
