@@ -110,6 +110,14 @@ topic-section markers). rawclaw owns the per-session recap (its domain = transcr
 - Likely shape: a `rawclaw recap <sess>` / `rawclaw title <sess>` verb so the logic lives in the tool,
   and hooks/cron just invoke it in the background.
 
+### Multi-Runtime Lifecycle & Closeout Parity — (planned — Jay directive 2026-08-31)
+
+Provide unified `SessionStart` / lifecycle hook priming for RawClaw closeout and auto-tagging across all agent runtimes (**Claude Code**, **Antigravity CLI**, **Codex**, **Hermes**, **Pi**).
+
+- **The Problem:** Claude Code possesses a rich hook pipeline in `settings.json` that injects the natural-language closeout trigger (`prime.sh` banner: "whenever the user signals that the session is ending..."), allowing users to close out with natural language ("let's close it out", "wrap up", "done"). Other runtimes (`agy`, `codex`, `hermes`) lack this hook infrastructure, causing agents to skip RawClaw topic tagging on exit.
+- **Architectural Directive (Jay, 2026-08-31):** Do **NOT** bloat `AGENTS.md` with closeout boilerplate — keep `AGENTS.md` word count as small and tight as possible.
+- **The Design:** Mirror the `mnemon` prime pattern (`SessionStart` / runtime hook injection / `rawclaw setup --all`) so that every runtime automatically receives the out-of-band closeout trigger banner on session start without modifying or expanding shared doctrine files.
+
 ### Progressive read — shipped
 
 The read protocol (source-stable uuid refs, git-style ambiguity guards, whole-by-default reads with an opt-in
