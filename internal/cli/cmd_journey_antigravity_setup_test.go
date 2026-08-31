@@ -54,6 +54,23 @@ func TestJourney_AntigravitySetupHermeticEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Stub selfExe and create a logging stub binary so setup bakes the stub
+	// executable and background detached ingest runs the stub and records to RAWCLAW_TEST_LOG.
+	stubDir := filepath.Join(sandbox, "stub-bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stubExe := filepath.Join(stubDir, "rawclaw")
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
+	if err := os.WriteFile(stubExe, []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(sandbox, "calls.log")
+
+	oldExe := selfExe
+	selfExe = func() (string, error) { return stubExe, nil }
+	t.Cleanup(func() { selfExe = oldExe })
+
 	// 1. Run `rawclaw setup --yes`
 	setupOut, err := runCmd(t, newSetupCmd(), "", "--yes")
 	if err != nil {
@@ -102,23 +119,17 @@ func TestJourney_AntigravitySetupHermeticEndToEnd(t *testing.T) {
 		t.Skip("sh not available for execution test")
 	}
 
-	stubDir := filepath.Join(sandbox, "stub-bin")
-	if err := os.MkdirAll(stubDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
 	hookEnv := append(os.Environ(),
 		"TMPDIR="+sandbox,
 		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"RAWCLAW_TEST_LOG="+logPath,
 	)
 
+	const sessionID = "journey-test-conv-001"
 	cmdTurn1 := exec.Command(sh, scriptPath)
 	cmdTurn1.Env = hookEnv
 	cmdTurn1.Stdin = strings.NewReader(`{
-		"conversationId": "journey-test-conv-001",
+		"conversationId": "` + sessionID + `",
 		"invocationNum": 0,
 		"initialNumSteps": 1,
 		"modelName": "gemini-3.7-flash",
@@ -128,6 +139,9 @@ func TestJourney_AntigravitySetupHermeticEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute hook script on turn 1 failed: %v (out=%q)", err, outTurn1)
 	}
+
+	// Wait for the detached background ingest process to finish before proceeding/cleanup.
+	assertSingleIngestCall(t, logPath, sessionID, "detached ingest did not run")
 
 	var injectEnvelope struct {
 		InjectSteps []struct {
@@ -152,7 +166,7 @@ func TestJourney_AntigravitySetupHermeticEndToEnd(t *testing.T) {
 	cmdTurn2 := exec.Command(sh, scriptPath)
 	cmdTurn2.Env = hookEnv
 	cmdTurn2.Stdin = strings.NewReader(`{
-		"conversationId": "journey-test-conv-001",
+		"conversationId": "` + sessionID + `",
 		"invocationNum": 1,
 		"initialNumSteps": 4
 	}`)
