@@ -246,7 +246,7 @@ if [ -n "$agy_transcript_path" ] || [ -n "$agy_cwd" ]; then
 fi
 
 # Session catalog keys are flat filenames. Invalid keys still ingest fail-soft,
-# but never become path components.
+# but never become path components (deliberate Claude/Codex parity per invalid-ID advisory).
 if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
 	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
 fi
