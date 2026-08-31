@@ -52,11 +52,11 @@ const rawclawSessionCatalogTail = `			printf '}\n'
 		rmdir "$tmp_dir" 2>/dev/null || true
 	fi
 	if [ "$claimed" -eq 1 ]; then
-		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+		nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
 	elif [ -e "$entry" ] || [ -L "$entry" ]; then
 		exit 0
 	else
-		nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+		nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
 	fi
 fi
 `
@@ -89,12 +89,12 @@ session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:spac
 hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 catalog_session_id=$session_id
 case "$catalog_session_id" in
-	''|.*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) catalog_session_id= ;;
+	''|.*|-*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) catalog_session_id= ;;
 esac
 
 if [ "$hook_event_name" = "Stop" ]; then
 	if [ -n "$session_id" ]; then
-		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+		nohup "$RAWCLAW" prewarm -- "$session_id" </dev/null >/dev/null 2>&1 &
 	fi
 	exit 0
 fi
@@ -102,7 +102,7 @@ fi
 # Session catalog keys are flat filenames. Invalid keys still ingest fail-soft,
 # but never become path components.
 if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 ` + rawclawSessionCatalogHead + `			printf '  "source": "claude"\n'
 ` + rawclawSessionCatalogTail + `
@@ -143,18 +143,18 @@ session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:spac
 hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 catalog_session_id=$session_id
 case "$catalog_session_id" in
-	''|.*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) catalog_session_id= ;;
+	''|.*|-*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) catalog_session_id= ;;
 esac
 
 if [ "$hook_event_name" = "Stop" ]; then
 	if [ -n "$session_id" ]; then
-		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+		nohup "$RAWCLAW" prewarm -- "$session_id" </dev/null >/dev/null 2>&1 &
 	fi
 	exit 0
 fi
 
 if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 ` + rawclawSessionCatalogHead + `			printf '  "source": "codex"\n'
 ` + rawclawSessionCatalogTail + `
@@ -218,7 +218,7 @@ inv_num=$(printf '%s' "$input" | sed -n 's/.*"invocationNum"[[:space:]]*:[[:spac
 session_id=$(printf '%s' "$input" | sed -n 's/.*"conversationId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 catalog_session_id=$session_id
 case "$catalog_session_id" in
-	''|.*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) catalog_session_id= ;;
+	''|.*|-*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) catalog_session_id= ;;
 esac
 
 # Stop invokes this same script with terminationReason and without invocationNum.
@@ -227,7 +227,7 @@ esac
 termination_reason=$(printf '%s' "$input" | sed -n 's/.*"terminationReason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 if [ -n "$termination_reason" ] && [ -z "$inv_num" ]; then
 	if [ -n "$session_id" ]; then
-		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+		nohup "$RAWCLAW" prewarm -- "$session_id" </dev/null >/dev/null 2>&1 &
 	fi
 	exit 0
 fi
@@ -248,7 +248,7 @@ fi
 # Session catalog keys are flat filenames. Invalid keys still ingest fail-soft,
 # but never become path components (deliberate Claude/Codex parity per invalid-ID advisory).
 if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
-	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+	nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
 fi
 ` + rawclawSessionCatalogHead + `			printf '  "source": "antigravity"\n'
 ` + rawclawSessionCatalogTail + `
@@ -271,12 +271,12 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     try {
       const id = ctx.sessionManager?.getSessionId();
-      if (!id || !/^[A-Za-z0-9._-]+$/.test(id)) return;
+      if (!id || !/^[A-Za-z0-9._-]+$/.test(id) || id.startsWith("-")) return;
       mkdirSync(catalogDir, { recursive: true, mode: 0o755 });
       const target = join(catalogDir, id);
       try {
         writeFileSync(target, JSON.stringify({ session_id: id, transcript_path: ctx.sessionManager?.getSessionFile() || "", cwd: ctx.cwd || "", source: "pi" }) + "\n", { flag: "wx", mode: 0o644 });
-        const child = spawn(rawclaw, ["ingest", id], { detached: true, stdio: "ignore" });
+        const child = spawn(rawclaw, ["ingest", "--", id], { detached: true, stdio: "ignore" });
         child.unref();
       } catch (err: any) {
         if (err?.code !== "EEXIST") {
@@ -320,12 +320,12 @@ export const RawclawCatalog = async ({ directory }) => ({
     try {
       if (event?.type === "session.created") {
         const id = event.properties?.info?.id || event.properties?.session?.id || event.properties?.id;
-        if (!id || !/^[A-Za-z0-9._-]+$/.test(id)) return;
+        if (!id || !/^[A-Za-z0-9._-]+$/.test(id) || id.startsWith("-")) return;
         mkdirSync(catalogDir, { recursive: true, mode: 0o755 });
         const target = join(catalogDir, id);
         try {
           writeFileSync(target, JSON.stringify({ session_id: id, transcript_path: "opencode.db#" + id, cwd: directory || "", source: "opencode" }) + "\n", { flag: "wx", mode: 0o644 });
-          const child = spawn(rawclaw, ["ingest", id], { detached: true, stdio: "ignore" });
+          const child = spawn(rawclaw, ["ingest", "--", id], { detached: true, stdio: "ignore" });
           child.unref();
         } catch (err) {
           if (err?.code !== "EEXIST") {
@@ -334,8 +334,8 @@ export const RawclawCatalog = async ({ directory }) => ({
         }
       } else if (event?.type === "session.deleted" || event?.type === "session.idle") {
         const id = event.properties?.info?.id || event.properties?.session?.id || event.properties?.id;
-        if (id && /^[A-Za-z0-9._-]+$/.test(id)) {
-          const child = spawn(rawclaw, ["prewarm", id], { detached: true, stdio: "ignore" });
+        if (id && /^[A-Za-z0-9._-]+$/.test(id) && !id.startsWith("-")) {
+          const child = spawn(rawclaw, ["prewarm", "--", id], { detached: true, stdio: "ignore" });
           child.unref();
         }
       }
@@ -354,15 +354,14 @@ input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
 hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
 cwd=$(printf '%s' "$input" | sed -n 's/.*"working_dir"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
-case "$session_id" in ''|.*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) exit 0;; esac
+case "$session_id" in ''|.*|-*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) exit 0;; esac
 
 if [ "$hook_event_name" = "Stop" ]; then
 	if [ -n "$session_id" ]; then
-		nohup @@RAWCLAW@@ prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+		nohup @@RAWCLAW@@ prewarm -- "$session_id" </dev/null >/dev/null 2>&1 &
 	fi
 	exit 0
 fi
-
 catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 mkdir -p "$catalog_dir" 2>/dev/null || true
 entry="$catalog_dir/$session_id"
@@ -370,7 +369,29 @@ tmp="$catalog_dir/.tmp.$$.json"
 if (umask 077; set -C; printf '{"session_id":"%s","transcript_path":"sessions.db#%s","cwd":"%s","source":"goose"}\n' "$session_id" "$session_id" "$cwd" > "$tmp") 2>/dev/null; then
   if ln "$tmp" "$entry" 2>/dev/null; then
     rm -f "$tmp"
-    nohup @@RAWCLAW@@ ingest "$session_id" </dev/null >/dev/null 2>&1 &
+    nohup @@RAWCLAW@@ ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
+  else
+    rm -f "$tmp"
+  fi
+fi
+exit 0
+`
+
+// rawclawHermesCatalogScript receives Hermes's session_start payload.
+const rawclawHermesCatalogScript = `#!/bin/sh
+set -eu
+input=$(cat)
+session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
+cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
+case "$session_id" in ''|.*|-*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) exit 0;; esac
+catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
+mkdir -p "$catalog_dir" 2>/dev/null || true
+entry="$catalog_dir/$session_id"
+tmp="$catalog_dir/.tmp.$$.json"
+if (umask 077; set -C; printf '{"session_id":"%s","transcript_path":"state.db#%s","cwd":"%s","source":"hermes"}\n' "$session_id" "$session_id" "$cwd" > "$tmp") 2>/dev/null; then
+  if ln "$tmp" "$entry" 2>/dev/null; then
+    rm -f "$tmp"
+    nohup @@RAWCLAW@@ ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
   else
     rm -f "$tmp"
   fi
@@ -386,20 +407,6 @@ exit 0
 // at install time. It never reaches disk.
 const resolvePlaceholder = "@@RAWCLAW_RESOLVE@@"
 
-// shellSingleQuote wraps s as a single POSIX-sh word using single quotes,
-// escaping any embedded single quote via the '\" idiom. An absolute path with
-// a space or shell metacharacter (or an apostrophe, e.g. /Users/o'brien/...)
-// then interpolates into a generated hook as one safe literal word.
-func shellSingleQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// rawclawBinQuoted returns the shell-quoted absolute path of the rawclaw binary
-// running `setup` (selfExe → os.Executable, made absolute), for baking into a
-// generated hook so it fires regardless of the hook's PATH. On any resolution
-// error it returns """ (an empty shell word): rawclawResolveHead's PATH-lookup
-// fallback then covers the hook, so setup never fails over an unresolvable self
-// path.
 func rawclawBinQuoted() string {
 	exe, err := selfExe()
 	if err != nil {
@@ -434,12 +441,17 @@ func rawclawBannerJSON() string {
 	return strings.TrimRight(buf.String(), "\n")
 }
 
-func runtimeConfigPath(env, fallback string, parts ...string) string {
-	base := os.Getenv(env)
+func runtimeConfigPath(envKey, defaultBase string, subpaths ...string) string {
+	base := os.Getenv(envKey)
 	if base == "" {
-		base = paths.ExpandHome(fallback)
+		base = paths.ExpandHome(defaultBase)
 	}
-	return filepath.Join(append([]string{base}, parts...)...)
+	parts := append([]string{base}, subpaths...)
+	return filepath.Join(parts...)
+}
+
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func fileExists(path string) bool {
@@ -447,8 +459,17 @@ func fileExists(path string) bool {
 	return err == nil && !st.IsDir()
 }
 
+func isFile(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
 func piExtensionPath() string {
 	return runtimeConfigPath("PI_CODING_AGENT_DIR", "~/.pi/agent", "extensions", "rawclaw-catalog.ts")
+}
+
+func hermesAgentHooksScriptPath() string {
+	return runtimeConfigPath("HERMES_HOME", "~/.hermes", "agent-hooks", "rawclaw", "prime.sh")
 }
 
 func goosePluginDir() string {
@@ -480,6 +501,14 @@ func installPiBirthHook() error {
 
 func ejectPiBirthHook() {
 	_ = os.Remove(piExtensionPath())
+}
+
+func installHermesBirthHook() error {
+	return writeHookScript(hermesAgentHooksScriptPath(), renderRuntimeScript(rawclawHermesCatalogScript))
+}
+
+func ejectHermesBirthHook() {
+	_ = os.Remove(hermesAgentHooksScriptPath())
 }
 
 func installOpenCodeBirthHook() error {

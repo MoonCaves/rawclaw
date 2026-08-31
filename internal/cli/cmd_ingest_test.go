@@ -58,7 +58,7 @@ func TestResolveIngestMatches_ReportsPartialDiscoveryError(t *testing.T) {
 func TestPrimeScripts_EmitDetachedIngest(t *testing.T) {
 	claudeScript := renderHookScript(rawclawPrimeScript, "'/usr/local/bin/rawclaw'")
 	for _, want := range []string{
-		`nohup "$RAWCLAW" ingest "$session_id"`,
+		`nohup "$RAWCLAW" ingest -- "$session_id"`,
 		`</dev/null >/dev/null 2>&1 &`,
 	} {
 		if !strings.Contains(claudeScript, want) {
@@ -68,7 +68,7 @@ func TestPrimeScripts_EmitDetachedIngest(t *testing.T) {
 
 	codexScript := renderHookScript(rawclawCodexPrimeScript, "'/usr/local/bin/rawclaw'")
 	for _, want := range []string{
-		`nohup "$RAWCLAW" ingest "$session_id"`,
+		`nohup "$RAWCLAW" ingest -- "$session_id"`,
 		`</dev/null >/dev/null 2>&1 &`,
 	} {
 		if !strings.Contains(codexScript, want) {
@@ -119,7 +119,7 @@ func TestPrimeScripts_StopLaunchDetachedPrewarm(t *testing.T) {
 			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
 				if b, err := os.ReadFile(logPath); err == nil {
-					if got := strings.TrimSpace(string(b)); got == "prewarm session-stop-123456" {
+					if got := strings.TrimSpace(string(b)); got == "prewarm -- session-stop-123456" || got == "prewarm session-stop-123456" {
 						return
 					} else if got != "" {
 						t.Fatalf("prewarm args = %q", got)
@@ -245,8 +245,8 @@ func TestPrimeScripts_SessionStartCatalogClaimIsPathSafe(t *testing.T) {
 					}
 					gotCall := strings.TrimSpace(string(calls))
 					if tt.wantIngest {
-						if want := "ingest " + tt.sessionID; gotCall != want {
-							t.Fatalf("rawclaw call = %q, want %q", gotCall, want)
+						if gotCall != "ingest -- "+tt.sessionID && gotCall != "ingest "+tt.sessionID {
+							t.Fatalf("rawclaw call = %q, want %q", gotCall, "ingest -- "+tt.sessionID)
 						}
 					} else if gotCall != "" {
 						t.Fatalf("unexpected rawclaw call: %q", gotCall)
@@ -368,7 +368,7 @@ func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
 				if err != nil {
 					t.Fatalf("read ingest log: %v", err)
 				}
-				if got := strings.TrimSpace(string(b)); got != "ingest "+sessionID {
+				if got := strings.TrimSpace(string(b)); got != "ingest -- "+sessionID && got != "ingest "+sessionID {
 					t.Fatalf("ingest calls = %q, want exactly one call", got)
 				}
 				return
@@ -432,7 +432,7 @@ func TestPrimeScripts_SessionStartIngestsWhenCatalogUnavailable(t *testing.T) {
 			for time.Now().Before(deadline) {
 				b, err := os.ReadFile(logPath)
 				if err == nil && strings.TrimSpace(string(b)) != "" {
-					if got := strings.TrimSpace(string(b)); got != "ingest "+sessionID {
+					if got := strings.TrimSpace(string(b)); got != "ingest -- "+sessionID && got != "ingest "+sessionID {
 						t.Fatalf("ingest calls = %q, want exactly one call", got)
 					}
 					return
