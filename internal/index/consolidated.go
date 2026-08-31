@@ -1526,17 +1526,16 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 				if !allIndexedPaths[full] {
 					return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
 				}
-			}
-		}
-		// Subagents: check known subagent transcript subdirectories if present
-		for _, subName := range []string{"subagents", ".claude", ".antigravity"} {
-			subDir := filepath.Join(cleanTDir, subName)
-			if subEntries, err := os.ReadDir(subDir); err == nil {
-				for _, se := range subEntries {
-					if !se.IsDir() && strings.HasSuffix(se.Name(), ".jsonl") {
-						full := filepath.Clean(filepath.Join(subDir, se.Name()))
-						if !allIndexedPaths[full] {
-							return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+			} else if e.IsDir() {
+				// Subagents & nested sessions: check direct child directories dynamically
+				subDir := filepath.Join(cleanTDir, e.Name())
+				if subEntries, err := os.ReadDir(subDir); err == nil {
+					for _, se := range subEntries {
+						if !se.IsDir() && strings.HasSuffix(se.Name(), ".jsonl") {
+							full := filepath.Clean(filepath.Join(subDir, se.Name()))
+							if !allIndexedPaths[full] {
+								return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+							}
 						}
 					}
 				}
