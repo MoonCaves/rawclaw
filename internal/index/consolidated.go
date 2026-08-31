@@ -1529,19 +1529,9 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 		}
 	}
 
-	// Option B: Stat un-cataloged container roots (Pi, Goose, OpenCode) in O(1).
+	// Project-sharded container check: Pi stores transcripts under ~/.pi/agent/sessions/--<escaped-cwd>--/.
 	if selectedSource == "" || selectedSource == "pi" {
 		if !checkPiContainerFreshness(tdir, allIndexedPaths) {
-			return IndexFreshness{Fresh: false, Reason: "container_transcripts_modified"}, nil
-		}
-	}
-	if selectedSource == "" || selectedSource == "goose" {
-		if !checkGooseContainerFreshness(con) {
-			return IndexFreshness{Fresh: false, Reason: "container_transcripts_modified"}, nil
-		}
-	}
-	if selectedSource == "" || selectedSource == "opencode" {
-		if !checkOpenCodeContainerFreshness(con) {
 			return IndexFreshness{Fresh: false, Reason: "container_transcripts_modified"}, nil
 		}
 	}
@@ -1576,83 +1566,6 @@ func checkPiContainerFreshness(tdir string, allIndexedPaths map[string]bool) boo
 			transcripts := paths.ContainedJSONL(projDir)
 			for _, t := range transcripts {
 				if !allIndexedPaths[filepath.Clean(t)] {
-					return false
-				}
-			}
-		}
-	}
-	return true
-}
-
-func checkGooseContainerFreshness(con *sql.DB) bool {
-	var roots []string
-	if h := os.Getenv("GOOSE_HOME"); h != "" {
-		roots = append(roots, filepath.Join(h, "sessions"), h)
-	}
-	if xdgData := os.Getenv("XDG_DATA_HOME"); xdgData != "" {
-		roots = append(roots, filepath.Join(xdgData, "goose", "sessions"))
-	}
-	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
-		roots = append(roots, filepath.Join(xdgConfig, "goose", "sessions"))
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		roots = append(roots, filepath.Join(home, ".local", "share", "goose", "sessions"))
-		roots = append(roots, filepath.Join(home, ".config", "goose", "sessions"))
-		roots = append(roots, filepath.Join(home, ".goose", "sessions"))
-	}
-
-	var ingestTimeStr string
-	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestTime).Scan(&ingestTimeStr)
-	lastIngest, _ := strconv.ParseFloat(ingestTimeStr, 64)
-
-	for _, r := range roots {
-		if r == "" {
-			continue
-		}
-		entries, err := os.ReadDir(r)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".db") {
-				info, err := e.Info()
-				if err == nil && lastIngest > 0 && mtimeOf(info) > lastIngest+0.001 {
-					return false
-				}
-			}
-		}
-	}
-	return true
-}
-
-func checkOpenCodeContainerFreshness(con *sql.DB) bool {
-	var roots []string
-	if d := os.Getenv("OPENCODE_HOME"); d != "" {
-		roots = append(roots, d)
-	}
-	if xdgData := os.Getenv("XDG_DATA_HOME"); xdgData != "" {
-		roots = append(roots, filepath.Join(xdgData, "opencode"))
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		roots = append(roots, filepath.Join(home, ".local", "share", "opencode"))
-	}
-
-	var ingestTimeStr string
-	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestTime).Scan(&ingestTimeStr)
-	lastIngest, _ := strconv.ParseFloat(ingestTimeStr, 64)
-
-	for _, r := range roots {
-		if r == "" {
-			continue
-		}
-		entries, err := os.ReadDir(r)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".db") {
-				info, err := e.Info()
-				if err == nil && lastIngest > 0 && mtimeOf(info) > lastIngest+0.001 {
 					return false
 				}
 			}
