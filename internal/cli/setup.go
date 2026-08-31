@@ -27,8 +27,14 @@ const rawclawSessionCatalogHead = `if [ -n "$catalog_session_id" ]; then
 	entry="$catalog_dir/$catalog_session_id"
 	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
 	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+	if [ -z "$transcript_path" ]; then
+		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcriptPath"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+	fi
 	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
 	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+	if [ -z "$cwd" ]; then
+		cwd=$(printf '%s' "$input" | sed -n 's/.*"workspacePaths"[[:space:]]*:[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+	fi
 	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
 	tmp_dir="$catalog_dir/.tmp.$$"
 	tmp_entry="$tmp_dir/$catalog_session_id"

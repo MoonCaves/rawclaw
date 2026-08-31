@@ -21,8 +21,8 @@ func TestPrimeScripts_RenderedBytesMatchBaseline(t *testing.T) {
 		tmpl string
 		want string
 	}{
-		{name: "claude", tmpl: rawclawPrimeScript, want: "25ffa050257b967cce9cfd5b1a38339a36d620fd2977003427f2c3095475213f"},
-		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "7f61fa571db867107744123cbe82f5fd47210788cf7044374a1cc85f2fdcbf09"},
+		{name: "claude", tmpl: rawclawPrimeScript, want: "0e47d45812b61a2422c20c0c1267ddc913fd9cd1309074f3774be38f13a9b6e1"},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "992d34efaefc1b772e477fa2c9a74c0a0686526cb7c68ff03b643d50a06ebcfc"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sha256.Sum256([]byte(renderHookScript(tc.tmpl, "'/usr/local/bin/rawclaw'")))
@@ -1053,8 +1053,8 @@ func TestEjectRawclawAntigravityHook_EmptyConfigLeavesUntouched(t *testing.T) {
 
 // TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest verifies that
 // starting an Antigravity session (invocationNum 0) creates the catalog dedup marker,
-// launches detached ingest exactly once across repeated starts, and suppresses
-// duplicate banner injections.
+// parses transcriptPath and workspacePaths, launches detached ingest exactly once across
+// repeated starts, and suppresses duplicate banner injections.
 func TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -1082,6 +1082,8 @@ func TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest(t *testin
 
 	catalogDir := filepath.Join(root, "catalog")
 	sessionID := "agy-dedup-session-123"
+	wantTranscript := "/Users/test/brain/123/transcript.jsonl"
+	wantCWD := "/Users/test/project"
 	env := append(os.Environ(),
 		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"RAWCLAW_TEST_LOG="+logPath,
@@ -1089,7 +1091,7 @@ func TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest(t *testin
 		"HOME="+root,
 		"TMPDIR="+root,
 	)
-	payload := `{"conversationId":"` + sessionID + `","invocationNum":0}`
+	payload := `{"conversationId":"` + sessionID + `","invocationNum":0,"transcriptPath":"` + wantTranscript + `","workspacePaths":["` + wantCWD + `"]}`
 
 	// 1. First run: should create catalog entry, launch detached ingest, and print banner JSON.
 	cmd1 := exec.Command(sh, scriptPath)
@@ -1103,7 +1105,7 @@ func TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest(t *testin
 		t.Fatalf("first invocation missing injectSteps JSON; got: %q", string(out1))
 	}
 
-	// Verify catalog entry was created with source="antigravity"
+	// Verify catalog entry was created with source="antigravity", session_id, transcript_path, and cwd
 	entryPath := filepath.Join(catalogDir, sessionID)
 	entry, err := paths.ReadCatalogEntry(entryPath)
 	if err != nil {
@@ -1114,6 +1116,12 @@ func TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest(t *testin
 	}
 	if entry.Source != "antigravity" {
 		t.Errorf("entry.Source = %q, want \"antigravity\"", entry.Source)
+	}
+	if entry.TranscriptPath != wantTranscript {
+		t.Errorf("entry.TranscriptPath = %q, want %q", entry.TranscriptPath, wantTranscript)
+	}
+	if entry.CWD != wantCWD {
+		t.Errorf("entry.CWD = %q, want %q", entry.CWD, wantCWD)
 	}
 
 	// 2. Second run (same session, invocationNum 0): must exit 0 with empty stdout (dedup).
@@ -1128,22 +1136,23 @@ func TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest(t *testin
 		t.Errorf("second invocation should produce empty output (dedup), got: %q", string(out2))
 	}
 
-	// 3. Verify exactly one background ingest call was launched.
-	deadline := time.Now().Add(5 * time.Second)
+	// 3. Verify exactly one background ingest call was launched (polling for absence like concurrent suite).
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		b, err := os.ReadFile(logPath)
-		if err == nil && strings.TrimSpace(string(b)) != "" {
-			time.Sleep(200 * time.Millisecond)
-			b, err = os.ReadFile(logPath)
-			if err != nil {
-				t.Fatalf("read ingest log: %v", err)
-			}
-			if got := strings.TrimSpace(string(b)); got != "ingest "+sessionID {
-				t.Fatalf("ingest calls = %q, want exactly one %q", got, "ingest "+sessionID)
-			}
-			return
+		if err != nil || strings.TrimSpace(string(b)) == "" {
+			time.Sleep(10 * time.Millisecond)
+			continue
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond)
+		b, err = os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("read ingest log: %v", err)
+		}
+		if got := strings.TrimSpace(string(b)); got != "ingest "+sessionID {
+			t.Fatalf("ingest calls = %q, want exactly one %q", got, "ingest "+sessionID)
+		}
+		return
 	}
 	t.Fatal("detached ingest did not run")
 }
