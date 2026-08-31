@@ -1471,9 +1471,8 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 	if err != nil {
 		return IndexFreshness{Fresh: false, Reason: "query_file_index_failed"}, err
 	}
-	defer rows.Close()
-
 	nRows := 0
+	indexedPaths := make(map[string]bool)
 	for rows.Next() {
 		nRows++
 		var (
@@ -1486,6 +1485,7 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 			return IndexFreshness{Fresh: false, Reason: "scan_file_index_failed"}, err
 		}
 		rawPath := backingFilePath(p)
+		indexedPaths[filepath.Clean(rawPath)] = true
 		curMTime, curSize, curFP, statErr := backingFileState(rawPath)
 		if statErr != nil {
 			return IndexFreshness{Fresh: false, Reason: "transcript_stat_changed"}, nil
@@ -1497,14 +1497,40 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 	if err := rows.Err(); err != nil {
 		return IndexFreshness{Fresh: false, Reason: "iterate_file_index_failed"}, err
 	}
-	if nRows == 0 {
-		entries, err := os.ReadDir(tdir)
-		if err != nil {
+	allIndexedPaths := indexedPaths
+	if selectedSource != "" {
+		allIndexedPaths = make(map[string]bool)
+		allRows, err := con.Query(`
+			SELECT path
+			FROM file_index
+			WHERE path LIKE ?
+			   OR session_id IN (
+					SELECT id FROM sessions
+					WHERE project = ?
+				)
+		`, tdir+"/%", projectLabel)
+		if err == nil {
+			defer allRows.Close()
+			for allRows.Next() {
+				var p string
+				if err := allRows.Scan(&p); err == nil {
+					allIndexedPaths[filepath.Clean(backingFilePath(p))] = true
+				}
+			}
+		}
+	}
+	entries, err := os.ReadDir(tdir)
+	if err != nil {
+		if nRows == 0 {
 			return IndexFreshness{Fresh: false, Reason: "read_project_dir_failed"}, fmt.Errorf("read project directory %q: %w", tdir, err)
 		}
+	} else {
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-				return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+				full := filepath.Clean(filepath.Join(tdir, e.Name()))
+				if !allIndexedPaths[full] {
+					return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+				}
 			}
 		}
 	}
