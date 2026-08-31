@@ -194,8 +194,12 @@ systems own current truth. RawClaw only points to where something was discussed.
 // discovery script (installed at <configDir>/hooks/rawclaw/prime.sh for the
 // Antigravity target).
 //
-// It emits the discovery banner wrapped in AGY's injectSteps JSON contract:
-// {"injectSteps":[{"ephemeralMessage":"..."}]}.
+// Writes a durable session catalog entry to
+// ${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/rawclaw/catalog}/<session_id>
+// with whatever fields the hook provides (partial entries are valid; readers
+// must tolerate unparseable entries as dedup markers), kicks a detached background
+// ingest run for the session, and emits the discovery banner wrapped in AGY's
+// injectSteps JSON contract: {"injectSteps":[{"ephemeralMessage":"..."}]}.
 // The JSON payload is pre-marshaled in Go at install time and baked into the
 // script (swapping @@RAWCLAW_INJECT_JSON@@), so no runtime json parser/encoder
 // (python3 or jq) is required.
@@ -211,13 +215,20 @@ set -eu
 
 input=$(cat)
 inv_num=$(printf '%s' "$input" | sed -n 's/.*"invocationNum"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
+session_id=$(printf '%s' "$input" | sed -n 's/.*"conversationId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+if [ -z "$session_id" ]; then
+	session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+fi
+catalog_session_id=$session_id
+case "$catalog_session_id" in
+	''|.*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) catalog_session_id= ;;
+esac
 
 # Stop invokes this same script with terminationReason and without invocationNum.
 # Pre-warm the session closeout data in the background and keep Stop synchronous
 # work empty.
 termination_reason=$(printf '%s' "$input" | sed -n 's/.*"terminationReason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 if [ -n "$termination_reason" ] && [ -z "$inv_num" ]; then
-	session_id=$(printf '%s' "$input" | sed -n 's/.*"conversationId"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
 	if [ -n "$session_id" ]; then
 		nohup "$RAWCLAW" prewarm "$session_id" </dev/null >/dev/null 2>&1 &
 	fi
@@ -229,6 +240,13 @@ if [ -n "$inv_num" ] && [ "$inv_num" -ne 0 ]; then
 	exit 0
 fi
 
+# Session catalog keys are flat filenames. Invalid keys still ingest fail-soft,
+# but never become path components.
+if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
+	nohup "$RAWCLAW" ingest "$session_id" </dev/null >/dev/null 2>&1 &
+fi
+` + rawclawSessionCatalogHead + `			printf '  "source": "antigravity"\n'
+` + rawclawSessionCatalogTail + `
 cat <<'BANNER_JSON'
 @@RAWCLAW_INJECT_JSON@@
 BANNER_JSON
