@@ -2051,6 +2051,7 @@ func TestConsolidate_FaultInjectionHelper(t *testing.T) {
 	// TestMain gives every test process its own HOME. Restore the parent's
 	// isolated home here so the child and parent truly share one store.
 	t.Setenv("HOME", home)
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	consolidateAfterMergeHook = func() { os.Exit(124) }
 	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
 		t.Fatalf("fault-injected consolidation: %v", err)
