@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/MoonCaves/rawclaw/internal/paths"
 )
 
 func TestPrimeScripts_RenderedBytesMatchBaseline(t *testing.T) {
@@ -1045,4 +1049,101 @@ func TestEjectRawclawAntigravityHook_EmptyConfigLeavesUntouched(t *testing.T) {
 	if string(b) != string(orig) {
 		t.Errorf("hooks.json mutated by no-op eject: got %q, want %q", string(b), string(orig))
 	}
+}
+
+// TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest verifies that
+// starting an Antigravity session (invocationNum 0) creates the catalog dedup marker,
+// launches detached ingest exactly once across repeated starts, and suppresses
+// duplicate banner injections.
+func TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+
+	root := t.TempDir()
+	stubDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(root, "calls.log")
+	stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
+	if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := renderAntigravityPrimeScript("''")
+	if err != nil {
+		t.Fatalf("renderAntigravityPrimeScript: %v", err)
+	}
+	scriptPath := filepath.Join(root, "prime.sh")
+	if err := os.WriteFile(scriptPath, []byte(rendered), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	catalogDir := filepath.Join(root, "catalog")
+	sessionID := "agy-dedup-session-123"
+	env := append(os.Environ(),
+		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"RAWCLAW_TEST_LOG="+logPath,
+		"RAWCLAW_CATALOG_DIR="+catalogDir,
+		"HOME="+root,
+		"TMPDIR="+root,
+	)
+	payload := `{"conversationId":"` + sessionID + `","invocationNum":0}`
+
+	// 1. First run: should create catalog entry, launch detached ingest, and print banner JSON.
+	cmd1 := exec.Command(sh, scriptPath)
+	cmd1.Env = env
+	cmd1.Stdin = strings.NewReader(payload)
+	out1, err := cmd1.Output()
+	if err != nil {
+		t.Fatalf("first invocation failed: %v (out=%s)", err, out1)
+	}
+	if !strings.Contains(string(out1), "injectSteps") {
+		t.Fatalf("first invocation missing injectSteps JSON; got: %q", string(out1))
+	}
+
+	// Verify catalog entry was created with source="antigravity"
+	entryPath := filepath.Join(catalogDir, sessionID)
+	entry, err := paths.ReadCatalogEntry(entryPath)
+	if err != nil {
+		t.Fatalf("read catalog entry at %s: %v", entryPath, err)
+	}
+	if entry.SessionID != sessionID {
+		t.Errorf("entry.SessionID = %q, want %q", entry.SessionID, sessionID)
+	}
+	if entry.Source != "antigravity" {
+		t.Errorf("entry.Source = %q, want \"antigravity\"", entry.Source)
+	}
+
+	// 2. Second run (same session, invocationNum 0): must exit 0 with empty stdout (dedup).
+	cmd2 := exec.Command(sh, scriptPath)
+	cmd2.Env = env
+	cmd2.Stdin = strings.NewReader(payload)
+	out2, err := cmd2.Output()
+	if err != nil {
+		t.Fatalf("second invocation failed: %v (out=%s)", err, out2)
+	}
+	if len(strings.TrimSpace(string(out2))) != 0 {
+		t.Errorf("second invocation should produce empty output (dedup), got: %q", string(out2))
+	}
+
+	// 3. Verify exactly one background ingest call was launched.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(logPath)
+		if err == nil && strings.TrimSpace(string(b)) != "" {
+			time.Sleep(200 * time.Millisecond)
+			b, err = os.ReadFile(logPath)
+			if err != nil {
+				t.Fatalf("read ingest log: %v", err)
+			}
+			if got := strings.TrimSpace(string(b)); got != "ingest "+sessionID {
+				t.Fatalf("ingest calls = %q, want exactly one %q", got, "ingest "+sessionID)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("detached ingest did not run")
 }
