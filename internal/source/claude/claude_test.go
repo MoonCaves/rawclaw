@@ -62,6 +62,30 @@ func TestMessages(t *testing.T) {
 	}
 }
 
+func TestMessagesDeduplicatesByUUID(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	f := filepath.Join(dir, "sess_dup.jsonl")
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"first attempt"}}`,
+		`{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:05Z","message":{"role":"user","content":"second attempt (replay)"}}`,
+		`{"type":"assistant","uuid":"u2","timestamp":"2026-06-01T10:01:00Z","message":{"role":"assistant","content":[{"type":"text","text":"the answer"}]}}`,
+	)
+
+	a := New()
+	got, err := a.Messages(source.Container{Path: f})
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 distinct messages after UUID dedup, got %d: %+v", len(got), got)
+	}
+	if got[0].Text != "second attempt (replay)" {
+		t.Errorf("expected latest replayed content, got %q", got[0].Text)
+	}
+}
+
 // TestMessagesMissingFile returns a wrapped error, never a panic.
 func TestMessagesMissingFile(t *testing.T) {
 	t.Parallel()
