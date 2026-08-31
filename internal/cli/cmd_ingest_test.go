@@ -150,6 +150,7 @@ func TestPrimeScripts_SessionStartCatalogClaimIsPathSafe(t *testing.T) {
 	}{
 		{name: "claude", tmpl: rawclawPrimeScript},
 		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
+		{name: "antigravity", tmpl: rawclawAntigravityPrimeScriptTemplate, json: true},
 	}
 	tests := []struct {
 		name       string
@@ -299,6 +300,7 @@ func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
 	}{
 		{name: "claude", tmpl: rawclawPrimeScript},
 		{name: "codex", tmpl: rawclawCodexPrimeScript},
+		{name: "antigravity", tmpl: rawclawAntigravityPrimeScriptTemplate},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -381,6 +383,7 @@ func TestPrimeScripts_SessionStartIngestsWhenCatalogUnavailable(t *testing.T) {
 	}{
 		{name: "claude", tmpl: rawclawPrimeScript},
 		{name: "codex", tmpl: rawclawCodexPrimeScript},
+		{name: "antigravity", tmpl: rawclawAntigravityPrimeScriptTemplate},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()

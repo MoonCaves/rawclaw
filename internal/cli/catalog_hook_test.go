@@ -25,6 +25,7 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 	}{
 		{name: "claude", tmpl: rawclawPrimeScript},
 		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
+		{name: "antigravity", tmpl: rawclawAntigravityPrimeScriptTemplate, json: true},
 	}
 	kinds := []string{
 		"new",
