@@ -1242,53 +1242,56 @@ func TestAntigravityPrimeScript_MalformedPayloadsDeduplicateAcrossInvocations(t 
 	assertSingleIngestCall(t, logPath, sessionID, "detached ingest did not run on turn 1")
 }
 
-func TestSetup_PiInstallAndEject(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_DIR", dir)
+func TestSetup_RuntimeExtensionsInstallAndEject(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		envKey     string
+		installFn  func() error
+		ejectFn    func()
+		targetPath func() string
+		needle     string
+	}{
+		{
+			name:       "pi",
+			envKey:     "PI_CODING_AGENT_DIR",
+			installFn:  installPiBirthHook,
+			ejectFn:    ejectPiBirthHook,
+			targetPath: piExtensionPath,
+			needle:     "pi.on(\"session_start\"",
+		},
+		{
+			name:       "opencode",
+			envKey:     "OPENCODE_CONFIG_DIR",
+			installFn:  installOpenCodeBirthHook,
+			ejectFn:    ejectOpenCodeBirthHook,
+			targetPath: openCodePluginPath,
+			needle:     "session.created",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(tc.envKey, dir)
 
-	if err := installPiBirthHook(); err != nil {
-		t.Fatalf("installPiBirthHook: %v", err)
-	}
-	p := piExtensionPath()
-	if !fileExists(p) {
-		t.Fatalf("expected pi extension at %s", p)
-	}
-	content, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(content), "pi.on(\"session_start\"") {
-		t.Fatalf("expected session_start in extension content: %s", string(content))
-	}
+			if err := tc.installFn(); err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			p := tc.targetPath()
+			if !fileExists(p) {
+				t.Fatalf("expected file at %s", p)
+			}
+			content, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(content), tc.needle) {
+				t.Fatalf("expected %s in content: %s", tc.needle, string(content))
+			}
 
-	ejectPiBirthHook()
-	if fileExists(p) {
-		t.Fatalf("expected pi extension to be removed after eject")
-	}
-}
-
-func TestSetup_OpenCodeInstallAndEject(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("OPENCODE_CONFIG_DIR", dir)
-
-	if err := installOpenCodeBirthHook(); err != nil {
-		t.Fatalf("installOpenCodeBirthHook: %v", err)
-	}
-	p := openCodePluginPath()
-	if !fileExists(p) {
-		t.Fatalf("expected opencode plugin at %s", p)
-	}
-	content, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(content), "session.created") {
-		t.Fatalf("expected session.created in plugin content: %s", string(content))
-	}
-
-	ejectOpenCodeBirthHook()
-	if fileExists(p) {
-		t.Fatalf("expected opencode plugin to be removed after eject")
+			tc.ejectFn()
+			if fileExists(p) {
+				t.Fatalf("expected file to be removed after eject")
+			}
+		})
 	}
 }
 
