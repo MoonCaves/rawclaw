@@ -231,6 +231,9 @@ func TestResolveTimeoutFromArgsConsolidateFloor(t *testing.T) {
 	}{
 		{"bare consolidate gets the floor", []string{"consolidate"}, "", consolidateWatchdog},
 		{"consolidate --rebuild gets the floor", []string{"consolidate", "--rebuild"}, "", consolidateWatchdog},
+		{"bare ingest gets the floor", []string{"ingest"}, "", consolidateWatchdog},
+		{"ingest with flag gets the floor", []string{"ingest", "--dir", "/tmp"}, "", consolidateWatchdog},
+		{"ingest single session keeps default watchdog", []string{"ingest", "7b2c4d6e-0000"}, "", defaultTimeout},
 		{"explicit --timeout wins over floor", []string{"consolidate", "--timeout", "90s"}, "", 90 * time.Second},
 		{"explicit --timeout=0 disables even for consolidate", []string{"consolidate", "--timeout", "0"}, "", 0},
 		{"RAWCLAW_TIMEOUT wins over floor", []string{"consolidate"}, "45s", 45 * time.Second},
