@@ -26,7 +26,7 @@ func init() {
 // the state dir. Started with a bare exec.Command; start-and-release — parent never waits.
 func spawnVectorTopupChild(dbp string) {
 	exe, err := selfExe()
-	if err != nil {
+	if err != nil || isTestExe(exe) {
 		return
 	}
 	logf, err := openVectorTopupLog()

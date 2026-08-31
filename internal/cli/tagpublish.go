@@ -51,6 +51,9 @@ func spawnTagPublishChild(dbp, sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("resolve rawclaw executable: %w", err)
 	}
+	if isTestExe(exe) {
+		return nil
+	}
 	logf, err := openTagPublishLog()
 	if err != nil {
 		return err

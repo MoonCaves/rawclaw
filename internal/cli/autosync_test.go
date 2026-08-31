@@ -22,6 +22,27 @@ func countSpawns(t *testing.T) *int {
 	return &calls
 }
 
+func TestIsTestExe(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/usr/local/bin/rawclaw", false},
+		{"/tmp/go-build123/b001/cli.test", true},
+		{"/var/folders/xx/T/cli.test", true},
+		{"cli.test.exe", true},
+		{"rawclaw", false},
+		{"/opt/homebrew/bin/rawclaw", false},
+	}
+	for _, tc := range cases {
+		if got := isTestExe(tc.path); got != tc.want {
+			t.Errorf("isTestExe(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
 // TestMaybeAutosync_KillSwitchMeansZeroSpawns: RAWCLAW_ARCHIVE_AUTOSYNC=off
 // spawns nothing, even with a configured archive and a free throttle slot.
 func TestMaybeAutosync_KillSwitchMeansZeroSpawns(t *testing.T) {
