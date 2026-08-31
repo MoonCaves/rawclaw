@@ -134,12 +134,13 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 			TSISO: iso,
 			UUID:  u,
 		}
-		if u != "" {
-			if idx, ok := seenUUID[u]; ok {
+		realUUID, hasUUID := o["uuid"].(string)
+		if hasUUID && realUUID != "" {
+			if idx, ok := seenUUID[realUUID]; ok {
 				out[idx] = msg
 				continue
 			}
-			seenUUID[u] = len(out)
+			seenUUID[realUUID] = len(out)
 		}
 		out = append(out, msg)
 	}

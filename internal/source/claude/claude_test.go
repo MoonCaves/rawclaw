@@ -86,6 +86,32 @@ func TestMessagesDeduplicatesByUUID(t *testing.T) {
 	}
 }
 
+func TestMessagesSummaryRecordDoesNotOverwriteUserMessageWithSameLeafUUID(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	f := filepath.Join(dir, "sess_summary.jsonl")
+	writeJSONL(t, f,
+		`{"type":"user","uuid":"u1","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"original user prompt"}}`,
+		`{"type":"summary","leafUuid":"u1","timestamp":"2026-06-01T10:05:00Z","summary":"this is a session summary"}`,
+	)
+
+	a := New()
+	got, err := a.Messages(source.Container{Path: f})
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 messages (user + summary), got %d: %+v", len(got), got)
+	}
+	if got[0].Text != "original user prompt" {
+		t.Errorf("user message was overwritten by summary! got %q", got[0].Text)
+	}
+	if got[1].Text != "[SUMMARY] this is a session summary" {
+		t.Errorf("expected summary text, got %q", got[1].Text)
+	}
+}
+
 // TestMessagesMissingFile returns a wrapped error, never a panic.
 func TestMessagesMissingFile(t *testing.T) {
 	t.Parallel()
