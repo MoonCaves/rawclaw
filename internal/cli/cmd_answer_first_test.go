@@ -593,6 +593,78 @@ func TestAnswerFirst_ThisProjectForcesSynchronousRebuild(t *testing.T) {
 	}
 }
 
+// TestAnswerFirst_ThisProject_UncatalogedSessionRebuilds verifies that when a new
+// session is born on disk for an un-cataloged runtime (e.g. Pi, Goose, OpenCode)
+// without a catalog entry, --this-project still detects the unindexed transcript in tdir
+// and rebuilds cleanly.
+func TestAnswerFirst_ThisProject_UncatalogedSessionRebuilds(t *testing.T) {
+	_, projDir, _, _, _ := setupFreshnessTestEnv(t)
+
+	// Create a brand new session on disk WITHOUT writing to catalog
+	uncatalogedSID := "c3d4e5f6-1111-2222-3333-444455556666"
+	newTransPath := filepath.Join(projDir, uncatalogedSID+".jsonl")
+	newContent := `{"type":"user","message":{"role":"user","content":"born without catalog claim"},"uuid":"9f3e1c24-1111-2222-3333-444455556666","timestamp":"2026-08-20T11:30:00Z"}` + "\n"
+	if err := os.WriteFile(newTransPath, []byte(newContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Initial search: unindexed session exists in tdir -> must refresh and find it
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--this-project", "--dir", projDir, "born without catalog claim")
+	if err != nil {
+		t.Fatalf("this-project search failed: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, uncatalogedSID[:8]) {
+		t.Errorf("this-project search did not find uncataloged session %s: %s", uncatalogedSID[:8], out)
+	}
+
+	// 2. Second search: no files changed -> project is fresh, answers without error
+	out2, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--this-project", "--dir", projDir, "born without catalog claim")
+	if err != nil {
+		t.Fatalf("warm this-project search failed: %v\nout: %s", err, out2)
+	}
+	if !strings.Contains(out2, uncatalogedSID[:8]) {
+		t.Errorf("warm this-project search missing session %s: %s", uncatalogedSID[:8], out2)
+	}
+}
+
+// TestAnswerFirst_ThisProject_NestedSubagentSessionRebuilds verifies that uncataloged sessions
+// located in nested subdirectories (such as subagents or workflows) are detected by ContainedJSONL
+// and force a synchronous rebuild rather than being skipped by a flat directory scan.
+func TestAnswerFirst_ThisProject_NestedSubagentSessionRebuilds(t *testing.T) {
+	_, projDir, sessionID, _, _ := setupFreshnessTestEnv(t)
+
+	// Create nested directory: projDir/<sessionID>/subagents/
+	nestedDir := filepath.Join(projDir, sessionID, "subagents")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	nestedSID := "d4e5f6a1-2222-3333-4444-555566667777"
+	nestedPath := filepath.Join(nestedDir, nestedSID+".jsonl")
+	nestedContent := `{"type":"user","message":{"role":"user","content":"nestedsubagentdiscoveryterm"},"uuid":"9f3e1c25-1111-2222-3333-444455556666","timestamp":"2026-08-20T12:00:00Z"}` + "\n"
+	if err := os.WriteFile(nestedPath, []byte(nestedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Initial search: nested uncataloged session exists -> must refresh and find it
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--this-project", "--dir", projDir, "--include-subagents", "nestedsubagentdiscoveryterm")
+	if err != nil {
+		t.Fatalf("this-project search failed: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, "9f3e1c25") || !strings.Contains(out, "nestedsubagentdiscoveryterm") {
+		t.Errorf("this-project search did not find nested subagent session: %s", out)
+	}
+
+	// 2. Warm search: no modifications -> answers cleanly
+	out2, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--this-project", "--dir", projDir, "--include-subagents", "nestedsubagentdiscoveryterm")
+	if err != nil {
+		t.Fatalf("warm this-project search failed: %v\nout: %s", err, out2)
+	}
+	if !strings.Contains(out2, "9f3e1c25") || !strings.Contains(out2, "nestedsubagentdiscoveryterm") {
+		t.Errorf("warm this-project search missing nested subagent session: %s", out2)
+	}
+}
+
 // TestAnswerFirst_StoreMissing_FallsBackToPerProjectDBs verifies that when the consolidated
 // store is absent or cannot be opened, read verbs fall back to per-project databases cleanly.
 func TestAnswerFirst_StoreMissing_FallsBackToPerProjectDBs(t *testing.T) {

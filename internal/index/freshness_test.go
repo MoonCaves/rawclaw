@@ -558,3 +558,83 @@ func TestCheckProjectFreshness_IsSourceScoped(t *testing.T) {
 		t.Fatalf("changed Codex source reported fresh: %+v", codexFresh)
 	}
 }
+
+// TestCheckProjectFreshness_UnrelatedDaemonDB_DoesNotInvalidateProject verifies that
+// background writes to global daemon databases (e.g. Goose or OpenCode session DBs)
+// do not spuriously invalidate freshness for an unrelated, unchanged project.
+func TestCheckProjectFreshness_UnrelatedDaemonDB_DoesNotInvalidateProject(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	catDir := filepath.Join(cfg, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	if err := os.MkdirAll(catDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tdir := filepath.Join(cfg, "project")
+	if err := os.MkdirAll(tdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transPath := filepath.Join(tdir, "sess-001.jsonl")
+	if err := os.WriteFile(transPath, []byte("sess-001 content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	con, err := store.ConnectRW(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatal(err)
+	}
+
+	mtime, size, fp, err := backingFileState(transPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("INSERT INTO sessions(id, source_tool, source_path, project) VALUES(?,?,?,?)", "sess-001", "claude", transPath, "project"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("INSERT INTO file_index(path, mtime, size, fp, session_id) VALUES(?,?,?,?,?)", transPath, mtime, size, fp, "sess-001"); err != nil {
+		t.Fatal(err)
+	}
+	if err := paths.WriteCatalogEntry(catDir, paths.CatalogEntry{
+		SessionID:      "sess-001",
+		TranscriptPath: transPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := StampIngestWatermark(con); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Project should be fresh initially
+	freshness, err := CheckProjectFreshness(con, "project", tdir)
+	if err != nil {
+		t.Fatalf("CheckProjectFreshness: %v", err)
+	}
+	if !freshness.Fresh {
+		t.Fatalf("initial project reported not fresh: %+v", freshness)
+	}
+
+	// 2. Simulate active background daemon writing to an unrelated global DB
+	gooseDir := filepath.Join(cfg, ".local", "share", "goose", "sessions")
+	if err := os.MkdirAll(gooseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(filepath.Join(gooseDir, "unrelated_daemon.db"), []byte("daemon wal commit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Project freshness must remain fresh (no daemon DB mtime thrashing)
+	freshness2, err := CheckProjectFreshness(con, "project", tdir)
+	if err != nil {
+		t.Fatalf("CheckProjectFreshness after daemon write: %v", err)
+	}
+	if !freshness2.Fresh {
+		t.Fatalf("unrelated daemon DB write spuriously invalidated project freshness: %+v", freshness2)
+	}
+}
