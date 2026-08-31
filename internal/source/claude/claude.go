@@ -107,6 +107,7 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 	}
 	var out []model.Message
 	var bad int
+	seenUUID := make(map[string]int)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -125,13 +126,23 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 			continue
 		}
 		iso, _ := o["timestamp"].(string)
-		out = append(out, model.Message{
+		u := parse.MsgUUID(o)
+		msg := model.Message{
 			Role:  parse.MsgRole(o),
 			Text:  text,
 			TS:    parse.ISOToEpoch(iso),
 			TSISO: iso,
-			UUID:  parse.MsgUUID(o),
-		})
+			UUID:  u,
+		}
+		realUUID, hasUUID := o["uuid"].(string)
+		if hasUUID && realUUID != "" {
+			if idx, ok := seenUUID[realUUID]; ok {
+				out[idx] = msg
+				continue
+			}
+			seenUUID[realUUID] = len(out)
+		}
+		out = append(out, msg)
 	}
 	if bad > 0 {
 		slog.Warn("claude: skipped malformed jsonl lines", "count", bad, "path", c.Path)
