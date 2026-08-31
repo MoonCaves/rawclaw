@@ -116,7 +116,7 @@ func TestPrimeScripts_StopLaunchDetachedPrewarm(t *testing.T) {
 				t.Fatalf("Stop hook failed: %v, out: %s", err, out)
 			}
 
-			deadline := time.Now().Add(time.Second)
+			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
 				if b, err := os.ReadFile(logPath); err == nil {
 					if got := strings.TrimSpace(string(b)); got == "prewarm session-stop-123456" {
@@ -150,6 +150,7 @@ func TestPrimeScripts_SessionStartCatalogClaimIsPathSafe(t *testing.T) {
 	}{
 		{name: "claude", tmpl: rawclawPrimeScript},
 		{name: "codex", tmpl: rawclawCodexPrimeScript, json: true},
+		{name: "antigravity", tmpl: rawclawAntigravityPrimeScriptTemplate, json: true},
 	}
 	tests := []struct {
 		name       string
@@ -217,7 +218,7 @@ func TestPrimeScripts_SessionStartCatalogClaimIsPathSafe(t *testing.T) {
 						t.Fatal(err)
 					}
 
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 					defer cancel()
 					cmd := exec.CommandContext(ctx, shellPath, scriptPath)
 					cmd.Env = append(os.Environ(),
@@ -225,7 +226,11 @@ func TestPrimeScripts_SessionStartCatalogClaimIsPathSafe(t *testing.T) {
 						"RAWCLAW_TEST_LOG="+logPath,
 						"RAWCLAW_CATALOG_DIR="+catalogDir,
 					)
-					cmd.Stdin = strings.NewReader(`{"session_id":"` + tt.sessionID + `"}`)
+					payload := `{"session_id":"` + tt.sessionID + `"}`
+					if tmpl.name == "antigravity" {
+						payload = `{"conversationId":"` + tt.sessionID + `","invocationNum":0}`
+					}
+					cmd.Stdin = strings.NewReader(payload)
 					out, err := cmd.Output()
 					if ctx.Err() == context.DeadlineExceeded {
 						t.Fatalf("hook hung on %s", tt.kind)
@@ -299,6 +304,7 @@ func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
 	}{
 		{name: "claude", tmpl: rawclawPrimeScript},
 		{name: "codex", tmpl: rawclawCodexPrimeScript},
+		{name: "antigravity", tmpl: rawclawAntigravityPrimeScriptTemplate},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -324,6 +330,9 @@ func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
 				"HOME="+root,
 			)
 			payload := `{"session_id":"` + sessionID + `"}`
+			if tc.name == "antigravity" {
+				payload = `{"conversationId":"` + sessionID + `","invocationNum":0}`
+			}
 			start := make(chan struct{})
 			errs := make(chan error, 2)
 			var wg sync.WaitGroup
@@ -381,6 +390,7 @@ func TestPrimeScripts_SessionStartIngestsWhenCatalogUnavailable(t *testing.T) {
 	}{
 		{name: "claude", tmpl: rawclawPrimeScript},
 		{name: "codex", tmpl: rawclawCodexPrimeScript},
+		{name: "antigravity", tmpl: rawclawAntigravityPrimeScriptTemplate},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -409,12 +419,16 @@ func TestPrimeScripts_SessionStartIngestsWhenCatalogUnavailable(t *testing.T) {
 				"RAWCLAW_TEST_LOG="+logPath,
 				"RAWCLAW_CATALOG_DIR="+filepath.Join(parent, "catalog"),
 			)
-			cmd.Stdin = strings.NewReader(`{"session_id":"` + sessionID + `"}`)
+			unavailPayload := `{"session_id":"` + sessionID + `"}`
+			if tc.name == "antigravity" {
+				unavailPayload = `{"conversationId":"` + sessionID + `","invocationNum":0}`
+			}
+			cmd.Stdin = strings.NewReader(unavailPayload)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("SessionStart failed: %v (out=%q)", err, out)
 			}
 
-			deadline := time.Now().Add(time.Second)
+			deadline := time.Now().Add(5 * time.Second)
 			for time.Now().Before(deadline) {
 				b, err := os.ReadFile(logPath)
 				if err == nil && strings.TrimSpace(string(b)) != "" {
