@@ -197,35 +197,7 @@ func discoverDatabaseContainers(dbPath string) ([]source.Container, error) {
 		return nil, fmt.Errorf("query session: %w", err)
 	}
 	defer rows.Close()
-
-	var containers []source.Container
-	for rows.Next() {
-		var id, directory string
-		var parentID sql.NullString
-		if err := rows.Scan(&id, &directory, &parentID); err != nil {
-			continue
-		}
-		if id == "" {
-			continue
-		}
-
-		isSubagent := parentID.Valid && strings.TrimSpace(parentID.String) != ""
-		parent := ""
-		if isSubagent {
-			parent = strings.TrimSpace(parentID.String)
-		}
-
-		containers = append(containers, source.Container{
-			ID:         id,
-			Path:       fmt.Sprintf("%s#%s", dbPath, id),
-			CWD:        directory,
-			IsSubagent: isSubagent,
-			ParentID:   parent,
-			ResumeArgv: source.ResumeArgv(ID, id),
-		})
-	}
-
-	return containers, nil
+	return scanSessionRows(rows, dbPath)
 }
 
 func discoverPluralSessions(db *sql.DB, dbPath string) ([]source.Container, error) {
@@ -234,7 +206,10 @@ func discoverPluralSessions(db *sql.DB, dbPath string) ([]source.Container, erro
 		return nil, fmt.Errorf("query sessions: %w", err)
 	}
 	defer rows.Close()
+	return scanSessionRows(rows, dbPath)
+}
 
+func scanSessionRows(rows *sql.Rows, dbPath string) ([]source.Container, error) {
 	var containers []source.Container
 	for rows.Next() {
 		var id, directory string
@@ -245,11 +220,13 @@ func discoverPluralSessions(db *sql.DB, dbPath string) ([]source.Container, erro
 		if id == "" {
 			continue
 		}
+
 		isSubagent := parentID.Valid && strings.TrimSpace(parentID.String) != ""
 		parent := ""
 		if isSubagent {
 			parent = strings.TrimSpace(parentID.String)
 		}
+
 		containers = append(containers, source.Container{
 			ID:         id,
 			Path:       fmt.Sprintf("%s#%s", dbPath, id),
@@ -462,7 +439,7 @@ func loadMessagesWithParts(db *sql.DB, sessionID string) ([]model.Message, error
 					if sb.Len() > 0 {
 						sb.WriteString("\n")
 					}
-					sb.WriteString(fmt.Sprintf("[agent: %s]", pData.Name))
+					fmt.Fprintf(&sb, "[agent: %s]", pData.Name)
 				}
 			case "tool":
 				toolName := pData.Tool
@@ -482,12 +459,12 @@ func loadMessagesWithParts(db *sql.DB, sessionID string) ([]model.Message, error
 						outputStr = pData.State.Output
 					}
 					if inputStr != "" {
-						sb.WriteString(fmt.Sprintf("[tool_use: %s] %s\n", toolName, inputStr))
+						fmt.Fprintf(&sb, "[tool_use: %s] %s\n", toolName, inputStr)
 					} else {
-						sb.WriteString(fmt.Sprintf("[tool_use: %s]\n", toolName))
+						fmt.Fprintf(&sb, "[tool_use: %s]\n", toolName)
 					}
 					if outputStr != "" {
-						sb.WriteString(fmt.Sprintf("[tool_result: %s] %s", toolName, outputStr))
+						fmt.Fprintf(&sb, "[tool_result: %s] %s", toolName, outputStr)
 					}
 				}
 			}

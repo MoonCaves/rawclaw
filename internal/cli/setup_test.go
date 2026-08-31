@@ -1241,3 +1241,75 @@ func TestAntigravityPrimeScript_MalformedPayloadsDeduplicateAcrossInvocations(t 
 	// Verify at most 1 background ingest call was launched across all 3 turns
 	assertSingleIngestCall(t, logPath, sessionID, "detached ingest did not run on turn 1")
 }
+
+func TestSetup_RuntimeExtensionsInstallAndEject(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		envKey     string
+		installFn  func() error
+		ejectFn    func()
+		targetPath func() string
+		needle     string
+	}{
+		{
+			name:       "pi",
+			envKey:     "PI_CODING_AGENT_DIR",
+			installFn:  installPiBirthHook,
+			ejectFn:    ejectPiBirthHook,
+			targetPath: piExtensionPath,
+			needle:     "pi.on(\"session_start\"",
+		},
+		{
+			name:       "opencode",
+			envKey:     "OPENCODE_CONFIG_DIR",
+			installFn:  installOpenCodeBirthHook,
+			ejectFn:    ejectOpenCodeBirthHook,
+			targetPath: openCodePluginPath,
+			needle:     "session.created",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(tc.envKey, dir)
+
+			if err := tc.installFn(); err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			p := tc.targetPath()
+			if !fileExists(p) {
+				t.Fatalf("expected file at %s", p)
+			}
+			content, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(content), tc.needle) {
+				t.Fatalf("expected %s in content: %s", tc.needle, string(content))
+			}
+
+			tc.ejectFn()
+			if fileExists(p) {
+				t.Fatalf("expected file to be removed after eject")
+			}
+		})
+	}
+}
+
+func TestSetup_GooseInstallAndEject(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOOSE_HOME", dir)
+
+	if err := installGooseBirthHook(); err != nil {
+		t.Fatalf("installGooseBirthHook: %v", err)
+	}
+	sp := goosePluginScriptPath()
+	hp := goosePluginHookPath()
+	if !fileExists(sp) || !fileExists(hp) {
+		t.Fatalf("expected goose files at %s and %s", sp, hp)
+	}
+
+	ejectGooseBirthHook()
+	if fileExists(sp) || fileExists(hp) {
+		t.Fatalf("expected goose files to be removed after eject")
+	}
+}
