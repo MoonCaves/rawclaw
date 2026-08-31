@@ -363,7 +363,7 @@ func resolveTimeoutFromArgs(args []string, env string) time.Duration {
 		if isUpgradeInvocation(args) && resolved < upgradeWatchdog {
 			return upgradeWatchdog
 		}
-		if isConsolidateInvocation(args) && resolved < consolidateWatchdog {
+		if (isConsolidateInvocation(args) || isIngestAllInvocation(args)) && resolved < consolidateWatchdog {
 			return consolidateWatchdog
 		}
 		// The syncing archive verbs (init/push/pull/autosync) run WITHOUT the
@@ -453,6 +453,14 @@ func isUpgradeInvocation(args []string) bool {
 func isConsolidateInvocation(args []string) bool {
 	w := leadingSubcommandTokens(args, 1)
 	return len(w) == 1 && w[0] == "consolidate"
+}
+
+// isIngestAllInvocation reports whether args target `ingest` without a specific
+// session ID, triggering a full corpus discovery and consolidation sweep whose
+// cost scales with the entire history on disk.
+func isIngestAllInvocation(args []string) bool {
+	w := leadingSubcommandTokens(args, 2)
+	return len(w) == 1 && w[0] == "ingest"
 }
 
 // isArchiveSyncInvocation reports whether args target a SYNCING archive verb —

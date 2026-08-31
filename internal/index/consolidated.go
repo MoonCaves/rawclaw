@@ -640,9 +640,9 @@ func beginConsolidatePhase(src, name string) func() {
 	if src != "" {
 		logger = logger.With("source", filepath.Base(src))
 	}
-	logger.Info("consolidate fold phase", "phase", name, "event", "start")
+	logger.Debug("consolidate fold phase", "phase", name, "event", "start")
 	return func() {
-		logger.Info("consolidate fold phase", "phase", name, "duration", time.Since(started))
+		logger.Debug("consolidate fold phase", "phase", name, "duration", time.Since(started))
 	}
 }
 

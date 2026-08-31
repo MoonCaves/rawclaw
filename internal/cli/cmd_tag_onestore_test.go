@@ -38,6 +38,10 @@ func writeTranscript(t *testing.T, proj, sid string, uuids []string) {
 // target is indexed in its project db and cataloged, but is absent from the
 // consolidated store while unrelated project dbs are also present.
 func TestTagWriteUsesCatalogBeforeCorpusSweep(t *testing.T) {
+	oldPublish := spawnTagPublish
+	spawnTagPublish = func(string, string) error { return nil }
+	t.Cleanup(func() { spawnTagPublish = oldPublish })
+
 	t.Setenv("HOME", t.TempDir())
 	configDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)

@@ -39,7 +39,7 @@ func TestRunTagWriteDefaultCatalogFastPathBeforeFence(t *testing.T) {
 	defer lock.Unlock()
 	old := spawnTagPublish
 	spawnTagPublish = func(string, string) error { return nil }
-	defer func() { spawnTagPublish = old }()
+	t.Cleanup(func() { spawnTagPublish = old })
 	var out strings.Builder
 	if err := runTagWriteCmd(&out, strings.NewReader(`[{"start_uuid":"11111111","topic":"default-fast","summary":"x"}]`), sid[:8], nil, func() []view.Scope { t.Fatal("guarded lookup called"); return nil }, false, "", false); err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestTagWriteFastPathAuthorsBeforeConsolidatedFence(t *testing.T) {
 	defer lock.Unlock()
 	oldPublish := spawnTagPublish
 	spawnTagPublish = func(string, string) error { return nil }
-	defer func() { spawnTagPublish = oldPublish }()
+	t.Cleanup(func() { spawnTagPublish = oldPublish })
 
 	done := make(chan error, 1)
 	go func() {
@@ -137,7 +137,7 @@ func TestTagWriteTDirFastPathAuthorsBeforeConsolidatedFence(t *testing.T) {
 	defer lock.Unlock()
 	oldPublish := spawnTagPublish
 	spawnTagPublish = func(string, string) error { return nil }
-	defer func() { spawnTagPublish = oldPublish }()
+	t.Cleanup(func() { spawnTagPublish = oldPublish })
 
 	done := make(chan error, 1)
 	go func() {
