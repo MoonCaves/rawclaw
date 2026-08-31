@@ -102,8 +102,21 @@ func TestJourney_AntigravitySetupHermeticEndToEnd(t *testing.T) {
 		t.Skip("sh not available for execution test")
 	}
 
+	stubDir := filepath.Join(sandbox, "stub-bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	hookEnv := append(os.Environ(),
+		"TMPDIR="+sandbox,
+		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+
 	cmdTurn1 := exec.Command(sh, scriptPath)
-	cmdTurn1.Env = append(os.Environ(), "TMPDIR="+sandbox)
+	cmdTurn1.Env = hookEnv
 	cmdTurn1.Stdin = strings.NewReader(`{
 		"conversationId": "journey-test-conv-001",
 		"invocationNum": 0,
@@ -137,7 +150,7 @@ func TestJourney_AntigravitySetupHermeticEndToEnd(t *testing.T) {
 
 	// 5. Execute on invocationNum 1 -> assert silent exit 0 (empty stdout)
 	cmdTurn2 := exec.Command(sh, scriptPath)
-	cmdTurn2.Env = append(os.Environ(), "TMPDIR="+sandbox)
+	cmdTurn2.Env = hookEnv
 	cmdTurn2.Stdin = strings.NewReader(`{
 		"conversationId": "journey-test-conv-001",
 		"invocationNum": 1,
