@@ -27,14 +27,8 @@ const rawclawSessionCatalogHead = `if [ -n "$catalog_session_id" ]; then
 	entry="$catalog_dir/$catalog_session_id"
 	esc_session_id=$(printf '%s' "$session_id" | sed 's/\\/\\\\/g' || true)
 	transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	if [ -z "$transcript_path" ]; then
-		transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcriptPath"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	fi
 	esc_transcript_path=$(printf '%s' "$transcript_path" | sed 's/\\/\\\\/g' || true)
 	cwd=$(printf '%s' "$input" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	if [ -z "$cwd" ]; then
-		cwd=$(printf '%s' "$input" | sed -n 's/.*"workspacePaths"[[:space:]]*:[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-	fi
 	esc_cwd=$(printf '%s' "$cwd" | sed 's/\\/\\\\/g' || true)
 	tmp_dir="$catalog_dir/.tmp.$$"
 	tmp_entry="$tmp_dir/$catalog_session_id"
@@ -222,9 +216,6 @@ set -eu
 input=$(cat)
 inv_num=$(printf '%s' "$input" | sed -n 's/.*"invocationNum"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"conversationId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-if [ -z "$session_id" ]; then
-	session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
-fi
 catalog_session_id=$session_id
 case "$catalog_session_id" in
 	''|.*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) catalog_session_id= ;;
@@ -244,6 +235,14 @@ fi
 # Gated to invocationNum 0 (first invocation in conversation). If unparseable, fall back to emitting.
 if [ -n "$inv_num" ] && [ "$inv_num" -ne 0 ]; then
 	exit 0
+fi
+
+# Antigravity delivers camelCase keys and array workspacePaths. Map them to
+# transcript_path and cwd for the shared catalog entry writer.
+agy_transcript_path=$(printf '%s' "$input" | sed -n 's/.*"transcriptPath"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+agy_cwd=$(printf '%s' "$input" | sed -n 's/.*"workspacePaths"[[:space:]]*:[[:space:]]*\[[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+if [ -n "$agy_transcript_path" ] || [ -n "$agy_cwd" ]; then
+	input=$(printf '%s\n"transcript_path":"%s","cwd":"%s"' "$input" "$agy_transcript_path" "$agy_cwd")
 fi
 
 # Session catalog keys are flat filenames. Invalid keys still ingest fail-soft,
