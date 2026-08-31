@@ -314,6 +314,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	_ = root.RegisterFlagCompletionFunc("source", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return registeredSourceIDs(), cobra.ShellCompDirectiveNoFileComp
 	})
+	root.PersistentFlags().Bool("debug", false, "enable debug logging on stderr")
 	return root
 }
 
@@ -325,6 +326,9 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 // which keeps the goroutine-leak detector green. main calls this instead of
 // root.Execute() directly.
 func Execute(root *cobra.Command, args []string) error {
+	if isDebugRequested(args, os.Getenv("RAWCLAW_DEBUG")) {
+		slog.SetDefault(slog.New(slog.NewTextHandler(root.ErrOrStderr(), &slog.HandlerOptions{Level: slog.LevelDebug})))
+	}
 	to := resolveTimeoutFromArgs(args, os.Getenv("RAWCLAW_TIMEOUT"))
 	ctx, stop := startWatchdog(to, root.ErrOrStderr(), osExit)
 	defer stop()
@@ -333,6 +337,21 @@ func Execute(root *cobra.Command, args []string) error {
 	// cancels every command — and kills any child started for the run via
 	// exec.CommandContext — so a child doesn't outlive the exit(124).
 	return root.ExecuteContext(ctx)
+}
+
+func isDebugRequested(args []string, env string) bool {
+	if env == "1" || strings.EqualFold(env, "true") {
+		return true
+	}
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == "--debug" {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveTimeoutFromArgs leniently parses just the --timeout value out of args
@@ -410,10 +429,10 @@ func isReindexVectorsInvocation(args []string) bool {
 // subcommand (`--dir archive pull` is a search, not `archive pull`). Flags
 // with `=` carry their own value. Keep in sync with the root flag set.
 var rootValueFlags = map[string]bool{
-	"--timeout": true, "--dir": true, "--limit": true, "--role": true,
-	"--source": true, "--sort": true, "--resume": true, "--since": true,
-	"--before": true, "--include-path": true, "--exclude-path": true,
-	"--min-messages": true, "--format": true,
+	"--timeout": true, "--dir": true, "-d": true, "--limit": true, "-l": true,
+	"--role": true, "-r": true, "--source": true, "-s": true, "--sort": true,
+	"--resume": true, "--since": true, "--before": true, "--include-path": true,
+	"--exclude-path": true, "--min-messages": true, "--format": true, "-f": true,
 }
 
 // leadingSubcommandTokens returns up to n leading non-flag tokens of args —
@@ -460,7 +479,13 @@ func isConsolidateInvocation(args []string) bool {
 // cost scales with the entire history on disk.
 func isIngestAllInvocation(args []string) bool {
 	w := leadingSubcommandTokens(args, 2)
-	return len(w) == 1 && w[0] == "ingest"
+	if len(w) == 0 || w[0] != "ingest" {
+		return false
+	}
+	if len(w) == 1 {
+		return true
+	}
+	return strings.TrimSpace(w[1]) == ""
 }
 
 // isArchiveSyncInvocation reports whether args target a SYNCING archive verb —
