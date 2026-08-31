@@ -1752,13 +1752,30 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		staleNote  string
 	)
 
-	// An explicit --reindex, explicit --dir, or --this-project refreshes the targeted
-	// project. Default search is answer-first: the O(1) per-project freshness check
-	// skips discovery entirely, and stale or UNKNOWN answers from the consolidated
-	// store while a throttled background ingest nudge repairs freshness.
-	if o.Reindex || o.DirSet || o.ThisProject {
+	// An explicit --reindex or explicit --dir refreshes the targeted project.
+	// --this-project evaluates O(1) project freshness before paying the multi-runtime
+	// re-consolidation fold. Default search is answer-first: the O(1) per-project
+	// freshness check skips discovery entirely, and stale or UNKNOWN answers from
+	// the consolidated store while a throttled background ingest nudge repairs freshness.
+	switch {
+	case o.Reindex || o.DirSet:
 		refreshThisProject(o)
-	} else {
+	case o.ThisProject:
+		td := resolveTDir(o.Dir, o.DirSet)
+		projLabel := ""
+		if td != "" {
+			projLabel = paths.ProjectLabel(td)
+		}
+		fresh := false
+		if con, _, err := index.OpenConsolidated(); err == nil {
+			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td, o.Source)
+			_ = con.Close()
+			fresh = fErr == nil && freshness.Fresh
+		}
+		if !fresh {
+			refreshThisProject(o)
+		}
+	default:
 		td := resolveTDir(o.Dir, o.DirSet)
 		projLabel := ""
 		if td != "" {

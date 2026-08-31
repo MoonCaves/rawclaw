@@ -1137,6 +1137,11 @@ func TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest(t *testin
 	}
 
 	// 3. Verify exactly one background ingest call was launched (polling for absence like concurrent suite).
+	assertSingleIngestCall(t, logPath, sessionID, "detached ingest did not run")
+}
+
+func assertSingleIngestCall(t *testing.T, logPath, sessionID, errMsg string) {
+	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		b, err := os.ReadFile(logPath)
@@ -1154,7 +1159,7 @@ func TestAntigravityPrimeScript_SessionStartDeduplicatesDetachedIngest(t *testin
 		}
 		return
 	}
-	t.Fatal("detached ingest did not run")
+	t.Fatal(errMsg)
 }
 
 // TestAntigravityPrimeScript_MalformedPayloadsDeduplicateAcrossInvocations verifies that
@@ -1234,22 +1239,5 @@ func TestAntigravityPrimeScript_MalformedPayloadsDeduplicateAcrossInvocations(t 
 	}
 
 	// Verify at most 1 background ingest call was launched across all 3 turns
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		b, err := os.ReadFile(logPath)
-		if err != nil || strings.TrimSpace(string(b)) == "" {
-			time.Sleep(10 * time.Millisecond)
-			continue
-		}
-		time.Sleep(250 * time.Millisecond)
-		b, err = os.ReadFile(logPath)
-		if err != nil {
-			t.Fatalf("read ingest log: %v", err)
-		}
-		if got := strings.TrimSpace(string(b)); got != "ingest "+sessionID {
-			t.Fatalf("ingest calls = %q, want exactly one %q", got, "ingest "+sessionID)
-		}
-		return
-	}
-	t.Fatal("detached ingest did not run on turn 1")
+	assertSingleIngestCall(t, logPath, sessionID, "detached ingest did not run on turn 1")
 }

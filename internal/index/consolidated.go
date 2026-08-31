@@ -1447,12 +1447,15 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 	if tdir == "" {
 		return IndexFreshness{Fresh: true}, nil
 	}
-	_, err = os.Stat(tdir)
+	st, err := os.Stat(tdir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return IndexFreshness{Fresh: true}, nil
 		}
 		return IndexFreshness{Fresh: false, Reason: "stat_tdir_failed"}, fmt.Errorf("stat project directory %q: %w", tdir, err)
+	}
+	if !st.IsDir() {
+		return IndexFreshness{Fresh: false, Reason: "not_a_directory"}, fmt.Errorf("project directory %q is not a directory", tdir)
 	}
 	selectedSource := ""
 	if len(sourceTool) > 0 {
@@ -1471,9 +1474,8 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 	if err != nil {
 		return IndexFreshness{Fresh: false, Reason: "query_file_index_failed"}, err
 	}
-	defer rows.Close()
-
 	nRows := 0
+	indexedPaths := make(map[string]bool)
 	for rows.Next() {
 		nRows++
 		var (
@@ -1486,6 +1488,7 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 			return IndexFreshness{Fresh: false, Reason: "scan_file_index_failed"}, err
 		}
 		rawPath := backingFilePath(p)
+		indexedPaths[filepath.Clean(rawPath)] = true
 		curMTime, curSize, curFP, statErr := backingFileState(rawPath)
 		if statErr != nil {
 			return IndexFreshness{Fresh: false, Reason: "transcript_stat_changed"}, nil
@@ -1497,19 +1500,78 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 	if err := rows.Err(); err != nil {
 		return IndexFreshness{Fresh: false, Reason: "iterate_file_index_failed"}, err
 	}
-	if nRows == 0 {
-		entries, err := os.ReadDir(tdir)
-		if err != nil {
-			return IndexFreshness{Fresh: false, Reason: "read_project_dir_failed"}, fmt.Errorf("read project directory %q: %w", tdir, err)
-		}
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-				return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+	allIndexedPaths := indexedPaths
+	if selectedSource != "" {
+		allIndexedPaths = make(map[string]bool)
+		allRows, err := con.Query(`
+			SELECT path
+			FROM file_index
+			WHERE path LIKE ?
+			   OR session_id IN (
+					SELECT id FROM sessions
+					WHERE project = ?
+				)
+		`, tdir+"/%", projectLabel)
+		if err == nil {
+			defer allRows.Close()
+			for allRows.Next() {
+				var p string
+				if err := allRows.Scan(&p); err == nil {
+					allIndexedPaths[filepath.Clean(backingFilePath(p))] = true
+				}
 			}
+		}
+	}
+	contained := paths.ContainedJSONL(tdir)
+	for _, full := range contained {
+		if !allIndexedPaths[filepath.Clean(full)] {
+			return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+		}
+	}
+
+	// Project-sharded container check: Pi stores transcripts under ~/.pi/agent/sessions/--<escaped-cwd>--/.
+	if selectedSource == "" || selectedSource == "pi" {
+		if !checkPiContainerFreshness(tdir, allIndexedPaths) {
+			return IndexFreshness{Fresh: false, Reason: "container_transcripts_modified"}, nil
 		}
 	}
 
 	return IndexFreshness{Fresh: true}, nil
+}
+
+func checkPiContainerFreshness(tdir string, allIndexedPaths map[string]bool) bool {
+	var roots []string
+	if d := os.Getenv("PI_CODING_AGENT_DIR"); d != "" {
+		roots = append(roots, filepath.Join(d, "sessions"))
+	}
+	if d := os.Getenv("PI_CONFIG_DIR"); d != "" {
+		roots = append(roots, filepath.Join(d, "agent", "sessions"))
+	}
+	if d := os.Getenv("PI_HOME"); d != "" {
+		roots = append(roots, filepath.Join(d, "agent", "sessions"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		roots = append(roots, filepath.Join(home, ".pi", "agent", "sessions"))
+	}
+
+	cleanTDir := filepath.Clean(tdir)
+	escaped := "--" + strings.ReplaceAll(strings.Trim(cleanTDir, string(os.PathSeparator)), string(os.PathSeparator), "-") + "--"
+
+	for _, r := range roots {
+		if r == "" {
+			continue
+		}
+		projDir := filepath.Join(r, escaped)
+		if st, err := os.Stat(projDir); err == nil && st.IsDir() {
+			transcripts := paths.ContainedJSONL(projDir)
+			for _, t := range transcripts {
+				if !allIndexedPaths[filepath.Clean(t)] {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 // SessionFreshnessStatus discriminates the freshness of an individual session.
