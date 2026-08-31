@@ -68,9 +68,18 @@ func maybeAutosync() {
 // reason to kill the child); the child's transfers are stall-bounded by the
 // archive git runner, not wall-clock-capped. Start-and-release — the parent
 // never waits.
+// isTestExe reports whether exe is a Go test runner binary (e.g. cli.test)
+// rather than an actual deployed rawclaw executable. Detached background spawns
+// must refuse to execute a test binary as a background child to prevent orphaned
+// test runners from spinning in /tmp under PPID 1.
+func isTestExe(exe string) bool {
+	base := filepath.Base(exe)
+	return strings.HasSuffix(base, ".test") || strings.HasSuffix(base, ".test.exe")
+}
+
 func spawnAutosyncChild() {
 	exe, err := selfExe()
-	if err != nil {
+	if err != nil || isTestExe(exe) {
 		return
 	}
 	logf, err := openAutosyncLog()

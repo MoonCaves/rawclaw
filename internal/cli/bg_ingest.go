@@ -167,7 +167,7 @@ func maybeSpawnIngest(sessionArg string) bool {
 // Start-and-release — the caller never waits.
 func spawnIngestChild(sessionArg string) {
 	exe, err := selfExe()
-	if err != nil {
+	if err != nil || isTestExe(exe) {
 		return
 	}
 	logf, err := openIngestLog()
