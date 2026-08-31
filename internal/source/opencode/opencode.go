@@ -439,7 +439,9 @@ func loadMessagesWithParts(db *sql.DB, sessionID string) ([]model.Message, error
 					if sb.Len() > 0 {
 						sb.WriteString("\n")
 					}
-					fmt.Fprintf(&sb, "[agent: %s]", pData.Name)
+					sb.WriteString("[agent: ")
+					sb.WriteString(pData.Name)
+					sb.WriteString("]")
 				}
 			case "tool":
 				toolName := pData.Tool
@@ -459,12 +461,21 @@ func loadMessagesWithParts(db *sql.DB, sessionID string) ([]model.Message, error
 						outputStr = pData.State.Output
 					}
 					if inputStr != "" {
-						fmt.Fprintf(&sb, "[tool_use: %s] %s\n", toolName, inputStr)
+						sb.WriteString("[tool_use: ")
+						sb.WriteString(toolName)
+						sb.WriteString("] ")
+						sb.WriteString(inputStr)
+						sb.WriteString("\n")
 					} else {
-						fmt.Fprintf(&sb, "[tool_use: %s]\n", toolName)
+						sb.WriteString("[tool_use: ")
+						sb.WriteString(toolName)
+						sb.WriteString("]\n")
 					}
 					if outputStr != "" {
-						fmt.Fprintf(&sb, "[tool_result: %s] %s", toolName, outputStr)
+						sb.WriteString("[tool_result: ")
+						sb.WriteString(toolName)
+						sb.WriteString("] ")
+						sb.WriteString(outputStr)
 					}
 				}
 			}

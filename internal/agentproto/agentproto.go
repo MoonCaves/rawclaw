@@ -620,10 +620,8 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 
 	// Topic labels and last-activity lines are attached HERE — after collection,
 	// fusion, sorting, dedup and capping have all finished — so neither can
-	// influence which conversations come back or in what order. See attachTopics
-	// and attachLastActivity.
-	attachTopics(results, picked)
-	attachLastActivity(results, picked)
+	// influence which conversations come back or in what order. See enrichSearchResults.
+	enrichSearchResults(results, picked)
 
 	// Never-silent truncation: an agent that sees N must learn the set is larger.
 	// total is the distinct count within the fetch window; if a scope hit the fetch
@@ -1357,7 +1355,41 @@ func currentTurnStart(dbp, sessionID string) int {
 // opens each project's database once. Any failure is silent: a missing topic
 // table or an unreadable database leaves the label empty, which renders exactly
 // as it did before topics existed.
+type dbConnCache struct {
+	conns map[string]*sql.DB
+}
+
+func (c *dbConnCache) get(dbp string) (*sql.DB, error) {
+	if c.conns == nil {
+		c.conns = make(map[string]*sql.DB)
+	}
+	if db, ok := c.conns[dbp]; ok && db != nil {
+		return db, nil
+	}
+	db, err := store.ConnectRO(dbp)
+	if err != nil {
+		return nil, err
+	}
+	c.conns[dbp] = db
+	return db, nil
+}
+
+func (c *dbConnCache) close() {
+	for _, db := range c.conns {
+		if db != nil {
+			_ = db.Close()
+		}
+	}
+	c.conns = nil
+}
+
 func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
+	cache := &dbConnCache{}
+	defer cache.close()
+	attachTopicsWithCache(refs, anchors, cache)
+}
+
+func attachTopicsWithCache(refs []SearchRef, anchors []retrieve.Anchor, cache *dbConnCache) {
 	if len(refs) == 0 || len(refs) != len(anchors) {
 		return
 	}
@@ -1369,7 +1401,7 @@ func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
 		byDB[anchors[i].DBP] = append(byDB[anchors[i].DBP], i)
 	}
 	for dbp, idxs := range byDB {
-		con, err := store.ConnectRO(dbp)
+		con, err := cache.get(dbp)
 		if err != nil {
 			continue
 		}
@@ -1380,7 +1412,6 @@ func attachTopics(refs []SearchRef, anchors []retrieve.Anchor) {
 			}
 			refs[i].Topic = topic
 		}
-		_ = con.Close()
 	}
 }
 
@@ -1416,6 +1447,12 @@ const searchTitleCap = 70
 // grouping is what keeps it one connection per project rather than per hit. Any
 // failure is silent and renders as no line.
 func attachLastActivity(refs []SearchRef, anchors []retrieve.Anchor) {
+	cache := &dbConnCache{}
+	defer cache.close()
+	attachLastActivityWithCache(refs, anchors, cache)
+}
+
+func attachLastActivityWithCache(refs []SearchRef, anchors []retrieve.Anchor, cache *dbConnCache) {
 	if len(refs) == 0 || len(refs) != len(anchors) {
 		return
 	}
@@ -1427,24 +1464,33 @@ func attachLastActivity(refs []SearchRef, anchors []retrieve.Anchor) {
 		byDB[anchors[i].DBP] = append(byDB[anchors[i].DBP], i)
 	}
 	for dbp, idxs := range byDB {
-		con, err := store.ConnectRO(dbp)
+		con, err := cache.get(dbp)
 		if err != nil {
 			continue
 		}
 		// Sessions repeat across hits only when the dedup let them through; the
 		// cache spares the duplicate tail read either way.
-		cache := map[string]string{}
+		seenLast := map[string]string{}
 		for _, i := range idxs {
 			sid := anchors[i].SessionID
-			last, done := cache[sid]
+			last, done := seenLast[sid]
 			if !done {
 				last = view.SessionLastActivity(con, sid)
-				cache[sid] = last
+				seenLast[sid] = last
 			}
 			refs[i].Last = last
 		}
-		_ = con.Close()
 	}
+}
+
+func enrichSearchResults(refs []SearchRef, anchors []retrieve.Anchor) {
+	if len(refs) == 0 || len(refs) != len(anchors) {
+		return
+	}
+	cache := &dbConnCache{}
+	defer cache.close()
+	attachTopicsWithCache(refs, anchors, cache)
+	attachLastActivityWithCache(refs, anchors, cache)
 }
 
 // sortCandidates orders the merged candidates: newest/oldest sort by ISO;
