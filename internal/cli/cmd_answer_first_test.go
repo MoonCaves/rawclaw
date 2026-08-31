@@ -627,6 +627,44 @@ func TestAnswerFirst_ThisProject_UncatalogedSessionRebuilds(t *testing.T) {
 	}
 }
 
+// TestAnswerFirst_ThisProject_NestedSubagentSessionRebuilds verifies that uncataloged sessions
+// located in nested subdirectories (such as subagents or workflows) are detected by ContainedJSONL
+// and force a synchronous rebuild rather than being skipped by a flat directory scan.
+func TestAnswerFirst_ThisProject_NestedSubagentSessionRebuilds(t *testing.T) {
+	_, projDir, sessionID, _, _ := setupFreshnessTestEnv(t)
+
+	// Create nested directory: projDir/<sessionID>/subagents/
+	nestedDir := filepath.Join(projDir, sessionID, "subagents")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	nestedSID := "d4e5f6a1-2222-3333-4444-555566667777"
+	nestedPath := filepath.Join(nestedDir, nestedSID+".jsonl")
+	nestedContent := `{"type":"user","message":{"role":"user","content":"nestedsubagentdiscoveryterm"},"uuid":"9f3e1c25-1111-2222-3333-444455556666","timestamp":"2026-08-20T12:00:00Z"}` + "\n"
+	if err := os.WriteFile(nestedPath, []byte(nestedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Initial search: nested uncataloged session exists -> must refresh and find it
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--this-project", "--dir", projDir, "--include-subagents", "nestedsubagentdiscoveryterm")
+	if err != nil {
+		t.Fatalf("this-project search failed: %v\nout: %s", err, out)
+	}
+	if !strings.Contains(out, "9f3e1c25") || !strings.Contains(out, "nestedsubagentdiscoveryterm") {
+		t.Errorf("this-project search did not find nested subagent session: %s", out)
+	}
+
+	// 2. Warm search: no modifications -> answers cleanly
+	out2, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--this-project", "--dir", projDir, "--include-subagents", "nestedsubagentdiscoveryterm")
+	if err != nil {
+		t.Fatalf("warm this-project search failed: %v\nout: %s", err, out2)
+	}
+	if !strings.Contains(out2, "9f3e1c25") || !strings.Contains(out2, "nestedsubagentdiscoveryterm") {
+		t.Errorf("warm this-project search missing nested subagent session: %s", out2)
+	}
+}
+
 // TestAnswerFirst_StoreMissing_FallsBackToPerProjectDBs verifies that when the consolidated
 // store is absent or cannot be opened, read verbs fall back to per-project databases cleanly.
 func TestAnswerFirst_StoreMissing_FallsBackToPerProjectDBs(t *testing.T) {

@@ -1447,12 +1447,15 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 	if tdir == "" {
 		return IndexFreshness{Fresh: true}, nil
 	}
-	_, err = os.Stat(tdir)
+	st, err := os.Stat(tdir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return IndexFreshness{Fresh: true}, nil
 		}
 		return IndexFreshness{Fresh: false, Reason: "stat_tdir_failed"}, fmt.Errorf("stat project directory %q: %w", tdir, err)
+	}
+	if !st.IsDir() {
+		return IndexFreshness{Fresh: false, Reason: "not_a_directory"}, fmt.Errorf("project directory %q is not a directory", tdir)
 	}
 	selectedSource := ""
 	if len(sourceTool) > 0 {
@@ -1519,23 +1522,143 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 			}
 		}
 	}
-	entries, err := os.ReadDir(tdir)
-	if err != nil {
-		if nRows == 0 {
-			return IndexFreshness{Fresh: false, Reason: "read_project_dir_failed"}, fmt.Errorf("read project directory %q: %w", tdir, err)
+	contained := paths.ContainedJSONL(tdir)
+	for _, full := range contained {
+		if !allIndexedPaths[filepath.Clean(full)] {
+			return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
 		}
-	} else {
-		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-				full := filepath.Clean(filepath.Join(tdir, e.Name()))
-				if !allIndexedPaths[full] {
-					return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
-				}
-			}
+	}
+
+	// Option B: Stat un-cataloged container roots (Pi, Goose, OpenCode) in O(1).
+	if selectedSource == "" || selectedSource == "pi" {
+		if !checkPiContainerFreshness(tdir, allIndexedPaths) {
+			return IndexFreshness{Fresh: false, Reason: "container_transcripts_modified"}, nil
+		}
+	}
+	if selectedSource == "" || selectedSource == "goose" {
+		if !checkGooseContainerFreshness(con) {
+			return IndexFreshness{Fresh: false, Reason: "container_transcripts_modified"}, nil
+		}
+	}
+	if selectedSource == "" || selectedSource == "opencode" {
+		if !checkOpenCodeContainerFreshness(con) {
+			return IndexFreshness{Fresh: false, Reason: "container_transcripts_modified"}, nil
 		}
 	}
 
 	return IndexFreshness{Fresh: true}, nil
+}
+
+func checkPiContainerFreshness(tdir string, allIndexedPaths map[string]bool) bool {
+	var roots []string
+	if d := os.Getenv("PI_CODING_AGENT_DIR"); d != "" {
+		roots = append(roots, filepath.Join(d, "sessions"))
+	}
+	if d := os.Getenv("PI_CONFIG_DIR"); d != "" {
+		roots = append(roots, filepath.Join(d, "agent", "sessions"))
+	}
+	if d := os.Getenv("PI_HOME"); d != "" {
+		roots = append(roots, filepath.Join(d, "agent", "sessions"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		roots = append(roots, filepath.Join(home, ".pi", "agent", "sessions"))
+	}
+
+	cleanTDir := filepath.Clean(tdir)
+	escaped := "--" + strings.ReplaceAll(strings.Trim(cleanTDir, string(os.PathSeparator)), string(os.PathSeparator), "-") + "--"
+
+	for _, r := range roots {
+		if r == "" {
+			continue
+		}
+		projDir := filepath.Join(r, escaped)
+		if st, err := os.Stat(projDir); err == nil && st.IsDir() {
+			transcripts := paths.ContainedJSONL(projDir)
+			for _, t := range transcripts {
+				if !allIndexedPaths[filepath.Clean(t)] {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func checkGooseContainerFreshness(con *sql.DB) bool {
+	var roots []string
+	if h := os.Getenv("GOOSE_HOME"); h != "" {
+		roots = append(roots, filepath.Join(h, "sessions"), h)
+	}
+	if xdgData := os.Getenv("XDG_DATA_HOME"); xdgData != "" {
+		roots = append(roots, filepath.Join(xdgData, "goose", "sessions"))
+	}
+	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+		roots = append(roots, filepath.Join(xdgConfig, "goose", "sessions"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		roots = append(roots, filepath.Join(home, ".local", "share", "goose", "sessions"))
+		roots = append(roots, filepath.Join(home, ".config", "goose", "sessions"))
+		roots = append(roots, filepath.Join(home, ".goose", "sessions"))
+	}
+
+	var ingestTimeStr string
+	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestTime).Scan(&ingestTimeStr)
+	lastIngest, _ := strconv.ParseFloat(ingestTimeStr, 64)
+
+	for _, r := range roots {
+		if r == "" {
+			continue
+		}
+		entries, err := os.ReadDir(r)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".db") {
+				info, err := e.Info()
+				if err == nil && lastIngest > 0 && mtimeOf(info) > lastIngest+0.001 {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func checkOpenCodeContainerFreshness(con *sql.DB) bool {
+	var roots []string
+	if d := os.Getenv("OPENCODE_HOME"); d != "" {
+		roots = append(roots, d)
+	}
+	if xdgData := os.Getenv("XDG_DATA_HOME"); xdgData != "" {
+		roots = append(roots, filepath.Join(xdgData, "opencode"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		roots = append(roots, filepath.Join(home, ".local", "share", "opencode"))
+	}
+
+	var ingestTimeStr string
+	_ = con.QueryRow("SELECT value FROM meta WHERE key=?", MetaLastIngestTime).Scan(&ingestTimeStr)
+	lastIngest, _ := strconv.ParseFloat(ingestTimeStr, 64)
+
+	for _, r := range roots {
+		if r == "" {
+			continue
+		}
+		entries, err := os.ReadDir(r)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".db") {
+				info, err := e.Info()
+				if err == nil && lastIngest > 0 && mtimeOf(info) > lastIngest+0.001 {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 // SessionFreshnessStatus discriminates the freshness of an individual session.
