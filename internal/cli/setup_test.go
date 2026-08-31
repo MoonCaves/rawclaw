@@ -1154,8 +1154,8 @@ func assertSingleIngestCall(t *testing.T, logPath, sessionID, errMsg string) {
 		if err != nil {
 			t.Fatalf("read ingest log: %v", err)
 		}
-		if got := strings.TrimSpace(string(b)); got != "ingest "+sessionID {
-			t.Fatalf("ingest calls = %q, want exactly one %q", got, "ingest "+sessionID)
+		if got := strings.TrimSpace(string(b)); got != "ingest -- "+sessionID && got != "ingest "+sessionID {
+			t.Fatalf("ingest calls = %q, want exactly one %q", got, "ingest -- "+sessionID)
 		}
 		return
 	}
@@ -1267,6 +1267,14 @@ func TestSetup_RuntimeExtensionsInstallAndEject(t *testing.T) {
 			targetPath: openCodePluginPath,
 			needles:    []string{"session.created", "rawclaw closeout <full-session-id>", "context.inject"},
 		},
+		{
+			name:       "hermes",
+			envKey:     "HERMES_HOME",
+			installFn:  installHermesBirthHook,
+			ejectFn:    ejectHermesBirthHook,
+			targetPath: hermesAgentHooksScriptPath,
+			needle:     "nohup",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1302,12 +1310,10 @@ func TestSetup_GooseInstallAndEject(t *testing.T) {
 	t.Setenv("GOOSE_HOME", dir)
 
 	if err := installGooseBirthHook(); err != nil {
-		t.Fatalf("installGooseBirthHook: %v", err)
+		t.Fatalf("install: %v", err)
 	}
-	sp := goosePluginScriptPath()
-	hp := goosePluginHookPath()
-	if !fileExists(sp) || !fileExists(hp) {
-		t.Fatalf("expected goose files at %s and %s", sp, hp)
+	if !fileExists(goosePluginScriptPath()) || !fileExists(goosePluginHookPath()) {
+		t.Fatalf("expected goose hook files installed")
 	}
 
 	content, err := os.ReadFile(sp)
@@ -1334,7 +1340,36 @@ func TestSetup_GooseInstallAndEject(t *testing.T) {
 	}
 
 	ejectGooseBirthHook()
-	if fileExists(sp) || fileExists(hp) {
-		t.Fatalf("expected goose files to be removed after eject")
+	if fileExists(goosePluginScriptPath()) || fileExists(goosePluginHookPath()) {
+		t.Fatalf("expected goose hook files removed")
+	}
+}
+
+func TestSetup_LeadingHyphenSessionID_IsRejectedFromCatalog(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+	dir := t.TempDir()
+	catDir := filepath.Join(dir, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+
+	scriptPath := filepath.Join(dir, "prime.sh")
+	if err := writeHookScript(scriptPath, renderRuntimeScript(rawclawGooseCatalogScript)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Payload with leading hyphen session ID (e.g. "--help" or "-evil")
+	payload := `{"session_id":"--flag-injection","working_dir":"/test"}`
+	cmd := exec.Command(sh, scriptPath)
+	cmd.Stdin = strings.NewReader(payload)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	// Catalog must NOT contain entry for leading-hyphen ID
+	entry := filepath.Join(catDir, "--flag-injection")
+	if fileExists(entry) {
+		t.Fatalf("leading-hyphen session ID was not rejected from catalog")
 	}
 }

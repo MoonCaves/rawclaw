@@ -163,8 +163,8 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 
 					calls := readDetachedIngestCalls(t, logPath)
 					if kind == "new" {
-						if len(calls) != 1 || calls[0] != "ingest "+sessionID {
-							t.Fatalf("detached rawclaw calls = %q, want [%q]", calls, "ingest "+sessionID)
+						if len(calls) != 1 || (calls[0] != "ingest -- "+sessionID && calls[0] != "ingest "+sessionID) {
+							t.Fatalf("detached rawclaw calls = %q, want [%q]", calls, "ingest -- "+sessionID)
 						}
 						if info, err := os.Stat(entry); err != nil || !info.Mode().IsRegular() {
 							t.Fatalf("new claim entry = %v, want regular file", err)

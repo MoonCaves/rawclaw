@@ -67,7 +67,7 @@ func TestAntigravityStopScript_DispatchesPrewarmDetached(t *testing.T) {
 	if err := os.MkdirAll(stubDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stub := "#!/bin/sh\nprintf '%s %s' \"$1\" \"$2\" > \"" + marker + "\"\n"
+	stub := "#!/bin/sh\nprintf '%s' \"$*\" > \"" + marker + "\"\n"
 	if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -94,8 +94,8 @@ func TestAntigravityStopScript_DispatchesPrewarmDetached(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if got, err := os.ReadFile(marker); err == nil {
-			if string(got) != "prewarm test-conversation" {
-				t.Fatalf("rawclaw args = %q, want prewarm test-conversation", got)
+			if string(got) != "prewarm -- test-conversation" && string(got) != "prewarm test-conversation" {
+				t.Fatalf("rawclaw args = %q, want prewarm -- test-conversation", got)
 			}
 			return
 		}

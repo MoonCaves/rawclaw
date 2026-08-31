@@ -105,6 +105,7 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 	piDetected := !project && (isDir(paths.ExpandHome("~/.pi")) || os.Getenv("PI_CODING_AGENT_DIR") != "")
 	openCodeDetected := !project && (isDir(paths.ExpandHome("~/.config/opencode")) || isDir(paths.ExpandHome("~/.local/share/opencode")) || os.Getenv("OPENCODE_CONFIG_DIR") != "")
 	gooseDetected := !project && (isDir(paths.ExpandHome("~/.config/goose")) || isDir(paths.ExpandHome("~/.local/share/goose")) || os.Getenv("GOOSE_HOME") != "")
+	hermesDetected := !project && (isDir(paths.ExpandHome("~/.hermes")) || os.Getenv("HERMES_HOME") != "")
 
 	maybePrintProjectTrustWarning(out, targetClaudeCode, project)
 	if codexDetected {
@@ -135,6 +136,9 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 	}
 	if gooseDetected {
 		fmt.Fprintf(out, "  install Goose catalog hook in %s\n", goosePluginDir())
+	}
+	if hermesDetected {
+		fmt.Fprintf(out, "  install Hermes catalog hook at %s\n", hermesAgentHooksScriptPath())
 	}
 	fmt.Fprintf(out, "  (every other hook already registered in any file is left untouched)\n\n")
 
@@ -190,6 +194,12 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 		}
 		fmt.Fprintf(out, "Installed Goose catalog hook in %s\n", goosePluginDir())
 	}
+	if hermesDetected {
+		if err := installHermesBirthHook(); err != nil {
+			return fmt.Errorf("install Hermes hook: %w", err)
+		}
+		fmt.Fprintf(out, "Installed %s\n", hermesAgentHooksScriptPath())
+	}
 
 	// Point at the optional cross-machine archive without provisioning it: setup
 	// wires local hooks; `archive init` is a separate opt-in the user runs when
@@ -201,11 +211,11 @@ func runSetup(cmd *cobra.Command, yes, project bool) error {
 	return nil
 }
 
-// runSetupEject resolves each target's config dir at the requested scope
-// exactly as runSetup does, shows the plan, confirms once (unless --yes), then
-// ejects every detected target. Codex is gated on its USER-LEVEL config dir
-// existing, same as install — nothing is created or touched for a target that
-// was never wired up.
+// runSetupEject is the --eject flow: resolve the same target config dirs as
+// runSetup, confirm once, then remove the hook script (and any empty parent
+// dirs) and strip rawclaw's entries from the config files. Ejecting on a
+// machine where rawclaw was never installed succeeds with a clean "already
+// clean" message — never an error.
 func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 	out := cmd.OutOrStdout()
 
@@ -237,33 +247,37 @@ func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 	piDetected := !project && (isDir(paths.ExpandHome("~/.pi")) || os.Getenv("PI_CODING_AGENT_DIR") != "")
 	openCodeDetected := !project && (isDir(paths.ExpandHome("~/.config/opencode")) || isDir(paths.ExpandHome("~/.local/share/opencode")) || os.Getenv("OPENCODE_CONFIG_DIR") != "")
 	gooseDetected := !project && (isDir(paths.ExpandHome("~/.config/goose")) || isDir(paths.ExpandHome("~/.local/share/goose")) || os.Getenv("GOOSE_HOME") != "")
+	hermesDetected := !project && (isDir(paths.ExpandHome("~/.hermes")) || os.Getenv("HERMES_HOME") != "")
 
 	fmt.Fprintf(out, "rawclaw setup --eject will:\n")
-	fmt.Fprintf(out, "  remove the discovery-hook script at %s (if present)\n", scriptPath)
-	fmt.Fprintf(out, "  remove the legacy tagging-queue hook script at %s (if present)\n", legacyTagQueueScriptPath(configDir))
-	fmt.Fprintf(out, "  strip rawclaw's own entries out of %s (if present)\n", sp)
+	fmt.Fprintf(out, "  remove the discovery-hook script at %s (and its parent dirs if empty)\n", scriptPath)
+	fmt.Fprintf(out, "  strip rawclaw's SessionStart entry from %s\n", sp)
+	fmt.Fprintf(out, "  remove the legacy tagging-queue hook at %s and its SessionEnd entry (if present)\n", legacyTagQueueScriptPath(configDir))
 	if codexDetected {
-		fmt.Fprintf(out, "  remove the discovery-hook script at %s (if present)\n", hookScriptPath(codexDir))
-		fmt.Fprintf(out, "  strip rawclaw's own entry out of %s (if present)\n", codexHooksPath(codexDir))
+		fmt.Fprintf(out, "  remove the discovery-hook script at %s (and its parent dirs if empty)\n", hookScriptPath(codexDir))
+		fmt.Fprintf(out, "  strip rawclaw's SessionStart entry from %s\n", codexHooksPath(codexDir))
 	} else {
 		fmt.Fprintf(out, "  Codex not detected (no config dir at %q) — skipping that target\n", codexsrc.ConfigDir())
 	}
 	if antigravityDetected {
-		fmt.Fprintf(out, "  remove the discovery-hook script at %s (if present)\n", hookScriptPath(antigravityDir))
-		fmt.Fprintf(out, "  strip rawclaw's own entry out of %s (if present)\n", antigravityHooksPath(antigravityDir))
+		fmt.Fprintf(out, "  remove the discovery-hook script at %s (and its parent dirs if empty)\n", hookScriptPath(antigravityDir))
+		fmt.Fprintf(out, "  strip rawclaw's PreInvocation entry from %s\n", antigravityHooksPath(antigravityDir))
 	} else {
 		fmt.Fprintf(out, "  Antigravity not detected (no config dir at %q) — skipping that target\n", antigravitysrc.ConfigDir())
 	}
 	if piDetected {
-		fmt.Fprintf(out, "  remove Pi catalog extension at %s (if present)\n", piExtensionPath())
+		fmt.Fprintf(out, "  remove Pi catalog extension at %s\n", piExtensionPath())
 	}
 	if openCodeDetected {
-		fmt.Fprintf(out, "  remove OpenCode catalog plugin at %s (if present)\n", openCodePluginPath())
+		fmt.Fprintf(out, "  remove OpenCode catalog plugin at %s\n", openCodePluginPath())
 	}
 	if gooseDetected {
-		fmt.Fprintf(out, "  remove Goose catalog hook in %s (if present)\n", goosePluginDir())
+		fmt.Fprintf(out, "  remove Goose catalog hook in %s\n", goosePluginDir())
 	}
-	fmt.Fprintf(out, "  (every sibling hook already registered in any file is left untouched)\n\n")
+	if hermesDetected {
+		fmt.Fprintf(out, "  remove Hermes catalog hook at %s\n", hermesAgentHooksScriptPath())
+	}
+	fmt.Fprintf(out, "  (every other hook in any file is left untouched)\n\n")
 
 	if !yes {
 		ok, err := confirm(cmd.InOrStdin(), out, "Proceed? [y/N]: ")
@@ -330,6 +344,15 @@ func runSetupEject(cmd *cobra.Command, yes, project bool) error {
 			anyRemoved = true
 		} else {
 			fmt.Fprintln(out, "Goose: nothing to remove (already clean).")
+		}
+	}
+	if hermesDetected {
+		if fileExists(hermesAgentHooksScriptPath()) {
+			ejectHermesBirthHook()
+			fmt.Fprintf(out, "Hermes: removed %s\n", hermesAgentHooksScriptPath())
+			anyRemoved = true
+		} else {
+			fmt.Fprintln(out, "Hermes: nothing to remove (already clean).")
 		}
 	}
 
