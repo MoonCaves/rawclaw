@@ -638,3 +638,103 @@ func TestCheckProjectFreshness_UnrelatedDaemonDB_DoesNotInvalidateProject(t *tes
 		t.Fatalf("unrelated daemon DB write spuriously invalidated project freshness: %+v", freshness2)
 	}
 }
+
+// TestCheckProjectFreshness_CrossWorktree_DoesNotPolluteOrInvalidate verifies that
+// two separate worktrees sharing the same project label do not cross-pollute each other's
+// freshness cache when one worktree's files are modified or deleted.
+func TestCheckProjectFreshness_CrossWorktree_DoesNotPolluteOrInvalidate(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("HOME", cfg)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(cfg, ".cache"))
+	catDir := filepath.Join(cfg, "catalog")
+	t.Setenv("RAWCLAW_CATALOG_DIR", catDir)
+	if err := os.MkdirAll(catDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	wt1 := filepath.Join(cfg, "worktrees", "rawclaw")
+	wt2 := filepath.Join(cfg, "worktrees", "rawclaw-feature-b")
+	if err := os.MkdirAll(wt1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(wt2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t1Path := filepath.Join(wt1, "session-wt1.jsonl")
+	t2Path := filepath.Join(wt2, "session-wt2.jsonl")
+	if err := os.WriteFile(t1Path, []byte("session wt1 content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(t2Path, []byte("session wt2 content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	con, err := store.ConnectRW(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	if err := EnsureSchema(con, sourceClaude); err != nil {
+		t.Fatal(err)
+	}
+
+	mt1, sz1, fp1, _ := backingFileState(t1Path)
+	mt2, sz2, fp2, _ := backingFileState(t2Path)
+
+	// Both recorded under project label "rawclaw"
+	if _, err := con.Exec("INSERT INTO sessions(id, source_tool, source_path, project, cwd) VALUES(?,?,?,?,?)", "sess-wt1", "claude", t1Path, "rawclaw", wt1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("INSERT INTO file_index(path, mtime, size, fp, session_id) VALUES(?,?,?,?,?)", t1Path, mt1, sz1, fp1, "sess-wt1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := con.Exec("INSERT INTO sessions(id, source_tool, source_path, project, cwd) VALUES(?,?,?,?,?)", "sess-wt2", "claude", t2Path, "rawclaw", wt2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := con.Exec("INSERT INTO file_index(path, mtime, size, fp, session_id) VALUES(?,?,?,?,?)", t2Path, mt2, sz2, fp2, "sess-wt2"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := paths.WriteCatalogEntry(catDir, paths.CatalogEntry{
+		SessionID:      "sess-wt1",
+		TranscriptPath: t1Path,
+		CWD:            wt1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := paths.WriteCatalogEntry(catDir, paths.CatalogEntry{
+		SessionID:      "sess-wt2",
+		TranscriptPath: t2Path,
+		CWD:            wt2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := StampIngestWatermark(con); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. wt1 should be fresh initially
+	fresh1, err := CheckProjectFreshness(con, "rawclaw", wt1)
+	if err != nil {
+		t.Fatalf("CheckProjectFreshness wt1: %v", err)
+	}
+	if !fresh1.Fresh {
+		t.Fatalf("wt1 initially reported not fresh: %+v", fresh1)
+	}
+
+	// 2. Now simulate worktree 2 being deleted or modified
+	if err := os.Remove(t2Path); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. wt1 MUST remain fresh despite wt2's file being deleted!
+	fresh1After, err := CheckProjectFreshness(con, "rawclaw", wt1)
+	if err != nil {
+		t.Fatalf("CheckProjectFreshness wt1 after wt2 deletion: %v", err)
+	}
+	if !fresh1After.Fresh {
+		t.Fatalf("Cross-worktree pollution bug: wt1 falsely marked stale due to wt2 deletion: %+v", fresh1After)
+	}
+}

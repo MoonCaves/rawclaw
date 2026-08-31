@@ -1447,7 +1447,8 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 	if tdir == "" {
 		return IndexFreshness{Fresh: true}, nil
 	}
-	st, err := os.Stat(tdir)
+	cleanTDir := filepath.Clean(tdir)
+	st, err := os.Stat(cleanTDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return IndexFreshness{Fresh: true}, nil
@@ -1462,76 +1463,90 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 		selectedSource = sourceTool[0]
 	}
 
-	rows, err := con.Query(`
-		SELECT path, mtime, size, fp
-		FROM file_index
-		WHERE (? = '' AND path LIKE ?)
-		   OR session_id IN (
-				SELECT id FROM sessions
-				WHERE project = ? AND (? = '' OR source_tool = ?)
-			)
-	`, selectedSource, tdir+"/%", projectLabel, selectedSource, selectedSource)
+	projectCWD := paths.DirCWD(cleanTDir)
+	if projectCWD != "" {
+		projectCWD = filepath.Clean(projectCWD)
+	}
+
+	allIndexedPaths := make(map[string]bool)
+	querySQL := `
+		SELECT fi.path, fi.mtime, fi.size, fi.fp, s.source_tool
+		FROM file_index fi
+		JOIN sessions s ON fi.session_id = s.id
+		WHERE (
+			fi.path LIKE ?
+			OR (s.source_path != '' AND s.source_path LIKE ?)
+			OR (s.cwd != '' AND (s.cwd = ? OR s.cwd LIKE ?))
+			OR (? != '' AND (s.cwd = ? OR s.cwd LIKE ?))
+		)
+	`
+	rows, err := con.Query(querySQL,
+		cleanTDir+"/%",
+		cleanTDir+"/%",
+		cleanTDir, cleanTDir+"/%",
+		projectCWD, projectCWD, projectCWD+"/%",
+	)
 	if err != nil {
 		return IndexFreshness{Fresh: false, Reason: "query_file_index_failed"}, err
 	}
-	nRows := 0
-	indexedPaths := make(map[string]bool)
+	defer rows.Close()
+
 	for rows.Next() {
-		nRows++
 		var (
-			p  string
-			mt float64
-			sz int64
-			fp string
+			p, tool string
+			mt      float64
+			sz      int64
+			fp      string
 		)
-		if err := rows.Scan(&p, &mt, &sz, &fp); err != nil {
+		if err := rows.Scan(&p, &mt, &sz, &fp, &tool); err != nil {
 			return IndexFreshness{Fresh: false, Reason: "scan_file_index_failed"}, err
 		}
-		rawPath := backingFilePath(p)
-		indexedPaths[filepath.Clean(rawPath)] = true
-		curMTime, curSize, curFP, statErr := backingFileState(rawPath)
-		if statErr != nil {
-			return IndexFreshness{Fresh: false, Reason: "transcript_stat_changed"}, nil
-		}
-		if absDiff(mt, curMTime) >= 0.001 || sz != curSize || (fp != "" && fp != curFP) {
-			return IndexFreshness{Fresh: false, Reason: "transcript_content_changed"}, nil
+		rawPath := filepath.Clean(backingFilePath(p))
+		allIndexedPaths[rawPath] = true
+
+		if selectedSource == "" || tool == selectedSource {
+			curMTime, curSize, curFP, statErr := backingFileState(rawPath)
+			if statErr != nil {
+				return IndexFreshness{Fresh: false, Reason: "transcript_stat_changed"}, nil
+			}
+			if absDiff(mt, curMTime) >= 0.001 || sz != curSize || (fp != "" && fp != curFP) {
+				return IndexFreshness{Fresh: false, Reason: "transcript_content_changed"}, nil
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return IndexFreshness{Fresh: false, Reason: "iterate_file_index_failed"}, err
 	}
-	allIndexedPaths := indexedPaths
-	if selectedSource != "" {
-		allIndexedPaths = make(map[string]bool)
-		allRows, err := con.Query(`
-			SELECT path
-			FROM file_index
-			WHERE path LIKE ?
-			   OR session_id IN (
-					SELECT id FROM sessions
-					WHERE project = ?
-				)
-		`, tdir+"/%", projectLabel)
-		if err == nil {
-			defer allRows.Close()
-			for allRows.Next() {
-				var p string
-				if err := allRows.Scan(&p); err == nil {
-					allIndexedPaths[filepath.Clean(backingFilePath(p))] = true
+
+	// Check top-level transcript directory entries in O(1) without recursive walk
+	if entries, err := os.ReadDir(cleanTDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+				full := filepath.Clean(filepath.Join(cleanTDir, e.Name()))
+				if !allIndexedPaths[full] {
+					return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
 				}
 			}
 		}
-	}
-	contained := paths.ContainedJSONL(tdir)
-	for _, full := range contained {
-		if !allIndexedPaths[filepath.Clean(full)] {
-			return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+		// Subagents: check known subagent transcript subdirectories if present
+		for _, subName := range []string{"subagents", ".claude", ".antigravity"} {
+			subDir := filepath.Join(cleanTDir, subName)
+			if subEntries, err := os.ReadDir(subDir); err == nil {
+				for _, se := range subEntries {
+					if !se.IsDir() && strings.HasSuffix(se.Name(), ".jsonl") {
+						full := filepath.Clean(filepath.Join(subDir, se.Name()))
+						if !allIndexedPaths[full] {
+							return IndexFreshness{Fresh: false, Reason: "unindexed_transcripts_exist"}, nil
+						}
+					}
+				}
+			}
 		}
 	}
 
 	// Project-sharded container check: Pi stores transcripts under ~/.pi/agent/sessions/--<escaped-cwd>--/.
 	if selectedSource == "" || selectedSource == "pi" {
-		if !checkPiContainerFreshness(tdir, allIndexedPaths) {
+		if !checkPiContainerFreshness(cleanTDir, allIndexedPaths) {
 			return IndexFreshness{Fresh: false, Reason: "container_transcripts_modified"}, nil
 		}
 	}
