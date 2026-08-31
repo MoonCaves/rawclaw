@@ -148,7 +148,11 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 						"RAWCLAW_CATALOG_DIR="+catalogDir,
 						"RAWCLAW_TEST_LOG="+logPath,
 					)
-					cmd.Stdin = strings.NewReader(`{"session_id":"` + sessionID + `"}`)
+					stdinPayload := `{"session_id":"` + sessionID + `"}`
+					if tc.name == "antigravity" {
+						stdinPayload = `{"conversationId":"` + sessionID + `","invocationNum":0}`
+					}
+					cmd.Stdin = strings.NewReader(stdinPayload)
 					out, err := cmd.Output()
 					if ctx.Err() == context.DeadlineExceeded {
 						t.Fatalf("hook hung on existing %s path under %s", kind, shellName)
