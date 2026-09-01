@@ -65,7 +65,7 @@ sovereign and dependency-free:
 
 ## Delegated agents
 
-- Open and close EVERY message with `[<AgentName> @ <CWD>]`.
+- Open and close EVERY message with `[<AgentName> @ <CWD>]` (use `$AGENT_NAME`, your prompt's persona, or runtime name like `Antigravity`/`Luna`/`Claude`).
 - Commit each working unit as you finish it. Never hold more than ~10 minutes, or a second
   concern, uncommitted — a run that ends loses everything uncommitted.
 - Touch only the files your task names. If another file needs changing, say so; don't take it.
