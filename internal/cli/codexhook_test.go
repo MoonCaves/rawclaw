@@ -43,6 +43,7 @@ func TestInstallCodex_WritesEnvelopedScript(t *testing.T) {
 		for _, want := range []string{
 			"Session closeout: when the user hints or signals",
 			"rawclaw closeout <full-session-id>",
+			"launch a background subagent with that exact command",
 		} {
 			if !strings.Contains(string(script), want) {
 				t.Errorf("%s SessionStart script missing approved closeout wording %q", name, want)
@@ -141,6 +142,7 @@ func TestCodexPrimeScript_EmitsValidHookJSON(t *testing.T) {
 		"offering to resume/fork it can help",
 		"Session closeout: when the user hints or signals",
 		"rawclaw closeout <full-session-id>",
+		"launch a background subagent with that exact command",
 	} {
 		if !strings.Contains(ctx, want) {
 			t.Errorf("additionalContext missing banner line %q; got %q", want, ctx)
