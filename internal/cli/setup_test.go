@@ -21,8 +21,8 @@ func TestPrimeScripts_RenderedBytesMatchBaseline(t *testing.T) {
 		tmpl string
 		want string
 	}{
-		{name: "claude", tmpl: rawclawPrimeScript, want: "25ffa050257b967cce9cfd5b1a38339a36d620fd2977003427f2c3095475213f"},
-		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "7f61fa571db867107744123cbe82f5fd47210788cf7044374a1cc85f2fdcbf09"},
+		{name: "claude", tmpl: rawclawPrimeScript, want: "8dea5f6bb13d6db42223962290030bfbf3fb928a63e84c203a41ec7ce6dfca56"},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "59d673bfad176cd8c08b67f2200c7cae7fff5b26cab1989aac5d987c89bd38b2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sha256.Sum256([]byte(renderHookScript(tc.tmpl, "'/usr/local/bin/rawclaw'")))
@@ -1249,7 +1249,7 @@ func TestSetup_RuntimeExtensionsInstallAndEject(t *testing.T) {
 		installFn  func() error
 		ejectFn    func()
 		targetPath func() string
-		needle     string
+		needles    []string
 	}{
 		{
 			name:       "pi",
@@ -1257,7 +1257,7 @@ func TestSetup_RuntimeExtensionsInstallAndEject(t *testing.T) {
 			installFn:  installPiBirthHook,
 			ejectFn:    ejectPiBirthHook,
 			targetPath: piExtensionPath,
-			needle:     "pi.on(\"session_start\"",
+			needles:    []string{"pi.on(\"session_start\"", "rawclaw closeout <full-session-id>", "pi.on(\"session_end\""},
 		},
 		{
 			name:       "opencode",
@@ -1265,7 +1265,7 @@ func TestSetup_RuntimeExtensionsInstallAndEject(t *testing.T) {
 			installFn:  installOpenCodeBirthHook,
 			ejectFn:    ejectOpenCodeBirthHook,
 			targetPath: openCodePluginPath,
-			needle:     "session.created",
+			needles:    []string{"session.created", "rawclaw closeout <full-session-id>", "context.inject"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1283,8 +1283,10 @@ func TestSetup_RuntimeExtensionsInstallAndEject(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(content), tc.needle) {
-				t.Fatalf("expected %s in content: %s", tc.needle, string(content))
+			for _, needle := range tc.needles {
+				if !strings.Contains(string(content), needle) {
+					t.Fatalf("expected %s in content: %s", needle, string(content))
+				}
 			}
 
 			tc.ejectFn()
@@ -1306,6 +1308,29 @@ func TestSetup_GooseInstallAndEject(t *testing.T) {
 	hp := goosePluginHookPath()
 	if !fileExists(sp) || !fileExists(hp) {
 		t.Fatalf("expected goose files at %s and %s", sp, hp)
+	}
+
+	content, err := os.ReadFile(sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "rawclaw closeout <full-session-id>") {
+		t.Fatalf("expected banner with closeout in goose script: %s", string(content))
+	}
+
+	hookData, err := readJSONFile(hp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks, ok := hookData["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected hooks map in %s", hp)
+	}
+	if _, hasStart := hooks["SessionStart"]; !hasStart {
+		t.Fatalf("expected SessionStart in goose hooks.json")
+	}
+	if _, hasStop := hooks["Stop"]; !hasStop {
+		t.Fatalf("expected Stop in goose hooks.json")
 	}
 
 	ejectGooseBirthHook()

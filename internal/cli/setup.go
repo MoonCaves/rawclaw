@@ -184,13 +184,10 @@ hold the superseding current truth; rawclaw is the dated raw record underneath i
 --json for structured output; --help for the rest.
 If the user seems to want to pick up a past session, offering to resume/fork it can help.
 
-Session closeout: whenever the user signals that the current session is ending or should be
-closed out, immediately delegate tagging to a background subagent so the main agent stays
-available. The subagent runs ` + "`rawclaw tag-prep <full-session-id>`" + ` (already fast if pre-warming
-ran, no extra step needed there), chooses a few topic segments, then runs
-` + "`rawclaw tag-write <full-session-id>`" + `. Keep summaries brief and inconclusive: describe
-what was explored, raised, or left open—not a verdict. RawClaw has no supersession; other memory
-systems own current truth. RawClaw only points to where something was discussed.`
+Session closeout: when the user hints or signals they are closing out, ending the session, or
+wrapping up for the day (e.g. "Let's close this out", "Let's wrap this up", "Hey, I'm going to go",
+"Goodbye"), run:
+  rawclaw closeout <full-session-id>`
 
 // rawclawAntigravityPrimeScriptTemplate is the Antigravity variant of the
 // discovery script (installed at <configDir>/hooks/rawclaw/prime.sh for the
@@ -266,6 +263,7 @@ import { spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const rawclaw = @@RAWCLAW_JSON@@;
+const banner = @@BANNER_JSON@@;
 const catalogDir = process.env.RAWCLAW_CATALOG_DIR || join(process.env.XDG_DATA_HOME || join(process.env.HOME || "/tmp", ".local/share"), "rawclaw", "catalog");
 
 export default function (pi: ExtensionAPI) {
@@ -284,6 +282,22 @@ export default function (pi: ExtensionAPI) {
           // fail-soft: do not crash host session
         }
       }
+      if (typeof (ctx as any)?.injectContext === "function") {
+        (ctx as any).injectContext(banner);
+      } else if (typeof (ctx as any)?.sessionManager?.appendCustomMessage === "function") {
+        (ctx as any).sessionManager.appendCustomMessage({ role: "custom_message", content: banner });
+      }
+    } catch (_) {
+      // fail-soft
+    }
+  });
+
+  pi.on("session_end", async (_event, ctx) => {
+    try {
+      const id = ctx.sessionManager?.getSessionId();
+      if (!id || !/^[A-Za-z0-9._-]+$/.test(id)) return;
+      const child = spawn(rawclaw, ["prewarm", id], { detached: true, stdio: "ignore" });
+      child.unref();
     } catch (_) {
       // fail-soft
     }
@@ -297,29 +311,38 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 
 const rawclaw = @@RAWCLAW_JSON@@;
+const banner = @@BANNER_JSON@@;
 const catalogDir = process.env.RAWCLAW_CATALOG_DIR || join(process.env.XDG_DATA_HOME || join(process.env.HOME || "/tmp", ".local/share"), "rawclaw", "catalog");
 
 export const RawclawCatalog = async ({ directory }) => ({
   event: async ({ event }) => {
     try {
-      if (event?.type !== "session.created") return;
-      const id = event.properties?.info?.id || event.properties?.session?.id || event.properties?.id;
-      if (!id || !/^[A-Za-z0-9._-]+$/.test(id)) return;
-      mkdirSync(catalogDir, { recursive: true, mode: 0o755 });
-      const target = join(catalogDir, id);
-      try {
-        writeFileSync(target, JSON.stringify({ session_id: id, transcript_path: "opencode.db#" + id, cwd: directory || "", source: "opencode" }) + "\n", { flag: "wx", mode: 0o644 });
-        const child = spawn(rawclaw, ["ingest", id], { detached: true, stdio: "ignore" });
-        child.unref();
-      } catch (err) {
-        if (err?.code !== "EEXIST") {
-          // fail-soft
+      if (event?.type === "session.created") {
+        const id = event.properties?.info?.id || event.properties?.session?.id || event.properties?.id;
+        if (!id || !/^[A-Za-z0-9._-]+$/.test(id)) return;
+        mkdirSync(catalogDir, { recursive: true, mode: 0o755 });
+        const target = join(catalogDir, id);
+        try {
+          writeFileSync(target, JSON.stringify({ session_id: id, transcript_path: "opencode.db#" + id, cwd: directory || "", source: "opencode" }) + "\n", { flag: "wx", mode: 0o644 });
+          const child = spawn(rawclaw, ["ingest", id], { detached: true, stdio: "ignore" });
+          child.unref();
+        } catch (err) {
+          if (err?.code !== "EEXIST") {
+            // fail-soft
+          }
+        }
+      } else if (event?.type === "session.deleted" || event?.type === "session.idle") {
+        const id = event.properties?.info?.id || event.properties?.session?.id || event.properties?.id;
+        if (id && /^[A-Za-z0-9._-]+$/.test(id)) {
+          const child = spawn(rawclaw, ["prewarm", id], { detached: true, stdio: "ignore" });
+          child.unref();
         }
       }
     } catch (_) {
       // fail-soft
     }
   },
+  "context.inject": async () => banner,
 });
 `
 
@@ -328,8 +351,17 @@ const rawclawGooseCatalogScript = `#!/bin/sh
 set -eu
 input=$(cat)
 session_id=$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
+hook_event_name=$(printf '%s' "$input" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
 cwd=$(printf '%s' "$input" | sed -n 's/.*"working_dir"[[:space:]]*:[[:space:]]*"\([^\"]*\)".*/\1/p' | head -n 1)
 case "$session_id" in ''|.*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) exit 0;; esac
+
+if [ "$hook_event_name" = "Stop" ]; then
+	if [ -n "$session_id" ]; then
+		nohup @@RAWCLAW@@ prewarm "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
+	exit 0
+fi
+
 catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 mkdir -p "$catalog_dir" 2>/dev/null || true
 entry="$catalog_dir/$session_id"
@@ -342,6 +374,9 @@ if (umask 077; set -C; printf '{"session_id":"%s","transcript_path":"sessions.db
     rm -f "$tmp"
   fi
 fi
+cat <<'BANNER'
+@@BANNER_RAW@@
+BANNER
 exit 0
 `
 
@@ -383,8 +418,19 @@ func rawclawBinJSON() string {
 	if abs, aerr := filepath.Abs(exe); aerr == nil {
 		exe = abs
 	}
-	b, _ := json.Marshal(exe)
-	return string(b)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(exe)
+	return strings.TrimRight(buf.String(), "\n")
+}
+
+func rawclawBannerJSON() string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(rawclawBanner)
+	return strings.TrimRight(buf.String(), "\n")
 }
 
 func runtimeConfigPath(env, fallback string, parts ...string) string {
@@ -420,7 +466,11 @@ func openCodePluginPath() string {
 }
 
 func renderRuntimeScript(tmpl string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(tmpl, "@@RAWCLAW_JSON@@", rawclawBinJSON()), "@@RAWCLAW@@", rawclawBinQuoted())
+	res := strings.ReplaceAll(tmpl, "@@RAWCLAW_JSON@@", rawclawBinJSON())
+	res = strings.ReplaceAll(res, "@@RAWCLAW@@", rawclawBinQuoted())
+	res = strings.ReplaceAll(res, "@@BANNER_JSON@@", rawclawBannerJSON())
+	res = strings.ReplaceAll(res, "@@BANNER_RAW@@", rawclawBanner)
+	return res
 }
 
 func installPiBirthHook() error {
@@ -439,6 +489,30 @@ func ejectOpenCodeBirthHook() {
 	_ = os.Remove(openCodePluginPath())
 }
 
+func addGooseHook(hooks map[string]any, event string, cmdHook map[string]any) {
+	curr, ok := hooks[event].([]any)
+	if !ok {
+		hooks[event] = []any{map[string]any{"hooks": []any{cmdHook}}}
+		return
+	}
+	found := false
+	for _, h := range curr {
+		if hm, ok := h.(map[string]any); ok {
+			if subHooks, ok := hm["hooks"].([]any); ok {
+				for _, sh := range subHooks {
+					if shm, ok := sh.(map[string]any); ok && shm["command"] == cmdHook["command"] {
+						found = true
+						break
+					}
+				}
+			}
+		}
+	}
+	if !found {
+		hooks[event] = append(curr, map[string]any{"hooks": []any{cmdHook}})
+	}
+}
+
 func installGooseBirthHook() error {
 	if err := writeHookScript(goosePluginScriptPath(), renderRuntimeScript(rawclawGooseCatalogScript)); err != nil {
 		return fmt.Errorf("install Goose catalog hook: %w", err)
@@ -452,27 +526,8 @@ func installGooseBirthHook() error {
 		return err
 	}
 	cmdHook := map[string]any{"type": "command", "command": "${PLUGIN_ROOT}/scripts/catalog.sh"}
-	curr, ok := hooks["SessionStart"].([]any)
-	if !ok {
-		hooks["SessionStart"] = []any{map[string]any{"hooks": []any{cmdHook}}}
-	} else {
-		found := false
-		for _, h := range curr {
-			if hm, ok := h.(map[string]any); ok {
-				if subHooks, ok := hm["hooks"].([]any); ok {
-					for _, sh := range subHooks {
-						if shm, ok := sh.(map[string]any); ok && shm["command"] == "${PLUGIN_ROOT}/scripts/catalog.sh" {
-							found = true
-							break
-						}
-					}
-				}
-			}
-		}
-		if !found {
-			hooks["SessionStart"] = append(curr, map[string]any{"hooks": []any{cmdHook}})
-		}
-	}
+	addGooseHook(hooks, "SessionStart", cmdHook)
+	addGooseHook(hooks, "Stop", cmdHook)
 	return writeJSONFile(goosePluginHookPath(), data)
 }
 
