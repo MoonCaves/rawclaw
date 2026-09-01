@@ -1798,8 +1798,18 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 			stale = true
 		}
 		if stale {
-			indexStale = true
-			staleNote = staleIngestNote()
+			refreshThisProject(o)
+			if con, _, err := index.OpenConsolidated(); err == nil {
+				freshness, fErr := index.CheckProjectFreshness(con, projLabel, td, o.Source)
+				_ = con.Close()
+				if fErr != nil || !freshness.Fresh {
+					indexStale = true
+					staleNote = staleIngestNote()
+				}
+			} else {
+				indexStale = true
+				staleNote = staleIngestNote()
+			}
 		}
 	}
 
