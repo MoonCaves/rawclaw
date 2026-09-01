@@ -65,7 +65,7 @@ sovereign and dependency-free:
 
 ## Delegated agents
 
-- Open and close EVERY message with `[<AgentName> @ <CWD>]` (use assigned persona like `Han`/`Ozzy`, or runtime + 4-char session ID like `Antigravity-547b`).
+- Open and close EVERY message with `[<AgentName> @ <CWD>]` (using the identity returned by MCP Agent Mail `register_agent` / `macro_start_session`, e.g. `[HazyHarbor @ ~/code/rawclaw]`, or your assigned persona).
 - Commit each working unit as you finish it. Never hold more than ~10 minutes, or a second
   concern, uncommitted — a run that ends loses everything uncommitted.
 - Touch only the files your task names. If another file needs changing, say so; don't take it.
