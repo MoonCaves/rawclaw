@@ -48,6 +48,7 @@ func TestInstallAntigravity_WritesInjectStepsScript(t *testing.T) {
 	for _, want := range []string{
 		"Session closeout: when the user hints or signals",
 		"rawclaw closeout <full-session-id>",
+		"launch a background subagent with that exact command",
 	} {
 		if !strings.Contains(agContent, want) {
 			t.Errorf("Antigravity script missing approved closeout wording %q", want)
@@ -162,6 +163,7 @@ func TestAntigravityPrimeScript_InvocationNum0(t *testing.T) {
 		"offering to resume/fork it can help",
 		"Session closeout: when the user hints or signals",
 		"rawclaw closeout <full-session-id>",
+		"launch a background subagent with that exact command",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("ephemeralMessage missing banner line %q; got: %q", want, msg)

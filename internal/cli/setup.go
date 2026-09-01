@@ -187,7 +187,8 @@ If the user seems to want to pick up a past session, offering to resume/fork it 
 Session closeout: when the user hints or signals they are closing out, ending the session, or
 wrapping up for the day (e.g. "Let's close this out", "Let's wrap this up", "Hey, I'm going to go",
 "Goodbye"), run:
-  rawclaw closeout <full-session-id>`
+  rawclaw closeout <full-session-id>
+If a tag-prep command is returned, launch a background subagent with that exact command (verbatim, nothing added).`
 
 // rawclawAntigravityPrimeScriptTemplate is the Antigravity variant of the
 // discovery script (installed at <configDir>/hooks/rawclaw/prime.sh for the
