@@ -122,8 +122,11 @@ func runTagPrepWithTopics(w io.Writer, con *sql.DB, fullSID string, existingSegs
 
 	fmt.Fprintf(w, "# condensed session %s — one line per message: <uuid8> [<role>] <text>\n",
 		lastSlice8(fullSID))
-	fmt.Fprintf(w, "# split into contiguous TOPIC segments; feed back via: rawclaw tag-write %s\n",
-		lastSlice8(fullSID))
+	fmt.Fprintf(w, "# split into contiguous TOPIC segments with brief, inconclusive summaries:\n")
+	fmt.Fprintf(w, "# describe what was explored, raised, or left open—not a verdict.\n")
+	fmt.Fprintf(w, "# RawClaw has no supersession; other memory systems own current truth.\n")
+	fmt.Fprintf(w, "# when finished, immediately run: rawclaw tag-write %s\n", lastSlice8(fullSID))
+	fmt.Fprintf(w, "# JSON payload on STDIN: [{\"start_uuid\":\"<uuid8>\",\"topic\":\"...\",\"summary\":\"...\"}]\n")
 
 	if win.start > 0 && tagged[win.start-1] {
 		if prev := findPrevSegment(existingSegs, displayable, msgs, win.start-1); prev != nil {

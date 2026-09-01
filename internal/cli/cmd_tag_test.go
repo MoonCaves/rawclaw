@@ -61,6 +61,21 @@ func TestRunTagPrepDumpsCondensed(t *testing.T) {
 			t.Errorf("dump missing line %q; got:\n%s", want, out)
 		}
 	}
+	// Verify header instructions and schema format
+	wantHeaderParts := []string{
+		"# condensed session ",
+		"# split into contiguous TOPIC segments with brief, inconclusive summaries:",
+		"# describe what was explored, raised, or left open—not a verdict.",
+		"# RawClaw has no supersession; other memory systems own current truth.",
+		"# when finished, immediately run: rawclaw tag-write ",
+		`# JSON payload on STDIN: [{"start_uuid":"<uuid8>","topic":"...","summary":"..."}]`,
+	}
+	for _, part := range wantHeaderParts {
+		if !strings.Contains(out, part) {
+			t.Errorf("dump missing expected header line %q; got:\n%s", part, out)
+		}
+	}
+
 	// Sanity on the line shape: each message line starts with an 8-char uuid8,
 	// a space, then `[role]`.
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
