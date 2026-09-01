@@ -46,11 +46,8 @@ func TestInstallAntigravity_WritesInjectStepsScript(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"Session closeout: whenever the user signals",
-		"background subagent",
-		"rawclaw tag-prep <full-session-id>",
-		"rawclaw tag-write <full-session-id>",
-		"RawClaw has no supersession",
+		"Session closeout: when the user hints or signals",
+		"rawclaw closeout <full-session-id>",
 	} {
 		if !strings.Contains(agContent, want) {
 			t.Errorf("Antigravity script missing approved closeout wording %q", want)
@@ -163,11 +160,8 @@ func TestAntigravityPrimeScript_InvocationNum0(t *testing.T) {
 		"Fast FTS5/BM25 search",
 		`rawclaw "query"`,
 		"offering to resume/fork it can help",
-		"Session closeout: whenever the user signals",
-		"background subagent",
-		"rawclaw tag-prep <full-session-id>",
-		"rawclaw tag-write <full-session-id>",
-		"RawClaw has no supersession",
+		"Session closeout: when the user hints or signals",
+		"rawclaw closeout <full-session-id>",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("ephemeralMessage missing banner line %q; got: %q", want, msg)
