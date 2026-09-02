@@ -9,6 +9,7 @@
 package claude
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -96,29 +97,37 @@ func (a *Adapter) Discover() ([]source.Container, error) {
 	return out, nil
 }
 
-// Messages flattens one Claude transcript into normalized messages in file order.
-// It mirrors the former index.parseTranscript exactly: skip non-indexable and
-// empty-text records; one malformed line is skipped, not fatal. Malformed lines
-// are counted and logged once (grouped, low-cardinality) rather than swallowed.
-func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
-	data, err := os.ReadFile(c.Path)
-	if err != nil {
-		return nil, fmt.Errorf("claude: read %s: %w", c.Path, err)
-	}
-	var out []model.Message
+// TranscriptInfo holds the normalized messages and session metadata extracted
+// from a Claude transcript.
+type TranscriptInfo struct {
+	Messages []model.Message
+	Started  float64
+	Last     float64
+	CWD      string
+}
+
+// ParseTranscript parses a raw Claude Code JSONL transcript into normalized
+// messages and session metadata, deduplicating records by message UUID.
+func ParseTranscript(data []byte) (TranscriptInfo, error) {
+	var info TranscriptInfo
 	var bad int
+	var startedSet, lastSet bool
 	seenUUID := make(map[string]int)
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+
+	for line := range bytes.SplitSeq(data, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
 			continue
 		}
 		var o map[string]any
-		if err := json.Unmarshal([]byte(line), &o); err != nil {
+		if err := json.Unmarshal(line, &o); err != nil {
 			bad++
 			continue
 		}
-		if !indexable(o) {
+		if info.CWD == "" {
+			info.CWD = paths.LineCWD(o)
+		}
+		if !parse.IsIndexable(o) {
 			continue
 		}
 		text := parse.ExtractText(o)
@@ -126,39 +135,50 @@ func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
 			continue
 		}
 		iso, _ := o["timestamp"].(string)
+		ts := parse.ISOToEpoch(iso)
 		u := parse.MsgUUID(o)
 		msg := model.Message{
 			Role:  parse.MsgRole(o),
 			Text:  text,
-			TS:    parse.ISOToEpoch(iso),
+			TS:    ts,
 			TSISO: iso,
 			UUID:  u,
 		}
 		realUUID, hasUUID := o["uuid"].(string)
 		if hasUUID && realUUID != "" {
 			if idx, ok := seenUUID[realUUID]; ok {
-				out[idx] = msg
+				info.Messages[idx] = msg
 				continue
 			}
-			seenUUID[realUUID] = len(out)
+			seenUUID[realUUID] = len(info.Messages)
 		}
-		out = append(out, msg)
+		info.Messages = append(info.Messages, msg)
+		if ts != 0 {
+			if !startedSet || ts < info.Started {
+				info.Started, startedSet = ts, true
+			}
+			if !lastSet || ts > info.Last {
+				info.Last, lastSet = ts, true
+			}
+		}
 	}
 	if bad > 0 {
-		slog.Warn("claude: skipped malformed jsonl lines", "count", bad, "path", c.Path)
+		slog.Warn("claude: skipped malformed jsonl lines", "count", bad)
 	}
-	return out, nil
+	return info, nil
 }
 
-// indexable reports whether o's "type" is one internal/parse indexes.
-func indexable(o map[string]any) bool {
-	t, _ := o["type"].(string)
-	for _, it := range parse.IndexableTypes {
-		if t == it {
-			return true
-		}
+// Messages flattens one Claude transcript into normalized messages in file order.
+func (a *Adapter) Messages(c source.Container) ([]model.Message, error) {
+	data, err := os.ReadFile(c.Path)
+	if err != nil {
+		return nil, fmt.Errorf("claude: read %s: %w", c.Path, err)
 	}
-	return false
+	info, err := ParseTranscript(data)
+	if err != nil {
+		return nil, fmt.Errorf("claude: parse %s: %w", c.Path, err)
+	}
+	return info.Messages, nil
 }
 
 // resumeID returns the id `claude --resume` expects: a subagent session id is

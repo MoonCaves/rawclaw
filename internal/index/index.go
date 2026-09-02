@@ -4,10 +4,8 @@
 package index
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,6 +24,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/retention"
 	"github.com/MoonCaves/rawclaw/internal/source"
+	"github.com/MoonCaves/rawclaw/internal/source/claude"
 	"github.com/MoonCaves/rawclaw/internal/store"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (FTS5 + bm25 + snippet)
@@ -733,70 +732,17 @@ func applyRetentionToVault(res retention.Result, now float64, origin string) {
 // parseTranscript reads and flattens one JSONL transcript into rows, computing
 // the started/last timestamp watermarks and the working directory the session
 // ran in. Returns ok=false if the file cannot be opened (a parse-time read
-// error), leaving existing rows untouched. Malformed individual lines are
-// skipped.
-//
-// cwd is read from the FIRST line that carries one, INCLUDING lines that are
-// not indexable as messages: Claude records cwd on attachment/meta lines too,
-// and a session whose only cwd-bearing line is non-indexable would otherwise
-// land with a NULL scope. It is the session's own recorded value, never a
-// decode of the enclosing directory name — that decode is lossy for any path
-// segment containing "-" or ".".
+// error), leaving existing rows untouched.
 func parseTranscript(path, sid string) (rows []model.Message, started, last float64, cwd string, ok bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, 0, 0, "", false
 	}
-	// []byte is already lossless and json.Unmarshal tolerates invalid UTF-8 in
-	// strings, so no transform is needed.
-	var startedSet, lastSet bool
-	for line := range bytes.SplitSeq(data, []byte{'\n'}) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var o map[string]any
-		if err := json.Unmarshal(line, &o); err != nil {
-			continue // skip malformed / incomplete trailing line
-		}
-		if cwd == "" {
-			cwd = lineCWD(o)
-		}
-		if !indexable(o) {
-			continue
-		}
-		text := parse.ExtractText(o)
-		if text == "" {
-			continue
-		}
-		iso, _ := o["timestamp"].(string)
-		ts := parse.ISOToEpoch(iso)
-		rows = append(rows, model.Message{Role: parse.MsgRole(o), Text: text, TS: ts, TSISO: iso, UUID: parse.MsgUUID(o)})
-		if ts != 0 {
-			if !startedSet || ts < started {
-				started, startedSet = ts, true
-			}
-			if !lastSet || ts > last {
-				last, lastSet = ts, true
-			}
-		}
+	info, err := claude.ParseTranscript(data)
+	if err != nil {
+		return nil, 0, 0, "", false
 	}
-	return rows, started, last, cwd, true
-}
-
-// lineCWD returns the working dir one transcript line records — top level, else
-// nested under "message" — or "" when it records none. Mirrors paths.FileCWD's
-// lookup so the two agree on where a cwd may hide.
-func lineCWD(o map[string]any) string {
-	if cwd, ok := o["cwd"].(string); ok && cwd != "" {
-		return cwd
-	}
-	if msg, ok := o["message"].(map[string]any); ok {
-		if cwd, ok := msg["cwd"].(string); ok && cwd != "" {
-			return cwd
-		}
-	}
-	return ""
+	return info.Messages, info.Started, info.Last, info.CWD, true
 }
 
 // scopeOf resolves the (project, cwd) pair to stamp on a session row. project is
@@ -843,15 +789,9 @@ func usableScope(s string) bool {
 	return s != "" && s != "." && s != string(filepath.Separator)
 }
 
-// indexable reports whether o's "type" is in parse.IndexableTypes.
+// indexable delegates to parse.IsIndexable.
 func indexable(o map[string]any) bool {
-	t, _ := o["type"].(string)
-	for _, it := range parse.IndexableTypes {
-		if t == it {
-			return true
-		}
-	}
-	return false
+	return parse.IsIndexable(o)
 }
 
 // splitLines splits on "\n" (each line is then stripped by the caller). A

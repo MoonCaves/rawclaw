@@ -430,6 +430,20 @@ func resolveSessionStem(prefix string) []SessionHit {
 // per-session backfill needs the cwd of one named file.
 func FileCWD(jsonlPath string) string { return firstCWD(jsonlPath) }
 
+// LineCWD returns the working dir one transcript line records — top level, else
+// nested under "message" — or "" when it records none.
+func LineCWD(o map[string]any) string {
+	if cwd, ok := o["cwd"].(string); ok && cwd != "" {
+		return cwd
+	}
+	if msg, ok := o["message"].(map[string]any); ok {
+		if cwd, ok := msg["cwd"].(string); ok && cwd != "" {
+			return cwd
+		}
+	}
+	return ""
+}
+
 // firstCWD reads jsonlPath line by line and returns the first non-empty string
 // `cwd` (top-level, else nested under "message"). Returns "" on any failure.
 func firstCWD(jsonlPath string) string {
@@ -446,13 +460,8 @@ func firstCWD(jsonlPath string) string {
 		if err := json.Unmarshal(sc.Bytes(), &o); err != nil {
 			continue
 		}
-		if cwd, ok := o["cwd"].(string); ok && cwd != "" {
+		if cwd := LineCWD(o); cwd != "" {
 			return cwd
-		}
-		if msg, ok := o["message"].(map[string]any); ok {
-			if cwd, ok := msg["cwd"].(string); ok && cwd != "" {
-				return cwd
-			}
 		}
 	}
 	return ""

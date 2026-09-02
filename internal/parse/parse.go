@@ -6,6 +6,7 @@ package parse
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,12 @@ const (
 
 // IndexableTypes is the set of transcript record types that get indexed.
 var IndexableTypes = []string{"user", "assistant", "summary", "system"}
+
+// IsIndexable reports whether obj's "type" is one of IndexableTypes.
+func IsIndexable(obj map[string]any) bool {
+	t, _ := obj["type"].(string)
+	return slices.Contains(IndexableTypes, t)
+}
 
 // NoHumanMarker is the placeholder shown for a tool-only match.
 const NoHumanMarker = "[tool-only match — use --include-tools to see it]"
