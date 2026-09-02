@@ -74,7 +74,9 @@ func VecAll(con *sql.DB) ([]VecRow, error) {
 
 // VecUpsert inserts or replaces one vector row, keyed by
 // (session_id, content_hash). vec is the packed little-endian float32 blob;
-// dim is its element count. [semantic.VecIndex]
+// dim is its element count. Callers should persist unit-length vectors for
+// new embeddings. Existing unnormalized rows remain valid: KNN normalizes
+// each row when calculating cosine similarity. [semantic.VecIndex]
 func VecUpsert(con *sql.DB, sid, contentHash string, msgID, dim int, vec []byte) error {
 	_, err := con.Exec(
 		"INSERT OR REPLACE INTO chunk_vec(session_id,content_hash,msg_id,dim,vec) VALUES(?,?,?,?,?)",
