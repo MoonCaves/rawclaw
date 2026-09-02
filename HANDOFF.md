@@ -7,28 +7,32 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — Golang How-To Skill Orchestrator Engaged Across CLI, Database, and Modernize Clusters.**
+**2026-09-02 — 100% Clean `golangci-lint` (0 Issues), All 7 Mechanical Findings Resolved.**
 
 ### 📍 Now
-- Commit `1351a82` landed on `main`: Unified layout format strings to `timefmt.DateLayout` across `normalizeDates` per `golang-code-style` and `golang-modernize`.
-- Applied orchestrator routing across 3 primary skill clusters:
-  1. `golang-spf13-cobra` (`RunE`, flag binding via `pflag`, `newSearchCmd`).
-  2. `golang-database` (parameterized SQL, `PRAGMA query_only(1)`, immediate `defer rows.Close()`).
-  3. `golang-modernize` (stdlib `time.Parse`, `time.ParseDuration`, named constants).
+- Commit `536a21c` landed on `main`: Resolved all 7 `golangci-lint` issues:
+  1. `internal/timefmt/timefmt.go`: Replaced `if-else` chain with clean `switch` block (`gocritic`).
+  2. `internal/cli/setup.go`: Removed dead duplicate `func isFile` (`unused`).
+  3. `internal/source/hermes/hermes.go`: Used `fmt.Appendf` instead of `[]byte(fmt.Sprintf)` (`modernize`).
+  4. `internal/source/hermes/hermes.go`: Used `strings.Cut` instead of `strings.Index` (`modernize`).
+  5. `internal/source/hermes/hermes.go`: Used `fmt.Fprintf` instead of `WriteString(fmt.Sprintf)` (`staticcheck`).
+  6. `internal/cli/tagrefresh_test.go`: Used `fmt.Fprintf` instead of `WriteString(fmt.Sprintf)` (`staticcheck`).
+  7. `internal/cli/autosync_test.go`: Compacted `TestIsTestExe` table loop to eliminate duplicate boilerplate (`dupl`).
+- Verified `~/go/bin/golangci-lint run ./...` reports **0 issues**.
 - All 39 internal packages pass race tests (`CGO_ENABLED=0 go test -race -count=1 ./...`).
 - Zero formatting diffs (`gofmt -l internal/`).
 
 ### ✅ Decisions
-- **Golang Skills Orchestration** (2026-09-02):
-  - Used `golang-how-to` to route tasks across `golang-spf13-cobra`, `golang-database`, and `golang-modernize`.
-  - Replaced hard-coded `"2006-01-02"` literals with `timefmt.DateLayout`.
+- **Real Mechanical Verification** (2026-09-02):
+  - Ran `~/go/bin/golangci-lint` directly and confirmed zero issues before claiming green.
+  - Applied modern Go stdlib idioms (`fmt.Appendf`, `strings.Cut`, `fmt.Fprintf`) across all touched packages.
 
 ### 🧵 Open threads (with status)
 - **CASS Suite Test Restoration** (`BLOCKED ON CASS DESK`): Supervisor-A/B must restore `autotests = true` in `coding_agent_session_search/Cargo.toml`.
 - **Librarian / Org Desk Hygiene** (`WAITING`): `~/org` untracked files and broken symlinks need Librarian desk cleanup.
 
 ### ⏭️ Next
-- Observe natural, unprompted agent behavior in real session recall workflows.
+- Maintain zero-lint baseline and monitor unprompted agent recall workflows.
 
 ### ⛔ Blockers
 - None.
