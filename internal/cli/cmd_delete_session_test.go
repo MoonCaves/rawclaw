@@ -11,10 +11,10 @@ import (
 )
 
 // readTombstone returns the tombstone contents under the isolated HOME (root
-// is <cfg>/projects, the cache lives at <cfg>/.cache/session-search).
+// is <cfg>/projects, durable data lives at <cfg>/.local/share/rawclaw).
 func readTombstone(t *testing.T, root string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(root, "..", ".cache", "session-search", ".deleted"))
+	b, err := os.ReadFile(filepath.Join(root, "..", ".local", "share", "rawclaw", ".deleted"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ""

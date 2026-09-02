@@ -775,6 +775,7 @@ func TestEnsureIndexedEndToEnd(t *testing.T) {
 	// Use a temp HOME so DBPath lands in an isolated cache dir.
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpHome, ".local", "share"))
 
 	proj := t.TempDir()
 	writeJSONL(t, filepath.Join(proj, "x.jsonl"),
@@ -875,15 +876,16 @@ func TestGetCorpusStatsMissingDB(t *testing.T) {
 }
 
 // TestUpdateIndexSkipsTombstoned is the lifecycle-integration guard: a session
-// id recorded in the tombstone sidecar (~/.cache/session-search/.deleted) must
+// id recorded in the tombstone sidecar (~/.local/share/rawclaw/.deleted) must
 // NOT be re-indexed on a reindex pass, even though its transcript .jsonl is
 // present on disk. This is what stops a user-deleted session from being
 // resurrected by the next index run.
 func TestUpdateIndexSkipsTombstoned(t *testing.T) {
 	// Isolate HOME so lifecycle.LoadTombstones("") reads our seeded sidecar at
-	// $HOME/.cache/session-search/.deleted and nothing from the real machine.
+	// $HOME/.local/share/rawclaw/.deleted and nothing from the real machine.
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpHome, ".local", "share"))
 
 	proj := t.TempDir()
 	keep := filepath.Join(proj, "keep.jsonl")
@@ -893,7 +895,7 @@ func TestUpdateIndexSkipsTombstoned(t *testing.T) {
 
 	// Tombstone the "dead" session id (the .jsonl stem == the top-level session
 	// id) in the sidecar the indexer consults.
-	tombDir := filepath.Join(tmpHome, ".cache", "session-search")
+	tombDir := filepath.Join(tmpHome, ".local", "share", "rawclaw")
 	if err := os.MkdirAll(tombDir, 0o755); err != nil {
 		t.Fatalf("mkdir tombstone dir: %v", err)
 	}

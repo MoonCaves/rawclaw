@@ -302,9 +302,31 @@ func TestTombstone_RoundTrips(t *testing.T) {
 }
 
 func TestTombstonePath_Default(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	got := TombstonePath("")
-	if !strings.HasSuffix(got, filepath.Join(".cache", "session-search", ".deleted")) {
-		t.Fatalf("default TombstonePath = %q, want suffix .cache/session-search/.deleted", got)
+	if !strings.HasSuffix(got, filepath.Join("rawclaw", ".deleted")) {
+		t.Fatalf("default TombstonePath = %q, want suffix rawclaw/.deleted", got)
+	}
+}
+
+func TestLoadTombstones_FallsBackToLegacyCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	legacy := filepath.Join(home, ".cache", "session-search", ".deleted")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("legacy-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	set, err := LoadTombstones("")
+	if err != nil {
+		t.Fatalf("LoadTombstones: %v", err)
+	}
+	if _, ok := set["legacy-id"]; !ok {
+		t.Fatalf("legacy tombstone missing from set %v", set)
 	}
 }
 
