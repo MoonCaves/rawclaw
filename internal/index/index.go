@@ -109,6 +109,9 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 	if _, err := con.Exec("SELECT 1 FROM messages_fts LIMIT 1"); err != nil {
 		_, _ = con.Exec(store.FTSSQL) // best-effort; raced creation is acceptable
 	}
+	if _, err := con.Exec("SELECT 1 FROM messages_code_fts LIMIT 1"); err != nil {
+		_, _ = con.Exec(store.CodeFTSSQL) // best-effort; raced creation is acceptable
+	}
 	// Same treatment again for the substring index: added in place, no version
 	// bump.
 	if err := migrateTrigramIndex(con); err != nil {
