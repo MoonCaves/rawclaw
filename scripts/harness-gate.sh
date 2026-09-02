@@ -29,9 +29,15 @@ if [ -n "$DIRTY" ]; then
 fi
 echo "PASS: Worktree state inspected."
 
-echo "==> [Gate 5/5] Running Search Latency & Allocation Benchmark Check..."
+echo "==> [Gate 5/6] Running Search Latency & Allocation Benchmark Check..."
 CGO_ENABLED=0 go test -run=^$ -bench=BenchmarkSearch ./internal/agentproto/... -benchmem -count=1
 echo "PASS: Benchmark completed within budget."
 
-echo "===> ALL 5 DETERMINISTIC HARNESS GATES PASSED (READY FOR LRVL MERGE)"
+if command -v graphify >/dev/null 2>&1; then
+  echo "==> [Gate 6/6] Refreshing Graphify AST Knowledge Graph..."
+  graphify update .
+  echo "PASS: Graphify AST knowledge graph refreshed."
+fi
+
+echo "===> ALL DETERMINISTIC HARNESS GATES PASSED (READY FOR MERGE)"
 exit 0
