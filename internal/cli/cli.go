@@ -124,13 +124,16 @@ func (o *Options) oneline() bool {
 // machineStream selects the plain one-line stream for agent runtimes and
 // redirected real process output. Test and embedding writers remain unchanged.
 func machineStream(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
 	for _, env := range currentSessionEnvs {
 		if strings.TrimSpace(os.Getenv(env)) != "" {
 			return true
 		}
 	}
-	f, ok := w.(*os.File)
-	return ok && !isatty.IsTerminal(f.Fd()) && !isatty.IsCygwinTerminal(f.Fd())
+	return !isatty.IsTerminal(f.Fd()) && !isatty.IsCygwinTerminal(f.Fd())
 }
 
 // currentSessionEnvs lists the runtime session-identity environment variables in
