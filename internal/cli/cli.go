@@ -36,6 +36,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -118,6 +119,18 @@ func (o *Options) normalizeDates() {
 // oneline reports whether oneline format was requested via --oneline or --format oneline/line.
 func (o *Options) oneline() bool {
 	return o.Oneline || o.Format == "oneline" || o.Format == "line"
+}
+
+// machineStream selects the plain one-line stream for agent runtimes and
+// redirected real process output. Test and embedding writers remain unchanged.
+func machineStream(w io.Writer) bool {
+	for _, env := range currentSessionEnvs {
+		if strings.TrimSpace(os.Getenv(env)) != "" {
+			return true
+		}
+	}
+	f, ok := w.(*os.File)
+	return ok && !isatty.IsTerminal(f.Fd()) && !isatty.IsCygwinTerminal(f.Fd())
 }
 
 // currentSessionEnvs lists the runtime session-identity environment variables in
@@ -891,6 +904,10 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 
 	if len(args) == 0 {
 		return runBrowse(ctx, out, o)
+	}
+
+	if machineStream(out) && !o.JSON {
+		o.Oneline = true
 	}
 
 	// Empty (or all-whitespace) query: a distinct coaching line, NOT the
