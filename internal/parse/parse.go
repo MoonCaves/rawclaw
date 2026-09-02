@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/MoonCaves/rawclaw/internal/text"
 )
 
 // Per-block / per-tool character ceilings.
@@ -23,24 +25,9 @@ var IndexableTypes = []string{"user", "assistant", "summary", "system"}
 // NoHumanMarker is the placeholder shown for a tool-only match.
 const NoHumanMarker = "[tool-only match — use --include-tools to see it]"
 
-// capRunes truncates s to at most n runes. The cap is rune-based, not
-// byte-based, so multi-byte code points are never split.
+// capRunes delegates to text.CapRunes.
 func capRunes(s string, n int) string {
-	if n < 0 {
-		return s // negative = no cap (used to render a chosen/anchored message whole)
-	}
-	if len(s) <= n {
-		// Fast path: byte length already within the rune cap.
-		return s
-	}
-	count := 0
-	for i := range s {
-		if count == n {
-			return s[:i]
-		}
-		count++
-	}
-	return s
+	return text.CapRunes(s, n)
 }
 
 // ExtractText flattens one decoded transcript record into a searchable string.

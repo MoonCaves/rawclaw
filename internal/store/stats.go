@@ -7,6 +7,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+
+	"github.com/MoonCaves/rawclaw/internal/text"
 )
 
 // CorpusStats is the aggregate-counts result for one indexed project's db.
@@ -82,7 +84,7 @@ func GetCorpusStats(dbp string) (CorpusStats, error) {
 	return cs, nil
 }
 
-// first10 returns the first 10 bytes of an ASCII ISO string (its date portion).
+// first10 delegates to text.First10.
 func first10(s string) string {
-	return s[:min(len(s), 10)]
+	return text.First10(s)
 }

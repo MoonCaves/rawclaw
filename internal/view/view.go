@@ -14,6 +14,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/text"
 )
 
 // dispCap is the default display-text cap used by anchored views and discovery.
@@ -183,16 +184,9 @@ func RenderMsgsWith(msgs []store.Msg, includeTools, includeThinking bool, cap in
 // collapse would destroy indentation and line breaks in code and prose.
 func displayText(content string, includeTools, includeThinking bool, cap int) string {
 	if isMarkdownCodeBlock(content) || !hasGeneratedMarker(content, includeThinking) {
-		return capRunes(content, cap)
+		return text.CapRunes(content, cap)
 	}
 	return parse.DispWith(content, includeTools, includeThinking, cap)
-}
-
-func capRunes(s string, cap int) string {
-	if cap < 0 || len([]rune(s)) <= cap {
-		return s
-	}
-	return string([]rune(s)[:cap])
 }
 
 func isMarkdownCodeBlock(content string) bool {

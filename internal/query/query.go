@@ -9,6 +9,8 @@ package query
 import (
 	"regexp"
 	"strings"
+
+	"github.com/MoonCaves/rawclaw/internal/text"
 )
 
 // Stopwords are common words + FTS5 boolean keywords dropped from natural-
@@ -430,11 +432,7 @@ func subBoolNot(s string) string {
 	return b.String()
 }
 
-// isWordByte reports whether c is in \w = [A-Za-z0-9_] (ASCII). The
-// boolean-operator inputs handled here are ASCII identifier text.
+// isWordByte delegates to text.IsWordByte.
 func isWordByte(c byte) bool {
-	return c == '_' ||
-		(c >= 'a' && c <= 'z') ||
-		(c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9')
+	return text.IsWordByte(c)
 }

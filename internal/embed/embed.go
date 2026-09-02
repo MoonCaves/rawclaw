@@ -62,17 +62,3 @@ type Embedder interface {
 type BatchEmbedder interface {
 	EmbedBatch(ctx context.Context, texts []string) [][]float64
 }
-
-// VectorStore stores and retrieves dense float vectors keyed by opaque string
-// ID. The caller owns ID generation and dedup. When no VectorStore is wired,
-// the keyword engine skips the vector path entirely — a missing store is never
-// fatal.
-type VectorStore interface {
-	// Upsert inserts or replaces the vector for id (last write wins, no error).
-	// The store does not validate dimensions.
-	Upsert(id string, vector []float64)
-	// KNN returns up to k nearest-neighbour IDs to vector, nearest first. May
-	// return fewer than k (or an empty slice) when the store holds fewer
-	// vectors.
-	KNN(vector []float64, k int) []string
-}

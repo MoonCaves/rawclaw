@@ -31,6 +31,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/scopes"
 	"github.com/MoonCaves/rawclaw/internal/semantic"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/text"
 	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -331,14 +332,9 @@ func fmtRef(sessionID, uuid string) string {
 	return sid8(sessionID) + ":" + uuid8(uuid)
 }
 
-// sid8 truncates a session id to its first 8 runes (code points) without
-// padding.
+// sid8 delegates to text.Sid8.
 func sid8(sessionID string) string {
-	r := []rune(sessionID)
-	if len(r) > 8 {
-		return string(r[:8])
-	}
-	return string(r)
+	return text.Sid8(sessionID)
 }
 
 // uuid8 returns the first 8 hex chars of a message uuid (the short, copyable

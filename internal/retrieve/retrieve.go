@@ -19,6 +19,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/provenance"
 	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/store"
+	"github.com/MoonCaves/rawclaw/internal/text"
 )
 
 // reBoolOps strips boolean operators (&& || !) down to spaces so the leftover
@@ -47,10 +48,7 @@ func stripBoolOps(s string) string {
 }
 
 func isWordByte(c byte) bool {
-	return c == '_' ||
-		(c >= '0' && c <= '9') ||
-		(c >= 'A' && c <= 'Z') ||
-		(c >= 'a' && c <= 'z')
+	return text.IsWordByte(c)
 }
 
 // Hit is one flat search result returned by Search / LinearFallback:
@@ -746,8 +744,7 @@ func containsAll(hay string, terms []string) bool {
 	return true
 }
 
-// first10 returns the first 10 bytes of an ISO timestamp (the YYYY-MM-DD prefix
-// the date bounds compare against, assuming an ASCII date).
+// first10 delegates to text.First10.
 func first10(iso string) string {
-	return iso[:min(len(iso), 10)]
+	return text.First10(iso)
 }
