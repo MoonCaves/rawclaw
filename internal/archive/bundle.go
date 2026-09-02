@@ -118,7 +118,9 @@ func InitFromBundle(ctx context.Context, bundlePath, remoteURL string, machineNa
 		return nil, fmt.Errorf("create archive state dir: %w", err)
 	}
 
-	// Verify bundle validity upfront before modifying any local clone state.
+	// Validate bundle header and ref advertisements upfront before modifying local clone state.
+	// We use 'bundle list-heads' because 'bundle verify' requires an existing .git
+	// repository to check prerequisites against, which does not exist yet during initial init.
 	if _, err := a.run(ctx, parent, "bundle", "list-heads", absBundle); err != nil {
 		return nil, fmt.Errorf("archive init: verify bundle %s: %w", bundlePath, err)
 	}
