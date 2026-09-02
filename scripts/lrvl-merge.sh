@@ -11,26 +11,19 @@ fi
 
 BRANCH="$1"
 REPO_DIR="/Users/jay-m4/code/rawclaw"
-LOCK_FILE="$REPO_DIR/.git/merge.lock"
+LOCK_DIR="$REPO_DIR/.git/merge.lock.d"
 
 echo "==> [LRVL 1/6] Acquiring exclusive repository merge lock..."
-# Portable POSIX/macOS atomic flock via Python fcntl
-python3 - <<EOF
-import fcntl, sys, time
-lock_file = open("$LOCK_FILE", "w")
-try:
-    fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    print("Lock acquired successfully.")
-except BlockingIOError:
-    print("ERROR: Merge lock currently held by another orchestrator process.", file=sys.stderr)
-    sys.exit(1)
-EOF
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo "ERROR: Merge lock currently held by another orchestrator process ($LOCK_DIR exists)." >&2
+  exit 1
+fi
 
 cleanup() {
   echo "==> [LRVL Cleanup] Releasing merge lock..."
-  rm -f "$LOCK_FILE"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 echo "==> [LRVL 2/6] Fetching latest main and rebasing candidate branch..."
 git -C "$REPO_DIR" fetch origin main

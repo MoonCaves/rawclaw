@@ -1545,7 +1545,11 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 
 	// Project-sharded container check: Pi stores transcripts under ~/.pi/agent/sessions/--<escaped-cwd>--/.
 	if selectedSource == "" || selectedSource == "pi" {
-		if !checkPiContainerFreshness(cleanTDir, allIndexedPaths) {
+		targetCWD := projectCWD
+		if targetCWD == "" {
+			targetCWD = cleanTDir
+		}
+		if !checkPiContainerFreshness(targetCWD, allIndexedPaths) {
 			return IndexFreshness{Fresh: false, Reason: "container_transcripts_modified"}, nil
 		}
 	}

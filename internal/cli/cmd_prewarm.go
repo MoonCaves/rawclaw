@@ -112,9 +112,15 @@ func prewarmSourcePath(dbPath, sessionID string) string {
 	defer con.Close()
 	var path string
 	if err := con.QueryRow("SELECT source_path FROM session_sources WHERE session_id=? LIMIT 1", sessionID).Scan(&path); err == nil {
+		if idx := strings.Index(path, "#"); idx >= 0 {
+			path = path[:idx]
+		}
 		return path
 	}
 	if err := con.QueryRow("SELECT path FROM file_index WHERE session_id=? LIMIT 1", sessionID).Scan(&path); err == nil {
+		if idx := strings.Index(path, "#"); idx >= 0 {
+			path = path[:idx]
+		}
 		return path
 	}
 	return ""
@@ -141,7 +147,11 @@ func prewarmFresh(dumpPath, sourcePath, sessionID, dbPath string) bool {
 	if sourcePath == "" {
 		return true
 	}
-	st, err := os.Stat(sourcePath)
+	cleanPath := sourcePath
+	if idx := strings.Index(cleanPath, "#"); idx >= 0 {
+		cleanPath = cleanPath[:idx]
+	}
+	st, err := os.Stat(cleanPath)
 	if err != nil {
 		return false
 	}

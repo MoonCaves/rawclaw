@@ -113,6 +113,16 @@ func InitFromBundle(ctx context.Context, bundlePath, remoteURL string, machineNa
 			configPath(), cloneDir())
 	}
 
+	parent := filepath.Dir(a.clone)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return nil, fmt.Errorf("create archive state dir: %w", err)
+	}
+
+	// Verify bundle validity upfront before modifying any local clone state.
+	if _, err := a.run(ctx, parent, "bundle", "verify", absBundle); err != nil {
+		return nil, fmt.Errorf("archive init: verify bundle %s: %w", bundlePath, err)
+	}
+
 	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err == nil {
 		if n, serr := a.strandedCommits(ctx); serr != nil {
 			return nil, fmt.Errorf("archive init: check unpushed commits in existing clone: %w", serr)
@@ -124,11 +134,6 @@ func InitFromBundle(ctx context.Context, bundlePath, remoteURL string, machineNa
 	}
 	if err := os.RemoveAll(a.clone); err != nil {
 		return nil, fmt.Errorf("clear stale clone: %w", err)
-	}
-
-	parent := filepath.Dir(a.clone)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return nil, fmt.Errorf("create archive state dir: %w", err)
 	}
 
 	if _, err := a.run(ctx, parent, "clone", absBundle, a.clone); err != nil {
