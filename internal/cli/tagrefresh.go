@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -72,7 +73,7 @@ func freshPrewarmDump(session8 string) (string, bool) {
 		return "", false
 	}
 	dumpPath := index.PrewarmDumpPath(fullSID)
-	if !prewarmFresh(dumpPath, prewarmSourcePath(dbp, fullSID)) {
+	if !prewarmFresh(dumpPath, prewarmSourcePath(dbp, fullSID), fullSID, dbp) {
 		return "", false
 	}
 	dump, err := os.ReadFile(dumpPath)
@@ -92,8 +93,35 @@ func readConsolidatedTopics(sessionID string) []store.TopicSegment {
 	return segs
 }
 
+func tryProjectDBTopics(authDB, sourcePath, sessionID string) []store.TopicSegment {
+	if sourcePath == "" {
+		return nil
+	}
+	tdir := paths.ProjectDirOf(sourcePath)
+	if tdir == "" {
+		return nil
+	}
+	projDB := index.DBPath(tdir)
+	if projDB == authDB {
+		return nil
+	}
+	pcon, err := store.ConnectRO(projDB)
+	if err != nil {
+		return nil
+	}
+	defer pcon.Close()
+
+	psegs, err := store.TopicsForSession(pcon, sessionID)
+	if err != nil {
+		slog.Debug("read project topics", "session", sessionID, "err", err)
+		return nil
+	}
+	return psegs
+}
+
 // readAuthoritativeTagTopics reads the current per-session DB. The source DB
-// is authoritative because a fold may be delayed.
+// is authoritative because a fold may be delayed. If empty, falls back to
+// the per-project db or consolidated topics.
 func readAuthoritativeTagTopics(authoritativeDB, sessionID string) ([]store.TopicSegment, error) {
 	auth, err := store.ConnectRO(authoritativeDB)
 	if err != nil {
@@ -104,10 +132,18 @@ func readAuthoritativeTagTopics(authoritativeDB, sessionID string) ([]store.Topi
 	if err != nil {
 		return nil, fmt.Errorf("read authoritative topics for %s: %w", sessionID, err)
 	}
-	if authoritativeDB == index.ConsolidatedPath() {
+	if len(authSegs) > 0 || authoritativeDB == index.ConsolidatedPath() {
 		return authSegs, nil
 	}
-	return append([]store.TopicSegment(nil), authSegs...), nil
+	if backing, ok, berr := store.SessionBackingFor(auth, sessionID); berr == nil && ok {
+		if psegs := tryProjectDBTopics(authoritativeDB, backing.SourcePath, sessionID); len(psegs) > 0 {
+			return psegs, nil
+		}
+	}
+	if consSegs := readConsolidatedTopics(sessionID); len(consSegs) > 0 {
+		return consSegs, nil
+	}
+	return authSegs, nil
 }
 
 type tagSourceMatch struct {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,6 +94,16 @@ func PrewarmDumpPath(sessionID string) string {
 	dir := filepath.Join(store.CacheDir(), "prewarm")
 	_ = os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".dump")
+}
+
+// InvalidatePrewarmDump removes the prewarm dump and fingerprint state for a session.
+func InvalidatePrewarmDump(sessionID string) {
+	dumpPath := PrewarmDumpPath(sessionID)
+	for _, p := range []string{dumpPath, dumpPath + ".state"} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			slog.Debug("invalidate prewarm dump", "path", p, "err", err)
+		}
+	}
 }
 
 // PrepareFreshContainer incrementally refreshes one live container and proves

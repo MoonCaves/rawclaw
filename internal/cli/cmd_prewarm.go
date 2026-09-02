@@ -18,8 +18,9 @@ import (
 )
 
 type prewarmFingerprint struct {
-	MTime int64 `json:"mtime"`
-	Size  int64 `json:"size"`
+	MTime      int64 `json:"mtime"`
+	Size       int64 `json:"size"`
+	TopicCount int   `json:"topic_count"`
 }
 
 // newPrewarmCmd wires the internal closeout prewarm command.
@@ -60,7 +61,7 @@ func runPrewarmCmd(
 
 	sourcePath := prewarmSourcePath(dbPath, fullSID)
 	dumpPath := index.PrewarmDumpPath(fullSID)
-	if prewarmFresh(dumpPath, sourcePath) {
+	if prewarmFresh(dumpPath, sourcePath, fullSID, dbPath) {
 		return nil
 	}
 
@@ -70,18 +71,24 @@ func runPrewarmCmd(
 	}
 	defer con.Close()
 
+	topics, err := readAuthoritativeTagTopics(dbPath, fullSID)
+	if err != nil {
+		return err
+	}
 	var content bytes.Buffer
-	if err := runTagPrepWithTopics(&content, con, fullSID, readConsolidatedTopics(fullSID)); err != nil {
+	if err := runTagPrepWithTopics(&content, con, fullSID, topics); err != nil {
 		return err
 	}
 
 	var fp prewarmFingerprint
+	fp.TopicCount = len(topics)
 	if sourcePath != "" {
 		st, err := os.Stat(sourcePath)
 		if err != nil {
 			return fmt.Errorf("stat transcript %s: %w", sourcePath, err)
 		}
-		fp = prewarmFingerprint{MTime: st.ModTime().UnixNano(), Size: st.Size()}
+		fp.MTime = st.ModTime().UnixNano()
+		fp.Size = st.Size()
 	}
 	if err := durable.WriteAtomic(dumpPath, content.Bytes()); err != nil {
 		return fmt.Errorf("write prewarm dump: %w", err)
@@ -113,15 +120,8 @@ func prewarmSourcePath(dbPath, sessionID string) string {
 	return ""
 }
 
-func prewarmFresh(dumpPath, sourcePath string) bool {
+func prewarmFresh(dumpPath, sourcePath, sessionID, dbPath string) bool {
 	if _, err := os.Stat(dumpPath); err != nil {
-		return false
-	}
-	if sourcePath == "" {
-		return true
-	}
-	st, err := os.Stat(sourcePath)
-	if err != nil {
 		return false
 	}
 	stateBytes, err := os.ReadFile(dumpPath + ".state")
@@ -130,6 +130,19 @@ func prewarmFresh(dumpPath, sourcePath string) bool {
 	}
 	var saved prewarmFingerprint
 	if json.Unmarshal(stateBytes, &saved) != nil {
+		return false
+	}
+	if sessionID != "" {
+		curTopics, err := readAuthoritativeTagTopics(dbPath, sessionID)
+		if err != nil || len(curTopics) != saved.TopicCount {
+			return false
+		}
+	}
+	if sourcePath == "" {
+		return true
+	}
+	st, err := os.Stat(sourcePath)
+	if err != nil {
 		return false
 	}
 	return saved.Size == st.Size() && saved.MTime == st.ModTime().UnixNano()
