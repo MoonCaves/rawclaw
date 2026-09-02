@@ -479,7 +479,7 @@ func isArchiveSyncInvocation(args []string) bool {
 	}
 	if w[0] == "archive" {
 		switch w[1] {
-		case "init", "push", "pull", "autosync":
+		case "init", "push", "pull", "autosync", "export-bundle":
 			return true
 		}
 	}
