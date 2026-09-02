@@ -309,15 +309,26 @@ func TestTombstonePath_Default(t *testing.T) {
 	}
 }
 
-func TestLoadTombstones_FallsBackToLegacyCache(t *testing.T) {
+func TestLoadTombstones_UnionsModernAndLegacy(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+
+	// Legacy cache file
 	legacy := filepath.Join(home, ".cache", "session-search", ".deleted")
 	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(legacy, []byte("legacy-id\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Modern durable file
+	modern := filepath.Join(home, ".local", "share", "rawclaw", ".deleted")
+	if err := os.MkdirAll(filepath.Dir(modern), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(modern, []byte("modern-id\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -327,6 +338,9 @@ func TestLoadTombstones_FallsBackToLegacyCache(t *testing.T) {
 	}
 	if _, ok := set["legacy-id"]; !ok {
 		t.Fatalf("legacy tombstone missing from set %v", set)
+	}
+	if _, ok := set["modern-id"]; !ok {
+		t.Fatalf("modern tombstone missing from set %v", set)
 	}
 }
 
