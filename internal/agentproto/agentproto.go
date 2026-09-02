@@ -288,6 +288,7 @@ type OutlineResult struct {
 // the human path does, instead of leaking their values into the FTS5 query.
 type SearchOpts struct {
 	Limit            int
+	Offset           int
 	Role             string
 	Sort             string
 	IncludeTools     bool
@@ -508,6 +509,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		IncludeSubagents: opts.IncludeSubagents,
 		Since:            opts.Since,
 		Before:           opts.Before,
+		Offset:           opts.Offset,
 		MinMessages:      opts.MinMessages,
 		RawMatch:         rawMatch,
 	}

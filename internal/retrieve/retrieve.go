@@ -110,6 +110,7 @@ type SearchParams struct {
 	IncludeSubagents bool
 	Since            string // "" = no bound; else YYYY-MM-DD inclusive
 	Before           string // "" = no bound; else YYYY-MM-DD inclusive
+	Offset           int    // 0 = no offset; else skip N results
 	RawMatch         string // "" = plain path; else explicit FTS5 expr (boolean query)
 	MinMessages      int    // 0 = no minimum
 
@@ -133,6 +134,7 @@ func storeFilterSort(p SearchParams) (store.Filter, store.Sort) {
 		MinMessages:      p.MinMessages,
 		SinceDate:        p.Since,
 		BeforeDate:       p.Before,
+		Offset:           p.Offset,
 		Projects:         p.Projects,
 		SourceTool:       p.SourceTool,
 	}

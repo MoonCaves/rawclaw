@@ -44,6 +44,7 @@ import (
 // cobra root command.
 type Options struct {
 	Limit            int
+	Offset           int
 	Dir              string
 	ThisProject      bool
 	All              bool
@@ -59,6 +60,11 @@ type Options struct {
 	Stats            bool
 	Since            string
 	Before           string
+	Until            string // alias for Before
+	Days             int    // filter to last N days
+	Today            bool   // filter to today only
+	Yesterday        bool   // filter to yesterday only
+	Week             bool   // filter to last 7 days
 	NoVector         bool
 	ReindexVectors   bool
 	IncludePath      string
@@ -73,6 +79,76 @@ type Options struct {
 	// CurrentSession is the caller's own live session ("" = fall back to the
 	// runtime's env, "off" = don't exclude anything). Resolved by currentSession.
 	CurrentSession string
+}
+
+// normalizeDates handles convenience aliases (--until, --days, --today, --yesterday, --week)
+// and parses relative date expressions (-7d, -24h, etc.).
+func (o *Options) normalizeDates() {
+	if o.Until != "" && o.Before == "" {
+		o.Before = o.Until
+	}
+	now := time.Now().UTC()
+	if o.Days > 0 && o.Since == "" {
+		o.Since = now.AddDate(0, 0, -o.Days).Format("2006-01-02")
+	}
+	if o.Today && o.Since == "" {
+		o.Since = now.Format("2006-01-02")
+	}
+	if o.Yesterday {
+		y := now.AddDate(0, 0, -1).Format("2006-01-02")
+		if o.Since == "" {
+			o.Since = y
+		}
+		if o.Before == "" {
+			o.Before = y
+		}
+	}
+	if o.Week && o.Since == "" {
+		o.Since = now.AddDate(0, 0, -7).Format("2006-01-02")
+	}
+	if o.Since != "" {
+		o.Since = parseFlexibleDate(o.Since)
+	}
+	if o.Before != "" {
+		o.Before = parseFlexibleDate(o.Before)
+	}
+}
+
+// parseFlexibleDate parses ISO dates ("2006-01-02"), keywords ("today", "yesterday"),
+// and relative offsets ("-7d", "7d", "-24h", "24h", "-1w", "1w") into YYYY-MM-DD.
+func parseFlexibleDate(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	lower := strings.ToLower(s)
+	now := time.Now().UTC()
+	switch lower {
+	case "today", "now":
+		return now.Format("2006-01-02")
+	case "yesterday":
+		return now.AddDate(0, 0, -1).Format("2006-01-02")
+	}
+	rel := strings.TrimPrefix(lower, "-")
+	if strings.HasSuffix(rel, "d") {
+		if days, err := strconv.Atoi(strings.TrimSuffix(rel, "d")); err == nil {
+			return now.AddDate(0, 0, -days).Format("2006-01-02")
+		}
+	}
+	if strings.HasSuffix(rel, "w") {
+		if weeks, err := strconv.Atoi(strings.TrimSuffix(rel, "w")); err == nil {
+			return now.AddDate(0, 0, -weeks*7).Format("2006-01-02")
+		}
+	}
+	if strings.HasSuffix(rel, "h") {
+		if hours, err := strconv.Atoi(strings.TrimSuffix(rel, "h")); err == nil {
+			return now.Add(-time.Duration(hours) * time.Hour).Format("2006-01-02")
+		}
+	}
+	if len(s) >= 10 {
+		return s[:10]
+	}
+	return s
 }
 
 // oneline reports whether oneline format was requested via --oneline or --format oneline/line.
@@ -147,6 +223,7 @@ func (o *Options) params(rawMatch string) retrieve.SearchParams {
 		IncludeSubagents: o.IncludeSubagents,
 		Since:            o.Since,
 		Before:           o.Before,
+		Offset:           o.Offset,
 		RawMatch:         rawMatch,
 		MinMessages:      o.MinMessages,
 	}
@@ -209,6 +286,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 			if cmd.Flags().Changed("this-desk") {
 				opts.ThisProject = true
 			}
+			opts.normalizeDates()
 			// An explicit --dir is the opt-in that lets an arbitrary
 			// jsonl-bearing folder resolve as a transcripts dir; the cwd
 			// default never is (folder guard).
@@ -219,6 +297,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 
 	f := root.Flags()
 	f.IntVar(&opts.Limit, "limit", 8, "max hits to return")
+	f.IntVar(&opts.Offset, "offset", 0, "skip the first N hits (pagination)")
 	f.StringVar(&opts.Dir, "dir", cwd(),
 		"the project's working directory (e.g. ~/code/my-project); encoded to "+
 			"find its transcripts. An already-encoded ~/.claude/projects path also works.")
@@ -236,8 +315,13 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	f.BoolVar(&opts.JSON, "json", false, "machine-readable JSON output (for agents/scripts)")
 	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready resume command (claude/codex/agy/goose/pi/opencode) for a session id (use the 8-char id from search output)")
 	f.BoolVar(&opts.Stats, "stats", false, "corpus overview (sessions/messages/date span) for this project, or --all for every project")
-	f.StringVar(&opts.Since, "since", "", "only results on/after this date")
-	f.StringVar(&opts.Before, "before", "", "only results on/before this date")
+	f.StringVar(&opts.Since, "since", "", "only results on/after this date (YYYY-MM-DD or relative like -7d)")
+	f.StringVar(&opts.Before, "before", "", "only results on/before this date (YYYY-MM-DD or relative like -24h)")
+	f.StringVar(&opts.Until, "until", "", "only results on/before this date (alias for --before)")
+	f.IntVar(&opts.Days, "days", 0, "filter to results within the last N days")
+	f.BoolVar(&opts.Today, "today", false, "filter to results from today only")
+	f.BoolVar(&opts.Yesterday, "yesterday", false, "filter to results from yesterday only")
+	f.BoolVar(&opts.Week, "week", false, "filter to results from the last 7 days")
 	f.BoolVar(&opts.NoVector, "no-vector", false, "force keyword-only (ignore any configured embedder)")
 	f.BoolVar(&opts.ReindexVectors, "reindex-vectors", false, "build/update the semantic index for the scope (needs RAWCLAW_EMBED_ENDPOINT)")
 	f.StringVar(&opts.IncludePath, "include-path", "", "only cover projects whose working dir matches this regex (search AND bare browse)")
@@ -1733,6 +1817,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	// git probing. The function is called only if the store cannot answer.
 	sopts := agentproto.SearchOpts{
 		Limit:            o.Limit,
+		Offset:           o.Offset,
 		Role:             o.Role,
 		Sort:             o.Sort,
 		IncludeTools:     o.IncludeTools,

@@ -18,6 +18,7 @@ type Filter struct {
 	MinMessages      int    // 0 = no minimum; else s.message_count >= MinMessages
 	SinceDate        string // "" = no bound; else substr(m.ts_iso,1,10) >= SinceDate (YYYY-MM-DD inclusive)
 	BeforeDate       string // "" = no bound; else substr(m.ts_iso,1,10) <= BeforeDate (YYYY-MM-DD inclusive)
+	Offset           int    // 0 = no offset; else SQL OFFSET Offset
 
 	// Scope, for the one store that holds every project. Which project a
 	// session belongs to is a column here, so narrowing to a project is a WHERE
@@ -216,6 +217,10 @@ func searchHits(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit
 	            JOIN sessions s ON s.id=m.session_id
 	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
 	args = append(args, limit)
+	if f.Offset > 0 {
+		sqlText += " OFFSET ?"
+		args = append(args, f.Offset)
+	}
 
 	rows, err := con.Query(sqlText, args...)
 	if err != nil {
@@ -293,6 +298,10 @@ func searchAnchors(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, li
 	            JOIN sessions s ON s.id=m.session_id
 	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
 	args = append(args, limit)
+	if f.Offset > 0 {
+		sqlText += " OFFSET ?"
+		args = append(args, f.Offset)
+	}
 
 	rows, err := con.Query(sqlText, args...)
 	if err != nil {
