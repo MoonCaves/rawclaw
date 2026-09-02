@@ -460,6 +460,7 @@ func runTagFloorCmd(w io.Writer, scope []view.Scope) error {
 }
 
 func applyFloorRoutine(con *sql.DB, sessionID string, isRoutine bool, taggedAt float64) error {
+	index.InvalidatePrewarmDump(sessionID)
 	if !isRoutine {
 		if _, err := con.Exec("DELETE FROM session_verdict WHERE session_id=? AND source=?", sessionID, store.VerdictSourceFloor); err != nil {
 			return fmt.Errorf("retract floor verdict for %s: %w", lastSlice8(sessionID), err)
@@ -514,6 +515,8 @@ func runTagWriteCmd(w io.Writer, r io.Reader, session8 string, scope []view.Scop
 	if writeErr != nil {
 		return writeErr
 	}
+
+	index.InvalidatePrewarmDump(fullSID)
 
 	if routine {
 		if source == "" {
