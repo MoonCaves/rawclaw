@@ -37,7 +37,7 @@ func TestDeleteCmd_ForeignOnlyRefuses(t *testing.T) {
 	if _, serr := os.Stat(foreignClonePath(fx)); serr != nil {
 		t.Errorf("foreign session touched by refused delete: %v", serr)
 	}
-	tomb := filepath.Join(fx.Home, ".cache", "session-search", ".deleted")
+	tomb := filepath.Join(fx.Home, ".local", "share", "rawclaw", ".deleted")
 	if b, rerr := os.ReadFile(tomb); rerr == nil && strings.Contains(string(b), archivetest.ForeignSession) {
 		t.Error("refused delete tombstoned a foreign session")
 	}

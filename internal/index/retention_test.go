@@ -76,6 +76,7 @@ func TestRetentionTombstonePrunes(t *testing.T) {
 	// Isolate HOME so lifecycle.LoadTombstones("") reads our seeded sidecar.
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpHome, ".local", "share"))
 
 	proj := t.TempDir()
 	f := filepath.Join(proj, "dead.jsonl")
@@ -95,7 +96,7 @@ func TestRetentionTombstonePrunes(t *testing.T) {
 	if err := os.Remove(f); err != nil {
 		t.Fatal(err)
 	}
-	tombDir := filepath.Join(tmpHome, ".cache", "session-search")
+	tombDir := filepath.Join(tmpHome, ".local", "share", "rawclaw")
 	if err := os.MkdirAll(tombDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -494,6 +495,7 @@ func dbDigest(t *testing.T, dbp string) string {
 func TestOrphanReconcileIsReadMostly(t *testing.T) {
 	tmpHome := t.TempDir()
 	t.Setenv("HOME", tmpHome)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tmpHome, ".local", "share"))
 
 	proj := t.TempDir()
 	f := filepath.Join(proj, "o.jsonl")
@@ -534,7 +536,7 @@ func TestOrphanReconcileIsReadMostly(t *testing.T) {
 	}
 
 	// A new tombstone is new work: the next pass prunes (one write)…
-	tombDir := filepath.Join(tmpHome, ".cache", "session-search")
+	tombDir := filepath.Join(tmpHome, ".local", "share", "rawclaw")
 	if err := os.MkdirAll(tombDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

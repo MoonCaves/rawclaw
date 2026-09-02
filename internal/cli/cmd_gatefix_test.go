@@ -79,7 +79,7 @@ func TestDeleteCmd_YesAloneRefusedWhenLiveFiles(t *testing.T) {
 	if _, serr := os.Stat(live); serr != nil {
 		t.Errorf("session deleted despite the --yes refusal: %v", serr)
 	}
-	tombPath := filepath.Join(root, "..", ".cache", "session-search", ".deleted")
+	tombPath := filepath.Join(root, "..", ".local", "share", "rawclaw", ".deleted")
 	if b, rerr := os.ReadFile(tombPath); rerr == nil && strings.Contains(string(b), "gate0003") {
 		t.Errorf("refused delete tombstoned the session: %q", string(b))
 	}
