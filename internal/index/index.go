@@ -88,6 +88,9 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 		if terr := migrateTrigramIndex(con); terr != nil {
 			return fmt.Errorf("ensure trigram index: %w", terr)
 		}
+		if ferr := migrateFileIndexColumns(con); ferr != nil {
+			return fmt.Errorf("ensure file index columns: %w", ferr)
+		}
 		return nil
 	}
 	// Version already current → ensure the base schema + FTS are present
@@ -104,6 +107,9 @@ func EnsureSchema(con *sql.DB, sourceID string) error {
 	// bump, for the same reason.
 	if err := migrateScopeColumns(con); err != nil {
 		return fmt.Errorf("ensure scope columns: %w", err)
+	}
+	if err := migrateFileIndexColumns(con); err != nil {
+		return fmt.Errorf("ensure file index columns: %w", err)
 	}
 	if _, err := con.Exec("SELECT 1 FROM messages_fts LIMIT 1"); err != nil {
 		_, _ = con.Exec(store.FTSSQL) // best-effort; raced creation is acceptable
@@ -417,6 +423,25 @@ func migrateScopeColumns(con *sql.DB) error {
 	return runOnce(con, inventedScopeRepairKey, repairInventedScope)
 }
 
+// migrateFileIndexColumns adds the incremental JSONL watermark in place. Old
+// rows were fully parsed at file_index.size, so that value is the safe legacy
+// byte offset. This is additive and deliberately does not bump SchemaVersion.
+func migrateFileIndexColumns(con *sql.DB) error {
+	have, err := tableColumns(con, "file_index")
+	if err != nil {
+		return err
+	}
+	if _, ok := have["byte_offset"]; !ok {
+		if _, err := con.Exec("ALTER TABLE file_index ADD COLUMN byte_offset INTEGER"); err != nil {
+			return fmt.Errorf("add file_index.byte_offset: %w", err)
+		}
+	}
+	if _, err := con.Exec("UPDATE file_index SET byte_offset=size WHERE byte_offset IS NULL"); err != nil {
+		return fmt.Errorf("backfill file_index.byte_offset: %w", err)
+	}
+	return nil
+}
+
 // runOnce runs a one-time migration step unless its completion key is already
 // stamped. The stamp is written only AFTER the step commits, so a process
 // killed mid-pass simply redoes the pass (F3).
@@ -646,8 +671,8 @@ func reindexFileWithOrigin(con *sql.DB, path, transcriptDir, origin string, scop
 		return fmt.Errorf("delete stale file_index: %w", err)
 	}
 	if _, err := tx.Exec(
-		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-		rp, mtime, size, provenance.FileFingerprint(path, size), sid,
+		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id,byte_offset) VALUES(?,?,?,?,?,?)",
+		rp, mtime, size, provenance.FileFingerprint(path, size), sid, size,
 	); err != nil {
 		return fmt.Errorf("session %s insert file_index: %w", sid, err)
 	}
@@ -803,9 +828,10 @@ func splitLines(data []byte) []string {
 
 // fileMeta is the file_index watermark row.
 type fileMeta struct {
-	mtime float64
-	size  int64
-	fp    string
+	mtime      float64
+	size       int64
+	fp         string
+	byteOffset int64
 }
 
 // UpdateIndex performs the incremental reindex of transcriptDir: fingerprint
@@ -1021,7 +1047,7 @@ func orphanWorkPending(dbp string, tombstoned map[string]struct{}) (pending bool
 
 // loadFileIndex reads the file_index watermark rows keyed by path.
 func loadFileIndex(con *sql.DB) (map[string]fileMeta, error) {
-	rows, err := con.Query("SELECT path,mtime,size,fp FROM file_index")
+	rows, err := con.Query("SELECT path,mtime,size,fp,byte_offset FROM file_index")
 	if err != nil {
 		return nil, err
 	}
@@ -1031,11 +1057,11 @@ func loadFileIndex(con *sql.DB) (map[string]fileMeta, error) {
 	for rows.Next() {
 		var path, fp string
 		var mtime float64
-		var size int64
-		if err := rows.Scan(&path, &mtime, &size, &fp); err != nil {
+		var size, byteOffset sql.NullInt64
+		if err := rows.Scan(&path, &mtime, &size, &fp, &byteOffset); err != nil {
 			return nil, err
 		}
-		out[path] = fileMeta{mtime: mtime, size: size, fp: fp}
+		out[path] = fileMeta{mtime: mtime, size: size.Int64, fp: fp, byteOffset: byteOffset.Int64}
 	}
 	return out, rows.Err()
 }

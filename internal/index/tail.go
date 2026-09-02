@@ -120,11 +120,15 @@ func parseTailMessages(con *sql.DB, c source.Container, sourceID, rawPath string
 	if strings.Contains(c.Path, "#") || strings.HasSuffix(rawPath, ".db") {
 		return nil, fromOffset, false
 	}
-	chunk, newOffset, ok, pending := readTailChunk(rawPath, fromOffset, toOffset)
-	if !ok {
-		if pending {
-			return nil, fromOffset, true
-		}
+	if fromOffset < 0 || toOffset <= fromOffset {
+		return nil, fromOffset, false
+	}
+	f, err := os.Open(rawPath)
+	if err != nil {
+		return nil, fromOffset, false
+	}
+	defer f.Close()
+	if _, err := f.Seek(fromOffset, io.SeekStart); err != nil {
 		return nil, fromOffset, false
 	}
 
@@ -132,45 +136,85 @@ func parseTailMessages(con *sql.DB, c source.Container, sourceID, rawPath string
 	_ = con.QueryRow("SELECT COUNT(*) FROM messages WHERE session_id=?", c.ID).Scan(&count)
 
 	var msgs []model.Message
-	var err error
-
-	switch sourceID {
-	case sourceClaude, "":
-		msgs, err = parseClaudeTail(chunk)
-	case "codex":
-		msgs, err = parseCodexTail(chunk, c.ID, count)
-	case "antigravity":
-		msgs, err = parseAntigravityTail(chunk, c.ID, count)
-	default:
-		return nil, fromOffset, false
-	}
-
+	ordinal := count
+	lineOffset, pending, err := parse.StreamJSONLLines(io.LimitReader(f, toOffset-fromOffset), func(line []byte) error {
+		line = []byte(strings.TrimSpace(string(line)))
+		if len(line) == 0 {
+			return nil
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			return err
+		}
+		var msg model.Message
+		switch sourceID {
+		case sourceClaude, "":
+			if !indexable(rec) {
+				return errors.New("unrecognized claude tail record type")
+			}
+			msg = model.Message{Role: parse.MsgRole(rec), Text: parse.ExtractText(rec), UUID: parse.MsgUUID(rec)}
+			msg.TSISO, _ = rec["timestamp"].(string)
+		case "codex":
+			role, text, ok := codex.NormalizeRecord(rec)
+			if !ok {
+				return errors.New("unrecognized codex tail record")
+			}
+			msg = model.Message{Role: role, Text: text, UUID: codex.MintUUID(c.ID, ordinal)}
+			msg.TSISO, _ = rec["timestamp"].(string)
+		case "antigravity":
+			role, text, ok := antigravity.NormalizeRecord(rec)
+			if !ok {
+				return errors.New("unrecognized antigravity tail record")
+			}
+			stepIdx := ordinal
+			if idx, ok := rec["step_index"].(float64); ok {
+				stepIdx = int(idx)
+			}
+			msg = model.Message{Role: role, Text: text, UUID: antigravity.MintUUID(c.ID, stepIdx, ordinal)}
+			msg.TSISO, _ = rec["created_at"].(string)
+		default:
+			return errors.New("unsupported tail source")
+		}
+		if msg.Text == "" {
+			return errors.New("empty tail record")
+		}
+		msg.TS = parse.ISOToEpoch(msg.TSISO)
+		msgs = append(msgs, msg)
+		ordinal++
+		return nil
+	})
 	if err != nil {
 		return nil, fromOffset, false
 	}
-	return msgs, newOffset, true
+	if pending {
+		return msgs, fromOffset + lineOffset, true
+	}
+	if fromOffset+lineOffset != toOffset {
+		return nil, fromOffset, false
+	}
+	return msgs, fromOffset + lineOffset, true
 }
 
 // appendTailIfPossible performs the shared append-only fast path. It returns
 // true when the caller should skip full reindexing, including incomplete tails
 // and stale-watermark races; false preserves the caller's full-reindex fallback.
 func appendTailIfPossible(con *sql.DB, c source.Container, sourceID, rawPath, rp, origin string, prev fileMeta, mtime float64, size int64) bool {
-	if prev.size <= 0 || size <= prev.size {
+	if prev.byteOffset <= 0 || size <= prev.byteOffset {
 		return false
 	}
-	headFP := checkPrefixFingerprint(rawPath, prev.size)
+	headFP := checkPrefixFingerprint(rawPath, prev.byteOffset)
 	if headFP == "" || headFP != prev.fp {
 		return false
 	}
-	tailMs, newOffset, ok := parseTailMessages(con, c, sourceID, rawPath, prev.size, size)
+	tailMs, newOffset, ok := parseTailMessages(con, c, sourceID, rawPath, prev.byteOffset, size)
 	if !ok {
 		return false
 	}
-	if len(tailMs) == 0 && newOffset == prev.size {
+	if len(tailMs) == 0 && newOffset == prev.byteOffset {
 		return true
 	}
 	newFP := checkPrefixFingerprint(rawPath, newOffset)
-	appendErr := appendContainer(con, c, tailMs, sourceID, origin, rp, prev.size, mtime, newOffset, newFP)
+	appendErr := appendContainerAt(con, c, tailMs, sourceID, origin, rp, prev.byteOffset, mtime, size, newOffset, newFP)
 	if errors.Is(appendErr, errAppendStale) || appendErr == nil {
 		if appendErr == nil {
 			IncrementalIngestCount.Add(1)

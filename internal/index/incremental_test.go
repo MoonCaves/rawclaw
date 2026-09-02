@@ -2,6 +2,7 @@ package index
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,61 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/codex"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
+
+func TestIncrementalIngest_LargeAppendKeepsExistingRows(t *testing.T) {
+	dir := t.TempDir()
+	dbp := filepath.Join(dir, "large.db")
+	f := filepath.Join(dir, "large.jsonl")
+	content := strings.Repeat("large transcript payload ", 40)
+	var b strings.Builder
+	for i := range 10000 {
+		fmt.Fprintf(&b, `{"type":"user","message":{"role":"user","content":%q},"uuid":"large-%d","timestamp":"2026-08-20T10:00:00Z"}`+"\n", content, i)
+	}
+	writeFile(t, f, b.String())
+	c := source.Container{ID: "large-session", Path: f, CWD: "/repo"}
+	msgsFn := claudeTailMsgsFn()
+	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, msgsFn, "claude", ""); err != nil {
+		t.Fatal(err)
+	}
+	con, err := store.ConnectRW(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+	var firstID int64
+	if err := con.QueryRow("SELECT id FROM messages WHERE session_id=? ORDER BY id LIMIT 1", c.ID).Scan(&firstID); err != nil {
+		t.Fatal(err)
+	}
+	appendFile(t, f, `{"type":"assistant","message":{"role":"assistant","content":"new one"},"uuid":"large-new-1","timestamp":"2026-08-20T11:00:00Z"}`+"\n")
+	appendFile(t, f, `{"type":"user","message":{"role":"user","content":"new two"},"uuid":"large-new-2","timestamp":"2026-08-20T11:00:05Z"}`+"\n")
+	ResetIngestCountersForTesting()
+	if _, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, msgsFn, "claude", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := IncrementalIngestCount.Load(); got != 1 {
+		t.Fatalf("incremental ingests = %d, want 1", got)
+	}
+	if got := FullReindexCount.Load(); got != 0 {
+		t.Fatalf("full reindexes = %d, want 0", got)
+	}
+	var firstIDAfter int64
+	if err := con.QueryRow("SELECT id FROM messages WHERE session_id=? ORDER BY id LIMIT 1", c.ID).Scan(&firstIDAfter); err != nil {
+		t.Fatal(err)
+	}
+	if firstIDAfter != firstID {
+		t.Fatalf("first message id changed from %d to %d", firstID, firstIDAfter)
+	}
+	if got := scalarInt(t, con, "SELECT message_count FROM sessions WHERE id=?", c.ID); got != 10002 {
+		t.Fatalf("message_count = %d, want 10002", got)
+	}
+	var offset, size int64
+	if err := con.QueryRow("SELECT byte_offset,size FROM file_index WHERE session_id=?", c.ID).Scan(&offset, &size); err != nil {
+		t.Fatal(err)
+	}
+	if offset != size {
+		t.Fatalf("byte_offset = %d, size = %d, want complete append", offset, size)
+	}
+}
 
 // TestIncrementalIngest_AppendFastPath_Claude verifies that append-only growth
 // takes the incremental fast path, increments the counter, anchors at the last

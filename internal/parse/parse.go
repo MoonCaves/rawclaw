@@ -4,14 +4,42 @@
 package parse
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/MoonCaves/rawclaw/internal/text"
 )
+
+// StreamJSONLLines calls fn for each complete, newline-terminated JSONL line.
+// It does not retain the file or an incomplete final line in memory. The
+// returned offset counts only bytes consumed through complete lines; pending
+// reports an unterminated final line that should be retried on the next pass.
+func StreamJSONLLines(r io.Reader, fn func([]byte) error) (offset int64, pending bool, err error) {
+	br := bufio.NewReader(r)
+	for {
+		line, readErr := br.ReadBytes('\n')
+		if len(line) > 0 && line[len(line)-1] == '\n' {
+			offset += int64(len(line))
+			line = bytes.TrimSuffix(line, []byte{'\n'})
+			line = bytes.TrimSuffix(line, []byte{'\r'})
+			if err := fn(line); err != nil {
+				return offset, false, fmt.Errorf("parse JSONL line: %w", err)
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return offset, len(line) > 0, nil
+			}
+			return offset, false, readErr
+		}
+	}
+}
 
 // Per-block / per-tool character ceilings.
 const (
