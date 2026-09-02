@@ -45,6 +45,7 @@ import (
 type Options struct {
 	Limit            int
 	Offset           int
+	Query            string // flag form of query (--query / -q)
 	Dir              string
 	ThisProject      bool
 	All              bool
@@ -296,7 +297,8 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	}
 
 	f := root.Flags()
-	f.IntVar(&opts.Limit, "limit", 8, "max hits to return")
+	f.IntVarP(&opts.Limit, "limit", "n", 8, "max hits to return")
+	f.StringVarP(&opts.Query, "query", "q", "", "search query terms (flag alternative to positional args)")
 	f.IntVar(&opts.Offset, "offset", 0, "skip the first N hits (pagination)")
 	f.StringVar(&opts.Dir, "dir", cwd(),
 		"the project's working directory (e.g. ~/code/my-project); encoded to "+
@@ -363,6 +365,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	// "{{.Name}} version", which would double the "rawclaw").
 	root.SetVersionTemplate("{{.Version}}\n")
 
+	root.AddCommand(newSearchCmd(opts, f))
 	root.AddCommand(newReadCmd())
 	root.AddCommand(newOutlineCmd())
 	root.AddCommand(newTopicsCmd())
@@ -400,6 +403,25 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 		return registeredSourceIDs(), cobra.ShellCompDirectiveNoFileComp
 	})
 	return root
+}
+
+// newSearchCmd builds the explicit `search` subcommand as an alias for bare search.
+func newSearchCmd(opts *Options, rootFlags *pflag.FlagSet) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "search [query]",
+		Short: "search transcripts (explicit alias for bare rawclaw <query>)",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("this-desk") {
+				opts.ThisProject = true
+			}
+			opts.normalizeDates()
+			opts.DirSet = cmd.Flags().Changed("dir")
+			return runRoot(cmd, opts, args)
+		},
+	}
+	cmd.Flags().AddFlagSet(rootFlags)
+	return cmd
 }
 
 // Execute runs the command tree under the self-bounding watchdog. It resolves the
@@ -894,6 +916,10 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 
 	if o.Stats {
 		return runStats(ctx, out, o)
+	}
+
+	if len(args) == 0 && strings.TrimSpace(o.Query) != "" {
+		args = strings.Fields(o.Query)
 	}
 
 	if len(args) == 0 {
