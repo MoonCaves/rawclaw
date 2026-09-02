@@ -14,6 +14,7 @@ package semantic
 
 import (
 	"cmp"
+	"container/heap"
 	"context"
 	"crypto/sha1"
 	"database/sql"
@@ -308,6 +309,35 @@ type ranked struct {
 	sid   string
 }
 
+type rankedHeap []ranked
+
+func (h rankedHeap) Len() int { return len(h) }
+
+func rankedBefore(a, b ranked) bool {
+	return cmp.Or(
+		cmp.Compare(b.sim, a.sim),
+		cmp.Compare(b.msgID, a.msgID),
+		cmp.Compare(b.sid, a.sid),
+	) < 0
+}
+
+// Less puts the worst retained candidate at the root.
+func (h rankedHeap) Less(i, j int) bool {
+	return rankedBefore(h[j], h[i])
+}
+
+func (h rankedHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *rankedHeap) Push(x any) { *h = append(*h, x.(ranked)) }
+
+func (h *rankedHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
 // knn runs the brute-force cosine scan and returns the top-`k` candidates,
 // nearest first. Vectors whose dim != len(qvec) are skipped.
 func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
@@ -323,7 +353,7 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 		qn = 1.0
 	}
 
-	out := make([]ranked, 0, len(rows))
+	out := make(rankedHeap, 0, min(k, len(rows)))
 	qLenBytes := len(qvec) * 4
 	for _, r := range rows {
 		// Score straight off the packed blob rather than unpackVec'ing it first.
@@ -342,16 +372,38 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 			continue
 		}
 		dot, nn := 0.0, 0.0
-		for i, q := range qvec {
+		i := 0
+		for ; i+7 < len(qvec); i += 8 {
+			v0 := float64(math.Float32frombits(binary.LittleEndian.Uint32(r.Vec[i*4:])))
+			v1 := float64(math.Float32frombits(binary.LittleEndian.Uint32(r.Vec[(i+1)*4:])))
+			v2 := float64(math.Float32frombits(binary.LittleEndian.Uint32(r.Vec[(i+2)*4:])))
+			v3 := float64(math.Float32frombits(binary.LittleEndian.Uint32(r.Vec[(i+3)*4:])))
+			v4 := float64(math.Float32frombits(binary.LittleEndian.Uint32(r.Vec[(i+4)*4:])))
+			v5 := float64(math.Float32frombits(binary.LittleEndian.Uint32(r.Vec[(i+5)*4:])))
+			v6 := float64(math.Float32frombits(binary.LittleEndian.Uint32(r.Vec[(i+6)*4:])))
+			v7 := float64(math.Float32frombits(binary.LittleEndian.Uint32(r.Vec[(i+7)*4:])))
+			dot += qvec[i]*v0 + qvec[i+1]*v1 + qvec[i+2]*v2 + qvec[i+3]*v3 +
+				qvec[i+4]*v4 + qvec[i+5]*v5 + qvec[i+6]*v6 + qvec[i+7]*v7
+			nn += v0*v0 + v1*v1 + v2*v2 + v3*v3 + v4*v4 + v5*v5 + v6*v6 + v7*v7
+		}
+		for ; i < len(qvec); i++ {
 			v := float64(math.Float32frombits(binary.LittleEndian.Uint32(r.Vec[i*4:])))
-			dot += q * v
+			dot += qvec[i] * v
 			nn += v * v
 		}
 		vn := math.Sqrt(nn)
 		if vn == 0 {
 			vn = 1.0
 		}
-		out = append(out, ranked{sim: dot / (qn * vn), msgID: r.MsgID, sid: r.SessionID})
+		candidate := ranked{sim: dot / (qn * vn), msgID: r.MsgID, sid: r.SessionID}
+		if len(out) < k {
+			heap.Push(&out, candidate)
+		} else if rankedBefore(candidate, out[0]) {
+			// The root is the worst retained candidate. Replace it only when
+			// this candidate sorts ahead of it.
+			heap.Pop(&out)
+			heap.Push(&out, candidate)
+		}
 	}
 
 	// Descending over (sim, msg_id, sid): sim first, then msg_id, then sid.
@@ -362,9 +414,6 @@ func knn(qvec []float64, rows []store.VecRow, k int) []ranked {
 			cmp.Compare(b.sid, a.sid),
 		)
 	})
-	if len(out) > k {
-		out = out[:k]
-	}
 	return out
 }
 
