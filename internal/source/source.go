@@ -50,7 +50,9 @@ type Registration struct {
 	Detect func(path string) bool
 	New    func() Source
 	// Lookup resolves one full session id without discovering or indexing a corpus.
-	Lookup func(fullID string) ([]Container, error)
+	Lookup  func(fullID string) ([]Container, error)
+	Label   func(cwd string) string
+	OptedIn func(filter string) bool
 }
 
 // registry holds the explicitly-registered sources, in registration order.

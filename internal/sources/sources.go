@@ -32,3 +32,13 @@ func Registered() []source.Registration {
 	source.Register(hermes.Registration())
 	return source.Registered()
 }
+
+// Get returns the registration for source ID, or nil if not registered.
+func Get(id string) *source.Registration {
+	for _, reg := range Registered() {
+		if reg.ID == id {
+			return &reg
+		}
+	}
+	return nil
+}
