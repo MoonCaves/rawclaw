@@ -43,4 +43,7 @@ func TestSid8(t *testing.T) {
 	if got := text.Sid8("abc"); got != "abc" {
 		t.Errorf("Sid8 short = %q, want 'abc'", got)
 	}
+	if got := text.Sid8("αβγδεζηθικλμ"); got != "αβγδεζηθ" {
+		t.Errorf("Sid8 Unicode = %q, want 'αβγδεζηθ'", got)
+	}
 }

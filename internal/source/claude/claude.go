@@ -144,6 +144,14 @@ func ParseTranscript(data []byte) (TranscriptInfo, error) {
 			TSISO: iso,
 			UUID:  u,
 		}
+		if ts != 0 {
+			if !startedSet || ts < info.Started {
+				info.Started, startedSet = ts, true
+			}
+			if !lastSet || ts > info.Last {
+				info.Last, lastSet = ts, true
+			}
+		}
 		realUUID, hasUUID := o["uuid"].(string)
 		if hasUUID && realUUID != "" {
 			if idx, ok := seenUUID[realUUID]; ok {
@@ -153,14 +161,6 @@ func ParseTranscript(data []byte) (TranscriptInfo, error) {
 			seenUUID[realUUID] = len(info.Messages)
 		}
 		info.Messages = append(info.Messages, msg)
-		if ts != 0 {
-			if !startedSet || ts < info.Started {
-				info.Started, startedSet = ts, true
-			}
-			if !lastSet || ts > info.Last {
-				info.Last, lastSet = ts, true
-			}
-		}
 	}
 	if bad > 0 {
 		slog.Warn("claude: skipped malformed jsonl lines", "count", bad)
