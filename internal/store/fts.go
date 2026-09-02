@@ -47,35 +47,94 @@ const (
 
 // orderClause maps a Sort onto its SQL ORDER BY — byte-identical to the
 // retrieve layer's clauses.
-func orderClause(s Sort, tbl ftsTable) string {
+func orderClause(s Sort) string {
 	switch s {
 	case SortNewest:
 		return "ORDER BY m.ts DESC, m.id DESC"
 	case SortOldest:
 		return "ORDER BY m.ts ASC, m.id ASC"
 	default:
-		if tbl == wordTable {
-			return "ORDER BY bm25(messages_fts, 5.0, 2.0, 0.1), m.id ASC"
-		}
 		return "ORDER BY rank, m.id"
 	}
 }
 
-// ftsTable names which of the two FTS5 indexes a query reads. Both cover the
-// same content of the same message rows and differ only in tokenizer, so
-// choosing between them is a table name and nothing more. Every value is a
-// constant defined here — a table name cannot be a bound parameter in SQL, and
-// none of these ever comes from a caller's input.
+// ftsTable names which of the FTS5 indexes a query reads.
 type ftsTable string
 
 const (
-	// wordTable is the word-tokenized index: the default, and the one whose
-	// bm25 ranking every existing result order is built on.
+	// wordTable is the natural language index (porter + unicode61).
 	wordTable ftsTable = "messages_fts"
-	// trigramTable is the substring index, for the queries wordTable cannot
-	// answer because they do not fall on token boundaries.
+	// codeTable is the code-aware index (unicode61 + tokenchars).
+	codeTable ftsTable = "messages_code_fts"
+	// trigramTable is the substring index for mid-token substrings.
 	trigramTable ftsTable = "messages_fts_trigram"
 )
+
+// SearchMode defines query routing.
+type SearchMode int
+
+const (
+	SearchModeAuto SearchMode = iota
+	SearchModeNaturalLanguage
+	SearchModeCode
+)
+
+// DetectSearchMode routes a query to natural language or code index.
+// Copied verbatim from CASS (pages/fts.rs:50-128).
+func DetectSearchMode(query string) SearchMode {
+	hasCodeChars := strings.ContainsAny(query, "_./\\#@$%") || strings.Contains(query, "::")
+	hasCodePatterns := hasCamelCase(query) || hasKebabCase(query)
+	isCodeQuery := hasCodeChars || hasCodePatterns
+
+	words := strings.Fields(query)
+	wordCount := len(words)
+	lower := strings.ToLower(query)
+
+	hasProseIndicators := wordCount > 3 ||
+		strings.HasPrefix(lower, "how ") ||
+		strings.HasPrefix(lower, "what ") ||
+		strings.HasPrefix(lower, "why ") ||
+		strings.HasPrefix(lower, "when ") ||
+		strings.HasPrefix(lower, "where ") ||
+		strings.Contains(lower, " the ") ||
+		strings.Contains(lower, " is ") ||
+		strings.Contains(lower, " are ") ||
+		strings.Contains(lower, " was ") ||
+		strings.Contains(lower, " were ")
+
+	if isCodeQuery && !hasProseIndicators {
+		return SearchModeCode
+	} else if hasProseIndicators && !isCodeQuery {
+		return SearchModeNaturalLanguage
+	} else if isCodeQuery {
+		return SearchModeCode
+	}
+	return SearchModeNaturalLanguage
+}
+
+func hasCamelCase(s string) bool {
+	runes := []rune(s)
+	for i := 1; i < len(runes); i++ {
+		if runes[i-1] >= 'a' && runes[i-1] <= 'z' && runes[i] >= 'A' && runes[i] <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKebabCase(s string) bool {
+	runes := []rune(s)
+	for i := 2; i < len(runes); i++ {
+		if runes[i-1] == '-' && isLetter(runes[i-2]) && isLetter(runes[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLetter(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
 
 // ftsWhere composes the shared WHERE clause list + args for an FTS query:
 // MATCH first, then the optional filters in the consumers' exact order
@@ -198,7 +257,11 @@ type SearchHit struct {
 // format — snippet(messages_fts,0,'>>>','<<<','…',16) — is part of the output
 // contract and stays byte-identical. [retrieve.searchScored]
 func SearchHits(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
-	return searchHits(con, wordTable, match, f, s, limit)
+	tbl := wordTable
+	if DetectSearchMode(match) == SearchModeCode {
+		tbl = codeTable
+	}
+	return searchHits(con, tbl, match, f, s, limit)
 }
 
 // SearchHitsSubstring is SearchHits against the trigram index instead of the
@@ -214,10 +277,10 @@ func SearchHitsSubstring(con *sql.DB, match string, f Filter, s Sort, limit int)
 func searchHits(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
 	where, args := ftsWhere(tbl, match, f)
 	sqlText := `SELECT m.session_id, m.role, m.ts_iso, s.is_subagent, s.parent_id, m.content,
-	                   snippet(` + string(tbl) + `,-1,'>>>','<<<','…',16) AS snip
+	                   snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip
 	            FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
 	            JOIN sessions s ON s.id=m.session_id
-	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s, tbl) + " LIMIT ?"
+	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := con.Query(sqlText, args...)
@@ -277,7 +340,11 @@ type SearchAnchor struct {
 // as SearchHits, returning message ids + uuid + only_copy_since for the view
 // layer to expand into bookend windows. [retrieve.MatchAnchors]
 func SearchAnchors(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
-	return searchAnchors(con, wordTable, match, f, s, limit)
+	tbl := wordTable
+	if DetectSearchMode(match) == SearchModeCode {
+		tbl = codeTable
+	}
+	return searchAnchors(con, tbl, match, f, s, limit)
 }
 
 // SearchAnchorsSubstring is SearchAnchors against the trigram index — the
@@ -291,10 +358,10 @@ func searchAnchors(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, li
 	where, args := ftsWhere(tbl, match, f)
 	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content, s.only_copy_since,
 	                   COALESCE(s.project,'') AS project,
-	                   snippet(` + string(tbl) + `,-1,'>>>','<<<','…',16) AS snip
+	                   snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip
 	            FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
 	            JOIN sessions s ON s.id=m.session_id
-	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s, tbl) + " LIMIT ?"
+	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := con.Query(sqlText, args...)
