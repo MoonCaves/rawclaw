@@ -25,10 +25,7 @@ func First10(s string) string {
 	return s[:10]
 }
 
-// Sid8 returns the first 8 characters of a session ID for concise display.
+// Sid8 returns the first 8 runes of a session ID for concise display.
 func Sid8(sessionID string) string {
-	if len(sessionID) > 8 {
-		return sessionID[:8]
-	}
-	return sessionID
+	return CapRunes(sessionID, 8)
 }
