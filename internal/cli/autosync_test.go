@@ -25,20 +25,16 @@ func countSpawns(t *testing.T) *int {
 func TestIsTestExe(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		path string
-		want bool
-	}{
-		{"/usr/local/bin/rawclaw", false},
-		{"/tmp/go-build123/b001/cli.test", true},
-		{"/var/folders/xx/T/cli.test", true},
-		{"cli.test.exe", true},
-		{"rawclaw", false},
-		{"/opt/homebrew/bin/rawclaw", false},
-	}
-	for _, tc := range cases {
-		if got := isTestExe(tc.path); got != tc.want {
-			t.Errorf("isTestExe(%q) = %v, want %v", tc.path, got, tc.want)
+	for path, want := range map[string]bool{
+		"/usr/local/bin/rawclaw":         false,
+		"/tmp/go-build123/b001/cli.test": true,
+		"/var/folders/xx/T/cli.test":     true,
+		"cli.test.exe":                   true,
+		"rawclaw":                        false,
+		"/opt/homebrew/bin/rawclaw":      false,
+	} {
+		if got := isTestExe(path); got != want {
+			t.Errorf("isTestExe(%q) = %v, want %v", path, got, want)
 		}
 	}
 }

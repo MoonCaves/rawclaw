@@ -462,11 +462,6 @@ func fileExists(path string) bool {
 	return err == nil && !st.IsDir()
 }
 
-func isFile(p string) bool {
-	st, err := os.Stat(p)
-	return err == nil && !st.IsDir()
-}
-
 func piExtensionPath() string {
 	return runtimeConfigPath("PI_CODING_AGENT_DIR", "~/.pi/agent", "extensions", "rawclaw-catalog.ts")
 }
