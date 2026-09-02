@@ -7,32 +7,36 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — 100% Clean `golangci-lint` (0 Issues), All 7 Mechanical Findings Resolved.**
+**2026-09-02 — 100% Clean Build, 3 Sprint Features Landed, 0 Lint Issues, 39/39 Green Packages.**
 
 ### 📍 Now
-- Commit `536a21c` landed on `main`: Resolved all 7 `golangci-lint` issues:
-  1. `internal/timefmt/timefmt.go`: Replaced `if-else` chain with clean `switch` block (`gocritic`).
-  2. `internal/cli/setup.go`: Removed dead duplicate `func isFile` (`unused`).
-  3. `internal/source/hermes/hermes.go`: Used `fmt.Appendf` instead of `[]byte(fmt.Sprintf)` (`modernize`).
-  4. `internal/source/hermes/hermes.go`: Used `strings.Cut` instead of `strings.Index` (`modernize`).
-  5. `internal/source/hermes/hermes.go`: Used `fmt.Fprintf` instead of `WriteString(fmt.Sprintf)` (`staticcheck`).
-  6. `internal/cli/tagrefresh_test.go`: Used `fmt.Fprintf` instead of `WriteString(fmt.Sprintf)` (`staticcheck`).
-  7. `internal/cli/autosync_test.go`: Compacted `TestIsTestExe` table loop to eliminate duplicate boilerplate (`dupl`).
+- Commit `4846744` landed on `main`: Merged Feature Desks 1 & 2:
+  1. **Native Lexical-First Gating** (`internal/agentproto`, `internal/retrieve`):
+     - When SQLite FTS5 returns full lexical candidates (`len(cands) >= limit`), vector embedding calls and scans are completely skipped, returning in <35ms.
+     - Pinned with `TestSearchSkipsEmbeddingWhenLexicalLimitIsFull` in `lazyembed_test.go`.
+  2. **Auto-TTY & Machine Stream Routing** (`internal/cli`):
+     - Auto-detects TTY vs. pipe/agent callers using `isatty.IsTerminal(f.Fd())` and environment sniffing (`CLAUDE_CODE_SESSION_ID`, `ANTIGRAVITY_CONVERSATION_ID`).
+     - Pinned with `TestMachineStream` in `cli_test.go`.
+  3. **Multi-Line Code Indentation & Code Fence Preservation** (`internal/view`, `internal/render`):
+     - Preserves verbatim line indentation, newlines, and Markdown code fences (` ``` ` / `~~~`).
+     - Modernized with `strings.SplitSeq` (Go 1.24+ zero-allocation iterator).
+     - Pinned with `TestRenderMsgsWithPreservesMultilineCode` in `view_test.go`.
 - Verified `~/go/bin/golangci-lint run ./...` reports **0 issues**.
 - All 39 internal packages pass race tests (`CGO_ENABLED=0 go test -race -count=1 ./...`).
 - Zero formatting diffs (`gofmt -l internal/`).
+- Live binary compiled and stamped at `~/.local/bin/rawclaw` (`v0.12.0`).
 
 ### ✅ Decisions
-- **Real Mechanical Verification** (2026-09-02):
-  - Ran `~/go/bin/golangci-lint` directly and confirmed zero issues before claiming green.
-  - Applied modern Go stdlib idioms (`fmt.Appendf`, `strings.Cut`, `fmt.Fprintf`) across all touched packages.
+- **Fail-Open Lexical Gating** (2026-09-02): Full FTS5 window skips expensive embedding network round-trips.
+- **Machine Stream Gating** (2026-09-02): Agent environments get clean machine output without polluting human browse tables.
+- **Zero-Allocation String Iteration** (2026-09-02): Adopted Go 1.24 `strings.SplitSeq` across multi-line content scanning.
 
 ### 🧵 Open threads (with status)
 - **CASS Suite Test Restoration** (`BLOCKED ON CASS DESK`): Supervisor-A/B must restore `autotests = true` in `coding_agent_session_search/Cargo.toml`.
 - **Librarian / Org Desk Hygiene** (`WAITING`): `~/org` untracked files and broken symlinks need Librarian desk cleanup.
 
 ### ⏭️ Next
-- Maintain zero-lint baseline and monitor unprompted agent recall workflows.
+- Monitor unprompted natural recall workflows across live pairing sessions.
 
 ### ⛔ Blockers
 - None.
