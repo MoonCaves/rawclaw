@@ -82,3 +82,25 @@ func TestOptions_NormalizeDates(t *testing.T) {
 		}
 	})
 }
+
+func TestSearchSubcommandAndFlags(t *testing.T) {
+	cmd := NewRootCmd(BuildInfo{Version: "test"})
+
+	// Verify search subcommand is registered
+	searchCmd, _, err := cmd.Find([]string{"search"})
+	if err != nil || searchCmd == nil || searchCmd.Name() != "search" {
+		t.Fatalf("expected search subcommand to be registered, got %v", err)
+	}
+
+	// Verify -n shorthand for limit
+	limitFlag := cmd.Flags().Lookup("limit")
+	if limitFlag == nil || limitFlag.Shorthand != "n" {
+		t.Errorf("expected limit flag to have shorthand 'n', got %v", limitFlag)
+	}
+
+	// Verify -q shorthand for query
+	queryFlag := cmd.Flags().Lookup("query")
+	if queryFlag == nil || queryFlag.Shorthand != "q" {
+		t.Errorf("expected query flag to have shorthand 'q', got %v", queryFlag)
+	}
+}
