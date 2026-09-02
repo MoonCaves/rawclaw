@@ -2,6 +2,7 @@ package render
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -40,6 +41,14 @@ func TestFmtMsg(t *testing.T) {
 				t.Errorf("fmtMsg() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFmtMsgPreservesMultilineText(t *testing.T) {
+	text := "```go\n\tif ready {\n\t\treturn\n\t}\n```"
+	got := fmtMsg(view.ViewMsg{Role: "assistant", Text: text})
+	if !strings.HasSuffix(got, text) {
+		t.Fatalf("fmtMsg() = %q, want text preserved verbatim", got)
 	}
 }
 
