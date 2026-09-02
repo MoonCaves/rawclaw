@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -325,5 +326,24 @@ func TestEmitJSONEmptyObject(t *testing.T) {
 	}
 	if got := buf.String(); got != "{}\n" {
 		t.Errorf("empty object json = %q, want %q", got, "{}\n")
+	}
+}
+
+func TestMachineStream(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "session-from-agent")
+	if !machineStream(bytes.NewBufferString("test")) {
+		t.Fatal("agent session should select machine stream")
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	if machineStream(bytes.NewBufferString("test")) {
+		t.Fatal("ordinary test writer should not select machine stream")
+	}
+	f, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer f.Close()
+	if !machineStream(f) {
+		t.Fatal("redirected real output should select machine stream")
 	}
 }

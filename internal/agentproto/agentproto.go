@@ -571,7 +571,7 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 				pathNoMatch = opts.IncludePath != ""
 			}
 		}
-		cands, reports, hitCeiling, vecCov = collectCandidates(scope, rawQuery, fetch, p, qvecFn)
+		cands, reports, hitCeiling, vecCov = collectCandidates(scope, rawQuery, fetch, limit, p, qvecFn)
 	}
 
 	// Withhold the caller's own live turn before anything is ranked: the prompt
@@ -923,6 +923,14 @@ func searchOneStore(
 	hitCeiling = !exhausted
 
 	if qvecFn != nil {
+		// A full lexical window already satisfies the caller's requested answer.
+		// Keep the fast, fail-open keyword result instead of paying for the vector
+		// coverage scan or embedding round-trip.
+		if len(rows) >= limit {
+			qvecFn = nil
+		}
+	}
+	if qvecFn != nil {
 		vecCov.Ran = true
 		var cov semantic.CoverageStats
 		if narrowed {
@@ -1152,6 +1160,7 @@ func collectCandidates(
 	scope []view.Scope,
 	query string,
 	fetch int,
+	limit int,
 	p retrieve.SearchParams,
 	qvecFn func() []float64,
 ) ([]retrieve.Anchor, []ScopeReport, bool, VectorCoverage) {
@@ -1159,9 +1168,6 @@ func collectCandidates(
 	reports := make([]ScopeReport, 0, len(scope))
 	hitCeiling := false
 	var vecCov VectorCoverage
-	if qvecFn != nil {
-		vecCov.Ran = true
-	}
 	for _, sc := range scope {
 		rep := ScopeReport{Project: sc.Project, Dir: sc.TDir}
 		dbp, status, err := scopes.Resolve(sc, false)
@@ -1186,7 +1192,9 @@ func collectCandidates(
 			// what saturated.
 			hitCeiling = true
 		}
-		if qvecFn != nil {
+		lexicalEnough := len(rows) >= limit
+		if qvecFn != nil && !lexicalEnough {
+			vecCov.Ran = true
 			cov, _ := semantic.MeasureCoverage(con)
 			vecCov.CandidateMsgs += cov.Candidates
 			vecCov.VectoredMsgs += cov.Vectored
@@ -1196,7 +1204,7 @@ func collectCandidates(
 		// holds vectors (relevance mode only — qvecFn is nil under --sort).
 		// Parity with Discovery. The embedding resolves at most once across the
 		// whole fan-out, and not at all if no database here has vectors.
-		if qvecFn != nil && store.HasVectors(con) {
+		if qvecFn != nil && !lexicalEnough && store.HasVectors(con) {
 			rows = semantic.Fuse(con, rows, qvecFn(), fetch, p.IncludeSubagents)
 		}
 		routines, _ := store.RoutineSet(con)
