@@ -127,24 +127,30 @@ func ParseDateFilter(s string) string {
 		return now.Format(DateLayout)
 	case "yesterday":
 		return now.AddDate(0, 0, -1).Format(DateLayout)
+	case "last week", "week":
+		return now.AddDate(0, 0, -7).Format(DateLayout)
+	case "last month", "month":
+		return now.AddDate(0, -1, 0).Format(DateLayout)
 	}
+
+	cleaned := strings.TrimSpace(strings.TrimSuffix(lower, "ago"))
 
 	// Relative day/week offsets via standard time.AddDate
 	switch {
-	case strings.HasSuffix(lower, "d"):
-		numStr := strings.TrimSuffix(strings.TrimPrefix(lower, "-"), "d")
+	case strings.HasSuffix(cleaned, "d"):
+		numStr := strings.TrimSuffix(strings.TrimPrefix(cleaned, "-"), "d")
 		if n, err := strconv.Atoi(numStr); err == nil {
 			return now.AddDate(0, 0, -n).Format(DateLayout)
 		}
-	case strings.HasSuffix(lower, "w"):
-		numStr := strings.TrimSuffix(strings.TrimPrefix(lower, "-"), "w")
+	case strings.HasSuffix(cleaned, "w"):
+		numStr := strings.TrimSuffix(strings.TrimPrefix(cleaned, "-"), "w")
 		if n, err := strconv.Atoi(numStr); err == nil {
 			return now.AddDate(0, 0, -n*7).Format(DateLayout)
 		}
 	}
 
 	// Standard Go durations (-24h, -48h, etc.) via time.ParseDuration
-	durStr := lower
+	durStr := cleaned
 	if !strings.HasPrefix(durStr, "-") && !strings.HasPrefix(durStr, "+") {
 		durStr = "-" + durStr
 	}

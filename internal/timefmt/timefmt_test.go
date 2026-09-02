@@ -68,3 +68,35 @@ func TestUTCFromISO(t *testing.T) {
 		})
 	}
 }
+
+func TestParseDateFilter(t *testing.T) {
+	now := time.Now()
+	today := now.Format(DateLayout)
+	yesterday := now.AddDate(0, 0, -1).Format(DateLayout)
+	sevenDaysAgo := now.AddDate(0, 0, -7).Format(DateLayout)
+	oneMonthAgo := now.AddDate(0, -1, 0).Format(DateLayout)
+
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"2026-09-02", "2026-09-02"},
+		{"2026-09-02T15:04:05Z", "2026-09-02"},
+		{"today", today},
+		{"now", today},
+		{"yesterday", yesterday},
+		{"7d", sevenDaysAgo},
+		{"-7d", sevenDaysAgo},
+		{"7d ago", sevenDaysAgo},
+		{"1w", sevenDaysAgo},
+		{"1w ago", sevenDaysAgo},
+		{"last week", sevenDaysAgo},
+		{"last month", oneMonthAgo},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		if got := ParseDateFilter(tc.in); got != tc.want {
+			t.Errorf("ParseDateFilter(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
