@@ -86,12 +86,11 @@ func TestAntigravityStopScript_DispatchesPrewarmDetached(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("run stop hook: %v (out=%q)", err, out)
 	}
-	// A 1s ceiling was too tight under -race plus full-suite concurrent package
-	// load: clean 10/10 in isolation, but flaky when many other packages'
-	// tests compete for CPU. This only waits for a detached background
-	// process to appear, not asserting a specific latency, so a longer
-	// ceiling costs nothing in the common (fast) case.
-	deadline := time.Now().Add(5 * time.Second)
+	// A short ceiling is too tight under -race plus full-suite concurrent package
+	// load when many other packages' tests compete for CPU. This only waits for a
+	// detached background process to write its marker file (not asserting latency),
+	// so a 15s ceiling costs nothing in the common fast (<50ms) case.
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if got, err := os.ReadFile(marker); err == nil {
 			if string(got) != "prewarm -- test-conversation" && string(got) != "prewarm test-conversation" {
