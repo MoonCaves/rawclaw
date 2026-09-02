@@ -55,10 +55,7 @@ func newArchiveInitCmd() *cobra.Command {
 				fmt.Fprintf(out, "Resolved %q → %s\n", args[0], remote)
 			}
 			if fromBundle != "" {
-				if err := archive.InitFromBundle(cmd.Context(), fromBundle, remote, name); err != nil {
-					return err
-				}
-				a, err := archive.Load()
+				a, err := archive.InitFromBundle(cmd.Context(), fromBundle, remote, name)
 				if err != nil {
 					return err
 				}

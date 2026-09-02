@@ -367,6 +367,9 @@ func resolveTimeoutFromArgs(args []string, env string) time.Duration {
 		if (isConsolidateInvocation(args) || isIngestAllInvocation(args)) && resolved < consolidateWatchdog {
 			return consolidateWatchdog
 		}
+		if isArchiveExportBundleInvocation(args) && resolved < exportBundleWatchdog {
+			return exportBundleWatchdog
+		}
 		// The syncing archive verbs (init/push/pull/autosync) run WITHOUT the
 		// wall-clock watchdog: no cap fits both a hung transfer and a legit
 		// slow multi-GB first push, so — like rsync's --timeout and curl's
@@ -464,6 +467,12 @@ func isIngestAllInvocation(args []string) bool {
 	return len(w) == 1 && w[0] == "ingest"
 }
 
+// isArchiveExportBundleInvocation reports whether args target `archive export-bundle`.
+func isArchiveExportBundleInvocation(args []string) bool {
+	w := leadingSubcommandTokens(args, 2)
+	return len(w) == 2 && w[0] == "archive" && w[1] == "export-bundle"
+}
+
 // isArchiveSyncInvocation reports whether args target a SYNCING archive verb —
 // `archive init|push|pull|autosync` — the ones that talk to the git remote and
 // run stall-bounded instead of wall-clock-bounded. `archive
@@ -479,7 +488,7 @@ func isArchiveSyncInvocation(args []string) bool {
 	}
 	if w[0] == "archive" {
 		switch w[1] {
-		case "init", "push", "pull", "autosync", "export-bundle":
+		case "init", "push", "pull", "autosync":
 			return true
 		}
 	}

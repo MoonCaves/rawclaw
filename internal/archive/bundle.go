@@ -18,37 +18,28 @@ func (a *Archive) ExportBundle(ctx context.Context, bundlePath string) error {
 		return errors.New("archive export bundle: bundle path required")
 	}
 
+	absBundle, err := filepath.Abs(bundlePath)
+	if err != nil {
+		return fmt.Errorf("archive export bundle: resolve bundle path: %w", err)
+	}
+	if st, err := os.Stat(absBundle); err == nil && st.IsDir() {
+		return fmt.Errorf("archive export bundle: destination %q is a directory, expected a file path", bundlePath)
+	}
+
 	release, err := acquireSyncLock(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
 
-	gitDir := filepath.Join(a.clone, ".git")
-	if _, err := os.Stat(gitDir); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("archive export bundle: clone %s does not exist", a.clone)
-		}
-		return fmt.Errorf("archive export bundle: stat clone git dir: %w", err)
-	}
-
 	if err := a.ensureClone(ctx); err != nil {
 		return fmt.Errorf("archive export bundle: %w", err)
 	}
 
-	if ahead, err := a.aheadOfRemote(ctx); err != nil {
+	if n, err := a.strandedCommits(ctx); err != nil {
 		return fmt.Errorf("archive export bundle: check unpushed commits: %w", err)
-	} else if ahead {
-		return fmt.Errorf("archive export bundle: clone %s holds unpushed commits; push them first", a.clone)
-	}
-
-	if n, err := a.strandedCommits(ctx); err == nil && n > 0 {
+	} else if n > 0 {
 		return fmt.Errorf("archive export bundle: clone %s holds %d unpushed commit(s); push them first", a.clone, n)
-	}
-
-	absBundle, err := filepath.Abs(bundlePath)
-	if err != nil {
-		return fmt.Errorf("archive export bundle: resolve bundle path: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(absBundle), 0o755); err != nil {
@@ -68,33 +59,33 @@ func (a *Archive) ExportBundle(ctx context.Context, bundlePath string) error {
 // InitFromBundle seeds a new archive from a pre-generated git bundle file,
 // sets the upstream remote to remoteURL, stamps the completed clone sentinel,
 // registers this machine, and persists the archive configuration.
-func InitFromBundle(ctx context.Context, bundlePath, remoteURL string, machineName ...string) error {
+func InitFromBundle(ctx context.Context, bundlePath, remoteURL string, machineName ...string) (*Archive, error) {
 	if strings.TrimSpace(bundlePath) == "" {
-		return errors.New("archive init: bundle path required")
+		return nil, errors.New("archive init: bundle path required")
 	}
 	if strings.TrimSpace(remoteURL) == "" {
-		return errors.New("archive init: remote url required")
+		return nil, errors.New("archive init: remote url required")
 	}
 
 	absBundle, err := filepath.Abs(bundlePath)
 	if err != nil {
-		return fmt.Errorf("archive init: resolve bundle path %q: %w", bundlePath, err)
+		return nil, fmt.Errorf("archive init: resolve bundle path %q: %w", bundlePath, err)
 	}
 	if st, err := os.Stat(absBundle); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("archive init: bundle file %q not found", bundlePath)
+			return nil, fmt.Errorf("archive init: bundle file %q not found", bundlePath)
 		}
-		return fmt.Errorf("archive init: stat bundle file %q: %w", bundlePath, err)
+		return nil, fmt.Errorf("archive init: stat bundle file %q: %w", bundlePath, err)
 	} else if st.IsDir() {
-		return fmt.Errorf("archive init: bundle path %q is a directory, expected a bundle file", bundlePath)
+		return nil, fmt.Errorf("archive init: bundle path %q is a directory, expected a bundle file", bundlePath)
 	}
 
 	if _, err := readConfig(); err == nil {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"archive already initialized; remove %s (and %s) to re-initialize",
 			configPath(), cloneDir())
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"archive config exists but is unreadable; remove %s to re-initialize: %w",
 			configPath(), err)
 	}
@@ -104,52 +95,64 @@ func InitFromBundle(ctx context.Context, bundlePath, remoteURL string, machineNa
 		name = machineName[0]
 	}
 	if err := validateMachineName(name); err != nil {
-		return fmt.Errorf("archive init: %w", err)
+		return nil, fmt.Errorf("archive init: %w", err)
 	}
 
 	a := newArchive(Config{Remote: remoteURL, Name: name})
 
 	release, err := acquireSyncLock(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer release()
 
+	// Double-checked locking: verify another process didn't initialize while we waited for the lock.
+	if _, err := readConfig(); err == nil {
+		return nil, fmt.Errorf(
+			"archive already initialized; remove %s (and %s) to re-initialize",
+			configPath(), cloneDir())
+	}
+
 	if _, err := os.Stat(filepath.Join(a.clone, ".git")); err == nil {
-		if n, serr := a.strandedCommits(ctx); serr == nil && n > 0 {
-			return fmt.Errorf(
+		if n, serr := a.strandedCommits(ctx); serr != nil {
+			return nil, fmt.Errorf("archive init: check unpushed commits in existing clone: %w", serr)
+		} else if n > 0 {
+			return nil, fmt.Errorf(
 				"existing clone %s holds %d unpushed commit(s); push or back them up (git -C %s status), or delete the dir, then re-run init",
 				a.clone, n, a.clone)
 		}
 	}
 	if err := os.RemoveAll(a.clone); err != nil {
-		return fmt.Errorf("clear stale clone: %w", err)
+		return nil, fmt.Errorf("clear stale clone: %w", err)
 	}
 
 	parent := filepath.Dir(a.clone)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return fmt.Errorf("create archive state dir: %w", err)
+		return nil, fmt.Errorf("create archive state dir: %w", err)
 	}
 
 	if _, err := a.run(ctx, parent, "clone", absBundle, a.clone); err != nil {
-		return fmt.Errorf("clone from bundle %s: %w", bundlePath, err)
+		return nil, fmt.Errorf("clone from bundle %s: %w", bundlePath, err)
 	}
 
 	if _, err := a.run(ctx, a.clone, "remote", "set-url", "origin", remoteURL); err != nil {
-		return fmt.Errorf("set origin remote: %w", err)
+		return nil, fmt.Errorf("set origin remote: %w", err)
 	}
 
 	gitDir := filepath.Join(a.clone, ".git")
 	if err := os.WriteFile(filepath.Join(gitDir, cloneSentinel), nil, 0o644); err != nil {
-		return fmt.Errorf("stamp clone complete: %w", err)
+		return nil, fmt.Errorf("stamp clone complete: %w", err)
 	}
 
 	if err := a.ensureRegistered(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := a.ensureClone(ctx); err != nil {
-		return err
+		return nil, err
 	}
 
-	return writeConfig(a.cfg)
+	if err := writeConfig(a.cfg); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
