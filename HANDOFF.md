@@ -7,26 +7,26 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — Phase 1 Forgiving Search Flags Landed & Audited Green.**
+**2026-09-02 — Explicit `search` Subcommand Alias & `-n`/`-q` Shorthand Flags Landed.**
 
 ### 📍 Now
-- Commit `9154d42` landed on `main`: Added forgiving search flags (`--until`, `--days <N>`, `--today`, `--yesterday`, `--week`) and standard SQL pagination (`--offset <N>`).
-- Luna Worker Medium review passed 100% green against Ponytail rules, parameterized SQL, and 50 non-invention registries.
+- Commit `6bbafbc` landed on `main`: Added `rawclaw search` subcommand alias and standard POSIX short flags (`-n` for `--limit`, `-q` for `--query`).
 - All 39 internal packages pass race tests (`CGO_ENABLED=0 go test -race -count=1 ./...`).
+- Clean `gofmt` compliance with zero formatting diffs.
 
 ### ✅ Decisions
-- **Forgiving Flag Implementation** (2026-09-02):
-  - Added `--until` as a drop-in alias for `--before`.
-  - Added `--days <N>`, `--today`, `--yesterday`, `--week` for rapid temporal scoping.
-  - Implemented standard relative date expressions (`-7d`, `-24h`, `-1w`, `today`, `yesterday`) in `internal/cli/cli.go`.
-  - Appended native SQL `LIMIT ? OFFSET ?` in `internal/store/fts.go` for $O(1)$ zero-copy pagination.
+- **Subcommand Aliasing** (2026-09-02):
+  - Added explicit `rawclaw search [query]` subcommand to eliminate 0-hit misses when agents trained on `gh/cargo/cass` type `search`.
+  - Added `-n` shorthand for `--limit` via standard `pflag.IntVarP`.
+  - Added `-q` / `--query` flag alternative to positional arguments via standard `pflag.StringVarP`.
+  - Handled query fallback in `runRoot` when positional args are empty.
 
 ### 🧵 Open threads (with status)
 - **CASS Suite Test Restoration** (`BLOCKED ON CASS DESK`): Supervisor-A/B must restore `autotests = true` in `coding_agent_session_search/Cargo.toml`.
 - **Librarian / Org Desk Hygiene** (`WAITING`): `~/org` untracked files and broken symlinks need Librarian desk cleanup.
 
 ### ⏭️ Next
-- Consider Phase 2 flags (`--fields` and `--sessions-from -`) when piped agent workflows are needed.
+- Observe natural, unprompted agent behavior in real session recall workflows.
 
 ### ⛔ Blockers
 - None.
