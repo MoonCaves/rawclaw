@@ -11,3 +11,10 @@
 
 # Local caches / OS
 .DS_Store
+
+# Local agent state
+.beads/
+.agent-mailbox/
+storage.sqlite3*
+graphify-out/
+

@@ -64,6 +64,11 @@ func containerScopes(sourceID string, adapter source.Source, labelFn func(string
 	return out
 }
 
+// RefreshCWD refreshes the index db for a given working dir and Source.
+func RefreshCWD(sourceID string, adapter source.Source, cwd string) {
+	refreshContainerCWD(sourceID, adapter, cwd)
+}
+
 // refreshContainerCWD refreshes the index db for a given working dir and Source.
 func refreshContainerCWD(sourceID string, adapter source.Source, cwd string) {
 	containers, err := adapter.Discover()

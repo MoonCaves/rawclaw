@@ -15,11 +15,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/query"
-	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
-	"github.com/MoonCaves/rawclaw/internal/source/codex"
-	"github.com/MoonCaves/rawclaw/internal/source/goose"
-	"github.com/MoonCaves/rawclaw/internal/source/opencode"
-	"github.com/MoonCaves/rawclaw/internal/source/pi"
+	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
@@ -47,30 +43,23 @@ func All(ctx context.Context, sourceFilter string, reindex bool, pathPreds ...fu
 		pathPred = pathPreds[0]
 	}
 	var out []view.Scope
-	if sourceFilter == "" || sourceFilter == "claude" {
-		out = append(out, Claude()...)
-	}
-	if sourceFilter == "" || sourceFilter == "codex" {
-		out = append(out, containerScopes(codex.Registration().ID, codex.New(), codexLabel, reindex, pathPred)...)
-	}
-	if sourceFilter == "" || sourceFilter == "antigravity" {
-		out = append(out, containerScopes(antigravity.ID, antigravity.New(), antigravityLabel, reindex, pathPred)...)
-	}
-	if sourceFilter == "" || sourceFilter == "pi" {
-		out = append(out, containerScopes(pi.ID, pi.New(), piLabel, reindex, pathPred)...)
-	}
-	if sourceFilter == "" || sourceFilter == "opencode" {
-		out = append(out, containerScopes(opencode.ID, opencode.New(), opencodeLabel, reindex, pathPred)...)
-	}
-	if sourceFilter == "" || sourceFilter == "goose" {
-		if GooseOptedIn(sourceFilter) {
-			out = append(out, containerScopes(goose.ID, goose.New(), gooseLabel, reindex, pathPred)...)
-		} else {
-			// Opted out skips the eager filesystem walk, but already-indexed
-			// history must still surface — an archive never hides what it
-			// already holds, opt-in or not.
-			out = append(out, GooseOrphanScopes()...)
+	for _, reg := range sources.Registered() {
+		if sourceFilter != "" && sourceFilter != reg.ID {
+			continue
 		}
+		if reg.ID == "claude" {
+			out = append(out, Claude()...)
+			continue
+		}
+		if reg.OptedIn != nil && !reg.OptedIn(sourceFilter) {
+			out = append(out, orphanContainerScopes(reg.ID, nil)...)
+			continue
+		}
+		labelFn := reg.Label
+		if labelFn == nil {
+			labelFn = func(cwd string) string { return defaultContainerLabel(reg.ID, cwd) }
+		}
+		out = append(out, containerScopes(reg.ID, reg.New(), labelFn, reindex, pathPred)...)
 	}
 	for _, sc := range Archive(ctx, reindex) {
 		if sourceFilter == "" || sc.Source == sourceFilter {
@@ -212,54 +201,69 @@ func orphanLabel(dbFileName string) string {
 // scopes carrying that db + cwd — unioned with orphanCodexScopes (D8: the same
 // 30-day-purge store-driven discovery Claude() does via orphanClaudeScopes).
 func Codex(reindex bool) []view.Scope {
-	return containerScopes(codex.Registration().ID, codex.New(), codexLabel, reindex)
+	if reg := sources.Get("codex"); reg != nil {
+		return containerScopes(reg.ID, reg.New(), codexLabel, reindex)
+	}
+	return nil
 }
 
 // RefreshCodexCWD refreshes the Codex index db for a given working dir.
 func RefreshCodexCWD(cwd string) {
-	refreshContainerCWD(codex.Registration().ID, codex.New(), cwd)
+	if reg := sources.Get("codex"); reg != nil {
+		refreshContainerCWD(reg.ID, reg.New(), cwd)
+	}
 }
 
 func codexDBPath(cwd string) string {
-	return containerDBPath(codex.Registration().ID, cwd)
+	return containerDBPath("codex", cwd)
 }
 
 func codexLabel(cwd string) string {
-	return defaultContainerLabel(codex.Registration().ID, cwd)
+	return defaultContainerLabel("codex", cwd)
 }
 
 func codexOrphanLabel(dbFileName string) string {
-	return containerOrphanLabel(codex.Registration().ID, dbFileName)
+	return containerOrphanLabel("codex", dbFileName)
 }
 
 // Pi discovers Pi agent sessions, groups them by recorded cwd, ingests each
 // group into its OWN db, and returns eager scopes carrying that db + cwd.
 func Pi(reindex bool) []view.Scope {
-	return containerScopes(pi.ID, pi.New(), piLabel, reindex)
+	if reg := sources.Get("pi"); reg != nil {
+		return containerScopes(reg.ID, reg.New(), piLabel, reindex)
+	}
+	return nil
 }
 
 // RefreshPiCWD refreshes the Pi index db for a given working dir.
 func RefreshPiCWD(cwd string) {
-	refreshContainerCWD(pi.ID, pi.New(), cwd)
+	if reg := sources.Get("pi"); reg != nil {
+		refreshContainerCWD(reg.ID, reg.New(), cwd)
+	}
 }
 
 func piLabel(cwd string) string {
-	return defaultContainerLabel(pi.ID, cwd)
+	return defaultContainerLabel("pi", cwd)
 }
 
 // OpenCode discovers OpenCode / Crush sessions, groups them by recorded cwd,
 // ingests each group into its OWN db, and returns eager scopes carrying that db + cwd.
 func OpenCode(reindex bool) []view.Scope {
-	return containerScopes(opencode.ID, opencode.New(), opencodeLabel, reindex)
+	if reg := sources.Get("opencode"); reg != nil {
+		return containerScopes(reg.ID, reg.New(), opencodeLabel, reindex)
+	}
+	return nil
 }
 
 // RefreshOpenCodeCWD refreshes the OpenCode index db for a given working dir.
 func RefreshOpenCodeCWD(cwd string) {
-	refreshContainerCWD(opencode.ID, opencode.New(), cwd)
+	if reg := sources.Get("opencode"); reg != nil {
+		refreshContainerCWD(reg.ID, reg.New(), cwd)
+	}
 }
 
 func opencodeLabel(cwd string) string {
-	return defaultContainerLabel(opencode.ID, cwd)
+	return defaultContainerLabel("opencode", cwd)
 }
 
 // Resolve returns a scope's db path and ensure-status. A pre-ensured scope

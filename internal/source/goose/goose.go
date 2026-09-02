@@ -55,13 +55,35 @@ func NewRoots(roots ...string) *Adapter {
 	return &Adapter{roots: roots}
 }
 
+// OptedIn reports whether goose discovery should run at all.
+func OptedIn(sourceFilter string) bool {
+	if sourceFilter == ID {
+		return true
+	}
+	switch os.Getenv("RAWCLAW_GOOSE") {
+	case "", "0", "off", "false":
+		return false
+	}
+	return true
+}
+
+// Label derives a friendly label for a Goose cwd group.
+func Label(cwd string) string {
+	if cwd == "" {
+		return "goose (unscoped)"
+	}
+	return filepath.Base(cwd)
+}
+
 // Registration wires the Goose adapter into the source registry.
 func Registration() source.Registration {
 	return source.Registration{
-		ID:     ID,
-		Detect: detect,
-		New:    func() source.Source { return New() },
-		Lookup: lookup,
+		ID:      ID,
+		Detect:  detect,
+		New:     func() source.Source { return New() },
+		Lookup:  lookup,
+		OptedIn: OptedIn,
+		Label:   Label,
 	}
 }
 

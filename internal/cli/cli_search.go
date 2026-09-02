@@ -18,6 +18,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/render"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
+	"github.com/MoonCaves/rawclaw/internal/sources"
 	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
@@ -495,25 +496,22 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 // carries the new rows into the store.
 func refreshThisProject(o *Options) {
 	expDir := realpathExpand(o.Dir)
-	if o.Source == "" || o.Source == "claude" {
-		td := resolveTDir(o.Dir, o.DirSet)
-		if td != "" && isDir(td) {
-			if _, _, err := scopes.Resolve(view.Scope{Project: paths.ProjectLabel(td), TDir: td}, false); err != nil {
-				slog.Debug("search: current-project refresh failed", "project", paths.ProjectLabel(td), "err", err)
-			}
+	for _, reg := range sources.Registered() {
+		if o.Source != "" && o.Source != reg.ID {
+			continue
 		}
-	}
-	if o.Source == "" || o.Source == "antigravity" {
-		scopes.RefreshAntigravityCWD(expDir)
-	}
-	if (o.Source == "" || o.Source == "goose") && scopes.GooseOptedIn(o.Source) {
-		scopes.RefreshGooseCWD(expDir)
-	}
-	if o.Source == "" || o.Source == "codex" {
-		scopes.RefreshCodexCWD(expDir)
-	}
-	if o.Source == "" || o.Source == "pi" {
-		scopes.RefreshPiCWD(expDir)
+		if reg.ID == "claude" {
+			td := resolveTDir(o.Dir, o.DirSet)
+			if td != "" && isDir(td) {
+				if _, _, err := scopes.Resolve(view.Scope{Project: paths.ProjectLabel(td), TDir: td}, false); err != nil {
+					slog.Debug("search: current-project refresh failed", "project", paths.ProjectLabel(td), "err", err)
+				}
+			}
+			continue
+		}
+		if reg.OptedIn == nil || reg.OptedIn(o.Source) {
+			scopes.RefreshCWD(reg.ID, reg.New(), expDir)
+		}
 	}
 }
 
