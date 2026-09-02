@@ -321,7 +321,7 @@ const ROMmapSize = 1 << 28 // 256 MiB read-only mmap window
 // rows from the first are still open — blocks forever waiting for a second
 // connection (the view.Browse / semantic.VecKNN deadlock class).
 func ConnectRO(dbp string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=mmap_size(%d)", dbp, ROMmapSize)
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)&_pragma=mmap_size(%d)", dbp, ROMmapSize)
 	con, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only db: %w", err)
