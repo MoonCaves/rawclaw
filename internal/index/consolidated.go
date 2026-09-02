@@ -321,6 +321,48 @@ SELECT session_id, role, content, ts, ts_iso, uuid FROM (
 ORDER BY first_id
 `
 
+// mergeMessagesIncrementalSQL inserts only messages strictly above the source db's
+// last folded rowid high-water mark, keeping live appends O(appended) rather than O(total).
+const mergeMessagesIncrementalSQL = `
+INSERT INTO main.messages(session_id,role,content,ts,ts_iso,uuid)
+SELECT session_id, role, content, ts, ts_iso, uuid FROM (
+  SELECT s.session_id AS session_id, s.role AS role, s.content AS content,
+         s.ts AS ts, s.ts_iso AS ts_iso, s.uuid AS uuid, MIN(s.id) AS first_id
+  FROM src.messages s
+  WHERE s.id > ?
+    AND NOT EXISTS (
+      SELECT 1 FROM main.messages m
+      WHERE m.session_id = s.session_id AND m.uuid = s.uuid
+    )
+  GROUP BY s.session_id, s.uuid
+)
+ORDER BY first_id
+`
+
+func parseSyncMark(s string) (sessions int, messages int, maxID int64, onlyCopy string, topic string, verdict string, ok bool) {
+	parts := strings.Split(s, ":")
+	if len(parts) < 4 {
+		return 0, 0, 0, "", "", "", false
+	}
+	sessions, err1 := strconv.Atoi(parts[0])
+	messages, err2 := strconv.Atoi(parts[1])
+	maxID, err3 := strconv.ParseInt(parts[2], 10, 64)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0, 0, 0, "", "", "", false
+	}
+	onlyCopy = parts[3]
+	topic = "0"
+	verdict = "0"
+	for _, p := range parts[4:] {
+		if val, ok := strings.CutPrefix(p, "t"); ok {
+			topic = val
+		} else if val, ok := strings.CutPrefix(p, "v"); ok {
+			verdict = val
+		}
+	}
+	return sessions, messages, maxID, onlyCopy, topic, verdict, true
+}
+
 // topicNewer is the precedence rule between two taggings of the SAME segment
 // (one session, one start anchor): origin authority wins (higher origin_machine);
 // on equal origin_machine, the later tagging wins (larger tagged_at). Equal or
@@ -706,15 +748,21 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 		return 0, false, true, err
 	}
 
-	mark := ""
+	var (
+		srcSessions    int
+		srcMessages    int
+		srcMaxMsgID    int64
+		srcOnlyCopyStr string
+	)
 	if err := con.QueryRow(
-		`SELECT (SELECT COUNT(*) FROM src.sessions) || ':' ||
-		        (SELECT COUNT(*) FROM src.messages) || ':' ||
-		        (SELECT COALESCE(MAX(id),0) FROM src.messages) || ':' ||
+		`SELECT (SELECT COUNT(*) FROM src.sessions),
+		        (SELECT COUNT(*) FROM src.messages),
+		        (SELECT COALESCE(MAX(id),0) FROM src.messages),
 		        (SELECT COUNT(only_copy_since) || '@' || COALESCE(MAX(only_copy_since),0) FROM src.sessions)`,
-	).Scan(&mark); err != nil {
+	).Scan(&srcSessions, &srcMessages, &srcMaxMsgID, &srcOnlyCopyStr); err != nil {
 		return 0, false, true, fmt.Errorf("read source watermark: %w", err)
 	}
+	mark := fmt.Sprintf("%d:%d:%d:%s", srcSessions, srcMessages, srcMaxMsgID, srcOnlyCopyStr)
 	// The topic layer and session verdicts join the watermark, because tagging
 	// changes a source without touching a single session or message row. Left
 	// out, a re-tagged project or updated verdict would read as unchanged and
@@ -762,6 +810,9 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	case err != nil && !errors.Is(err, sql.ErrNoRows):
 		return 0, false, true, fmt.Errorf("read sync watermark: %w", err)
 	}
+
+	prevSessions, _, prevMaxID, prevOnlyCopy, _, _, prevOK := parseSyncMark(prev)
+	isIncrementalAppend := prevOK && prevSessions == srcSessions && prevOnlyCopy == srcOnlyCopyStr && prevMaxID > 0 && srcMaxMsgID >= prevMaxID
 
 	srcID := sourceIdentity(src)
 	done = beginConsolidatePhase(src, "prepare")
@@ -841,9 +892,45 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	if _, err := tx.Exec(mergeSessionsSQL); err != nil {
 		return 0, false, true, fmt.Errorf("merge sessions: %w", err)
 	}
-	if _, err := tx.Exec(mergeMessagesSQL); err != nil {
-		return 0, false, true, fmt.Errorf("merge messages: %w", err)
+
+	if isIncrementalAppend {
+		if srcMaxMsgID > prevMaxID {
+			if _, err := tx.Exec(mergeMessagesIncrementalSQL, prevMaxID); err != nil {
+				return 0, false, true, fmt.Errorf("merge incremental messages: %w", err)
+			}
+			if _, err := tx.Exec(`
+				UPDATE main.sessions SET message_count =
+				  (SELECT COUNT(*) FROM main.messages WHERE main.messages.session_id = main.sessions.id)
+				WHERE main.sessions.id IN (SELECT DISTINCT session_id FROM src.messages WHERE id > ?)
+			`, prevMaxID); err != nil {
+				return 0, false, true, fmt.Errorf("recount source sessions: %w", err)
+			}
+		}
+	} else {
+		if _, err := tx.Exec(mergeMessagesSQL); err != nil {
+			return 0, false, true, fmt.Errorf("merge messages: %w", err)
+		}
+		if _, err := tx.Exec(`
+			DELETE FROM main.messages
+			WHERE session_id IN (
+				SELECT a.session_id
+				FROM temp.consolidation_affected_sessions a
+				WHERE NOT EXISTS (
+					SELECT 1 FROM main.session_sources s WHERE s.session_id = a.session_id
+				)
+			)
+		`); err != nil {
+			return 0, false, true, fmt.Errorf("prune deleted session messages: %w", err)
+		}
+		if _, err := tx.Exec(`
+			UPDATE main.sessions SET message_count =
+			  (SELECT COUNT(*) FROM main.messages WHERE main.messages.session_id = main.sessions.id)
+			WHERE main.sessions.id IN (SELECT id FROM src.sessions)
+		`); err != nil {
+			return 0, false, true, fmt.Errorf("recount source sessions: %w", err)
+		}
 	}
+
 	if hasTopics {
 		if _, err := tx.Exec(mergeTopicsSQLFor(srcOrigin)); err != nil {
 			return 0, false, true, fmt.Errorf("merge topics: %w", err)
@@ -875,18 +962,6 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 		return 0, false, true, fmt.Errorf("prune deleted session verdicts: %w", err)
 	}
 	if _, err := tx.Exec(`
-		DELETE FROM main.messages
-		WHERE session_id IN (
-			SELECT a.session_id
-			FROM temp.consolidation_affected_sessions a
-			WHERE NOT EXISTS (
-				SELECT 1 FROM main.session_sources s WHERE s.session_id = a.session_id
-			)
-		)
-	`); err != nil {
-		return 0, false, true, fmt.Errorf("prune deleted session messages: %w", err)
-	}
-	if _, err := tx.Exec(`
 		DELETE FROM main.sessions
 		WHERE id IN (
 			SELECT a.session_id
@@ -898,24 +973,30 @@ func consolidateOne(con *sql.DB, src string) (offered int, changed bool, skipped
 	`); err != nil {
 		return 0, false, true, fmt.Errorf("prune deleted sessions: %w", err)
 	}
+
 	if _, err := tx.Exec(`
-		UPDATE main.sessions SET message_count =
-		  (SELECT COUNT(*) FROM main.messages WHERE main.messages.session_id = main.sessions.id)
-		WHERE main.sessions.id IN (SELECT id FROM src.sessions)
-	`); err != nil {
-		return 0, false, true, fmt.Errorf("recount source sessions: %w", err)
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO main.file_index(path,mtime,size,fp,session_id)
-		SELECT path,mtime,size,fp,session_id FROM src.file_index
+		INSERT INTO main.file_index(path,mtime,size,fp,session_id,byte_offset)
+		SELECT path,mtime,size,fp,session_id,COALESCE(byte_offset, size) FROM src.file_index
 		WHERE true
 		ON CONFLICT(path) DO UPDATE SET
 		  mtime = excluded.mtime,
 		  size = excluded.size,
 		  fp = excluded.fp,
-			 session_id = excluded.session_id
+		  session_id = excluded.session_id,
+		  byte_offset = excluded.byte_offset
 	`); err != nil {
-		return 0, false, true, fmt.Errorf("merge file_index: %w", err)
+		if _, err2 := tx.Exec(`
+			INSERT INTO main.file_index(path,mtime,size,fp,session_id)
+			SELECT path,mtime,size,fp,session_id FROM src.file_index
+			WHERE true
+			ON CONFLICT(path) DO UPDATE SET
+			  mtime = excluded.mtime,
+			  size = excluded.size,
+			  fp = excluded.fp,
+			  session_id = excluded.session_id
+		`); err2 != nil {
+			return 0, false, true, fmt.Errorf("merge file_index: %w", err2)
+		}
 	}
 	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", key, mark); err != nil {
 		return 0, false, true, fmt.Errorf("stamp sync watermark: %w", err)
