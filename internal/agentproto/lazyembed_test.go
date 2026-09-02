@@ -2,10 +2,13 @@ package agentproto
 
 import (
 	"context"
+	"encoding/binary"
+	"math"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
@@ -82,5 +85,49 @@ func TestSearchEmbedsAtMostOncePerSearch(t *testing.T) {
 
 	if emb.calls > 1 {
 		t.Errorf("the query was embedded %d times across %d databases — the round-trip must be memoised, not repeated per database", emb.calls, len(scope))
+	}
+}
+
+func TestSearchSkipsEmbeddingWhenLexicalLimitIsFull(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	proj := t.TempDir()
+	sid := "5c2ba140-0000-4000-8000-00000000aa03"
+	writeSession(t, proj, sid,
+		"9f3e1c20-aaaa-bbbb-cccc-00000000aa03", "lexical gate beacon")
+	db, _, _, err := index.EnsureIndexed(proj, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+	con, err := store.ConnectRW(db)
+	if err != nil {
+		t.Fatalf("ConnectRW: %v", err)
+	}
+	if err := store.EnsureVecSchema(con); err != nil {
+		_ = con.Close()
+		t.Fatalf("EnsureVecSchema: %v", err)
+	}
+	vec := make([]byte, 12)
+	for i, v := range []float32{1, 0, 0} {
+		binary.LittleEndian.PutUint32(vec[i*4:], math.Float32bits(v))
+	}
+	if err := store.VecUpsert(con, sid, "beacon", 1, 3, vec); err != nil {
+		_ = con.Close()
+		t.Fatalf("VecUpsert: %v", err)
+	}
+	if err := con.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	emb := &countingEmbedder{}
+	env := Search("lexical", []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}, SearchOpts{Limit: 1}, emb)
+	if len(env.Results) != 1 {
+		t.Fatalf("keyword search returned %d results, want 1", len(env.Results))
+	}
+	if emb.calls != 0 {
+		t.Fatalf("the full lexical window triggered %d embedding calls", emb.calls)
+	}
+	if env.VectorCoverage.Ran {
+		t.Fatal("vector coverage ran despite a full lexical window")
 	}
 }
