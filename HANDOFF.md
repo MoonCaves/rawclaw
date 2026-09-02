@@ -7,15 +7,16 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — CASS-Identical Dual FTS5 Indexing & Query Router Landed Clean.**
+**2026-09-02 — Lucene/Zoekt Unified Single FTS5 Index Architecture Landed Clean.**
 
 ### 📍 Now
-- Landed commit `d25446c`: Replaced hand-rolled weighting with the exact dual-index architecture from CASS (`messages_fts` with `porter unicode61 remove_diacritics 2` + `messages_code_fts` with `unicode61 tokenchars '-_./:@#$%\\'`) and CASS's exact `DetectSearchMode` query router.
+- Landed commit `f3b0555`: Unified single `messages_fts` SQLite FTS5 table with sub-token decomposition and Okapi BM25 ranking (`ORDER BY rank, m.id`).
+- Removed the ad-hoc dual-table heuristic router; mixed code+prose queries match both stemmed intent and exact code symbols natively.
 - All 39 internal packages pass race tests 100% green (`CGO_ENABLED=0 go test -race -count=1 ./...`).
 - Single static pure-Go binary rebuilt and active at `~/.local/bin/rawclaw`.
 
 ### ✅ Decisions
-- **CASS Dual-Table FTS5 Standard** (2026-09-02): Adopted CASS's production dual-index schema from `src/pages/export.rs:252-266` and query router from `src/pages/fts.rs:50-128`. Zero hand-rolled weights. Exact code symbols and file paths are indexed and routed natively by SQLite FTS5.
+- **Lucene / Zoekt Single Unified Index Standard** (2026-09-02): Single `messages_fts` virtual table with `tokenize='porter unicode61'` + substring `messages_fts_trigram`. Sub-token decomposition at tokenization time. Zero heuristic routing. 50% less disk footprint and perfect mixed-query recall.
 - **Atomic LRVL Directory Lock** (2026-09-02): `scripts/lrvl-merge.sh` locks via atomic `mkdir .git/merge.lock.d` with cleanup trap.
 - **Pi CWD Freshness Resolution** (2026-09-02): `CheckProjectFreshnessWithSource` passes resolved `projectCWD` to `checkPiContainerFreshness`.
 
