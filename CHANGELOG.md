@@ -4,6 +4,25 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [v0.12.0] - 2026-09-02
+
+### Added
+
+- **Lucene / Zoekt Unified Single FTS5 Indexing & Sub-Token Decomposition.** Replaced ad-hoc routing heuristics with a single unified `messages_fts` SQLite FTS5 table with sub-token decomposition for code identifiers (`snake_case`, `camelCase`, and `/paths/`). Mixed queries containing both natural language questions and exact code symbols match stemmed intent and exact code symbols in a single unified query with 50% less disk footprint.
+- **Code-Aware Pre-Tokenizer.** Added `internal/text/tokenize.go` exporting `SplitCodeIdentifier` to decompose compound identifiers into searchable components while preserving exact literal tokens.
+
+### Changed
+
+- **Read-Only Engine Query Enforcement.** Configured `_pragma=query_only(1)` in `store.ConnectRO` to enforce at the SQLite engine level that read-only search and browse connections cannot issue mutating statements.
+- **Silent Hot-Path Logging.** Downgraded internal consolidated fence acquisition/release logging from `slog.Info` to `slog.Debug`, ensuring zero stderr noise on normal CLI and hook execution paths.
+
+### Fixed
+
+- **POSIX Atomic Directory Lock in LRVL Merge.** Replaced Python subshell `flock` in `scripts/lrvl-merge.sh` with POSIX atomic directory locking (`mkdir .git/merge.lock.d`) and trap cleanup, eliminating subshell hanging risks.
+- **Pi Container Freshness Resolution.** Resolved symlinked and relative `projectCWD` paths before checking Pi session container freshness in `internal/index/consolidated.go`.
+- **Pre-Clone Verification in Archive Bundle Import.** Added upfront `git bundle verify` before wiping existing clone targets in `internal/archive/bundle.go`.
+- **Hermes DB Path Fragment Stripping.** Stripped `#<uuid>` fragment suffixes before calling `os.Stat` on SQLite database paths in `internal/cli/cmd_prewarm.go`.
+
 ## [v0.11.0] - 2026-09-02
 
 ### Added
