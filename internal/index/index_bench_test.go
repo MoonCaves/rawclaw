@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/MoonCaves/rawclaw/internal/source"
 	"github.com/MoonCaves/rawclaw/internal/store"
 )
 
@@ -178,6 +180,33 @@ func BenchmarkChangedSessionReplacement(b *testing.B) {
 
 		if !ReindexFile(con, targetFile, tdir) {
 			b.Fatalf("ReindexFile failed on iteration %d", iter)
+		}
+	}
+}
+
+// BenchmarkIncrementalAppend measures tail ingestion after a 10 MB JSONL
+// transcript has already been indexed. BenchmarkChangedSessionReplacement is
+// the corresponding full-file replacement baseline.
+func BenchmarkIncrementalAppend(b *testing.B) {
+	b.Setenv("HOME", b.TempDir())
+	tmp := b.TempDir()
+	f := filepath.Join(tmp, "large.jsonl")
+	payload := strings.Repeat("payload ", 120)
+	lines := make([]string, 10000)
+	for i := range lines {
+		lines[i] = fmt.Sprintf(`{"type":"user","message":{"role":"user","content":%q},"uuid":"seed-%d","timestamp":"2026-08-01T10:00:00Z"}`, payload, i)
+	}
+	writeBenchJSONL(b, f, lines...)
+	c := source.Container{ID: "bench-large", Path: f, CWD: "/bench"}
+	dbp := filepath.Join(tmp, "incremental.db")
+	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, claudeTailMsgsFn(), sourceClaude, ""); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		appendFile(b, f, fmt.Sprintf(`{"type":"assistant","message":{"role":"assistant","content":"append %d"},"uuid":"append-%d","timestamp":"2026-08-01T11:00:00Z"}`+"\n", i, i))
+		if _, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, claudeTailMsgsFn(), sourceClaude, ""); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

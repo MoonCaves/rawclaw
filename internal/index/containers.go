@@ -214,24 +214,25 @@ func verifyFreshContainer(dbp string, c source.Container) (int, error) {
 	defer con.Close()
 
 	var (
-		mtime     float64
-		size      int64
-		fp        string
-		sessionID string
+		mtime      float64
+		size       int64
+		fp         string
+		byteOffset int64
+		sessionID  string
 	)
 	err = con.QueryRow(
-		"SELECT mtime,size,fp,session_id FROM file_index WHERE path=?",
+		"SELECT mtime,size,fp,byte_offset,session_id FROM file_index WHERE path=?",
 		realpath(c.Path),
-	).Scan(&mtime, &size, &fp, &sessionID)
+	).Scan(&mtime, &size, &fp, &byteOffset, &sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("verify refreshed transcript %s: %w", c.Path, err)
 	}
-	watermarkMatches := size == wantSize && fp == wantFP && absDiff(mtime, wantMTime) < 0.001
-	if size > 0 && size < wantSize {
+	watermarkMatches := size == wantSize && byteOffset == wantSize && fp == wantFP && absDiff(mtime, wantMTime) < 0.001
+	if byteOffset >= 0 && byteOffset < wantSize {
 		// An active writer may leave a final JSONL record incomplete. The
 		// incremental path intentionally keeps the watermark at the last
 		// complete newline, so verify that prefix rather than demanding EOF.
-		watermarkMatches = checkPrefixFingerprint(rawPath, size) == fp
+		watermarkMatches = size <= wantSize && checkPrefixFingerprint(rawPath, byteOffset) == fp
 	}
 	if sessionID != c.ID || !watermarkMatches {
 		return 0, fmt.Errorf("live transcript %s changed or was not fully refreshed", c.Path)
@@ -491,8 +492,8 @@ func reindexContainer(con *sql.DB, params reindexContainerParams) error {
 		return fmt.Errorf("delete stale file_index for %s: %w", c.ID, err)
 	}
 	if _, err := tx.Exec(
-		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id) VALUES(?,?,?,?,?)",
-		rp, mtime, size, fp, c.ID,
+		"INSERT OR REPLACE INTO file_index(path,mtime,size,fp,session_id,byte_offset) VALUES(?,?,?,?,?,?)",
+		rp, mtime, size, fp, c.ID, size,
 	); err != nil {
 		return fmt.Errorf("session %s insert file_index: %w", c.ID, err)
 	}
@@ -516,7 +517,11 @@ func reindexContainer(con *sql.DB, params reindexContainerParams) error {
 // updated together. If any statement or vault write fails, the transaction is rolled back.
 var errAppendStale = errors.New("append watermark changed")
 
-func appendContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, expectedSize int64, mtime float64, size int64, fp string) error {
+func appendContainer(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, expectedOffset int64, mtime float64, size int64, fp string) error {
+	return appendContainerAt(con, c, ms, sourceID, origin, rp, expectedOffset, mtime, size, size, fp)
+}
+
+func appendContainerAt(con *sql.DB, c source.Container, ms []model.Message, sourceID, origin, rp string, expectedOffset int64, mtime float64, size, byteOffset int64, fp string) error {
 	tx, err := con.Begin()
 	if err != nil {
 		return fmt.Errorf("session %s begin tx for append: %w", c.ID, err)
@@ -553,8 +558,8 @@ func appendContainer(con *sql.DB, c source.Container, ms []model.Message, source
 		return fmt.Errorf("delete stale file_index for %s: %w", c.ID, err)
 	}
 	result, err := tx.Exec(
-		"UPDATE file_index SET mtime=?,size=?,fp=? WHERE path=? AND session_id=? AND size=?",
-		mtime, size, fp, rp, c.ID, expectedSize,
+		"UPDATE file_index SET mtime=?,size=?,fp=?,byte_offset=? WHERE path=? AND session_id=? AND byte_offset=?",
+		mtime, size, fp, byteOffset, rp, c.ID, expectedOffset,
 	)
 	if err != nil {
 		return fmt.Errorf("session %s update file_index on append: %w", c.ID, err)
