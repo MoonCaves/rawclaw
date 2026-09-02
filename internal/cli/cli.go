@@ -105,51 +105,14 @@ func (o *Options) normalizeDates() {
 		}
 	}
 	if o.Week && o.Since == "" {
-		o.Since = now.AddDate(0, 0, -7).Format("2006-01-02")
+		o.Since = now.AddDate(0, 0, -7).Format(timefmt.DateLayout)
 	}
 	if o.Since != "" {
-		o.Since = parseFlexibleDate(o.Since)
+		o.Since = timefmt.ParseDateFilter(o.Since)
 	}
 	if o.Before != "" {
-		o.Before = parseFlexibleDate(o.Before)
+		o.Before = timefmt.ParseDateFilter(o.Before)
 	}
-}
-
-// parseFlexibleDate parses ISO dates ("2006-01-02"), keywords ("today", "yesterday"),
-// and relative offsets ("-7d", "7d", "-24h", "24h", "-1w", "1w") into YYYY-MM-DD.
-func parseFlexibleDate(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
-	lower := strings.ToLower(s)
-	now := time.Now().UTC()
-	switch lower {
-	case "today", "now":
-		return now.Format("2006-01-02")
-	case "yesterday":
-		return now.AddDate(0, 0, -1).Format("2006-01-02")
-	}
-	rel := strings.TrimPrefix(lower, "-")
-	if strings.HasSuffix(rel, "d") {
-		if days, err := strconv.Atoi(strings.TrimSuffix(rel, "d")); err == nil {
-			return now.AddDate(0, 0, -days).Format("2006-01-02")
-		}
-	}
-	if strings.HasSuffix(rel, "w") {
-		if weeks, err := strconv.Atoi(strings.TrimSuffix(rel, "w")); err == nil {
-			return now.AddDate(0, 0, -weeks*7).Format("2006-01-02")
-		}
-	}
-	if strings.HasSuffix(rel, "h") {
-		if hours, err := strconv.Atoi(strings.TrimSuffix(rel, "h")); err == nil {
-			return now.Add(-time.Duration(hours) * time.Hour).Format("2006-01-02")
-		}
-	}
-	if len(s) >= 10 {
-		return s[:10]
-	}
-	return s
 }
 
 // oneline reports whether oneline format was requested via --oneline or --format oneline/line.
@@ -919,7 +882,7 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 	}
 
 	if len(args) == 0 && strings.TrimSpace(o.Query) != "" {
-		args = strings.Fields(o.Query)
+		args = []string{o.Query}
 	}
 
 	if len(args) == 0 {

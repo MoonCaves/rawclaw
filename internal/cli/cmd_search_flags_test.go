@@ -3,6 +3,8 @@ package cli
 import (
 	"testing"
 	"time"
+
+	"github.com/MoonCaves/rawclaw/internal/timefmt"
 )
 
 func TestParseFlexibleDate(t *testing.T) {
@@ -24,14 +26,15 @@ func TestParseFlexibleDate(t *testing.T) {
 		{"7d", sevenDaysAgoStr},
 		{"-1w", sevenDaysAgoStr},
 		{"1w", sevenDaysAgoStr},
+		{"-24h", yesterdayStr},
 		{"2026-05-12", "2026-05-12"},
 		{"2026-05-12T15:04:05Z", "2026-05-12"},
 	}
 
 	for _, tc := range cases {
-		got := parseFlexibleDate(tc.in)
+		got := timefmt.ParseDateFilter(tc.in)
 		if got != tc.want {
-			t.Errorf("parseFlexibleDate(%q) = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("timefmt.ParseDateFilter(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }
