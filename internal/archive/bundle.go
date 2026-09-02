@@ -119,7 +119,7 @@ func InitFromBundle(ctx context.Context, bundlePath, remoteURL string, machineNa
 	}
 
 	// Verify bundle validity upfront before modifying any local clone state.
-	if _, err := a.run(ctx, parent, "bundle", "verify", absBundle); err != nil {
+	if _, err := a.run(ctx, parent, "bundle", "list-heads", absBundle); err != nil {
 		return nil, fmt.Errorf("archive init: verify bundle %s: %w", bundlePath, err)
 	}
 

@@ -402,6 +402,15 @@ func verbScope(ctx context.Context, thisProject bool, dir string, dirSet bool) (
 		return nil, func() []view.Scope { return allScope(ctx, "", false) }
 	}
 	td := resolveTDir(dir, dirSet)
+	if !dirSet || td != dir {
+		if gitRoot := paths.GitRoot(dir); gitRoot != "" {
+			all := allScope(ctx, "", false)
+			matched := scopes.FilterByProjectDir(all, dir)
+			if len(matched) > 0 {
+				return matched, nil
+			}
+		}
+	}
 	if td == "" || !isDir(td) {
 		return []view.Scope{}, nil
 	}

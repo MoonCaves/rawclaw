@@ -121,7 +121,7 @@ func ParseDateFilter(s string) string {
 	}
 
 	lower := strings.ToLower(s)
-	now := time.Now()
+	now := time.Now().UTC()
 	switch lower {
 	case "today", "now":
 		return now.Format(DateLayout)

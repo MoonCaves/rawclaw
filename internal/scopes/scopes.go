@@ -316,3 +316,38 @@ func FilterByPath(scope []view.Scope, include, exclude string) []view.Scope {
 	}
 	return out
 }
+
+// FilterByProjectDir narrows scopes to those belonging to the project at dir.
+// If dir is inside a Git repository (worktree or primary), it matches any scope
+// whose working directory shares the same Git root repository.
+// If not a git repository, it matches by exact normalized working directory.
+func FilterByProjectDir(scopes []view.Scope, dir string) []view.Scope {
+	if dir == "" {
+		return scopes
+	}
+	targetDir := paths.Realpath(paths.ExpandHome(dir))
+	gitRoot := paths.GitRoot(targetDir)
+
+	var out []view.Scope
+	seen := make(map[string]struct{})
+	for _, sc := range scopes {
+		scCWD := paths.Realpath(CWD(sc))
+		matched := false
+		if gitRoot != "" {
+			if scGitRoot := paths.GitRoot(scCWD); scGitRoot != "" && scGitRoot == gitRoot {
+				matched = true
+			}
+		}
+		if !matched && scCWD != "" && scCWD == targetDir {
+			matched = true
+		}
+		if matched {
+			key := sc.Project + "|" + sc.TDir + "|" + sc.DBP
+			if _, ok := seen[key]; !ok {
+				seen[key] = struct{}{}
+				out = append(out, sc)
+			}
+		}
+	}
+	return out
+}

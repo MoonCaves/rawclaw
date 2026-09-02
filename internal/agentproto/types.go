@@ -159,6 +159,7 @@ type SearchOpts struct {
 	Oneline          bool
 	CurrentSession   string
 	Project          string
+	Projects         []string
 	Source           string
 	ScopeFallback    func() []view.Scope
 }

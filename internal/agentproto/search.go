@@ -312,7 +312,7 @@ func searchOneStore(
 	}
 	defer con.Close()
 
-	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.IncludePath, opts.ExcludePath)
+	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.Projects, opts.IncludePath, opts.ExcludePath)
 	if err != nil {
 		return nil, nil, false, VectorCoverage{}, "one store scope lookup failed (" + err.Error() + ") — searched per project instead", false
 	}
@@ -412,8 +412,21 @@ func fallbackScope(opts SearchOpts) []view.Scope {
 	} else {
 		sc = allScope()
 	}
-	if opts.Project == "" {
+	if opts.Project == "" && len(opts.Projects) == 0 {
 		return sc
+	}
+	if len(opts.Projects) > 0 {
+		projSet := make(map[string]struct{}, len(opts.Projects))
+		for _, p := range opts.Projects {
+			projSet[p] = struct{}{}
+		}
+		var out []view.Scope
+		for _, s := range sc {
+			if _, ok := projSet[s.Project]; ok {
+				out = append(out, s)
+			}
+		}
+		return out
 	}
 	out := make([]view.Scope, 0, 1)
 	for _, s := range sc {

@@ -25,6 +25,9 @@ import (
 // would never run.
 func TestMain(m *testing.M) {
 	os.Setenv("RAWCLAW_ARCHIVE_AUTOSYNC", "off")
+	_ = os.Unsetenv("ANTIGRAVITY_CONVERSATION_ID")
+	_ = os.Unsetenv("CLAUDE_CODE_SESSION_ID")
+	_ = os.Unsetenv("CODEX_SESSION_ID")
 
 	// Same hazard, second spawner: with RAWCLAW_EMBED_ENDPOINT set, a search
 	// through the real command tree fires a detached vector top-up of
