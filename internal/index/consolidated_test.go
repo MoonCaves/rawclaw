@@ -2427,3 +2427,58 @@ func TestConsolidate_CurrentIdentityFormWinsMetadataTie(t *testing.T) {
 		t.Errorf("merged cwd = %q, want /w/current", got)
 	}
 }
+
+// TestConsolidate_IncrementalAppendHighWaterMark pins the high-water mark incremental
+// message fold: appending new messages to an existing session in a source DB folds
+// only the new rows via mergeMessagesIncrementalSQL, updating message_count and FTS5.
+func TestConsolidate_IncrementalAppendHighWaterMark(t *testing.T) {
+	isolateCache(t)
+	src := seedSessionDB(t, "-w-inc.db", sessionRow{
+		id: "inc-1", project: "inc-proj", cwd: "/w/inc",
+		msgs: []msgRow{
+			{"u-1", "user", "initial message 1", 100},
+			{"u-2", "assistant", "initial message 2", 101},
+		},
+	})
+	if _, err := ConsolidateFrom([]string{src}, false); err != nil {
+		t.Fatalf("first consolidate: %v", err)
+	}
+
+	con := openConsolidated(t)
+	if got := scalar(t, con, "SELECT message_count FROM sessions WHERE id='inc-1'"); got != "2" {
+		t.Fatalf("initial message_count = %s, want 2", got)
+	}
+	con.Close()
+
+	// Append 2 new messages to the source DB
+	sdb, err := store.ConnectRW(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sdb.Exec(`
+		INSERT INTO messages(session_id, role, content, ts, ts_iso, uuid) VALUES
+		('inc-1', 'user', 'incremental append 3', 102, '2026-06-01T10:02:00Z', 'u-3'),
+		('inc-1', 'assistant', 'incremental append 4', 103, '2026-06-01T10:03:00Z', 'u-4');
+		UPDATE sessions SET message_count = 4, last_ts = 103 WHERE id = 'inc-1';
+	`); err != nil {
+		t.Fatal(err)
+	}
+	_ = sdb.Close()
+
+	// Sync via SyncConsolidatedFrom
+	if err := SyncConsolidatedFrom(src); err != nil {
+		t.Fatalf("sync consolidated from: %v", err)
+	}
+
+	con2 := openConsolidated(t)
+	if got := scalar(t, con2, "SELECT message_count FROM sessions WHERE id='inc-1'"); got != "4" {
+		t.Fatalf("after sync message_count = %s, want 4", got)
+	}
+	if got := scalar(t, con2, "SELECT COUNT(*) FROM messages WHERE session_id='inc-1'"); got != "4" {
+		t.Fatalf("after sync message rows = %s, want 4", got)
+	}
+	if got := scalar(t, con2, "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'incremental'"); got != "2" {
+		t.Fatalf("FTS match count for 'incremental' = %s, want 2", got)
+	}
+	con2.Close()
+}
