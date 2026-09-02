@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1368,5 +1369,67 @@ func TestRunTagPrepCmd_DetachedFoldDoesNotInspectConsolidatedFailures(t *testing
 
 	if spawned != fullSID {
 		t.Fatalf("detached ingest session = %q, want %q", spawned, fullSID)
+	}
+}
+
+func TestTagPrepAdvancesPastWrittenWindow(t *testing.T) {
+	oldCap := chunkByteCap
+	chunkByteCap = 2000
+	t.Cleanup(func() { chunkByteCap = oldCap })
+
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	t.Setenv("HOME", configDir)
+	t.Setenv("RAWCLAW_CACHE_DIR", t.TempDir())
+
+	projDir := filepath.Join(configDir, "projects", "-test-project")
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatalf("mkdir projDir: %v", err)
+	}
+
+	const fullSID = "96969696-abcd-1111-2222-333344445555"
+	transcriptPath := filepath.Join(projDir, fullSID+".jsonl")
+
+	var sb strings.Builder
+	for i := 1; i <= 250; i++ {
+		uuid := fmt.Sprintf("msg%04d-0000-0000-0000-000000000000", i)
+		content := fmt.Sprintf("Payload message number %d with some repeated text %s", i, strings.Repeat("ABC ", 50))
+		sb.WriteString(fmt.Sprintf(`{"type":"user","uuid":%q,"timestamp":"2026-08-25T10:00:00Z","message":{"role":"user","content":%q}}`+"\n", uuid, content))
+	}
+	if err := os.WriteFile(transcriptPath, []byte(sb.String()), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	claudeReg := claude.Registration()
+
+	// 1. Run tag-prep window 1
+	var out1 strings.Builder
+	if err := runTagPrepCmdWithSources(&out1, fullSID[:8], nil, nil, []source.Registration{claudeReg}); err != nil {
+		t.Fatalf("tag-prep 1: %v", err)
+	}
+	if !strings.Contains(out1.String(), "msg0001") {
+		t.Fatalf("tag-prep 1 missing msg0001; got:\n%s", out1.String())
+	}
+	if !strings.Contains(out1.String(), "untagged content remains beyond budget") {
+		t.Fatalf("tag-prep 1 should indicate more untagged content")
+	}
+
+	// 2. Tag window 1
+	tagJSON := `[{"start_uuid":"msg0001","topic":"Topic 1","summary":"Summary 1"}]`
+	var tagOut strings.Builder
+	if err := runTagWriteCmd(&tagOut, strings.NewReader(tagJSON), fullSID[:8], nil, nil, false, "agent", false); err != nil {
+		t.Fatalf("tag-write 1: %v", err)
+	}
+
+	// 3. Run tag-prep window 2 - MUST advance past window 1!
+	var out2 strings.Builder
+	if err := runTagPrepCmdWithSources(&out2, fullSID[:8], nil, nil, []source.Registration{claudeReg}); err != nil {
+		t.Fatalf("tag-prep 2: %v", err)
+	}
+	if strings.Contains(out2.String(), "msg0001") {
+		t.Fatalf("tag-prep 2 repeated already-tagged msg0001; got:\n%s", out2.String())
+	}
+	if !strings.Contains(out2.String(), "previous topic: \"Topic 1\"") {
+		t.Fatalf("tag-prep 2 should display previous topic summary; got:\n%s", out2.String())
 	}
 }
