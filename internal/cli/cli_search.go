@@ -396,11 +396,12 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 			sopts.Project = paths.ProjectLabel(td)
 		}
 		sopts.ScopeFallback = func() []view.Scope { return sc }
-		if td != "" && isDir(td) {
+		switch {
+		case td != "" && isDir(td):
 			label = "on " + paths.ProjectLabel(td)
-		} else if len(projs) > 0 {
+		case len(projs) > 0:
 			label = "on " + projs[0]
-		} else {
+		default:
 			label = "on this project"
 		}
 	} else {
