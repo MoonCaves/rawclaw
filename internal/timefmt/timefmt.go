@@ -132,17 +132,18 @@ func ParseDateFilter(s string) string {
 
 	// Translate day/week shorthand to Go standard duration format for time.ParseDuration
 	durStr := lower
-	if strings.HasSuffix(durStr, "d") {
+	switch {
+	case strings.HasSuffix(durStr, "d"):
 		numStr := strings.TrimSuffix(strings.TrimPrefix(durStr, "-"), "d")
 		if n, err := strconv.Atoi(numStr); err == nil {
 			durStr = fmt.Sprintf("-%dh", n*24)
 		}
-	} else if strings.HasSuffix(durStr, "w") {
+	case strings.HasSuffix(durStr, "w"):
 		numStr := strings.TrimSuffix(strings.TrimPrefix(durStr, "-"), "w")
 		if n, err := strconv.Atoi(numStr); err == nil {
 			durStr = fmt.Sprintf("-%dh", n*168)
 		}
-	} else if !strings.HasPrefix(durStr, "-") && !strings.HasPrefix(durStr, "+") {
+	case !strings.HasPrefix(durStr, "-") && !strings.HasPrefix(durStr, "+"):
 		durStr = "-" + durStr
 	}
 

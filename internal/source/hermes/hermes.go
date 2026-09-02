@@ -255,7 +255,7 @@ func formatToolCalls(toolCallsJSON string) string {
 		if i > 0 {
 			sb.WriteString("\n")
 		}
-		sb.WriteString(fmt.Sprintf("[call: %s(%s)]", call.Name, string(call.Arguments)))
+		fmt.Fprintf(&sb, "[call: %s(%s)]", call.Name, string(call.Arguments))
 	}
 	return sb.String()
 }
@@ -263,7 +263,7 @@ func formatToolCalls(toolCallsJSON string) string {
 func deterministicUUID(sessionID string, msgID int64, role, content string) string {
 	h := sha1.New()
 	h.Write([]byte(sessionID))
-	h.Write([]byte(fmt.Sprintf(":%d:", msgID)))
+	h.Write(fmt.Appendf(nil, ":%d:", msgID))
 	h.Write([]byte(role))
 	h.Write([]byte(":"))
 	h.Write([]byte(content))
@@ -272,8 +272,8 @@ func deterministicUUID(sessionID string, msgID int64, role, content string) stri
 }
 
 func splitDBPath(path string) (string, string) {
-	if idx := strings.Index(path, "#"); idx != -1 {
-		return path[:idx], path[idx+1:]
+	if before, after, found := strings.Cut(path, "#"); found {
+		return before, after
 	}
 	return path, ""
 }

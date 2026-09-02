@@ -1394,7 +1394,7 @@ func TestTagPrepAdvancesPastWrittenWindow(t *testing.T) {
 	for i := 1; i <= 250; i++ {
 		uuid := fmt.Sprintf("msg%04d-0000-0000-0000-000000000000", i)
 		content := fmt.Sprintf("Payload message number %d with some repeated text %s", i, strings.Repeat("ABC ", 50))
-		sb.WriteString(fmt.Sprintf(`{"type":"user","uuid":%q,"timestamp":"2026-08-25T10:00:00Z","message":{"role":"user","content":%q}}`+"\n", uuid, content))
+		fmt.Fprintf(&sb, `{"type":"user","uuid":%q,"timestamp":"2026-08-25T10:00:00Z","message":{"role":"user","content":%q}}`+"\n", uuid, content)
 	}
 	if err := os.WriteFile(transcriptPath, []byte(sb.String()), 0o644); err != nil {
 		t.Fatalf("write transcript: %v", err)
