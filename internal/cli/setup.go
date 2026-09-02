@@ -374,6 +374,9 @@ if (umask 077; set -C; printf '{"session_id":"%s","transcript_path":"sessions.db
     rm -f "$tmp"
   fi
 fi
+cat <<'BANNER'
+@@BANNER_RAW@@
+BANNER
 exit 0
 `
 

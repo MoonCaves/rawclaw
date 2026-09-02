@@ -21,8 +21,8 @@ func TestPrimeScripts_RenderedBytesMatchBaseline(t *testing.T) {
 		tmpl string
 		want string
 	}{
-		{name: "claude", tmpl: rawclawPrimeScript, want: "85a99e0c54a798f09dbd2785f851a49e0ea74abfb00f724e192c2207b4eb84e7"},
-		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "31caed61970667d1bb2d6464cf901d5ec2c67ed260e336c167832e4c8dfc4eb9"},
+		{name: "claude", tmpl: rawclawPrimeScript, want: "3dedcf43aea3a706e7dd7cd7c5278b1ef3fd1875ac7b3fbc63e946d10aac5312"},
+		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "5698ab96156f913de5a49dc3d550d9831359d93da408d94e1136686a3a751ed3"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sha256.Sum256([]byte(renderHookScript(tc.tmpl, "'/usr/local/bin/rawclaw'")))
@@ -1273,7 +1273,7 @@ func TestSetup_RuntimeExtensionsInstallAndEject(t *testing.T) {
 			installFn:  installHermesBirthHook,
 			ejectFn:    ejectHermesBirthHook,
 			targetPath: hermesAgentHooksScriptPath,
-			needle:     "nohup",
+			needles:    []string{"nohup"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1312,7 +1312,9 @@ func TestSetup_GooseInstallAndEject(t *testing.T) {
 	if err := installGooseBirthHook(); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if !fileExists(goosePluginScriptPath()) || !fileExists(goosePluginHookPath()) {
+	sp := goosePluginScriptPath()
+	hp := goosePluginHookPath()
+	if !fileExists(sp) || !fileExists(hp) {
 		t.Fatalf("expected goose hook files installed")
 	}
 
@@ -1340,7 +1342,7 @@ func TestSetup_GooseInstallAndEject(t *testing.T) {
 	}
 
 	ejectGooseBirthHook()
-	if fileExists(goosePluginScriptPath()) || fileExists(goosePluginHookPath()) {
+	if fileExists(sp) || fileExists(hp) {
 		t.Fatalf("expected goose hook files removed")
 	}
 }
