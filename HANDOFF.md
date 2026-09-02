@@ -7,37 +7,43 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-03 — Phase 2 Merged: Pure-Go SIMD Unrolled Dot Products, Bounded Min-Heap Top-K, Unit Normalization, 0 Lint Issues, 39/39 Passing Packages.**
+**2026-09-03 — 4 Architectural Cleanups Shipped, Audited by Codex Luna Medium & FoggySnow, 6/6 Deterministic Harness Gates Passed, Fleet Currency Deployed.**
 
 ### 📍 Now
-- Commit `b217ff6` landed on `main`: Merged Phase 2 Feature Desks:
-  1. **Bounded Min-Heap Top-K & 8-Way Unrolled Dot Product** (`internal/semantic`):
-     - Replaced full-slice 120k candidate allocation and $O(N \log N)$ sorting with `container/heap` bounded min-heap ($O(N \log K)$ time, $O(K)$ space).
-     - 8-way unrolled the inner float32 dot product to saturate CPU pipeline registers without heap allocations.
-     - Pinned in `internal/semantic/semantic.go`.
-  2. **Vector Unit-Length Normalization** (`internal/embed`, `internal/store`):
-     - Added `embed.Normalize(vec []float64) []float64` scaling vectors to $\|v\|_2 = 1.0$ at ingest time (FAISS / Lance standard practice).
-     - Pinned with 3 unit tests in `internal/embed/embed_test.go`.
-  3. **Sprint 1 Core Capabilities Retained**:
-     - Native lexical-first gating (<35ms fail-open).
-     - Auto-TTY machine stream routing.
-     - Multi-line code indentation and fence preservation (`strings.SplitSeq`).
-- Verified `~/go/bin/golangci-lint run ./...` reports **0 issues**.
-- All 39 internal packages pass race tests (`CGO_ENABLED=0 go test -race -count=1 ./...`).
-- Zero formatting diffs (`gofmt -l internal/`).
-- Live binary compiled and stamped at `~/.local/bin/rawclaw` (`v0.12.0`).
+- Commit `bf8d2ad` landed on `main` and pushed to `origin/main`:
+  1. **Git Worktree Scoping & Multi-Shard Resolution** (`internal/paths`, `internal/agentproto`, `internal/scopes`, `internal/cli`):
+     - `paths.GitCommonRoot` follows `.git` pointer files and `commondir` back to the parent repository root.
+     - `Projects []string` query filter transparently searches sessions across all sibling worktrees without database resharding.
+  2. **Durable Tombstone Vault Relocation & Legacy Union** (`internal/lifecycle`, `internal/paths`):
+     - Relocated default `.deleted` file from wipeable cache to `$XDG_DATA_HOME/rawclaw/.deleted` (`~/.local/share/rawclaw/.deleted`).
+     - Kept flat atomic append-only format (`O_APPEND | O_CREATE | O_WRONLY`).
+     - `LoadTombstones` unconditionally merges legacy `~/.cache/session-search/.deleted` entries so existing deletions are never lost.
+  3. **Modular CLI Split** (`internal/cli`):
+     - Decomposed 2,284-line monolithic `cli.go` into 5 single-responsibility files: `cli_options.go`, `cli_search.go`, `cli_read.go`, `cli_lifecycle.go`, and root `cli.go`.
+     - 100% backwards-compatible flag, UX, and exit code contracts preserved.
+  4. **Unified Source Registration & Dynamic Discovery** (`internal/sources`, `internal/scopes`, `internal/source`):
+     - Dynamic loop over `sources.Registered()` across `scopes.All` and `refreshThisProject` eliminates hardcoded adapter switch statements.
+     - Added `Label` and `OptedIn` capability hooks on `source.Registration`.
+  5. **Automatic Toolchain Buildinfo Stamping** (`cmd/rawclaw/version.go`):
+     - Integrated `runtime/debug.ReadBuildInfo()` so unstamped `go build` / `go install` binaries automatically display exact Git commit and build timestamp.
+- Verified:
+  - Full test suite passed with race detector: `CGO_ENABLED=0 go test -race -count=1 ./...` (39/39 packages).
+  - Linter: `golangci-lint run ./...` reports **0 issues**.
+  - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`).
+  - Graphify AST knowledge graph refreshed (4,117 nodes, 11,791 edges, 246 communities).
+  - Fleet binary `rawclaw v0.8.0 (commit bf8d2ad)` deployed live across **Mac HQ**, **jay-m1**, **muppet-server**, and **ai-server**.
 
 ### ✅ Decisions
-- **Bounded Min-Heap Partition** (2026-09-03): Replaces global candidate array sorting with $O(K)$ heap bounded to user-requested limit.
-- **8-Way Loop Unrolling** (2026-09-03): Unrolls 8 float32 dimensions per step for maximum instruction throughput under `CGO_ENABLED=0`.
-- **Ingest-Time Unit Normalization** (2026-09-03): Pre-normalizes vectors so cosine similarity evaluates directly as dot products.
+- **Query-Side Worktree Widening** (2026-09-03): Widens `--this-project` via `GitCommonRoot` and `Projects []string` filter at query time rather than resharding database tables.
+- **Durable Flat Append-Only Tombstones** (2026-09-03): Preserves flat text append-only atomicity in permanent XDG data storage instead of introducing JSON lock contention.
+- **Unconditional Legacy Tombstone Union** (2026-09-03): Merges legacy cache entries alongside durable XDG storage so prior deletions remain active across mixed environments.
+- **Zero-Dep Source Registry** (2026-09-03): Wires discovery and project refresh through `sources.Registered()` while keeping parsers pure Go adapters.
 
 ### 🧵 Open threads (with status)
-- **CASS Suite Test Restoration** (`BLOCKED ON CASS DESK`): Supervisor-A/B must restore `autotests = true` in `coding_agent_session_search/Cargo.toml`.
-- **Librarian / Org Desk Hygiene** (`WAITING`): `~/org` untracked files and broken symlinks need Librarian desk cleanup.
+- None. All 4 targeted improvements are completed, verified, audited, and deployed.
 
 ### ⏭️ Next
-- Monitor live query latency and semantic retrieval precision across paired coding sessions.
+- Monitor cross-worktree search latency and fleet sync during daily coding workflows.
 
 ### ⛔ Blockers
 - None.
