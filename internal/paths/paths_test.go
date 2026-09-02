@@ -809,3 +809,69 @@ func TestResolveSession_CatalogFallbacks(t *testing.T) {
 		}
 	})
 }
+
+func TestGitCommonRoot(t *testing.T) {
+	tmp := t.TempDir()
+	mainRepo := filepath.Join(tmp, "main-repo")
+	_ = os.MkdirAll(filepath.Join(mainRepo, ".git", "worktrees", "wt-1"), 0o755)
+
+	// Standard git repository
+	if got := GitCommonRoot(mainRepo); got != Realpath(mainRepo) {
+		t.Errorf("GitCommonRoot(mainRepo) = %q, want %q", got, Realpath(mainRepo))
+	}
+
+	// Worktree directory with .git file pointer
+	wtDir := filepath.Join(tmp, "worktree-1")
+	_ = os.MkdirAll(wtDir, 0o755)
+	gitdirPointer := filepath.Join(mainRepo, ".git", "worktrees", "wt-1")
+	_ = os.WriteFile(filepath.Join(wtDir, ".git"), []byte("gitdir: "+gitdirPointer+"\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(gitdirPointer, "commondir"), []byte("../..\n"), 0o644)
+
+	if got := GitCommonRoot(wtDir); got != Realpath(mainRepo) {
+		t.Errorf("GitCommonRoot(wtDir) = %q, want %q", got, Realpath(mainRepo))
+	}
+
+	// Subdirectory inside worktree
+	subDir := filepath.Join(wtDir, "sub", "pkg")
+	_ = os.MkdirAll(subDir, 0o755)
+	if got := GitCommonRoot(subDir); got != Realpath(mainRepo) {
+		t.Errorf("GitCommonRoot(subDir) = %q, want %q", got, Realpath(mainRepo))
+	}
+
+	// Non-git directory
+	nonGit := filepath.Join(tmp, "non-git")
+	_ = os.MkdirAll(nonGit, 0o755)
+	if got := GitCommonRoot(nonGit); got != "" {
+		t.Errorf("GitCommonRoot(nonGit) = %q, want empty string", got)
+	}
+}
+
+func TestFindTranscriptDir_WorktreeFallback(t *testing.T) {
+	tmp := t.TempDir()
+	claudeProjects := filepath.Join(tmp, "projects")
+	_ = os.MkdirAll(claudeProjects, 0o755)
+	t.Setenv("CLAUDE_CONFIG_DIR", tmp)
+
+	mainRepo := filepath.Join(tmp, "my-repo")
+	_ = os.MkdirAll(filepath.Join(mainRepo, ".git", "worktrees", "feature-a"), 0o755)
+
+	// Create main repo transcript
+	mainTDir := filepath.Join(claudeProjects, "-my-repo")
+	writeJSONL(t, filepath.Join(mainTDir, "session-1.jsonl"),
+		`{"type":"summary","cwd":"`+mainRepo+`"}`,
+		`{"type":"user","message":{"text":"hello"}}`,
+	)
+
+	// Create worktree
+	wtDir := filepath.Join(tmp, "my-repo-feature-a")
+	_ = os.MkdirAll(wtDir, 0o755)
+	gitdirPointer := filepath.Join(mainRepo, ".git", "worktrees", "feature-a")
+	_ = os.WriteFile(filepath.Join(wtDir, ".git"), []byte("gitdir: "+gitdirPointer+"\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(gitdirPointer, "commondir"), []byte("../..\n"), 0o644)
+
+	// Calling FindTranscriptDir on wtDir should find mainTDir!
+	got := FindTranscriptDir(wtDir)
+	if got != mainTDir {
+		t.Errorf("FindTranscriptDir(wtDir) = %q, want %q", got, mainTDir)
+	}
+}
