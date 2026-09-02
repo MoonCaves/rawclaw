@@ -146,8 +146,7 @@ func Archive(sessionPathOrID, archiveDir string) (string, error) {
 // Delete removes the sessions under projectsRoot that match opts, gated by the
 // filter requirement. projectsRoot is the Claude Code projects root (the dir
 // holding the per-project transcript dirs). cacheDir is where the tombstone
-// sidecar lives (typically ~/.cache/session-search); if empty it defaults to
-// that path.
+// sidecar lives; if empty it defaults to the durable RawClaw data directory.
 //
 // Behavior:
 //   - No filter set -> ErrNoFilter (never deletes everything).
@@ -194,11 +193,11 @@ func Delete(projectsRoot, cacheDir string, opts DeleteOpts) (DeletePlan, error) 
 }
 
 // TombstonePath returns the path to the tombstone sidecar file:
-// <cacheDir>/.deleted. If cacheDir is empty it defaults to
-// ~/.cache/session-search.
+// <cacheDir>/.deleted. If cacheDir is empty it defaults to the durable
+// RawClaw data directory (~/.local/share/rawclaw/.deleted).
 func TombstonePath(cacheDir string) string {
 	if cacheDir == "" {
-		cacheDir = defaultCacheDir()
+		return paths.TombstonePath()
 	}
 	return filepath.Join(paths.ExpandHome(cacheDir), ".deleted")
 }
@@ -221,9 +220,25 @@ func TombstoneIDs(cacheDir string, ids []string) error {
 // of deleted session ids. A missing file is not an error — it yields an empty
 // set. Blank lines and surrounding whitespace are ignored.
 func LoadTombstones(cacheDir string) (map[string]struct{}, error) {
-	set := make(map[string]struct{}) // never nil — safe to range / read
 	path := TombstonePath(cacheDir)
+	set, err := loadTombstoneFile(path)
+	if err != nil {
+		return set, err
+	}
+	if cacheDir == "" && len(set) == 0 {
+		legacy, err := loadTombstoneFile(filepath.Join(defaultCacheDir(), ".deleted"))
+		if err != nil {
+			return set, err
+		}
+		for id := range legacy {
+			set[id] = struct{}{}
+		}
+	}
+	return set, nil
+}
 
+func loadTombstoneFile(path string) (map[string]struct{}, error) {
+	set := make(map[string]struct{}) // never nil — safe to range / read
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

@@ -78,6 +78,12 @@ func CatalogDir() string {
 	return rawclawDataDir("catalog")
 }
 
+// TombstonePath returns the durable path for deleted session IDs:
+// $XDG_DATA_HOME/rawclaw/.deleted, else ~/.local/share/rawclaw/.deleted.
+func TombstonePath() string {
+	return filepath.Join(rawclawDataDir(""), ".deleted")
+}
+
 // CatalogEntry is one entry in the durable session catalog.
 type CatalogEntry struct {
 	SessionID      string `json:"session_id"`
