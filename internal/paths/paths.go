@@ -178,11 +178,78 @@ func FindTranscriptDir(cwd string) string {
 				}
 			}
 		}
+
+		cand := filepath.Join(root, encodePath(target))
+		if isDir(cand) {
+			return cand
+		}
+
+		// Worktree fallback: if this working dir has no transcripts of its own,
+		// resolve its parent repository root if it is a Git worktree.
+		if gitRoot := GitCommonRoot(target); gitRoot != "" && gitRoot != target {
+			for _, d := range entries {
+				if !isDir(d) {
+					continue
+				}
+				files, _ := filepath.Glob(filepath.Join(d, "*.jsonl"))
+				slices.Sort(files)
+				for _, f := range files {
+					rec := firstCWD(f)
+					if rec != "" && Realpath(rec) == gitRoot {
+						return d
+					}
+				}
+			}
+			candGit := filepath.Join(root, encodePath(gitRoot))
+			if isDir(candGit) {
+				return candGit
+			}
+		}
 	}
 
-	cand := filepath.Join(root, encodePath(target))
-	if isDir(cand) {
-		return cand
+	return ""
+}
+
+// GitCommonRoot returns the root directory of the repository enclosing dir,
+// resolving Git worktree pointers (where .git is a file containing "gitdir: ...")
+// to the parent repository root. Returns "" if dir is not inside a git repo.
+func GitCommonRoot(dir string) string {
+	dir = Realpath(ExpandHome(dir))
+	curr := dir
+	for {
+		gitPath := filepath.Join(curr, ".git")
+		if fi, err := os.Stat(gitPath); err == nil {
+			if fi.IsDir() {
+				return curr
+			}
+			// Worktree: .git is a file
+			data, err := os.ReadFile(gitPath)
+			if err == nil {
+				content := strings.TrimSpace(string(data))
+				if gitDir, ok := strings.CutPrefix(content, "gitdir:"); ok {
+					gitDir = strings.TrimSpace(gitDir)
+					if !filepath.IsAbs(gitDir) {
+						gitDir = filepath.Join(curr, gitDir)
+					}
+					gitDir = Realpath(gitDir)
+					// If commondir exists inside gitDir, follow it
+					commonFile := filepath.Join(gitDir, "commondir")
+					if cdata, err := os.ReadFile(commonFile); err == nil {
+						commonRel := strings.TrimSpace(string(cdata))
+						commonDir := filepath.Clean(filepath.Join(gitDir, commonRel))
+						return filepath.Dir(commonDir)
+					}
+					// Fallback: gitDir is <main>/.git/worktrees/<name>
+					return filepath.Clean(filepath.Join(gitDir, "../../.."))
+				}
+			}
+			return curr
+		}
+		parent := filepath.Dir(curr)
+		if parent == curr {
+			break
+		}
+		curr = parent
 	}
 	return ""
 }
