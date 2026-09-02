@@ -7,24 +7,25 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — Synchronous Active-Project Search Freshness, Mac-wide Discovery Parity, and Fleet Reconnaissance.**
+**2026-09-02 — 4 Critical Operational Bug Fixes Landed & Wire Broadcast Sealed.**
 
 ### 📍 Now
-- RawClaw core engine is 100% green across all 32 internal packages with race detector (`CGO_ENABLED=0 go test -race -count=1 ./...`).
-- Pushed commits through `ef510b5` to `origin/main` on GitHub (`MoonCaves/rawclaw`).
+- Landed commit `5300567`: Patched LRVL phantom lock in `scripts/lrvl-merge.sh`, Pi container freshness CWD resolution in `consolidated.go`, upfront bundle verify in `bundle.go`, and `#fragment` stat stripping in `cmd_prewarm.go`.
+- All 39 internal packages pass race tests 100% green (`CGO_ENABLED=0 go test -race -count=1 ./...`).
+- Wire broadcast #590 & #591 issued in thread `PUBLIC-ESTATE-RECORD` roasting fleet essay bloat and issuing binding operational mandates.
 
 ### ✅ Decisions
-- **Synchronous Active-Project Freshness** (2026-09-01): `internal/cli/cli.go:1786-1815` invokes `refreshThisProject(o)` synchronously when active project is stale before returning query results.
-- **Mac-Wide Global Rules Parity** (2026-09-01): Symlinked `/Users/jay-m4/AGENTS.md` across all 7 coding agent harness global configuration paths (`~/.gemini/config/AGENTS.md`, `~/.codex/instructions.md`, `~/.pi/agent/SYSTEM.md`, `~/.hermes/instructions.md`, `~/.config/opencode/instructions.md`, `~/.config/goose/custom_instructions.txt`).
-- **Identity Standard** (2026-09-01): Standardized mandatory `[<AgentName> @ <CWD>]` opening and closing tags in top-level `AGENTS.md`.
+- **Atomic LRVL Directory Lock** (2026-09-02): `scripts/lrvl-merge.sh` locks via atomic `mkdir .git/merge.lock.d` with cleanup trap, eliminating the phantom Python subshell drop.
+- **Pi CWD Freshness Resolution** (2026-09-02): `CheckProjectFreshnessWithSource` passes resolved `projectCWD` to `checkPiContainerFreshness` to prevent bogus ENOENT invalidations.
+- **Upfront Bundle Verification** (2026-09-02): `InitFromBundle` executes `git bundle verify` before wiping existing clone directories.
+- **Hermes/OpenCode Source Stat Stripping** (2026-09-02): Stripped `#` fragments in `cmd_prewarm.go` before statting DB container files.
 
 ### 🧵 Open threads (with status)
-- **Standalone Headless Tagger Script** (`OPEN`): Dedicated zero-token JSON segment parser at `~/.cache/session-search/tagger-config.json` for headless tag writes.
-- **Pi/OpenCode Live Context Injections** (`VERIFIED`): Lifecycle hooks in `setup.go` verified compatible with native session startup events.
+- **CASS Suite Test Restoration** (`BLOCKED ON CASS DESK`): Supervisor-A/B must restore `autotests = true` in `coding_agent_session_search/Cargo.toml`.
+- **Librarian / Org Desk Hygiene** (`WAITING`): `~/org` untracked files and broken symlinks need Librarian desk cleanup.
 
 ### ⏭️ Next
-- Monitor CASS / Luna PR merge progress from Supervisor B.
-- Maintain RawClaw zero-runtime dependency and pure Go invariants.
+- Maintain RawClaw zero-runtime dependency, pure Go, and single static binary invariants.
 
 ### ⛔ Blockers
 - None.
