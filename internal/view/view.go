@@ -173,9 +173,53 @@ func RenderMsgs(msgs []store.Msg, includeTools bool, cap int) []ViewMsg {
 func RenderMsgsWith(msgs []store.Msg, includeTools, includeThinking bool, cap int) []ViewMsg {
 	out := make([]ViewMsg, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, ViewMsg{ID: m.ID, Role: m.Role, Text: parse.DispWith(m.Content, includeTools, includeThinking, cap)})
+		out = append(out, ViewMsg{ID: m.ID, Role: m.Role, Text: displayText(m.Content, includeTools, includeThinking, cap)})
 	}
 	return out
+}
+
+// displayText keeps transcript text readable as authored. parse.DispWith is
+// still used when generated material needs removing, but its final whitespace
+// collapse would destroy indentation and line breaks in code and prose.
+func displayText(content string, includeTools, includeThinking bool, cap int) string {
+	if isMarkdownCodeBlock(content) || !hasGeneratedMarker(content, includeThinking) {
+		return capRunes(content, cap)
+	}
+	return parse.DispWith(content, includeTools, includeThinking, cap)
+}
+
+func capRunes(s string, cap int) string {
+	if cap < 0 || len([]rune(s)) <= cap {
+		return s
+	}
+	return string([]rune(s)[:cap])
+}
+
+func isMarkdownCodeBlock(content string) bool {
+	for line := range strings.SplitSeq(content, "\n") {
+		line = strings.TrimLeft(line, " \t")
+		if line == "" {
+			continue
+		}
+		return strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~")
+	}
+	return false
+}
+
+func hasGeneratedMarker(content string, includeThinking bool) bool {
+	if !includeThinking && strings.Contains(content, "[THINKING") {
+		return true
+	}
+	for _, marker := range []string{
+		"[TOOL", "<task-notification>", "<system-reminder>",
+		"<command-message>", "<command-name>", "<command-args>",
+		"<local-command-", "<bash-", "<environment_context>",
+	} {
+		if strings.Contains(content, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // TakeDisplayable renders the FIRST want displayable records of msgs.
@@ -255,7 +299,7 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 		if isAnchor {
 			cap = -1
 		}
-		text := parse.DispWith(m.Content, opts.IncludeTools, opts.IncludeThinking, cap)
+		text := displayText(m.Content, opts.IncludeTools, opts.IncludeThinking, cap)
 		if !isAnchor { // neighbours are context: conversation only
 			if !opts.IncludeTools && !IsDisplayableWith(m.Content, opts.IncludeTools, opts.IncludeThinking) {
 				continue
@@ -412,7 +456,7 @@ func SessionLastActivity(con *sql.DB, sessionID string) string {
 		if !IsDisplayable(m.Content) {
 			continue
 		}
-		if text := parse.Disp(m.Content, false, browsePreviewCap); text != "" {
+		if text := displayText(m.Content, false, true, browsePreviewCap); text != "" {
 			return text
 		}
 	}
@@ -495,10 +539,10 @@ func SessionPreview(con *sql.DB, sessionID string, cap int) string {
 	var fallback string
 	for _, content := range contents {
 		if fallback == "" {
-			fallback = parse.Disp(content, false, cap)
+			fallback = displayText(content, false, true, cap)
 		}
 		if parse.IsSubstantive(content) {
-			return parse.Disp(content, false, cap)
+			return displayText(content, false, true, cap)
 		}
 	}
 	return fallback
