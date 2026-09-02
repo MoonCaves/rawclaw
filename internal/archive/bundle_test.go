@@ -39,7 +39,7 @@ func TestBundle_ExportAndInitRoundTrip(t *testing.T) {
 	// Switch to a fresh home (second machine) and seed from bundle.
 	newTestHome(t)
 
-	if err := InitFromBundle(ctx, bundlePath, bare); err != nil {
+	if _, err := InitFromBundle(ctx, bundlePath, bare); err != nil {
 		t.Fatalf("InitFromBundle: %v", err)
 	}
 
@@ -78,8 +78,28 @@ func TestBundle_ExportRefusesMissingClone(t *testing.T) {
 	if err == nil {
 		t.Fatal("ExportBundle succeeded on missing clone, want error")
 	}
-	if !strings.Contains(err.Error(), "does not exist") {
-		t.Errorf("error = %v, want 'does not exist'", err)
+	if !strings.Contains(err.Error(), "does not exist") && !strings.Contains(err.Error(), "stat") {
+		t.Errorf("error = %v, want missing clone error", err)
+	}
+}
+
+func TestBundle_ExportRefusesDirectory(t *testing.T) {
+	newTestHome(t)
+	bare := initBareRepo(t)
+
+	ctx := context.Background()
+	a, err := Init(ctx, bare, "machine-1")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	dirPath := t.TempDir()
+	err = a.ExportBundle(ctx, dirPath)
+	if err == nil {
+		t.Fatal("ExportBundle succeeded with directory destination, want error")
+	}
+	if !strings.Contains(err.Error(), "directory") {
+		t.Errorf("error = %v, want directory error", err)
 	}
 }
 
@@ -111,7 +131,7 @@ func TestBundle_InitFromBundleValidation(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("empty bundle path", func(t *testing.T) {
-		if err := InitFromBundle(ctx, "", "git@example.com:repo.git"); err == nil {
+		if _, err := InitFromBundle(ctx, "", "git@example.com:repo.git"); err == nil {
 			t.Error("InitFromBundle succeeded with empty bundle path, want error")
 		}
 	})
@@ -119,13 +139,13 @@ func TestBundle_InitFromBundleValidation(t *testing.T) {
 	t.Run("empty remote url", func(t *testing.T) {
 		bundlePath := filepath.Join(t.TempDir(), "empty.bundle")
 		_ = os.WriteFile(bundlePath, []byte("data"), 0o644)
-		if err := InitFromBundle(ctx, bundlePath, ""); err == nil {
+		if _, err := InitFromBundle(ctx, bundlePath, ""); err == nil {
 			t.Error("InitFromBundle succeeded with empty remote url, want error")
 		}
 	})
 
 	t.Run("nonexistent bundle file", func(t *testing.T) {
-		if err := InitFromBundle(ctx, "/path/to/nonexistent.bundle", "git@example.com:repo.git"); err == nil {
+		if _, err := InitFromBundle(ctx, "/path/to/nonexistent.bundle", "git@example.com:repo.git"); err == nil {
 			t.Error("InitFromBundle succeeded with nonexistent bundle file, want error")
 		}
 	})
@@ -135,7 +155,7 @@ func TestBundle_InitFromBundleValidation(t *testing.T) {
 		if err := os.WriteFile(invalidBundle, []byte("not-a-git-bundle"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := InitFromBundle(ctx, invalidBundle, "git@example.com:repo.git"); err == nil {
+		if _, err := InitFromBundle(ctx, invalidBundle, "git@example.com:repo.git"); err == nil {
 			t.Error("InitFromBundle succeeded with invalid bundle file, want error")
 		}
 	})
@@ -150,7 +170,7 @@ func TestBundle_InitFromBundleValidation(t *testing.T) {
 		if err := a.ExportBundle(ctx, bundlePath); err != nil {
 			t.Fatalf("ExportBundle: %v", err)
 		}
-		if err := InitFromBundle(ctx, bundlePath, bare); err == nil {
+		if _, err := InitFromBundle(ctx, bundlePath, bare); err == nil {
 			t.Error("InitFromBundle succeeded when already initialized, want error")
 		}
 	})

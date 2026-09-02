@@ -35,6 +35,13 @@ const upgradeWatchdog = 5 * time.Minute
 // not that a minute is the longest anything may take.
 const consolidateWatchdog = 10 * time.Minute
 
+// exportBundleWatchdog is the watchdog floor for `rawclaw archive export-bundle`
+// when the user gave no explicit --timeout / RAWCLAW_TIMEOUT. Creating a standalone
+// git bundle from a multi-gigabyte archive clone requires packing all objects to disk,
+// which easily exceeds the default 30s watchdog. This floor ensures large bundle exports
+// complete reliably while guaranteeing the command remains wall-clock bounded.
+const exportBundleWatchdog = 10 * time.Minute
+
 // resolveTimeout picks the effective deadline: an explicit --timeout flag wins,
 // else RAWCLAW_TIMEOUT (a Go duration like "45s" or "2m"), else defaultTimeout.
 // A non-positive value disables the watchdog (returns 0). A malformed env var is
