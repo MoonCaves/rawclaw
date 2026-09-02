@@ -9,17 +9,14 @@ import (
 	"io"
 
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
+	"github.com/MoonCaves/rawclaw/internal/text"
 	"github.com/MoonCaves/rawclaw/internal/timefmt"
 	"github.com/MoonCaves/rawclaw/internal/view"
 )
 
-// sid8 returns up to the first 8 bytes of s, with no padding when the string
-// is shorter.
+// sid8 delegates to text.Sid8.
 func sid8(s string) string {
-	if len(s) > 8 {
-		return s[:8]
-	}
-	return s
+	return text.Sid8(s)
 }
 
 // fmtMsg formats a single message line: an anchored message is marked with a
