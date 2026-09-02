@@ -7,18 +7,19 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — Lucene/Zoekt Unified Single FTS5 Index Architecture Landed Clean.**
+**2026-09-02 — Release v0.12.0 Cut & Pushed to GitHub.**
 
 ### 📍 Now
-- Landed commit `f3b0555`: Unified single `messages_fts` SQLite FTS5 table with sub-token decomposition and Okapi BM25 ranking (`ORDER BY rank, m.id`).
-- Removed the ad-hoc dual-table heuristic router; mixed code+prose queries match both stemmed intent and exact code symbols natively.
+- Release `v0.12.0` tagged and pushed cleanly to `MoonCaves/rawclaw`.
+- `rawclaw setup` executed: discovery and session-lifecycle hooks installed across Claude Code, Codex, and Antigravity pointing to the static binary at `~/.local/bin/rawclaw`.
 - All 39 internal packages pass race tests 100% green (`CGO_ENABLED=0 go test -race -count=1 ./...`).
-- Single static pure-Go binary rebuilt and active at `~/.local/bin/rawclaw`.
 
 ### ✅ Decisions
-- **Lucene / Zoekt Single Unified Index Standard** (2026-09-02): Single `messages_fts` virtual table with `tokenize='porter unicode61'` + substring `messages_fts_trigram`. Sub-token decomposition at tokenization time. Zero heuristic routing. 50% less disk footprint and perfect mixed-query recall.
-- **Atomic LRVL Directory Lock** (2026-09-02): `scripts/lrvl-merge.sh` locks via atomic `mkdir .git/merge.lock.d` with cleanup trap.
-- **Pi CWD Freshness Resolution** (2026-09-02): `CheckProjectFreshnessWithSource` passes resolved `projectCWD` to `checkPiContainerFreshness`.
+- **Release v0.12.0** (2026-09-02):
+  - Lucene / Zoekt unified single FTS5 index (`messages_fts`) with sub-token decomposition and Okapi BM25 ranking.
+  - Read-only connection discipline (`_pragma=query_only(1)`).
+  - Silent hot-path logging (`slog.Debug` on fence acquire/release).
+  - Estate defect hardening (POSIX atomic directory lock in `lrvl-merge.sh`, Pi CWD resolution, `git bundle verify` upfront, and Hermes DB fragment stripping).
 
 ### 🧵 Open threads (with status)
 - **CASS Suite Test Restoration** (`BLOCKED ON CASS DESK`): Supervisor-A/B must restore `autotests = true` in `coding_agent_session_search/Cargo.toml`.
