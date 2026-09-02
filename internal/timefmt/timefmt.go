@@ -17,7 +17,6 @@
 package timefmt
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -104,8 +103,8 @@ func UTCShortFromISO(iso string) string {
 // Accepts:
 //   - Standard ISO dates: "2006-01-02", RFC3339 ("2006-01-02T15:04:05Z") via time.Parse
 //   - Relative day keywords: "today", "yesterday", "now"
+//   - Relative day/week shorthand: "-7d", "7d", "-1w", "1w" via time.Time.AddDate
 //   - Standard durations: "-24h", "-168h", "72h" via time.ParseDuration
-//   - Day/week shorthand: "-7d", "7d", "-1w", "1w" (translated to hours for time.ParseDuration)
 func ParseDateFilter(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -113,16 +112,16 @@ func ParseDateFilter(s string) string {
 	}
 	// Try standard ISO formats first via time.Parse
 	if t, err := time.Parse(DateLayout, s); err == nil {
-		return t.UTC().Format(DateLayout)
+		return t.Format(DateLayout)
 	}
 	for _, layout := range isoLayouts {
 		if t, err := time.Parse(layout, s); err == nil {
-			return t.UTC().Format(DateLayout)
+			return t.Format(DateLayout)
 		}
 	}
 
 	lower := strings.ToLower(s)
-	now := time.Now().UTC()
+	now := time.Now()
 	switch lower {
 	case "today", "now":
 		return now.Format(DateLayout)
@@ -130,23 +129,25 @@ func ParseDateFilter(s string) string {
 		return now.AddDate(0, 0, -1).Format(DateLayout)
 	}
 
-	// Translate day/week shorthand to Go standard duration format for time.ParseDuration
-	durStr := lower
+	// Relative day/week offsets via standard time.AddDate
 	switch {
-	case strings.HasSuffix(durStr, "d"):
-		numStr := strings.TrimSuffix(strings.TrimPrefix(durStr, "-"), "d")
+	case strings.HasSuffix(lower, "d"):
+		numStr := strings.TrimSuffix(strings.TrimPrefix(lower, "-"), "d")
 		if n, err := strconv.Atoi(numStr); err == nil {
-			durStr = fmt.Sprintf("-%dh", n*24)
+			return now.AddDate(0, 0, -n).Format(DateLayout)
 		}
-	case strings.HasSuffix(durStr, "w"):
-		numStr := strings.TrimSuffix(strings.TrimPrefix(durStr, "-"), "w")
+	case strings.HasSuffix(lower, "w"):
+		numStr := strings.TrimSuffix(strings.TrimPrefix(lower, "-"), "w")
 		if n, err := strconv.Atoi(numStr); err == nil {
-			durStr = fmt.Sprintf("-%dh", n*168)
+			return now.AddDate(0, 0, -n*7).Format(DateLayout)
 		}
-	case !strings.HasPrefix(durStr, "-") && !strings.HasPrefix(durStr, "+"):
-		durStr = "-" + durStr
 	}
 
+	// Standard Go durations (-24h, -48h, etc.) via time.ParseDuration
+	durStr := lower
+	if !strings.HasPrefix(durStr, "-") && !strings.HasPrefix(durStr, "+") {
+		durStr = "-" + durStr
+	}
 	if d, err := time.ParseDuration(durStr); err == nil {
 		return now.Add(d).Format(DateLayout)
 	}

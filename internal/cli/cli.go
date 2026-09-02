@@ -881,8 +881,12 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 		return runStats(ctx, out, o)
 	}
 
-	if len(args) == 0 && strings.TrimSpace(o.Query) != "" {
-		args = []string{o.Query}
+	if strings.TrimSpace(o.Query) != "" {
+		if len(args) == 0 {
+			args = []string{o.Query}
+		} else {
+			args = append(args, o.Query)
+		}
 	}
 
 	if len(args) == 0 {
