@@ -7,16 +7,15 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — Multi-Column Role-Weighted BM25F & Code Tokenizer Landed Clean.**
+**2026-09-02 — CASS-Identical Dual FTS5 Indexing & Query Router Landed Clean.**
 
 ### 📍 Now
-- Landed commit `2301dd1`: Multi-column role-weighted BM25F SQLite FTS5 index (`user_prompt`, `assistant_text`, `tool_output`) with 5.0x / 2.0x / 0.1x weight vectors and standard code-aware identifier tokenizer in `internal/text/tokenize.go`.
+- Landed commit `d25446c`: Replaced hand-rolled weighting with the exact dual-index architecture from CASS (`messages_fts` with `porter unicode61 remove_diacritics 2` + `messages_code_fts` with `unicode61 tokenchars '-_./:@#$%\\'`) and CASS's exact `DetectSearchMode` query router.
 - All 39 internal packages pass race tests 100% green (`CGO_ENABLED=0 go test -race -count=1 ./...`).
-- Single static binary rebuilt and active at `~/.local/bin/rawclaw`.
+- Single static pure-Go binary rebuilt and active at `~/.local/bin/rawclaw`.
 
 ### ✅ Decisions
-- **Multi-Column Role-Weighted BM25F** (2026-09-02): Standard SQLite FTS5 table `messages_fts` splits content into `user_prompt`, `assistant_text`, `tool_output` via triggers. Ranked queries apply `bm25(messages_fts, 5.0, 2.0, 0.1)` so human prompts and assistant reasoning outrank raw compiler dumps without external models.
-- **Standard Code-Aware Tokenizer** (2026-09-02): `internal/text/tokenize.go` exports `SplitCodeIdentifier` using standard regex/path splitting for camelCase, snake_case, PascalCase, and file paths.
+- **CASS Dual-Table FTS5 Standard** (2026-09-02): Adopted CASS's production dual-index schema from `src/pages/export.rs:252-266` and query router from `src/pages/fts.rs:50-128`. Zero hand-rolled weights. Exact code symbols and file paths are indexed and routed natively by SQLite FTS5.
 - **Atomic LRVL Directory Lock** (2026-09-02): `scripts/lrvl-merge.sh` locks via atomic `mkdir .git/merge.lock.d` with cleanup trap.
 - **Pi CWD Freshness Resolution** (2026-09-02): `CheckProjectFreshnessWithSource` passes resolved `projectCWD` to `checkPiContainerFreshness`.
 
