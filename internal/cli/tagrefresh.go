@@ -72,7 +72,7 @@ func freshPrewarmDump(session8 string) (string, bool) {
 		return "", false
 	}
 	dumpPath := index.PrewarmDumpPath(fullSID)
-	if !prewarmFresh(dumpPath, prewarmSourcePath(dbp, fullSID)) {
+	if !prewarmFresh(dumpPath, prewarmSourcePath(dbp, fullSID), fullSID) {
 		return "", false
 	}
 	dump, err := os.ReadFile(dumpPath)
@@ -93,7 +93,8 @@ func readConsolidatedTopics(sessionID string) []store.TopicSegment {
 }
 
 // readAuthoritativeTagTopics reads the current per-session DB. The source DB
-// is authoritative because a fold may be delayed.
+// is authoritative because a fold may be delayed. If empty, falls back to
+// the per-project db or consolidated topics.
 func readAuthoritativeTagTopics(authoritativeDB, sessionID string) ([]store.TopicSegment, error) {
 	auth, err := store.ConnectRO(authoritativeDB)
 	if err != nil {
@@ -104,10 +105,27 @@ func readAuthoritativeTagTopics(authoritativeDB, sessionID string) ([]store.Topi
 	if err != nil {
 		return nil, fmt.Errorf("read authoritative topics for %s: %w", sessionID, err)
 	}
-	if authoritativeDB == index.ConsolidatedPath() {
+	if len(authSegs) > 0 || authoritativeDB == index.ConsolidatedPath() {
 		return authSegs, nil
 	}
-	return append([]store.TopicSegment(nil), authSegs...), nil
+	if backing, ok, berr := store.SessionBackingFor(auth, sessionID); berr == nil && ok && backing.SourcePath != "" {
+		if tdir := paths.ProjectDirOf(backing.SourcePath); tdir != "" {
+			projDB := index.DBPath(tdir)
+			if projDB != authoritativeDB {
+				if pcon, perr := store.ConnectRO(projDB); perr == nil {
+					psegs, _ := store.TopicsForSession(pcon, sessionID)
+					_ = pcon.Close()
+					if len(psegs) > 0 {
+						return psegs, nil
+					}
+				}
+			}
+		}
+	}
+	if consSegs := readConsolidatedTopics(sessionID); len(consSegs) > 0 {
+		return consSegs, nil
+	}
+	return authSegs, nil
 }
 
 type tagSourceMatch struct {

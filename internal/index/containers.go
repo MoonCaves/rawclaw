@@ -95,6 +95,13 @@ func PrewarmDumpPath(sessionID string) string {
 	return filepath.Join(dir, hex.EncodeToString(sum[:])+".dump")
 }
 
+// InvalidatePrewarmDump removes the prewarm dump and fingerprint state for a session.
+func InvalidatePrewarmDump(sessionID string) {
+	dumpPath := PrewarmDumpPath(sessionID)
+	_ = os.Remove(dumpPath)
+	_ = os.Remove(dumpPath + ".state")
+}
+
 // PrepareFreshContainer incrementally refreshes one live container and proves
 // its watermark matches the current file in the refresh db without folding into
 // the consolidated store.
