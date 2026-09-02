@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/store/storetest"
 )
 
@@ -566,5 +567,13 @@ func TestIsDisplayable(t *testing.T) {
 		if got := IsDisplayable(tt.content); got != tt.want {
 			t.Errorf("IsDisplayable(%q) = %v, want %v", tt.content, got, tt.want)
 		}
+	}
+}
+
+func TestRenderMsgsWithPreservesMultilineCode(t *testing.T) {
+	content := "```go\n\tfunc main() {\n\t\tprintln(\"x\")\n\t}\n```"
+	got := RenderMsgsWith([]store.Msg{{ID: 1, Role: "assistant", Content: content}}, false, true, -1)
+	if len(got) != 1 || got[0].Text != content {
+		t.Fatalf("RenderMsgsWith() = %#v, want exact fenced content", got)
 	}
 }
