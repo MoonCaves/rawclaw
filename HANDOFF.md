@@ -7,18 +7,18 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — 4 Critical Operational Bug Fixes Landed & Wire Broadcast Sealed.**
+**2026-09-02 — Multi-Column Role-Weighted BM25F & Code Tokenizer Landed Clean.**
 
 ### 📍 Now
-- Landed commit `5300567`: Patched LRVL phantom lock in `scripts/lrvl-merge.sh`, Pi container freshness CWD resolution in `consolidated.go`, upfront bundle verify in `bundle.go`, and `#fragment` stat stripping in `cmd_prewarm.go`.
+- Landed commit `2301dd1`: Multi-column role-weighted BM25F SQLite FTS5 index (`user_prompt`, `assistant_text`, `tool_output`) with 5.0x / 2.0x / 0.1x weight vectors and standard code-aware identifier tokenizer in `internal/text/tokenize.go`.
 - All 39 internal packages pass race tests 100% green (`CGO_ENABLED=0 go test -race -count=1 ./...`).
-- Wire broadcast #590 & #591 issued in thread `PUBLIC-ESTATE-RECORD` roasting fleet essay bloat and issuing binding operational mandates.
+- Single static binary rebuilt and active at `~/.local/bin/rawclaw`.
 
 ### ✅ Decisions
-- **Atomic LRVL Directory Lock** (2026-09-02): `scripts/lrvl-merge.sh` locks via atomic `mkdir .git/merge.lock.d` with cleanup trap, eliminating the phantom Python subshell drop.
-- **Pi CWD Freshness Resolution** (2026-09-02): `CheckProjectFreshnessWithSource` passes resolved `projectCWD` to `checkPiContainerFreshness` to prevent bogus ENOENT invalidations.
-- **Upfront Bundle Verification** (2026-09-02): `InitFromBundle` executes `git bundle verify` before wiping existing clone directories.
-- **Hermes/OpenCode Source Stat Stripping** (2026-09-02): Stripped `#` fragments in `cmd_prewarm.go` before statting DB container files.
+- **Multi-Column Role-Weighted BM25F** (2026-09-02): Standard SQLite FTS5 table `messages_fts` splits content into `user_prompt`, `assistant_text`, `tool_output` via triggers. Ranked queries apply `bm25(messages_fts, 5.0, 2.0, 0.1)` so human prompts and assistant reasoning outrank raw compiler dumps without external models.
+- **Standard Code-Aware Tokenizer** (2026-09-02): `internal/text/tokenize.go` exports `SplitCodeIdentifier` using standard regex/path splitting for camelCase, snake_case, PascalCase, and file paths.
+- **Atomic LRVL Directory Lock** (2026-09-02): `scripts/lrvl-merge.sh` locks via atomic `mkdir .git/merge.lock.d` with cleanup trap.
+- **Pi CWD Freshness Resolution** (2026-09-02): `CheckProjectFreshnessWithSource` passes resolved `projectCWD` to `checkPiContainerFreshness`.
 
 ### 🧵 Open threads (with status)
 - **CASS Suite Test Restoration** (`BLOCKED ON CASS DESK`): Supervisor-A/B must restore `autotests = true` in `coding_agent_session_search/Cargo.toml`.
