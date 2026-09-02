@@ -90,13 +90,13 @@ func (o *Options) normalizeDates() {
 	}
 	now := time.Now().UTC()
 	if o.Days > 0 && o.Since == "" {
-		o.Since = now.AddDate(0, 0, -o.Days).Format("2006-01-02")
+		o.Since = now.AddDate(0, 0, -o.Days).Format(timefmt.DateLayout)
 	}
 	if o.Today && o.Since == "" {
-		o.Since = now.Format("2006-01-02")
+		o.Since = now.Format(timefmt.DateLayout)
 	}
 	if o.Yesterday {
-		y := now.AddDate(0, 0, -1).Format("2006-01-02")
+		y := now.AddDate(0, 0, -1).Format(timefmt.DateLayout)
 		if o.Since == "" {
 			o.Since = y
 		}
