@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,8 +99,11 @@ func PrewarmDumpPath(sessionID string) string {
 // InvalidatePrewarmDump removes the prewarm dump and fingerprint state for a session.
 func InvalidatePrewarmDump(sessionID string) {
 	dumpPath := PrewarmDumpPath(sessionID)
-	_ = os.Remove(dumpPath)
-	_ = os.Remove(dumpPath + ".state")
+	for _, p := range []string{dumpPath, dumpPath + ".state"} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			slog.Debug("invalidate prewarm dump", "path", p, "err", err)
+		}
+	}
 }
 
 // PrepareFreshContainer incrementally refreshes one live container and proves

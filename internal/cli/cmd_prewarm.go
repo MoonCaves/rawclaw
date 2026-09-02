@@ -61,7 +61,7 @@ func runPrewarmCmd(
 
 	sourcePath := prewarmSourcePath(dbPath, fullSID)
 	dumpPath := index.PrewarmDumpPath(fullSID)
-	if prewarmFresh(dumpPath, sourcePath, fullSID) {
+	if prewarmFresh(dumpPath, sourcePath, fullSID, dbPath) {
 		return nil
 	}
 
@@ -71,7 +71,10 @@ func runPrewarmCmd(
 	}
 	defer con.Close()
 
-	topics := readConsolidatedTopics(fullSID)
+	topics, err := readAuthoritativeTagTopics(dbPath, fullSID)
+	if err != nil {
+		return err
+	}
 	var content bytes.Buffer
 	if err := runTagPrepWithTopics(&content, con, fullSID, topics); err != nil {
 		return err
@@ -117,7 +120,7 @@ func prewarmSourcePath(dbPath, sessionID string) string {
 	return ""
 }
 
-func prewarmFresh(dumpPath, sourcePath, sessionID string) bool {
+func prewarmFresh(dumpPath, sourcePath, sessionID, dbPath string) bool {
 	if _, err := os.Stat(dumpPath); err != nil {
 		return false
 	}
@@ -130,8 +133,8 @@ func prewarmFresh(dumpPath, sourcePath, sessionID string) bool {
 		return false
 	}
 	if sessionID != "" {
-		curTopics := readConsolidatedTopics(sessionID)
-		if len(curTopics) != saved.TopicCount {
+		curTopics, err := readAuthoritativeTagTopics(dbPath, sessionID)
+		if err != nil || len(curTopics) != saved.TopicCount {
 			return false
 		}
 	}
