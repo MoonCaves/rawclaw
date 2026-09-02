@@ -64,16 +64,26 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
 // FTSSQL is the FTS5 virtual table + sync triggers (contentful/inline + porter).
 const FTSSQL = `
-CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize='porter unicode61');
+CREATE VIRTUAL TABLE messages_fts USING fts5(user_prompt, assistant_text, tool_output, tokenize='porter unicode61');
 CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
-  INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+  INSERT INTO messages_fts(rowid, user_prompt, assistant_text, tool_output) VALUES (
+    new.id,
+    CASE WHEN new.role = 'user' THEN new.content ELSE '' END,
+    CASE WHEN new.role = 'assistant' THEN new.content ELSE '' END,
+    CASE WHEN new.role NOT IN ('user', 'assistant') THEN new.content ELSE '' END
+  );
 END;
 CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
   DELETE FROM messages_fts WHERE rowid = old.id;
 END;
 CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
   DELETE FROM messages_fts WHERE rowid = old.id;
-  INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+  INSERT INTO messages_fts(rowid, user_prompt, assistant_text, tool_output) VALUES (
+    new.id,
+    CASE WHEN new.role = 'user' THEN new.content ELSE '' END,
+    CASE WHEN new.role = 'assistant' THEN new.content ELSE '' END,
+    CASE WHEN new.role NOT IN ('user', 'assistant') THEN new.content ELSE '' END
+  );
 END;
 `
 
