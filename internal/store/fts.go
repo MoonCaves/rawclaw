@@ -47,13 +47,16 @@ const (
 
 // orderClause maps a Sort onto its SQL ORDER BY — byte-identical to the
 // retrieve layer's clauses.
-func orderClause(s Sort) string {
+func orderClause(s Sort, tbl ftsTable) string {
 	switch s {
 	case SortNewest:
 		return "ORDER BY m.ts DESC, m.id DESC"
 	case SortOldest:
 		return "ORDER BY m.ts ASC, m.id ASC"
 	default:
+		if tbl == wordTable {
+			return "ORDER BY bm25(messages_fts, 5.0, 2.0, 0.1), m.id ASC"
+		}
 		return "ORDER BY rank, m.id"
 	}
 }
@@ -211,10 +214,10 @@ func SearchHitsSubstring(con *sql.DB, match string, f Filter, s Sort, limit int)
 func searchHits(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
 	where, args := ftsWhere(tbl, match, f)
 	sqlText := `SELECT m.session_id, m.role, m.ts_iso, s.is_subagent, s.parent_id, m.content,
-	                   snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip
+	                   snippet(` + string(tbl) + `,-1,'>>>','<<<','…',16) AS snip
 	            FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
 	            JOIN sessions s ON s.id=m.session_id
-	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
+	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s, tbl) + " LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := con.Query(sqlText, args...)
@@ -288,10 +291,10 @@ func searchAnchors(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, li
 	where, args := ftsWhere(tbl, match, f)
 	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content, s.only_copy_since,
 	                   COALESCE(s.project,'') AS project,
-	                   snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip
+	                   snippet(` + string(tbl) + `,-1,'>>>','<<<','…',16) AS snip
 	            FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
 	            JOIN sessions s ON s.id=m.session_id
-	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
+	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s, tbl) + " LIMIT ?"
 	args = append(args, limit)
 
 	rows, err := con.Query(sqlText, args...)
