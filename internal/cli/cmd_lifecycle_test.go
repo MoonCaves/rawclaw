@@ -24,7 +24,7 @@ func newCfgRoot(t *testing.T) string {
 	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
 	// Isolate HOME too: a real `delete` writes its tombstone to the default
 	// ~/.cache (cacheDir="" in runDelete). Without this, `go test` would pollute
-	// the contributor's real ~/.cache/session-search/.deleted. Keep it hermetic.
+	// the contributor's real ~/.local/share/rawclaw/.deleted. Keep it hermetic.
 	t.Setenv("HOME", cfg)
 	// The durable transcript vault reads XDG_DATA_HOME before HOME, so pin it
 	// under this test's config dir too. Otherwise every test in the package
@@ -314,7 +314,7 @@ func TestDeleteCmd_ReachesRetainedSession(t *testing.T) {
 
 	// The tombstone sidecar (under the isolated HOME newCfgRoot set) now carries
 	// the retained session's full id, so a later reindex would skip resurrecting it.
-	tombPath := filepath.Join(root, "..", ".cache", "session-search", ".deleted")
+	tombPath := filepath.Join(root, "..", ".local", "share", "rawclaw", ".deleted")
 	b, rerr := os.ReadFile(tombPath)
 	if rerr != nil {
 		t.Fatalf("read tombstone %q: %v", tombPath, rerr)
@@ -343,7 +343,7 @@ func TestDeleteCmd_DryRunReportsRetainedWithoutTombstoning(t *testing.T) {
 		t.Errorf("dry-run must not report a deletion; out: %s", out)
 	}
 
-	tombPath := filepath.Join(root, "..", ".cache", "session-search", ".deleted")
+	tombPath := filepath.Join(root, "..", ".local", "share", "rawclaw", ".deleted")
 	if b, rerr := os.ReadFile(tombPath); rerr == nil && strings.Contains(string(b), "dryret0001xyz") {
 		t.Errorf("dry-run must not tombstone anything, but found the id in %q: %q", tombPath, string(b))
 	}

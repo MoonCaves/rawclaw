@@ -145,7 +145,7 @@ func TestArchivePushCmd_ReportsRemovals(t *testing.T) {
 	if err := os.Remove(p); err != nil {
 		t.Fatal(err)
 	}
-	tomb := filepath.Join(home, ".cache", "session-search", ".deleted")
+	tomb := filepath.Join(home, ".local", "share", "rawclaw", ".deleted")
 	if err := os.MkdirAll(filepath.Dir(tomb), 0o755); err != nil {
 		t.Fatal(err)
 	}

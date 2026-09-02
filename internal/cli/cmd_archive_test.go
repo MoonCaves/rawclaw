@@ -19,6 +19,7 @@ func newArchiveHome(t *testing.T) string {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	t.Setenv("RAWCLAW_ARCHIVE", "")
 	return home
 }

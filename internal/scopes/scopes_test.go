@@ -125,6 +125,7 @@ func TestCodexDBPath_Stable(t *testing.T) {
 func TestClaudeUnionsOrphanedDBs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 
 	root := filepath.Join(home, ".claude", "projects")
@@ -158,7 +159,7 @@ func TestClaudeUnionsOrphanedDBs(t *testing.T) {
 		t.Fatal(err)
 	}
 	// deletedDir's session is ALSO tombstoned (a real `rawclaw delete`).
-	tombDir := filepath.Join(home, ".cache", "session-search")
+	tombDir := filepath.Join(home, ".local", "share", "rawclaw")
 	if err := os.MkdirAll(tombDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -217,6 +218,7 @@ func TestClaudeUnionsOrphanedDBs(t *testing.T) {
 func TestCodexUnionsOrphanedDBs_NoLiveContainers(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	codexHome := t.TempDir() // no sessions/ subdir -> Discover() sees zero containers
 	t.Setenv("CODEX_HOME", codexHome)
 
@@ -288,7 +290,7 @@ func TestCodexUnionsOrphanedDBs_TombstonedExcluded(t *testing.T) {
 		t.Fatalf("seed orphan db: %v", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(store.CacheDir(), ".deleted"), []byte("deadsess\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".local", "share", "rawclaw", ".deleted"), []byte("deadsess\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
