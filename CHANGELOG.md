@@ -4,8 +4,20 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+## [v0.11.0] - 2026-09-02
+
 ### Added
 
+- **Archive bundle export and 15-second cold-start seeding.** Added `rawclaw archive export-bundle <path>`
+  to package the entire local transcript archive clone into a portable git bundle file, and
+  `rawclaw archive init --from-bundle <path> <remote-url>` to seed new machines locally in ~15 seconds,
+  bypassing multi-gigabyte WAN clones while automatically reattaching upstream remotes and stamping sentinels.
+- **New runtime adapters: Hermes Agent, OpenCode, and Pi.** Added native transcript adapters and session-birth
+  discovery hooks for Hermes Agent (`~/.hermes/state.db`), OpenCode & Crush (`~/.local/share/opencode/`),
+  and Pi (`~/.pi/sessions/`).
+- **Multi-runtime session closeout parity.** `rawclaw closeout <session_id>` provides unified closeout
+  guidance and subagent delegation across all supported runtimes (Claude Code, Codex, Antigravity, Goose,
+  OpenCode, and Pi).
 - **Durable session catalog and catalog-first O(1) session resolution.** `rawclaw setup` now installs
   upgraded Claude Code and Codex hooks that record session metadata (`session_id`, `transcript_path`,
   `cwd`, `source`) into a flat, lightweight catalog at `~/.local/share/rawclaw/catalog` (or
