@@ -7,7 +7,33 @@
 // Voyage, sqlite-vec, …) plug in later.
 package embed
 
-import "context"
+import (
+	"context"
+	"math"
+)
+
+// Normalize returns a unit-length copy of vec. Nil, empty, and zero vectors
+// are returned unchanged because they cannot be normalized.
+func Normalize(vec []float64) []float64 {
+	out := append([]float64(nil), vec...)
+	if len(out) == 0 {
+		return out
+	}
+
+	length := 0.0
+	for _, value := range out {
+		length += value * value
+	}
+	if length == 0 {
+		return out
+	}
+
+	length = math.Sqrt(length)
+	for i := range out {
+		out[i] /= length
+	}
+	return out
+}
 
 // Embedder turns a text string into a dense float vector.
 //
