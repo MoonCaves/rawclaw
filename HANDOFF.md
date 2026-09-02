@@ -7,19 +7,21 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — Standard Go `time.Parse` / `time.ParseDuration` Seam Consolidated & Query Forwarding Preserved.**
+**2026-09-02 — Golang How-To Skill Orchestrator Engaged Across CLI, Database, and Modernize Clusters.**
 
 ### 📍 Now
-- Commit `3b1a790` landed on `main`: Consolidated date filter parsing in `internal/timefmt.ParseDateFilter` using Go standard library `time.Parse` and `time.ParseDuration`.
-- Eliminated redundant `strings.Fields` split-and-rejoin on `o.Query`, forwarding `args = []string{o.Query}` directly to preserve exact spacing and quotes.
+- Commit `1351a82` landed on `main`: Unified layout format strings to `timefmt.DateLayout` across `normalizeDates` per `golang-code-style` and `golang-modernize`.
+- Applied orchestrator routing across 3 primary skill clusters:
+  1. `golang-spf13-cobra` (`RunE`, flag binding via `pflag`, `newSearchCmd`).
+  2. `golang-database` (parameterized SQL, `PRAGMA query_only(1)`, immediate `defer rows.Close()`).
+  3. `golang-modernize` (stdlib `time.Parse`, `time.ParseDuration`, named constants).
 - All 39 internal packages pass race tests (`CGO_ENABLED=0 go test -race -count=1 ./...`).
 - Zero formatting diffs (`gofmt -l internal/`).
 
 ### ✅ Decisions
-- **Standard Go Stdlib Time Parsing** (2026-09-02):
-  - Moved date parsing out of `cli.go` into `internal/timefmt.ParseDateFilter`.
-  - Replaced ad-hoc string slicing with standard Go `time.Parse` (supporting `DateLayout` and RFC3339) and `time.ParseDuration`.
-  - Replaced `strings.Fields` with direct `[]string{o.Query}` forwarder.
+- **Golang Skills Orchestration** (2026-09-02):
+  - Used `golang-how-to` to route tasks across `golang-spf13-cobra`, `golang-database`, and `golang-modernize`.
+  - Replaced hard-coded `"2006-01-02"` literals with `timefmt.DateLayout`.
 
 ### 🧵 Open threads (with status)
 - **CASS Suite Test Restoration** (`BLOCKED ON CASS DESK`): Supervisor-A/B must restore `autotests = true` in `coding_agent_session_search/Cargo.toml`.
