@@ -37,7 +37,8 @@ func Registered() []source.Registration {
 func Get(id string) *source.Registration {
 	for _, reg := range Registered() {
 		if reg.ID == id {
-			return &reg
+			r := reg
+			return &r
 		}
 	}
 	return nil
