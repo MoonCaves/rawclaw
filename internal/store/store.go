@@ -62,9 +62,9 @@ CREATE INDEX IF NOT EXISTS idx_file_index_session ON file_index(session_id);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 `
 
-// FTSSQL is the natural language FTS5 virtual table + sync triggers (porter + unicode61).
+// // FTSSQL is the unified FTS5 virtual table + sync triggers (porter + unicode61).
 const FTSSQL = `
-CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize='porter unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize='porter unicode61');
 CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
   INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
@@ -74,22 +74,6 @@ END;
 CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
   DELETE FROM messages_fts WHERE rowid = old.id;
   INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-END;
-`
-
-// CodeFTSSQL is the code-aware FTS5 virtual table using unicode61 with symbol tokenchars.
-// Copied verbatim from CASS (pages/export.rs:261).
-const CodeFTSSQL = `
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_code_fts USING fts5(content, tokenize="unicode61 tokenchars '-_./:@#$%\\'");
-CREATE TRIGGER IF NOT EXISTS messages_code_ai AFTER INSERT ON messages BEGIN
-  INSERT INTO messages_code_fts(rowid, content) VALUES (new.id, new.content);
-END;
-CREATE TRIGGER IF NOT EXISTS messages_code_ad AFTER DELETE ON messages BEGIN
-  DELETE FROM messages_code_fts WHERE rowid = old.id;
-END;
-CREATE TRIGGER IF NOT EXISTS messages_code_au AFTER UPDATE ON messages BEGIN
-  DELETE FROM messages_code_fts WHERE rowid = old.id;
-  INSERT INTO messages_code_fts(rowid, content) VALUES (new.id, new.content);
 END;
 `
 
@@ -154,9 +138,6 @@ const TrigramBatchFillSQL = `INSERT OR REPLACE INTO messages_fts_trigram(rowid, 
 const dropSQL = `DROP TRIGGER IF EXISTS messages_ai;
 DROP TRIGGER IF EXISTS messages_ad;
 DROP TRIGGER IF EXISTS messages_au;
-DROP TRIGGER IF EXISTS messages_code_ai;
-DROP TRIGGER IF EXISTS messages_code_ad;
-DROP TRIGGER IF EXISTS messages_code_au;
 DROP TRIGGER IF EXISTS messages_tri_ai;
 DROP TRIGGER IF EXISTS messages_tri_ad;
 DROP TRIGGER IF EXISTS messages_tri_au;
@@ -314,9 +295,6 @@ func Rebuild(con *sql.DB) error {
 	}
 	if _, err := con.Exec(FTSSQL); err != nil {
 		return fmt.Errorf("rebuild fts: %w", err)
-	}
-	if _, err := con.Exec(CodeFTSSQL); err != nil {
-		return fmt.Errorf("rebuild code fts: %w", err)
 	}
 	// The substring index is part of the rebuilt shape, so a fresh db carries it
 	// from the start and only an already-populated db needs the migration.
