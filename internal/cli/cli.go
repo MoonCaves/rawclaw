@@ -292,6 +292,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root.AddCommand(newTagPublishCmd())
 	archiveCmd := newArchiveCmd()
 	archiveCmd.AddCommand(newArchiveInitCmd())
+	archiveCmd.AddCommand(newArchiveExportBundleCmd())
 	archiveCmd.AddCommand(newArchivePushCmd())
 	archiveCmd.AddCommand(newArchivePullCmd())
 	archiveCmd.AddCommand(newArchiveStatusCmd())

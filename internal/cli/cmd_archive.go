@@ -12,10 +12,14 @@ import (
 )
 
 // newArchiveInitCmd wires `rawclaw archive init <remote-url>`: clone (or start
-// on an empty remote), register this machine under a human-readable dir name,
-// push the registration, persist the config — and print the privacy warning.
+// on an empty remote, or seed from a local bundle file), register this machine under
+// a human-readable dir name, push the registration, persist the config — and print the
+// privacy warning.
 func newArchiveInitCmd() *cobra.Command {
-	var name string
+	var (
+		name       string
+		fromBundle string
+	)
 	cmd := &cobra.Command{
 		Use:   "init <remote-url>",
 		Short: "Set up the transcript archive against a git remote",
@@ -31,7 +35,14 @@ func newArchiveInitCmd() *cobra.Command {
 			"    own server, then use `ssh://you@host/path/archive.git` or `host:path`). Transcripts\n" +
 			"    never leave your network, and there is nothing to encrypt.\n" +
 			"  - Convenient: a private GitHub / GitLab / Gitea repo. Transcripts are stored\n" +
-			"    UNENCRYPTED in the repo, so it MUST stay private.\n" +
+			"    UNENCRYPTED in the repo, so it MUST stay private.\n\n" +
+			"Cold-start seeding with --from-bundle:\n" +
+			"  For large archives with gigabytes of transcript history, cloning over a slow network\n" +
+			"  can take minutes. Run `rawclaw archive export-bundle <path>` on an existing machine,\n" +
+			"  transfer the bundle file via AirDrop, USB drive, or local network, and initialize with:\n" +
+			"    rawclaw archive init --from-bundle /path/to/archive.bundle <remote-url>\n" +
+			"  This seeds the local archive clone from the bundle in ~15 seconds, sets the remote to\n" +
+			"  <remote-url>, and registers this machine.\n\n" +
 			"Adding a second machine? Run the same `archive init <remote>` on it — it clones what the\n" +
 			"first machine pushed. Give each machine a distinct --name if they share a hostname.",
 		Args:          cobra.ExactArgs(1),
@@ -42,6 +53,20 @@ func newArchiveInitCmd() *cobra.Command {
 			remote := guessArchiveRemote(args[0])
 			if remote != args[0] {
 				fmt.Fprintf(out, "Resolved %q → %s\n", args[0], remote)
+			}
+			if fromBundle != "" {
+				if err := archive.InitFromBundle(cmd.Context(), fromBundle, remote, name); err != nil {
+					return err
+				}
+				a, err := archive.Load()
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "Archive initialized from bundle.\n  remote:      %s\n  bundle:      %s\n  machine dir: %s\n  local clone: %s\n\n",
+					a.Remote(), fromBundle, a.Name(), a.ClonePath())
+				fmt.Fprintln(out, archive.PrivacyWarning)
+				fmt.Fprintln(out, "\nNext: `rawclaw archive push` uploads this machine's transcripts.")
+				return nil
 			}
 			a, err := archive.Init(cmd.Context(), remote, name)
 			if err != nil {
@@ -56,7 +81,44 @@ func newArchiveInitCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&name, "name", "",
 		"machine dir name in the archive (default: sanitized hostname; give machines that share a hostname distinct names)")
+	cmd.Flags().StringVar(&fromBundle, "from-bundle", "",
+		"seed local archive clone from a git bundle file instead of cloning over the network (15-second cold start)")
 	return cmd
+}
+
+// newArchiveExportBundleCmd wires `rawclaw archive export-bundle <output-path>`:
+// export the local archive clone into a git bundle file for 15-second cold-start
+// seeding on another machine.
+func newArchiveExportBundleCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "export-bundle <output-path>",
+		Short: "Export local archive clone to a git bundle for cold-start seeding",
+		Long: "Export the local transcript archive clone into a git bundle file at <output-path>.\n\n" +
+			"This bundle can be transferred to a new machine (via AirDrop, USB drive, scp, or LAN)\n" +
+			"to seed its local clone using `rawclaw archive init --from-bundle <path> <remote-url>`.\n" +
+			"Bundle seeding bypasses slow multi-gigabyte remote clones over the network, turning a\n" +
+			"multi-minute network clone into a ~15-second local cold start.\n\n" +
+			"The archive must already be initialized on this machine (`rawclaw archive init`).",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := archive.Load()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if a == nil {
+				fmt.Fprintln(out, "Archive not configured; run `rawclaw archive init <remote-url>` first. Nothing to do.")
+				return nil
+			}
+			if err := a.ExportBundle(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Archive bundle exported to %s.\n", args[0])
+			return nil
+		},
+	}
 }
 
 // newArchivePullCmd wires `rawclaw archive pull`: refresh the clone so other
