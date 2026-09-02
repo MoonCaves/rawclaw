@@ -225,7 +225,7 @@ func LoadTombstones(cacheDir string) (map[string]struct{}, error) {
 	if err != nil {
 		return set, err
 	}
-	if cacheDir == "" && len(set) == 0 {
+	if cacheDir == "" {
 		legacy, err := loadTombstoneFile(filepath.Join(defaultCacheDir(), ".deleted"))
 		if err != nil {
 			return set, err
