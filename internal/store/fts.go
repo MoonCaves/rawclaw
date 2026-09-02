@@ -93,12 +93,12 @@ func ftsWhere(tbl ftsTable, match string, f Filter) (where []string, args []any)
 		args = append(args, f.MinMessages)
 	}
 	if f.SinceDate != "" {
-		where = append(where, "substr(m.ts_iso,1,10) >= ?")
+		where = append(where, "m.ts_iso >= ?")
 		args = append(args, f.SinceDate)
 	}
 	if f.BeforeDate != "" {
-		where = append(where, "substr(m.ts_iso,1,10) <= ?")
-		args = append(args, f.BeforeDate)
+		where = append(where, "m.ts_iso <= ?")
+		args = append(args, f.BeforeDate+"T23:59:59.999999999Z")
 	}
 	if len(f.Projects) > 0 {
 		where = append(where, "s.project IN ("+placeholders(len(f.Projects))+")")
