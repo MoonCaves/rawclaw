@@ -31,6 +31,9 @@ func newCfgRoot(t *testing.T) string {
 	// would share the one scratch vault TestMain sets, and a delete test could
 	// evict a sibling test's fixture.
 	t.Setenv("XDG_DATA_HOME", filepath.Join(cfg, ".local", "share"))
+	_ = os.Unsetenv("ANTIGRAVITY_CONVERSATION_ID")
+	_ = os.Unsetenv("CLAUDE_CODE_SESSION_ID")
+	_ = os.Unsetenv("CODEX_SESSION_ID")
 	return root
 }
 

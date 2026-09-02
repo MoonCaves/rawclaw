@@ -84,6 +84,19 @@ func TombstonePath() string {
 	return filepath.Join(rawclawDataDir(""), ".deleted")
 }
 
+// DurableTombstonePath returns the path to the persistent tombstone file in the
+// durable vault: $XDG_DATA_HOME/rawclaw/.deleted or ~/.local/share/rawclaw/.deleted.
+func DurableTombstonePath() string {
+	return TombstonePath()
+}
+
+// GitRoot finds the canonical root repository directory for a path, following
+// Git worktree pointers (.git file -> gitdir -> commondir) to the primary
+// checkout. Returns "" if dir is not inside a git repository.
+func GitRoot(dir string) string {
+	return GitCommonRoot(dir)
+}
+
 // CatalogEntry is one entry in the durable session catalog.
 type CatalogEntry struct {
 	SessionID      string `json:"session_id"`
@@ -220,6 +233,9 @@ func FindTranscriptDir(cwd string) string {
 // resolving Git worktree pointers (where .git is a file containing "gitdir: ...")
 // to the parent repository root. Returns "" if dir is not inside a git repo.
 func GitCommonRoot(dir string) string {
+	if dir == "" {
+		return ""
+	}
 	dir = Realpath(ExpandHome(dir))
 	curr := dir
 	for {

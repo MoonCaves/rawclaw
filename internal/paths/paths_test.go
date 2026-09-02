@@ -875,3 +875,69 @@ func TestFindTranscriptDir_WorktreeFallback(t *testing.T) {
 		t.Errorf("FindTranscriptDir(wtDir) = %q, want %q", got, mainTDir)
 	}
 }
+
+func TestGitRoot(t *testing.T) {
+	t.Run("regular git repository", func(t *testing.T) {
+		tmp := t.TempDir()
+		gitDir := filepath.Join(tmp, ".git")
+		if err := os.Mkdir(gitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sub := filepath.Join(tmp, "src", "pkg")
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		got := GitRoot(sub)
+		if Realpath(got) != Realpath(tmp) {
+			t.Errorf("GitRoot(%q) = %q, want %q", sub, got, tmp)
+		}
+	})
+
+	t.Run("git worktree with commondir", func(t *testing.T) {
+		tmp := t.TempDir()
+		mainRepo := filepath.Join(tmp, "repo")
+		gitDir := filepath.Join(mainRepo, ".git")
+		wtMeta := filepath.Join(gitDir, "worktrees", "wt1")
+		if err := os.MkdirAll(wtMeta, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wtMeta, "commondir"), []byte("../..\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		wtDir := filepath.Join(tmp, "repo-wt1")
+		if err := os.MkdirAll(wtDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wtDir, ".git"), []byte("gitdir: "+wtMeta+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		got := GitRoot(wtDir)
+		if Realpath(got) != Realpath(mainRepo) {
+			t.Errorf("GitRoot(%q) = %q, want %q", wtDir, got, mainRepo)
+		}
+	})
+
+	t.Run("non-git directory returns empty", func(t *testing.T) {
+		tmp := t.TempDir()
+		got := GitRoot(tmp)
+		if got != "" {
+			t.Errorf("GitRoot(%q) = %q, want empty", tmp, got)
+		}
+		if gotEmpty := GitRoot(""); gotEmpty != "" {
+			t.Errorf("GitRoot('') = %q, want empty", gotEmpty)
+		}
+	})
+}
+
+func TestDurableTombstonePath(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmp)
+	got := DurableTombstonePath()
+	want := filepath.Join(tmp, "rawclaw", ".deleted")
+	if got != want {
+		t.Errorf("DurableTombstonePath() = %q, want %q", got, want)
+	}
+}

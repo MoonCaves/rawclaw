@@ -70,7 +70,7 @@ func TestUTCFromISO(t *testing.T) {
 }
 
 func TestParseDateFilter(t *testing.T) {
-	now := time.Now()
+	now := time.Now().UTC()
 	today := now.Format(DateLayout)
 	yesterday := now.AddDate(0, 0, -1).Format(DateLayout)
 	sevenDaysAgo := now.AddDate(0, 0, -7).Format(DateLayout)

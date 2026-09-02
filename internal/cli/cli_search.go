@@ -26,6 +26,15 @@ import (
 
 func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool) {
 	td = resolveTDir(o.Dir, o.DirSet)
+	if !o.DirSet || td != o.Dir {
+		if gitRoot := paths.GitRoot(o.Dir); gitRoot != "" {
+			all := allScope(context.Background(), o.Source, o.Reindex)
+			matched := scopes.FilterByProjectDir(all, o.Dir)
+			if len(matched) > 0 {
+				return matched, td, true
+			}
+		}
+	}
 	if td == "" || !isDir(td) {
 		fmt.Fprintf(w, "No transcript history for --dir %s. Try --list, or --all for every project.\n", realpathExpand(o.Dir))
 		return nil, "", false
@@ -374,12 +383,26 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		if !ok {
 			return nil
 		}
-		// --this-project narrows the one store by project LABEL. The label is the
-		// same paths.ProjectLabel value the indexer stamps on the row, so it matches
-		// the column exactly; the scope list still travels for the fallback.
-		sopts.Project = paths.ProjectLabel(td)
+		var projs []string
+		for _, s := range sc {
+			if s.Project != "" {
+				projs = append(projs, s.Project)
+			}
+		}
+		sopts.Projects = projs
+		if len(projs) == 1 {
+			sopts.Project = projs[0]
+		} else if td != "" && isDir(td) {
+			sopts.Project = paths.ProjectLabel(td)
+		}
 		sopts.ScopeFallback = func() []view.Scope { return sc }
-		label = "on " + paths.ProjectLabel(td)
+		if td != "" && isDir(td) {
+			label = "on " + paths.ProjectLabel(td)
+		} else if len(projs) > 0 {
+			label = "on " + projs[0]
+		} else {
+			label = "on this project"
+		}
 	} else {
 		sopts.ScopeFallback = func() []view.Scope {
 			return allScope(ctx, o.Source, o.Reindex, o.IncludePath, o.ExcludePath)
@@ -501,10 +524,18 @@ func refreshThisProject(o *Options) {
 			continue
 		}
 		if reg.ID == "claude" {
-			td := resolveTDir(o.Dir, o.DirSet)
-			if td != "" && isDir(td) {
-				if _, _, err := scopes.Resolve(view.Scope{Project: paths.ProjectLabel(td), TDir: td}, false); err != nil {
-					slog.Debug("search: current-project refresh failed", "project", paths.ProjectLabel(td), "err", err)
+			if (o.ThisProject || o.DirSet) && paths.GitRoot(o.Dir) != "" {
+				for _, sc := range scopes.FilterByProjectDir(scopes.Claude(), o.Dir) {
+					if _, _, err := scopes.Resolve(sc, false); err != nil {
+						slog.Debug("search: current-project refresh failed", "project", sc.Project, "err", err)
+					}
+				}
+			} else {
+				td := resolveTDir(o.Dir, o.DirSet)
+				if td != "" && isDir(td) {
+					if _, _, err := scopes.Resolve(view.Scope{Project: paths.ProjectLabel(td), TDir: td}, false); err != nil {
+						slog.Debug("search: current-project refresh failed", "project", paths.ProjectLabel(td), "err", err)
+					}
 				}
 			}
 			continue

@@ -32,6 +32,7 @@ const topicsEmptyNote = "no topics tagged yet — a session is tagged via the ra
 type TopicsOpts struct {
 	Limit         int
 	Project       string
+	Projects      []string
 	IncludePath   string
 	ScopeFallback ScopeFn
 }
@@ -55,7 +56,7 @@ func topicsFromStore(con *sql.DB, query string, limit int, opts TopicsOpts) (Top
 	if !store.TopicRowsExist(con) {
 		return TopicsResult{}, false
 	}
-	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.IncludePath, "")
+	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.Projects, opts.IncludePath, "")
 	if err != nil || (narrowed && len(projects) == 0) {
 		return TopicsResult{}, false
 	}
@@ -166,8 +167,8 @@ func topicsByFanOut(query string, scope []view.Scope, limit int, opts TopicsOpts
 	return res, nil
 }
 
-func resolveStoreProjects(con *sql.DB, project, includePath, excludePath string) (projects []string, narrowed bool, err error) {
-	if project == "" && includePath == "" && excludePath == "" {
+func resolveStoreProjects(con *sql.DB, project string, projectsFilter []string, includePath, excludePath string) (projects []string, narrowed bool, err error) {
+	if project == "" && len(projectsFilter) == 0 && includePath == "" && excludePath == "" {
 		return nil, false, nil
 	}
 	scopeRows, err := store.DistinctScopes(con)
@@ -191,7 +192,17 @@ func resolveStoreProjects(con *sql.DB, project, includePath, excludePath string)
 			keep[k] = true
 		}
 	}
-	if project != "" {
+	if len(projectsFilter) > 0 {
+		projSet := make(map[string]bool, len(projectsFilter))
+		for _, p := range projectsFilter {
+			projSet[p] = true
+		}
+		for k := range keep {
+			if !projSet[k] {
+				keep[k] = false
+			}
+		}
+	} else if project != "" {
 		for k := range keep {
 			if k != project {
 				keep[k] = false
