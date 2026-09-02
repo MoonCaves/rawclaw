@@ -7,19 +7,19 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-02 — Explicit `search` Subcommand Alias & `-n`/`-q` Shorthand Flags Landed.**
+**2026-09-02 — Standard Go `time.Parse` / `time.ParseDuration` Seam Consolidated & Query Forwarding Preserved.**
 
 ### 📍 Now
-- Commit `6bbafbc` landed on `main`: Added `rawclaw search` subcommand alias and standard POSIX short flags (`-n` for `--limit`, `-q` for `--query`).
+- Commit `3b1a790` landed on `main`: Consolidated date filter parsing in `internal/timefmt.ParseDateFilter` using Go standard library `time.Parse` and `time.ParseDuration`.
+- Eliminated redundant `strings.Fields` split-and-rejoin on `o.Query`, forwarding `args = []string{o.Query}` directly to preserve exact spacing and quotes.
 - All 39 internal packages pass race tests (`CGO_ENABLED=0 go test -race -count=1 ./...`).
-- Clean `gofmt` compliance with zero formatting diffs.
+- Zero formatting diffs (`gofmt -l internal/`).
 
 ### ✅ Decisions
-- **Subcommand Aliasing** (2026-09-02):
-  - Added explicit `rawclaw search [query]` subcommand to eliminate 0-hit misses when agents trained on `gh/cargo/cass` type `search`.
-  - Added `-n` shorthand for `--limit` via standard `pflag.IntVarP`.
-  - Added `-q` / `--query` flag alternative to positional arguments via standard `pflag.StringVarP`.
-  - Handled query fallback in `runRoot` when positional args are empty.
+- **Standard Go Stdlib Time Parsing** (2026-09-02):
+  - Moved date parsing out of `cli.go` into `internal/timefmt.ParseDateFilter`.
+  - Replaced ad-hoc string slicing with standard Go `time.Parse` (supporting `DateLayout` and RFC3339) and `time.ParseDuration`.
+  - Replaced `strings.Fields` with direct `[]string{o.Query}` forwarder.
 
 ### 🧵 Open threads (with status)
 - **CASS Suite Test Restoration** (`BLOCKED ON CASS DESK`): Supervisor-A/B must restore `autotests = true` in `coding_agent_session_search/Cargo.toml`.
