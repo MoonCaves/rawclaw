@@ -58,83 +58,21 @@ func orderClause(s Sort) string {
 	}
 }
 
-// ftsTable names which of the FTS5 indexes a query reads.
+// ftsTable names which of the two FTS5 indexes a query reads. Both cover the
+// same content of the same message rows and differ only in tokenizer, so
+// choosing between them is a table name and nothing more. Every value is a
+// constant defined here — a table name cannot be a bound parameter in SQL, and
+// none of these ever comes from a caller's input.
 type ftsTable string
 
 const (
-	// wordTable is the natural language index (porter + unicode61).
+	// wordTable is the unified word-tokenized index: the default, and the one whose
+	// bm25 ranking every existing result order is built on.
 	wordTable ftsTable = "messages_fts"
-	// codeTable is the code-aware index (unicode61 + tokenchars).
-	codeTable ftsTable = "messages_code_fts"
-	// trigramTable is the substring index for mid-token substrings.
+	// trigramTable is the substring index, for the queries wordTable cannot
+	// answer because they do not fall on token boundaries.
 	trigramTable ftsTable = "messages_fts_trigram"
 )
-
-// SearchMode defines query routing.
-type SearchMode int
-
-const (
-	SearchModeAuto SearchMode = iota
-	SearchModeNaturalLanguage
-	SearchModeCode
-)
-
-// DetectSearchMode routes a query to natural language or code index.
-// Copied verbatim from CASS (pages/fts.rs:50-128).
-func DetectSearchMode(query string) SearchMode {
-	hasCodeChars := strings.ContainsAny(query, "_./\\#@$%") || strings.Contains(query, "::")
-	hasCodePatterns := hasCamelCase(query) || hasKebabCase(query)
-	isCodeQuery := hasCodeChars || hasCodePatterns
-
-	words := strings.Fields(query)
-	wordCount := len(words)
-	lower := strings.ToLower(query)
-
-	hasProseIndicators := wordCount > 3 ||
-		strings.HasPrefix(lower, "how ") ||
-		strings.HasPrefix(lower, "what ") ||
-		strings.HasPrefix(lower, "why ") ||
-		strings.HasPrefix(lower, "when ") ||
-		strings.HasPrefix(lower, "where ") ||
-		strings.Contains(lower, " the ") ||
-		strings.Contains(lower, " is ") ||
-		strings.Contains(lower, " are ") ||
-		strings.Contains(lower, " was ") ||
-		strings.Contains(lower, " were ")
-
-	if isCodeQuery && !hasProseIndicators {
-		return SearchModeCode
-	} else if hasProseIndicators && !isCodeQuery {
-		return SearchModeNaturalLanguage
-	} else if isCodeQuery {
-		return SearchModeCode
-	}
-	return SearchModeNaturalLanguage
-}
-
-func hasCamelCase(s string) bool {
-	runes := []rune(s)
-	for i := 1; i < len(runes); i++ {
-		if runes[i-1] >= 'a' && runes[i-1] <= 'z' && runes[i] >= 'A' && runes[i] <= 'Z' {
-			return true
-		}
-	}
-	return false
-}
-
-func hasKebabCase(s string) bool {
-	runes := []rune(s)
-	for i := 2; i < len(runes); i++ {
-		if runes[i-1] == '-' && isLetter(runes[i-2]) && isLetter(runes[i]) {
-			return true
-		}
-	}
-	return false
-}
-
-func isLetter(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-}
 
 // ftsWhere composes the shared WHERE clause list + args for an FTS query:
 // MATCH first, then the optional filters in the consumers' exact order
@@ -257,11 +195,7 @@ type SearchHit struct {
 // format — snippet(messages_fts,0,'>>>','<<<','…',16) — is part of the output
 // contract and stays byte-identical. [retrieve.searchScored]
 func SearchHits(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
-	tbl := wordTable
-	if DetectSearchMode(match) == SearchModeCode {
-		tbl = codeTable
-	}
-	return searchHits(con, tbl, match, f, s, limit)
+	return searchHits(con, wordTable, match, f, s, limit)
 }
 
 // SearchHitsSubstring is SearchHits against the trigram index instead of the
@@ -340,11 +274,7 @@ type SearchAnchor struct {
 // as SearchHits, returning message ids + uuid + only_copy_since for the view
 // layer to expand into bookend windows. [retrieve.MatchAnchors]
 func SearchAnchors(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
-	tbl := wordTable
-	if DetectSearchMode(match) == SearchModeCode {
-		tbl = codeTable
-	}
-	return searchAnchors(con, tbl, match, f, s, limit)
+	return searchAnchors(con, wordTable, match, f, s, limit)
 }
 
 // SearchAnchorsSubstring is SearchAnchors against the trigram index — the
