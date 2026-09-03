@@ -7,40 +7,33 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-04 — RawClaw v0.11.0 Released, Archive Bundle Seeding Shipped, PR #99 Merged, Fleet-Wide Deployment & Sync Complete Across All Nodes.**
+**2026-09-04 — Fast Adapter Discovery (CWDDiscoverer & Cached Header Inspection) Shipped, Search Latency Certified at 35–43ms, Fleet Currency Deployed.**
 
 ### 📍 Now
-- Release `v0.11.0` tagged, published, and curated on GitHub with release binaries and checksums.
-- Commit `4abcc41` landed on `main` and pushed to `origin/main`:
-  1. **Archive Bundle Seeding Seam (`export-bundle` & `--from-bundle`)**:
-     - `rawclaw archive export-bundle <path>` packages local archive clone into a portable git bundle in ~45s.
-     - `rawclaw archive init --from-bundle <path> <remote-url>` seeds new machines in ~15s, bypassing multi-GB WAN clone transfers.
-     - Fail-closed safety: strictly verifies zero unpushed commits (`strandedCommits`) and acquires `clone.lock` with double-checked configuration verification.
-     - 10-minute bounded watchdog floor (`exportBundleWatchdog = 10 * time.Minute`) in `internal/cli/timeout.go`.
-  2. **PR #99 Merged (Closes #96)**:
-     - Invalidates prewarm dump cache on `tag-write` and resolves project topics during delayed folds in `internal/cli/tagrefresh.go` and `internal/cli/cmd_prewarm.go`.
-  3. **New Runtime Adapters & Hooks**:
-     - Native Hermes Agent SQLite transcript reader (`~/.hermes/state.db`).
-     - Native OpenCode & Crush transcript reader (`~/.local/share/opencode/`).
-     - Native Pi coding agent transcript reader (`~/.pi/sessions/`).
-     - Antigravity session-birth catalog registration and subagent lineage tracking.
-     - Unified `rawclaw closeout <session_id>` guidance across all 7 runtimes.
-  4. **Fleet-Wide Deployment & Bidirectional Sync**:
-     - **jay-m4 (M4 Mac)**: Running `v0.11.0+`, all 7 runtime hooks wired via `rawclaw setup`.
-     - **jay-m1 (M1 Mac)**: Woken up, updated to `v0.11.0+`, hooks wired, bidirectional sync executed (72 session files pushed & pulled).
-     - **muppet-server (Linux amd64)**: Updated to `v0.11.0+`, hooks wired, archive pulled.
-     - **ai-server (Linux amd64)**: Updated to `v0.11.0+`, hooks wired, seeded from bundle and fully synchronized.
-     - **coolify-server (Gitea)**: Healthy, verified, protected by split packs + MIDX reachability bitmaps.
+- Commit `6e8d9fe` landed on `main` and pushed to `origin/main`:
+  1. **Fast Adapter Discovery & Scoped CWD Routing (`internal/source/antigravity`, `internal/scopes`)**:
+     - Added `CWDDiscoverer` interface in `internal/source/source.go`.
+     - Added `DiscoverCWD(cwd string)` in `internal/source/antigravity/antigravity.go` — filters directly by workspace in `history.jsonl`, reading only the 1–2 matching sessions (< 2ms) instead of discovering all 508 sessions across the disk.
+     - Added `(path, mtime, size)` cache in `inspectSessionHeaderAndSubagents` — eliminates file opens and JSON parsing for unchanged files on steady-state.
+     - Bounded header scanning to opening records (`scanLimit = 50`) rather than reading large files to EOF.
+     - Added `TestDiscoverCWD` verifying workspace filtering.
+  2. **Rowid High-Water Mark Incremental Consolidated Folding** (`internal/index/consolidated.go`):
+     - Bounded `mergeMessagesIncrementalSQL` to `s.id > prevMaxID`.
+     - Recounts messages only for touched sessions during incremental appends.
+  3. **Incremental Byte-Offset Transcript Ingestion** (`internal/index`, `internal/parse`):
+     - Streams unread tail bytes via `bufio.Reader` over `io.LimitReader`.
 - Verified:
-  - Full test suite passed with race detector: `CGO_ENABLED=0 go test -race -count=1 ./...` (100% green).
-  - Formatting: `gofmt -l internal/` clean.
-  - Multi-machine transcript search verified live on `jay-m4`.
+  - Full test suite passed with race detector: `CGO_ENABLED=0 go test -race -count=1 ./...` (39/39 packages).
+  - Linter: `golangci-lint run ./...` reports **0 issues**.
+  - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`).
+  - Graphify AST knowledge graph refreshed (4,124 nodes, 11,812 edges, 246 communities).
+  - Fleet binary `rawclaw v0.8.0 (commit 6e8d9fe)` deployed live across **Mac HQ**, **jay-m1**, **muppet-server**, and **ai-server**.
+  - **Live Search Timing Protocol**: Run 1 = 43ms (0.043s), Run 2 = 35ms (0.035s).
 
 ### ✅ Decisions
-- **Archive Bundle Seeding** (2026-09-02): Enables local multi-gigabyte seeding in 15 seconds from a portable git bundle instead of multi-hour network clones.
-- **Fail-Closed Unpushed Protection** (2026-09-02): Disallows bundle exports and destructive clone wipes if unpushed commits cannot be verified zero.
-- **Prewarm Dump Invalidation** (2026-09-02): Removes cached prewarm dumps immediately on `tag-write` to prevent stale topic window loops (PR #99).
-- **Fleet-Wide Runtime Setup** (2026-09-04): Deploys discovery hooks and catalog extensions across Claude Code, Codex, Antigravity, Pi, OpenCode, Goose, and Hermes.
+- **Scoped CWD Adapter Discovery** (2026-09-04): Implements `CWDDiscoverer` so local repo searches only inspect transcripts matching the current working directory.
+- **Mtime-Cached Header Inspection** (2026-09-04): Caches session headers and subagent lineage by `(path, mtime, size)` to prevent multi-second JSON parsing loops across large session transcripts.
+- **Rowid High-Water Mark Consolidated Folding** (2026-09-03): Bounds `consolidateOne` message merges to `s.id > prevMaxID` so live session folds do $O(\text{appended})$ work rather than $O(\text{total})$.
 
 ### 🧵 Open threads (with status)
 - **Cluster Git Governance Critique**: Dispatched open-ended critique request to OLUMBRA, Marrowlight, and cluster peers on Agent Mail thread `cluster-git-governance`.
