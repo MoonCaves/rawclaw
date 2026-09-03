@@ -590,3 +590,38 @@ func TestScanTranscriptScannerError(t *testing.T) {
 		t.Errorf("expected warning to contain error token too long, got: %s", out)
 	}
 }
+
+// TestDiscoverCWD verifies that DiscoverCWD filters directly by workspace in history.jsonl
+// without scanning transcripts from unrelated workspaces.
+func TestDiscoverCWD(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+
+	// 2 sessions in history.jsonl: 1 matching /workspace/match, 1 matching /workspace/other
+	historyContent := `{"conversationId":"sess-match","workspace":"/workspace/match"}` + "\n" +
+		`{"conversationId":"sess-other","workspace":"/workspace/other"}` + "\n"
+	if err := os.WriteFile(filepath.Join(tmp, "history.jsonl"), []byte(historyContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pMatch := filepath.Join(tmp, "brain", "sess-match", ".system_generated", "logs", "transcript.jsonl")
+	writeJSONL(t, pMatch, `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-14T10:00:00Z","content":"hello match"}`)
+
+	pOther := filepath.Join(tmp, "brain", "sess-other", ".system_generated", "logs", "transcript.jsonl")
+	writeJSONL(t, pOther, `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-14T10:00:00Z","content":"hello other"}`)
+
+	ad := NewRoot(tmp)
+	matched, err := ad.DiscoverCWD("/workspace/match")
+	if err != nil {
+		t.Fatalf("DiscoverCWD error: %v", err)
+	}
+	if len(matched) != 1 {
+		t.Fatalf("DiscoverCWD returned %d containers, want 1", len(matched))
+	}
+	if matched[0].ID != "sess-match" {
+		t.Errorf("matched container ID = %q, want sess-match", matched[0].ID)
+	}
+	if matched[0].CWD != "/workspace/match" {
+		t.Errorf("matched container CWD = %q, want /workspace/match", matched[0].CWD)
+	}
+}

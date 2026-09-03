@@ -40,6 +40,12 @@ type Source interface {
 	Messages(c Container) ([]model.Message, error)
 }
 
+// CWDDiscoverer is an optional interface a Source may implement to accelerate
+// discovery when scoped to a specific working directory.
+type CWDDiscoverer interface {
+	DiscoverCWD(cwd string) ([]Container, error)
+}
+
 // Registration is a source's selection metadata, kept OFF the behavioral
 // interface (the image.RegisterFormat / database/sql.Register split): Detect
 // reports whether a path belongs to this source (for --source auto-detection),
