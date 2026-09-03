@@ -7,16 +7,16 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-04 — Fast Adapter Discovery (CWDDiscoverer & Cached Header Inspection) Shipped, Search Latency Certified at 35–43ms, Fleet Currency Deployed.**
+**2026-09-04 — Full-File Subagent Lineage Scan with Mtime Cache & CWDDiscoverer Shipped, Search Latency Certified at 33–38ms, Fleet Currency Deployed.**
 
 ### 📍 Now
-- Commit `6e8d9fe` landed on `main` and pushed to `origin/main`:
+- Commit `3ff274d` landed on `main` and pushed to `origin/main`:
   1. **Fast Adapter Discovery & Scoped CWD Routing (`internal/source/antigravity`, `internal/scopes`)**:
      - Added `CWDDiscoverer` interface in `internal/source/source.go`.
-     - Added `DiscoverCWD(cwd string)` in `internal/source/antigravity/antigravity.go` — filters directly by workspace in `history.jsonl`, reading only the 1–2 matching sessions (< 2ms) instead of discovering all 508 sessions across the disk.
-     - Added `(path, mtime, size)` cache in `inspectSessionHeaderAndSubagents` — eliminates file opens and JSON parsing for unchanged files on steady-state.
-     - Bounded header scanning to opening records (`scanLimit = 50`) rather than reading large files to EOF.
-     - Added `TestDiscoverCWD` verifying workspace filtering.
+     - Added `DiscoverCWD(cwd string)` in `internal/source/antigravity/antigravity.go` — filters directly by workspace in `history.jsonl`, with fallback to full discovery when unmapped or missing.
+     - Preserves full-file subagent scanning for `INVOKE_SUBAGENT` to prevent lineage drops (FoggySnow Ruling 2), gated behind an `(path, mtime, size)` cache storing both header and subagents.
+     - Header inspection (CWD/parent/isSub) checks the opening 50 records.
+     - Pinned with `TestDiscoverCWD`, `TestExtractCWDFromTranscript`, and `TestRebuildRefusesToLoseHistory`.
   2. **Rowid High-Water Mark Incremental Consolidated Folding** (`internal/index/consolidated.go`):
      - Bounded `mergeMessagesIncrementalSQL` to `s.id > prevMaxID`.
      - Recounts messages only for touched sessions during incremental appends.
@@ -27,12 +27,12 @@
   - Linter: `golangci-lint run ./...` reports **0 issues**.
   - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`).
   - Graphify AST knowledge graph refreshed (4,124 nodes, 11,812 edges, 246 communities).
-  - Fleet binary `rawclaw v0.8.0 (commit 6e8d9fe)` deployed live across **Mac HQ**, **jay-m1**, **muppet-server**, and **ai-server**.
-  - **Live Search Timing Protocol**: Run 1 = 43ms (0.043s), Run 2 = 35ms (0.035s).
+  - Fleet binary `rawclaw v0.8.0 (commit 3ff274d)` deployed live across **Mac HQ**, **jay-m1**, **muppet-server**, and **ai-server**.
+  - **Live Search Timing Protocol**: Run 1 = 38ms (0.038s), Run 2 = 33ms (0.033s).
 
 ### ✅ Decisions
+- **Full-File Subagent Scan with Mtime Cache** (2026-09-04): Adopts FoggySnow's ruling: scans full transcript for `INVOKE_SUBAGENT` but caches `(hdr, children)` by `(path, mtime, size)` so unchanged files cost 0 file reads.
 - **Scoped CWD Adapter Discovery** (2026-09-04): Implements `CWDDiscoverer` so local repo searches only inspect transcripts matching the current working directory.
-- **Mtime-Cached Header Inspection** (2026-09-04): Caches session headers and subagent lineage by `(path, mtime, size)` to prevent multi-second JSON parsing loops across large session transcripts.
 - **Rowid High-Water Mark Consolidated Folding** (2026-09-03): Bounds `consolidateOne` message merges to `s.id > prevMaxID` so live session folds do $O(\text{appended})$ work rather than $O(\text{total})$.
 
 ### 🧵 Open threads (with status)
