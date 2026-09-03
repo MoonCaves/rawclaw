@@ -71,7 +71,13 @@ func RefreshCWD(sourceID string, adapter source.Source, cwd string) {
 
 // refreshContainerCWD refreshes the index db for a given working dir and Source.
 func refreshContainerCWD(sourceID string, adapter source.Source, cwd string) {
-	containers, err := adapter.Discover()
+	var containers []source.Container
+	var err error
+	if cd, ok := adapter.(source.CWDDiscoverer); ok {
+		containers, err = cd.DiscoverCWD(cwd)
+	} else {
+		containers, err = adapter.Discover()
+	}
 	if err != nil || len(containers) == 0 {
 		return
 	}

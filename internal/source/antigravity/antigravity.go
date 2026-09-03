@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/MoonCaves/rawclaw/internal/model"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -35,8 +36,11 @@ type Adapter struct {
 	root string
 }
 
-// Compile-time proof the adapter satisfies the ingest port.
-var _ source.Source = (*Adapter)(nil)
+// Compile-time proof the adapter satisfies the ingest port and CWDDiscoverer.
+var (
+	_ source.Source        = (*Adapter)(nil)
+	_ source.CWDDiscoverer = (*Adapter)(nil)
+)
 
 // New returns a ready Antigravity adapter using the default config directory.
 func New() *Adapter {
@@ -165,6 +169,35 @@ func (a *Adapter) Discover() ([]source.Container, error) {
 	return a.DiscoverRoot(BrainRoot(a.root))
 }
 
+// DiscoverCWD returns only the Antigravity sessions associated with a specific working directory.
+func (a *Adapter) DiscoverCWD(cwd string) ([]source.Container, error) {
+	if a.root == "" || cwd == "" {
+		return nil, nil
+	}
+	historyMap := loadHistory(filepath.Join(a.root, "history.jsonl"))
+	cleanCWD := filepath.Clean(cwd)
+	brainDir := BrainRoot(a.root)
+
+	var candidates []candSession
+	for id, ws := range historyMap {
+		if ws == cwd || (ws != "" && filepath.Clean(ws) == cleanCWD) {
+			p := findTranscriptFile(filepath.Join(brainDir, id))
+			if p != "" {
+				candidates = append(candidates, candSession{id: id, path: p})
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	return a.buildContainers(candidates, historyMap), nil
+}
+
+type candSession struct {
+	id   string
+	path string
+}
+
 // DiscoverRoot enumerates Antigravity sessions under an explicit brain directory.
 func (a *Adapter) DiscoverRoot(brainDir string) ([]source.Container, error) {
 	if brainDir == "" {
@@ -179,11 +212,6 @@ func (a *Adapter) DiscoverRoot(brainDir string) ([]source.Container, error) {
 	}
 
 	historyMap := loadHistory(filepath.Join(a.root, "history.jsonl"))
-
-	type candSession struct {
-		id   string
-		path string
-	}
 
 	var candidates []candSession
 	for _, entry := range entries {
@@ -203,11 +231,13 @@ func (a *Adapter) DiscoverRoot(brainDir string) ([]source.Container, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
+	return a.buildContainers(candidates, historyMap), nil
+}
 
+func (a *Adapter) buildContainers(candidates []candSession, historyMap map[string]string) []source.Container {
 	subagentParents := map[string]string{}
 	headers := make(map[string]sessionHeader, len(candidates))
 
-	// Single pass over each candidate transcript to extract header metadata and lineage.
 	for _, c := range candidates {
 		hdr, spawned := inspectSessionHeaderAndSubagents(c.path)
 		headers[c.id] = hdr
@@ -251,7 +281,7 @@ func (a *Adapter) DiscoverRoot(brainDir string) ([]source.Container, error) {
 		})
 	}
 
-	return out, nil
+	return out
 }
 
 // findTranscriptFile finds the preferred transcript file in a session dir.
@@ -303,11 +333,36 @@ type sessionHeader struct {
 	isSub    bool
 }
 
-// inspectSessionHeaderAndSubagents performs a single pass over a transcript to extract
-// header metadata (CWD, parentID, isSub) and all spawned subagent conversation IDs.
+type headerCacheEntry struct {
+	mtime   int64
+	size    int64
+	hdr     sessionHeader
+	spawned []string
+}
+
+var (
+	headerCacheMu sync.RWMutex
+	headerCache   = make(map[string]headerCacheEntry)
+)
+
+// inspectSessionHeaderAndSubagents extracts header metadata (CWD, parentID, isSub)
+// and spawned subagent conversation IDs from the first few records of a transcript.
+// Uses an mtime+size cache to avoid re-opening unchanged files on repeated discovery passes.
 func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 	var hdr sessionHeader
 	var children []string
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		return hdr, nil
+	}
+
+	headerCacheMu.RLock()
+	if entry, ok := headerCache[path]; ok && entry.mtime == fi.ModTime().UnixNano() && entry.size == fi.Size() {
+		headerCacheMu.RUnlock()
+		return entry.hdr, entry.spawned
+	}
+	headerCacheMu.RUnlock()
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -319,67 +374,67 @@ func inspectSessionHeaderAndSubagents(path string) (sessionHeader, []string) {
 	buf := make([]byte, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
 	count := 0
-	for scanner.Scan() {
+	const scanLimit = 50
+	for scanner.Scan() && count < scanLimit {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 		count++
 
-		// Header inspection for opening records (up to 50 records)
-		if count <= 50 {
-			var rec map[string]any
-			if err := json.Unmarshal([]byte(line), &rec); err == nil {
-				content, _ := rec["content"].(string)
-				if strings.Contains(content, "<subagent_reminder>") || strings.Contains(line, "<subagent_reminder>") {
-					hdr.isSub = true
-					target := content
-					if target == "" {
-						target = line
-					}
-					if pid := extractParentFromPrompt(target); pid != "" {
-						hdr.parentID = pid
-					}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err == nil {
+			content, _ := rec["content"].(string)
+			if strings.Contains(content, "<subagent_reminder>") || strings.Contains(line, "<subagent_reminder>") {
+				hdr.isSub = true
+				target := content
+				if target == "" {
+					target = line
 				}
-				if hdr.cwd == "" {
-					if tcList, ok := rec["tool_calls"].([]any); ok {
-						for _, tc := range tcList {
-							if tcMap, ok := tc.(map[string]any); ok {
-								if argsMap := decodeArgsMap(tcMap["args"]); argsMap != nil {
-									if c, ok := argsMap["Cwd"].(string); ok && c != "" {
-										c = strings.Trim(c, "\"")
-										if isAbsPath(c) {
-											hdr.cwd = c
-											break
-										}
+				if pid := extractParentFromPrompt(target); pid != "" {
+					hdr.parentID = pid
+				}
+			}
+			if hdr.cwd == "" {
+				if tcList, ok := rec["tool_calls"].([]any); ok {
+					for _, tc := range tcList {
+						if tcMap, ok := tc.(map[string]any); ok {
+							if argsMap := decodeArgsMap(tcMap["args"]); argsMap != nil {
+								if c, ok := argsMap["Cwd"].(string); ok && c != "" {
+									c = strings.Trim(c, "\"")
+									if isAbsPath(c) {
+										hdr.cwd = c
+										break
 									}
 								}
 							}
 						}
 					}
 				}
-				if hdr.cwd == "" && strings.Contains(content, "<user_information>") {
-					if extracted := extractCWDFromUserInformation(content); extracted != "" {
-						hdr.cwd = extracted
-					}
+			}
+			if hdr.cwd == "" && strings.Contains(content, "<user_information>") {
+				if extracted := extractCWDFromUserInformation(content); extracted != "" {
+					hdr.cwd = extracted
 				}
 			}
-		}
-
-		// Lineage check for INVOKE_SUBAGENT
-		if strings.Contains(line, "INVOKE_SUBAGENT") {
-			var rec map[string]any
-			if err := json.Unmarshal([]byte(line), &rec); err == nil {
-				if stepType, _ := rec["type"].(string); stepType == "INVOKE_SUBAGENT" {
-					content, _ := rec["content"].(string)
-					children = append(children, conversationIDs(content)...)
-				}
+			if stepType, _ := rec["type"].(string); stepType == "INVOKE_SUBAGENT" {
+				children = append(children, conversationIDs(content)...)
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Warn("antigravity: scan transcript error", "path", path, "err", err)
 	}
+
+	headerCacheMu.Lock()
+	headerCache[path] = headerCacheEntry{
+		mtime:   fi.ModTime().UnixNano(),
+		size:    fi.Size(),
+		hdr:     hdr,
+		spawned: children,
+	}
+	headerCacheMu.Unlock()
+
 	return hdr, children
 }
 
