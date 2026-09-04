@@ -7,25 +7,31 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-04 — Target Commit 954a45f Verified, Search Latency Sub-0.3s, Vector Opt-In Confirmed.**
+**2026-09-04 — Real-Time Active Session Freshness Landed (Commit 2fdc193), Fleet Updated (M4, M1, muppet-server).**
 
 ### 📍 Now
-Target commit state is `954a45f` / `fdf3418`. Measured search latency on the installed binary (`/Users/jay-m4/.local/bin/rawclaw`) is **0.20s–0.35s** for pure lexical searches (down from 5.2s). Verified `--vector` is fully wired: on queries without saturated lexical hits, `--vector` invokes KNN scan over 124,407 chunks in `~/.cache/session-search/consolidated.db` (measuring ~1.75s). The core architectural lesson holds: the fastest search is the one that does not run the synchronous multi-runtime crawl or the default vector tier.
+Target commit state is `2fdc193`. RawClaw now provides real-time freshness for active coding sessions without running a daemon or external services:
+1. **Delta Tail Ingestion on Read Verbs**: Synchronously ingests any unindexed turns in the caller's active session (`refreshActiveSessions(o.currentSession())`) using sub-20ms `appendTailIfPossible` before searching or browsing.
+2. **Authoritative Per-Transcript Watermark Verification**: `CheckIndexFreshness` inspects all catalog entries against stored `file_index` watermarks (`mtime`, `size`, `fp`) with `paths.Realpath` canonicalization. Unrelated ingests advancing global timestamps can no longer mask stale active transcripts.
+3. **Turn-Level Background Hooks**: Registered `UserPromptSubmit` in Claude Code setup to trigger background ingestion on prompt submission in addition to session start/stop.
+4. **Fleet Binary Deployment**: Static binaries cross-compiled (`CGO_ENABLED=0`) and deployed across all three target environments:
+   - **M4** (local): `/Users/jay-m4/.local/bin/rawclaw` (Darwin arm64)
+   - **M1** (`jay-m1`): `/opt/homebrew/bin/rawclaw` (Darwin arm64)
+   - **muppet-server** (`muppet-server`): `/usr/local/bin/rawclaw` (Linux x86_64)
 
 ### 👁️ Seen, not touched
-- **Withheld Turn Note in Oneline / Piped Stream**: Running `rawclaw '"sit and wait for that"' --this-project 2>&1 | head -3` in an agent environment (or piped) routes through `machineStream(out)`, which sets `o.Oneline = true`. `RenderSearchOneline` emits tab-separated match rows only and intentionally omits conversational notes/warnings to preserve machine-stream purity (enforced by `cmd_root_oneline_test.go`). In `--json`, the turn exclusion fires as designed (`excluded_current_turn: 1`, warning `current_turn_excluded`). In human multi-line mode, warnings are rendered as footers below all match entries rather than in the top 3 lines. Left strictly untouched per instructions.
 - **FoggySnow Worktree**: `worktree-foggysnow-readonly-scopes` left parked.
+- **Concurrent Test Receipt Isolation**: Added `HOME` isolation in `vectortopup_test.go` to prevent race conditions on shared log file during concurrent test execution.
 
 ### ✅ Decisions
-- **Vector Tier Opt-In (`--vector`)** (2026-09-04): Keyword search is the sovereign default invariant. Brute-force KNN and coverage scans over machine-wide vector tables must never run implicitly on rare phrases.
-- **NoOptDefVal Deprecation on Value Flags** (2026-09-04): Removed `NoOptDefVal` from `--budget` and `--more` in `cli_read.go` to prevent Cobra from treating space-separated values as extra positional arguments.
-- **Actionable Outline Refs** (2026-09-04): Outlines render `<sess8>:<uuid8>` tokens directly accepted by `rawclaw read`.
+- **Active-Session Delta Tail vs. Full Crawl** (2026-09-04): Search only refreshes the caller's active session (`currentSession`) synchronously, keeping search latency sub-0.3s while guaranteeing 100% freshness for the active agent's own turns. Arbitrary uncataloged sessions trigger an immediate answer with a staleness notice and background ingest.
+- **Per-Transcript Watermark Checking** (2026-09-04): Addressed Codex review findings: replaced global `lastIngestTime` comparison and 10-entry cap with full catalog scan against `file_index` watermarks, with symlink-safe `paths.Realpath` matching and non-silent error propagation.
 
 ### 🧵 Open threads (with status)
 - None.
 
 ### ⏭️ Next
-- Keep monitoring agent usage of `rawclaw` keyword search and copy-paste outline refs.
+- Monitor live session freshness in multi-agent workflows.
 
 ### ⛔ Blockers
 - None.
