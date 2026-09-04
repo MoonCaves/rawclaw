@@ -7,32 +7,33 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-04 — Codex & Antigravity CWDDiscoverer Shipped, Scoped In-Repo Search Certified at 30–37ms, Fleet Currency Deployed.**
+**2026-09-04 — CheckProjectFreshness Scope Uncoupled, Idle Project Search Certified at 29ms, Fleet Currency Deployed.**
 
 ### 📍 Now
-- Commit `8534dc3` landed on `main` and pushed to `origin/main`:
-  1. **Codex CWDDiscoverer & Header Caching (`internal/source/codex`)**:
-     - Added `metaCache` map with `(path, mtime, size)` caching in `readMeta(path)` — eliminates 16MB buffer allocations and repeated JSON unmarshals across 1,236 Codex rollouts.
-     - Added `DiscoverCWD(cwd string)` in `internal/source/codex/codex.go` — filters rollouts directly down to matching CWD, dropping Codex scoped refresh from 4.1s–9.7s to **43ms**.
-     - Pinned with `TestDiscoverCWD`.
-  2. **ClaudeLive Scope Optimization (`internal/scopes`, `internal/cli`)**:
-     - Added `ClaudeLive()` in `internal/scopes/scopes.go` and wired into `refreshThisProject` in commit `2bf673e` — bypasses opening 562 orphan shard databases on in-repo search.
-  3. **Antigravity CWDDiscoverer & Full-File Subagent Lineage Cache (`internal/source/antigravity`)**:
-     - Added `DiscoverCWD(cwd)` and `(path, mtime, size)` cache storing header and subagent lineage in commit `3ff274d`.
+- Commit `ca8f8bd` landed on `main` and pushed to `origin/main`:
+  1. **CheckProjectFreshness Scope Uncoupling (`internal/index/consolidated.go`)**:
+     - Removed the global catalog watermark check (`globalFresh := CheckIndexFreshness(con)`) from `CheckProjectFreshness`.
+     - Previously, any active session on the entire machine touching `~/.cache/session-search/catalog` made every idle repo (e.g. `~/code/beads_rust`) report `fresh: false` permanently, triggering the full multi-runtime refresh on every keystroke.
+     - Uncoupling makes `CheckProjectFreshness` evaluate only the project's own files and transcripts in $O(1)$ (< 0.1ms).
+  2. **Codex CWDDiscoverer & Header Caching (`internal/source/codex`)**:
+     - Added `metaCache` map with `(path, mtime, size)` caching in `readMeta(path)`.
+     - Added `DiscoverCWD(cwd string)` in `internal/source/codex/codex.go` in commit `8534dc3`.
+  3. **ClaudeLive Scope Optimization (`internal/scopes`, `internal/cli`)**:
+     - Added `ClaudeLive()` in `internal/scopes/scopes.go` in commit `2bf673e`.
 - Verified:
   - Full test suite passed with race detector: `CGO_ENABLED=0 go test -race -count=1 ./...` (39/39 packages).
   - Linter: `golangci-lint run ./...` reports **0 issues**.
   - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`).
   - Graphify AST knowledge graph refreshed (4,125 nodes, 11,815 edges, 246 communities).
-  - Fleet binary `rawclaw v0.8.0 (commit 8534dc3)` deployed live across **Mac HQ**, **jay-m1**, **muppet-server**, and **ai-server**.
+  - Fleet binary `rawclaw v0.8.0 (commit ca8f8bd)` deployed live across **Mac HQ**, **jay-m1**, **muppet-server**, and **ai-server**.
   - **Live Search Timing Protocol**:
-    - Codex-only (`--this-project --source codex`): Run 1 = 46ms, Run 2 = 43ms.
-    - Full in-repo search (`--this-project`): Run 1 = 37ms, Run 2 = 30ms.
+    - Idle repo (`beads_rust`): Run 1 = 36ms, Run 2 = 29ms (down from 6.3s).
+    - Active repo (`rawclaw`): Run 1 = 36ms, Run 2 = 29ms.
 
 ### ✅ Decisions
-- **Codex CWD Scoping & Header Cache** (2026-09-04): Implements `CWDDiscoverer` and `(path, mtime, size)` caching for Codex so 1,236 session files don't block in-repo searches.
+- **Project-Scoped Freshness Check** (2026-09-04): Uncouples `CheckProjectFreshness` from global machine-wide catalog mtimes so an active session in repo A never invalidates the freshness of idle repo B.
+- **Codex CWD Scoping & Header Cache** (2026-09-04): Implements `CWDDiscoverer` and `(path, mtime, size)` caching for Codex.
 - **ClaudeLive Scoped Refresh** (2026-09-04): Bypasses 562-database orphan discovery sweeps on current-project queries.
-- **Full-File Subagent Scan with Mtime Cache** (2026-09-04): Caches `(hdr, children)` by `(path, mtime, size)` so unchanged files cost 0 file reads.
 
 ### 🧵 Open threads (with status)
 - **Cluster Git Governance Critique**: Dispatched open-ended critique request to OLUMBRA, Marrowlight, and cluster peers on Agent Mail thread `cluster-git-governance`.
