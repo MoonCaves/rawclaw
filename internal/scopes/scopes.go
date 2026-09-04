@@ -121,6 +121,16 @@ func Claude() []view.Scope {
 	return out
 }
 
+// ClaudeLive returns only the live Claude project scopes without running orphan reconciliation.
+func ClaudeLive() []view.Scope {
+	dirs := paths.AllProjectDirs()
+	out := make([]view.Scope, 0, len(dirs))
+	for _, d := range dirs {
+		out = append(out, view.Scope{Project: paths.ProjectLabel(d), TDir: d, Source: "claude"})
+	}
+	return out
+}
+
 // orphanClaudeScopes discovers index dbs in the session-search cache dir whose
 // Claude source dir is gone and surfaces each as an eager read-only scope (DBP
 // set, like a Codex scope) so search/read/list reach the retained rows without

@@ -526,7 +526,7 @@ func refreshThisProject(o *Options) {
 		}
 		if reg.ID == "claude" {
 			if (o.ThisProject || o.DirSet) && paths.GitRoot(o.Dir) != "" {
-				for _, sc := range scopes.FilterByProjectDir(scopes.Claude(), o.Dir) {
+				for _, sc := range scopes.FilterByProjectDir(scopes.ClaudeLive(), o.Dir) {
 					if _, _, err := scopes.Resolve(sc, false); err != nil {
 						slog.Debug("search: current-project refresh failed", "project", sc.Project, "err", err)
 					}
