@@ -212,7 +212,11 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 	}
 	fmt.Fprintln(w, "  ── GOAL (session opening) ──")
 	for _, m := range r.Start {
-		fmt.Fprintf(w, "     [%s #%d] %s\n", m.Role, m.ID, m.Text)
+		ref := fmt.Sprintf("#%d", m.ID)
+		if m.UUID != "" {
+			ref = fmtRef(r.SessionID, m.UUID)
+		}
+		fmt.Fprintf(w, "     [%s %s] %s\n", m.Role, ref, m.Text)
 	}
 	if r.MidCount > 0 {
 		fmt.Fprintf(w, "\n  … %d messages in between …\n\n", r.MidCount)
@@ -220,7 +224,11 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 	if len(r.End) > 0 {
 		fmt.Fprintln(w, "  ── RESOLUTION (session close) ──")
 		for _, m := range r.End {
-			fmt.Fprintf(w, "     [%s #%d] %s\n", m.Role, m.ID, m.Text)
+			ref := fmt.Sprintf("#%d", m.ID)
+			if m.UUID != "" {
+				ref = fmtRef(r.SessionID, m.UUID)
+			}
+			fmt.Fprintf(w, "     [%s %s] %s\n", m.Role, ref, m.Text)
 		}
 	}
 	if len(r.Subagents) > 0 {

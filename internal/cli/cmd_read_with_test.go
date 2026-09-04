@@ -135,3 +135,59 @@ func TestWithValidationErrors(t *testing.T) {
 		t.Errorf("err = %q, want 'invalid --with choice'", err.Error())
 	}
 }
+
+// TestReadSpaceSeparatedFlags verifies that flags like --budget and --more accept space-separated
+// values (e.g. --budget 20000, --more 2) without triggering Cobra argument count errors.
+func TestReadSpaceSeparatedFlags(t *testing.T) {
+	root := newCfgRoot(t)
+	sessID := "aaaa1111-0000-0000-0000-000000000001"
+	writeRichReadSession(t, root, "-home-u-proj", sessID)
+
+	ref := "aaaa1111:9f3e1c20"
+
+	// Test --budget 20000 with space
+	outBudget, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "read", ref, "--budget", "20000", "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("read --budget 20000 failed: %v\n%s", err, outBudget)
+	}
+	if !strings.Contains(outBudget, "How do we optimize DB queries?") {
+		t.Errorf("read output missing content:\n%s", outBudget)
+	}
+
+	// Test --more 1 with space
+	outMore, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "read", ref, "--more", "1", "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("read --more 1 failed: %v\n%s", err, outMore)
+	}
+	if !strings.Contains(outMore, "How do we optimize DB queries?") {
+		t.Errorf("read output missing content:\n%s", outMore)
+	}
+}
+
+// TestOutlinePrintsValidReadRefs verifies that outline outputs [role <sess8>:<uuid8>] refs
+// that can be directly passed into rawclaw read.
+func TestOutlinePrintsValidReadRefs(t *testing.T) {
+	root := newCfgRoot(t)
+	sessID := "aaaa1111-0000-0000-0000-000000000001"
+	writeRichReadSession(t, root, "-home-u-proj", sessID)
+
+	outOutline, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "outline", "aaaa1111", "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("outline failed: %v\n%s", err, outOutline)
+	}
+
+	// Outline should contain [user aaaa1111:9f3e1c20]
+	expectedRefTag := "[user aaaa1111:9f3e1c20]"
+	if !strings.Contains(outOutline, expectedRefTag) {
+		t.Errorf("outline output does not contain expected ref tag %q:\n%s", expectedRefTag, outOutline)
+	}
+
+	// Directly read the ref printed in the outline
+	outRead, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "read", "aaaa1111:9f3e1c20", "--dir", t.TempDir())
+	if err != nil {
+		t.Fatalf("read from outline ref failed: %v\n%s", err, outRead)
+	}
+	if !strings.Contains(outRead, "How do we optimize DB queries?") {
+		t.Errorf("read output missing expected content:\n%s", outRead)
+	}
+}

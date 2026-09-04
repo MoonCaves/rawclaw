@@ -442,7 +442,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	}
 
 	var emb embed.Embedder
-	if !o.NoVector {
+	if o.Vector {
 		emb = adapters.GetEmbedder()
 	}
 
