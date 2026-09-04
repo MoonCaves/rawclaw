@@ -1461,6 +1461,10 @@ type IndexFreshness struct {
 	Reason string
 }
 
+// SettleWindow defines the duration after a transcript's last modification during
+// which it is considered actively written and ignored by freshness checks.
+var SettleWindow = 60 * time.Second
+
 // CheckIndexFreshness evaluates whether the consolidated store is current by
 // comparing the last-ingest watermark in meta against a single stat of the session catalog dir.
 // It is strictly O(1): at most 1 stat of the catalog directory and 1 DB meta query.
@@ -1496,22 +1500,24 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 		lastIngestTime, _ = strconv.ParseFloat(ingestTimeStr, 64)
 	}
 
+	var lastCatMTime float64
 	if catMTimeStr != "" {
-		lastCatMTime, pErr := strconv.ParseFloat(catMTimeStr, 64)
-		if pErr == nil {
-			if curCatMTime > lastCatMTime+0.001 {
-				return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
-			}
-		}
-	} else if lastIngestTime > 0 {
-		if curCatMTime > lastIngestTime+0.001 {
-			return IndexFreshness{Fresh: false, Reason: "catalog_newer_than_ingest"}, nil
-		}
+		lastCatMTime, _ = strconv.ParseFloat(catMTimeStr, 64)
 	}
 
-	// Check catalog session transcripts against stored file_index watermarks.
-	// If a transcript has been modified since it was indexed, or is present in the catalog
-	// but missing from file_index, the index is stale.
+	// 1. Directory mtime gate: if catalog mtime matches what was stamped at ingest,
+	// no sessions were added or removed. The index is fresh in O(1).
+	if lastCatMTime > 0 && curCatMTime <= lastCatMTime+0.001 {
+		return IndexFreshness{Fresh: true}, nil
+	}
+	if lastCatMTime == 0 && lastIngestTime > 0 && curCatMTime <= lastIngestTime+0.001 {
+		return IndexFreshness{Fresh: true}, nil
+	}
+
+	// 2. Directory mtime differed. Check entries in catalog: ignore transcripts
+	// modified within SettleWindow (active agents still writing).
+	// Only settled transcripts (modified outside SettleWindow) that were modified or born
+	// after ingest make the index stale.
 	entries, err := os.ReadDir(catDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1520,48 +1526,16 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 		return IndexFreshness{Fresh: false, Reason: "read_catalog_dir_failed"}, fmt.Errorf("read catalog directory %q: %w", catDir, err)
 	}
 
-	type watermark struct {
-		mtime    float64
-		size     int64
-		fp       string
-		hasMtime bool
-		hasSize  bool
-	}
-	watermarks := make(map[string]watermark)
-	rows, err := con.Query("SELECT path, mtime, size, fp FROM file_index")
-	if err != nil {
-		return IndexFreshness{Fresh: false, Reason: "query_file_index_failed"}, fmt.Errorf("query file_index: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var p, fp sql.NullString
-		var mt sql.NullFloat64
-		var sz sql.NullInt64
-		if err := rows.Scan(&p, &mt, &sz, &fp); err != nil {
-			return IndexFreshness{Fresh: false, Reason: "scan_file_index_failed"}, fmt.Errorf("scan file_index: %w", err)
-		}
-		if p.Valid {
-			raw := filepath.Clean(backingFilePath(p.String))
-			wm := watermark{
-				mtime:    mt.Float64,
-				size:     sz.Int64,
-				fp:       fp.String,
-				hasMtime: mt.Valid,
-				hasSize:  sz.Valid,
-			}
-			watermarks[raw] = wm
-			watermarks[paths.Realpath(raw)] = wm
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return IndexFreshness{Fresh: false, Reason: "iterate_file_index_failed"}, fmt.Errorf("iterate file_index: %w", err)
-	}
-
+	now := time.Now()
 	for _, e := range entries {
 		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		catPath := filepath.Join(catDir, e.Name())
+		cst, cErr := os.Stat(catPath)
+		if cErr != nil {
+			continue
+		}
 		entry, err := paths.ReadCatalogEntry(catPath)
 		if err != nil {
 			return IndexFreshness{Fresh: false, Reason: "read_catalog_entry_failed"}, fmt.Errorf("read catalog entry %q: %w", catPath, err)
@@ -1570,24 +1544,26 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 			continue
 		}
 		rawPath := filepath.Clean(backingFilePath(entry.TranscriptPath))
-		curMTime, curSize, curFP, statErr := backingFileState(rawPath)
+		tst, statErr := os.Stat(rawPath)
 		if statErr != nil {
 			if os.IsNotExist(statErr) {
-				continue
+				return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
 			}
 			return IndexFreshness{Fresh: false, Reason: "stat_transcript_failed"}, fmt.Errorf("stat transcript %q: %w", rawPath, statErr)
 		}
 
-		wm, ok := watermarks[rawPath]
-		if !ok {
-			wm, ok = watermarks[paths.Realpath(rawPath)]
+		// Settle window: ignore any transcript modified within the settle window.
+		if now.Sub(tst.ModTime()) < SettleWindow {
+			continue
 		}
-		if !ok {
-			// Transcript is present in catalog but not indexed yet.
-			return IndexFreshness{Fresh: false, Reason: "active_sessions_modified"}, nil
+
+		curCatEntryMTime := mtimeOf(cst)
+		curTransMTime := mtimeOf(tst)
+		if lastCatMTime > 0 && (curCatEntryMTime > lastCatMTime+0.001 || curTransMTime > lastCatMTime+0.001) {
+			return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
 		}
-		if !wm.hasMtime || !wm.hasSize || absDiff(wm.mtime, curMTime) >= 0.001 || wm.size != curSize || (wm.fp != "" && wm.fp != curFP) {
-			return IndexFreshness{Fresh: false, Reason: "active_sessions_modified"}, nil
+		if lastCatMTime == 0 && lastIngestTime > 0 && (curCatEntryMTime > lastIngestTime+0.001 || curTransMTime > lastIngestTime+0.001) {
+			return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
 		}
 	}
 
