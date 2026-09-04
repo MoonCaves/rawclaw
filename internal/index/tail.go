@@ -139,22 +139,29 @@ func parseTailMessages(con *sql.DB, c source.Container, sourceID, rawPath string
 	ordinal := count
 	lineOffset, pending, err := parse.StreamJSONLLines(io.LimitReader(f, toOffset-fromOffset), func(line []byte) error {
 		line = []byte(strings.TrimSpace(string(line)))
-		if len(line) == 0 {
-			return nil
-		}
-		var rec map[string]any
-		if err := json.Unmarshal(line, &rec); err != nil {
-			return err
-		}
 		var msg model.Message
 		switch sourceID {
 		case sourceClaude, "":
+			if len(line) == 0 {
+				return nil
+			}
+			var rec map[string]any
+			if err := json.Unmarshal(line, &rec); err != nil {
+				return err
+			}
 			if !indexable(rec) {
 				return errors.New("unrecognized claude tail record type")
 			}
 			msg = model.Message{Role: parse.MsgRole(rec), Text: parse.ExtractText(rec), UUID: parse.MsgUUID(rec)}
 			msg.TSISO, _ = rec["timestamp"].(string)
 		case "codex":
+			if len(line) == 0 {
+				return nil
+			}
+			var rec map[string]any
+			if err := json.Unmarshal(line, &rec); err != nil {
+				return err
+			}
 			role, text, ok := codex.NormalizeRecord(rec)
 			if !ok {
 				return errors.New("unrecognized codex tail record")
@@ -162,6 +169,13 @@ func parseTailMessages(con *sql.DB, c source.Container, sourceID, rawPath string
 			msg = model.Message{Role: role, Text: text, UUID: codex.MintUUID(c.ID, ordinal)}
 			msg.TSISO, _ = rec["timestamp"].(string)
 		case "antigravity":
+			if len(line) == 0 {
+				return nil
+			}
+			var rec map[string]any
+			if err := json.Unmarshal(line, &rec); err != nil {
+				return err
+			}
 			role, text, ok := antigravity.NormalizeRecord(rec)
 			if !ok {
 				return errors.New("unrecognized antigravity tail record")

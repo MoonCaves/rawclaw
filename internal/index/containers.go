@@ -358,7 +358,7 @@ func updateContainers(con *sql.DB, cs []source.Container, msgs MessagesFunc, sou
 		if prev, found = cur[rp]; found {
 			if absDiff(prev.mtime, mtime) < 0.001 && prev.size == size {
 				if prev.fp == fp {
-					continue // genuinely unchanged
+					continue
 				}
 			}
 		}

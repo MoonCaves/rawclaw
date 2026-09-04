@@ -118,6 +118,12 @@ func prewarmSourcePath(dbPath, sessionID string) string {
 		}
 		return path
 	}
+	if err := con.QueryRow("SELECT source_path FROM sessions WHERE id=? LIMIT 1", sessionID).Scan(&path); err == nil && path != "" {
+		if idx := strings.Index(path, "#"); idx >= 0 {
+			path = path[:idx]
+		}
+		return path
+	}
 	if err := con.QueryRow("SELECT path FROM file_index WHERE session_id=? LIMIT 1", sessionID).Scan(&path); err == nil {
 		if idx := strings.Index(path, "#"); idx >= 0 {
 			path = path[:idx]
