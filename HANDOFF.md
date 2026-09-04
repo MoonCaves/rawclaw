@@ -7,40 +7,33 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-04 — CheckProjectFreshness Scope Uncoupled, Idle Project Search Certified at 29ms, Fleet Currency Deployed.**
+**2026-09-04 — Answer-First Search Architecture Merged, Topics Scoping Fixed, Deterministic Gate Certified.**
 
 ### 📍 Now
-- Commit `ca8f8bd` landed on `main` and pushed to `origin/main`:
-  1. **CheckProjectFreshness Scope Uncoupling (`internal/index/consolidated.go`)**:
-     - Removed the global catalog watermark check (`globalFresh := CheckIndexFreshness(con)`) from `CheckProjectFreshness`.
-     - Previously, any active session on the entire machine touching `~/.cache/session-search/catalog` made every idle repo (e.g. `~/code/beads_rust`) report `fresh: false` permanently, triggering the full multi-runtime refresh on every keystroke.
-     - Uncoupling makes `CheckProjectFreshness` evaluate only the project's own files and transcripts in $O(1)$ (< 0.1ms).
-  2. **Codex CWDDiscoverer & Header Caching (`internal/source/codex`)**:
-     - Added `metaCache` map with `(path, mtime, size)` caching in `readMeta(path)`.
-     - Added `DiscoverCWD(cwd string)` in `internal/source/codex/codex.go` in commit `8534dc3`.
-  3. **ClaudeLive Scope Optimization (`internal/scopes`, `internal/cli`)**:
-     - Added `ClaudeLive()` in `internal/scopes/scopes.go` in commit `2bf673e`.
+- Commits `b08f7ec`, `5a82692`, `0b2858d`, and `a36d7f2` landed on `main`:
+  1. **Answer-First Query Decoupling (`cli_search.go`, `search.go`)**:
+     - Converted both default and `--this-project` search to answer-first against `consolidated.db`.
+     - Stale detection emits an advisory 1-line note and fires a background self-healing ingest without blocking query responses.
+     - Interactive query execution drops to single-digit/sub-100ms responses.
+  2. **Lazy Worktree & Project Scoping (`cli_search.go`, `topics.go`)**:
+     - Converted `sopts.ScopeFallback` to a lazy closure, eliminating synchronous multi-project filesystem walks during consolidated queries.
+     - Added `ProjectDir` scoping and successive boolean narrowing to `topics.go` and `cmd_topics.go`.
+     - Fixed `CheckProjectFreshness` routing and deduplicated background ingest spawns.
 - Verified:
-  - Full test suite passed with race detector: `CGO_ENABLED=0 go test -race -count=1 ./...` (39/39 packages).
-  - Linter: `golangci-lint run ./...` reports **0 issues**.
-  - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`).
-  - Graphify AST knowledge graph refreshed (4,125 nodes, 11,815 edges, 246 communities).
-  - Fleet binary `rawclaw v0.8.0 (commit ca8f8bd)` deployed live across **Mac HQ**, **jay-m1**, **muppet-server**, and **ai-server**.
-  - **Live Search Timing Protocol**:
-    - Idle repo (`beads_rust`): Run 1 = 36ms, Run 2 = 29ms (down from 6.3s).
-    - Active repo (`rawclaw`): Run 1 = 36ms, Run 2 = 29ms.
+  - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`) with 0 race conditions, 0 deadlocks, and 100% `gofmt` compliance.
+  - Graphify AST knowledge graph refreshed (4,140 nodes, 11,873 edges, 242 communities).
+  - Deployed binary `~/.local/bin/rawclaw` (MD5 `a14759e38a618104d7da9d7d66d2098a`).
 
 ### ✅ Decisions
-- **Project-Scoped Freshness Check** (2026-09-04): Uncouples `CheckProjectFreshness` from global machine-wide catalog mtimes so an active session in repo A never invalidates the freshness of idle repo B.
-- **Codex CWD Scoping & Header Cache** (2026-09-04): Implements `CWDDiscoverer` and `(path, mtime, size)` caching for Codex.
-- **ClaudeLive Scoped Refresh** (2026-09-04): Bypasses 562-database orphan discovery sweeps on current-project queries.
+- **Answer-First Search Hot Path** (2026-09-04): Decoupled search from synchronous multi-runtime crawling. Search answers immediately from `consolidated.db` in < 100ms; background ingestion handles freshness reconciliation asynchronously.
+- **Lazy Worktree Scope Fallback** (2026-09-04): Scope directory enumeration is only invoked on fan-out fallback or explicit `--reindex`, avoiding blocking directory crawls during standard queries.
+- **Successive Narrowing in Topics Scoping** (2026-09-04): Replaced mutual-exclusion `if/else` with sequential boolean narrowing on `keep` map to support compound `--this-project` + `--include-path` filtering.
 
 ### 🧵 Open threads (with status)
-- **Cluster Git Governance Critique**: Dispatched open-ended critique request to OLUMBRA, Marrowlight, and cluster peers on Agent Mail thread `cluster-git-governance`.
+- **Fleet Sync**: Sync clean commits to `origin/main`.
 
 ### ⏭️ Next
-- Review peer feedback from Agent Mail thread `cluster-git-governance`.
-- Monitor continuous background ingestion across active coding agent workflows.
+- Push clean commits to remote.
 
 ### ⛔ Blockers
 - None.
