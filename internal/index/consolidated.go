@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1491,23 +1492,60 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 	}
 
 	curCatMTime := mtimeOf(st)
+	var lastIngestTime float64
+	if ingestTimeStr != "" {
+		lastIngestTime, _ = strconv.ParseFloat(ingestTimeStr, 64)
+	}
+
 	if catMTimeStr != "" {
 		lastCatMTime, pErr := strconv.ParseFloat(catMTimeStr, 64)
 		if pErr == nil {
 			if curCatMTime > lastCatMTime+0.001 {
 				return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
 			}
-			return IndexFreshness{Fresh: true}, nil
+		}
+	} else if lastIngestTime > 0 {
+		if curCatMTime > lastIngestTime+0.001 {
+			return IndexFreshness{Fresh: false, Reason: "catalog_newer_than_ingest"}, nil
 		}
 	}
 
-	if ingestTimeStr != "" {
-		lastIngestTime, pErr := strconv.ParseFloat(ingestTimeStr, 64)
-		if pErr == nil {
-			if curCatMTime > lastIngestTime+0.001 {
-				return IndexFreshness{Fresh: false, Reason: "catalog_newer_than_ingest"}, nil
+	// Check if any recent catalog session transcript was modified after last ingest
+	if lastIngestTime > 0 {
+		if entries, err := os.ReadDir(catDir); err == nil {
+			type cand struct {
+				name string
+				mt   time.Time
 			}
-			return IndexFreshness{Fresh: true}, nil
+			var cands []cand
+			for _, e := range entries {
+				if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+					continue
+				}
+				if info, err := e.Info(); err == nil {
+					cands = append(cands, cand{name: e.Name(), mt: info.ModTime()})
+				}
+			}
+			sort.Slice(cands, func(i, j int) bool {
+				return cands[i].mt.After(cands[j].mt)
+			})
+			if len(cands) > 10 {
+				cands = cands[:10]
+			}
+			for _, c := range cands {
+				entry, err := paths.ReadCatalogEntry(filepath.Join(catDir, c.name))
+				if err != nil || entry.TranscriptPath == "" {
+					continue
+				}
+				tst, err := os.Stat(entry.TranscriptPath)
+				if err != nil {
+					continue
+				}
+				curTransMTime := mtimeOf(tst)
+				if curTransMTime > lastIngestTime+0.001 {
+					return IndexFreshness{Fresh: false, Reason: "active_sessions_modified"}, nil
+				}
+			}
 		}
 	}
 

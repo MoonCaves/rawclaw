@@ -89,6 +89,7 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 		staleNote  string
 	)
 	if !o.Reindex {
+		refreshActiveSessions(o.currentSession())
 		if con, _, err := index.OpenConsolidated(); err == nil {
 			defer con.Close()
 			if freshness, fErr := index.CheckIndexFreshness(con); fErr == nil && !freshness.Fresh {
@@ -155,6 +156,7 @@ func runBrowseScoped(w io.Writer, o *Options, universe []view.Scope) error {
 	var freshness *index.IndexFreshness
 
 	if !o.Reindex {
+		refreshActiveSessions(o.currentSession())
 		if con, _, err := index.OpenConsolidated(); err == nil {
 			defer con.Close()
 			if f, fErr := index.CheckIndexFreshness(con); fErr == nil {
@@ -417,6 +419,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	if o.Reindex || o.DirSet {
 		refreshThisProject(o)
 	} else {
+		refreshActiveSessions(o.currentSession())
 		td := resolveTDir(o.Dir, o.DirSet)
 		projLabel := ""
 		if td != "" {
