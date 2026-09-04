@@ -182,18 +182,26 @@ func resolveStoreProjects(con *sql.DB, project string, projectsFilter []string, 
 
 	keep := map[string]bool{}
 	for _, sr := range scopeRows {
-		keep[sr.Project] = false
+		keep[sr.Project] = true
 	}
 	if includePath != "" || excludePath != "" {
 		pred := query.PathPredicate(includePath, excludePath)
+		matching := map[string]bool{}
 		for _, sr := range scopeRows {
 			if pred(sr.CWD) {
-				keep[sr.Project] = true
+				matching[sr.Project] = true
 			}
 		}
-	} else if projectDir != "" {
+		for k := range keep {
+			if !matching[k] {
+				keep[k] = false
+			}
+		}
+	}
+	if projectDir != "" {
 		targetDir := paths.Realpath(paths.ExpandHome(projectDir))
 		gitRoot := paths.GitRoot(targetDir)
+		dirMatching := map[string]bool{}
 		for _, sr := range scopeRows {
 			scCWD := paths.Realpath(sr.CWD)
 			matched := false
@@ -206,27 +214,20 @@ func resolveStoreProjects(con *sql.DB, project string, projectsFilter []string, 
 				matched = true
 			}
 			if matched {
-				keep[sr.Project] = true
+				dirMatching[sr.Project] = true
 			}
 		}
-		hasAny := false
-		for _, v := range keep {
-			if v {
-				hasAny = true
-				break
-			}
-		}
-		if !hasAny {
+		if len(dirMatching) == 0 {
 			lbl := paths.ProjectLabel(targetDir)
-			for k := range keep {
-				if k == lbl || (project != "" && k == project) {
-					keep[k] = true
-				}
+			dirMatching[lbl] = true
+			if project != "" {
+				dirMatching[project] = true
 			}
 		}
-	} else {
 		for k := range keep {
-			keep[k] = true
+			if !dirMatching[k] {
+				keep[k] = false
+			}
 		}
 	}
 	if len(projectsFilter) > 0 {
