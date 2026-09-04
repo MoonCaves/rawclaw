@@ -414,7 +414,6 @@ func TestDetect(t *testing.T) {
 }
 
 func TestDiscoverCWD(t *testing.T) {
-	t.Parallel()
 	tmp := t.TempDir()
 	sessionsDir := filepath.Join(tmp, "sessions", "2026", "09", "04")
 
