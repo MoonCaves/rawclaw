@@ -36,6 +36,9 @@ func newTopicsCmd() *cobra.Command {
 			q := strings.Join(args, " ")
 			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
 			opts := agentproto.TopicsOpts{Limit: limit, IncludePath: includePath, ScopeFallback: more}
+			if thisProject {
+				opts.ProjectDir = dir
+			}
 			// --this-project narrows the one store by project LABEL, so take the
 			// label off the single scope the flag resolved to rather than
 			// re-deriving it. The scope list still travels for the fallback path.

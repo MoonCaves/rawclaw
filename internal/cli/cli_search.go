@@ -434,12 +434,10 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 			if fErr != nil || !freshness.Fresh {
 				indexStale = true
 				staleNote = staleIngestNote()
-				maybeSpawnIngest("")
 			}
 		} else {
 			indexStale = true
 			staleNote = staleIngestNote()
-			maybeSpawnIngest("")
 		}
 	}
 
