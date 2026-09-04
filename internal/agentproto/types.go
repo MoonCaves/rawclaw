@@ -160,6 +160,7 @@ type SearchOpts struct {
 	CurrentSession   string
 	Project          string
 	Projects         []string
+	ProjectDir       string
 	Source           string
 	ScopeFallback    func() []view.Scope
 }

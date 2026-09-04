@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/paths"
 	"github.com/MoonCaves/rawclaw/internal/query"
 	"github.com/MoonCaves/rawclaw/internal/retrieve"
 	"github.com/MoonCaves/rawclaw/internal/scopes"
@@ -33,6 +34,7 @@ type TopicsOpts struct {
 	Limit         int
 	Project       string
 	Projects      []string
+	ProjectDir    string
 	IncludePath   string
 	ScopeFallback ScopeFn
 }
@@ -56,7 +58,7 @@ func topicsFromStore(con *sql.DB, query string, limit int, opts TopicsOpts) (Top
 	if !store.TopicRowsExist(con) {
 		return TopicsResult{}, false
 	}
-	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.Projects, opts.IncludePath, "")
+	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.Projects, opts.ProjectDir, opts.IncludePath, "")
 	if err != nil || (narrowed && len(projects) == 0) {
 		return TopicsResult{}, false
 	}
@@ -86,7 +88,9 @@ func topicsFromStore(con *sql.DB, query string, limit int, opts TopicsOpts) (Top
 		}
 		return false
 	})
-
+	if len(hits) == 0 {
+		return TopicsResult{}, false
+	}
 	return TopicsResult{Query: query, Hits: hits}, true
 }
 
@@ -167,8 +171,8 @@ func topicsByFanOut(query string, scope []view.Scope, limit int, opts TopicsOpts
 	return res, nil
 }
 
-func resolveStoreProjects(con *sql.DB, project string, projectsFilter []string, includePath, excludePath string) (projects []string, narrowed bool, err error) {
-	if project == "" && len(projectsFilter) == 0 && includePath == "" && excludePath == "" {
+func resolveStoreProjects(con *sql.DB, project string, projectsFilter []string, projectDir, includePath, excludePath string) (projects []string, narrowed bool, err error) {
+	if project == "" && len(projectsFilter) == 0 && projectDir == "" && includePath == "" && excludePath == "" {
 		return nil, false, nil
 	}
 	scopeRows, err := store.DistinctScopes(con)
@@ -187,6 +191,39 @@ func resolveStoreProjects(con *sql.DB, project string, projectsFilter []string, 
 				keep[sr.Project] = true
 			}
 		}
+	} else if projectDir != "" {
+		targetDir := paths.Realpath(paths.ExpandHome(projectDir))
+		gitRoot := paths.GitRoot(targetDir)
+		for _, sr := range scopeRows {
+			scCWD := paths.Realpath(sr.CWD)
+			matched := false
+			if gitRoot != "" {
+				if scGitRoot := paths.GitRoot(scCWD); scGitRoot != "" && scGitRoot == gitRoot {
+					matched = true
+				}
+			}
+			if !matched && scCWD != "" && scCWD == targetDir {
+				matched = true
+			}
+			if matched {
+				keep[sr.Project] = true
+			}
+		}
+		hasAny := false
+		for _, v := range keep {
+			if v {
+				hasAny = true
+				break
+			}
+		}
+		if !hasAny {
+			lbl := paths.ProjectLabel(targetDir)
+			for k := range keep {
+				if k == lbl || (project != "" && k == project) {
+					keep[k] = true
+				}
+			}
+		}
 	} else {
 		for k := range keep {
 			keep[k] = true
@@ -202,7 +239,7 @@ func resolveStoreProjects(con *sql.DB, project string, projectsFilter []string, 
 				keep[k] = false
 			}
 		}
-	} else if project != "" {
+	} else if project != "" && projectDir == "" {
 		for k := range keep {
 			if k != project {
 				keep[k] = false

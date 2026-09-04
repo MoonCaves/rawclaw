@@ -312,7 +312,7 @@ func searchOneStore(
 	}
 	defer con.Close()
 
-	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.Projects, opts.IncludePath, opts.ExcludePath)
+	projects, narrowed, err := resolveStoreProjects(con, opts.Project, opts.Projects, opts.ProjectDir, opts.IncludePath, opts.ExcludePath)
 	if err != nil {
 		return nil, nil, false, VectorCoverage{}, "one store scope lookup failed (" + err.Error() + ") — searched per project instead", false
 	}
