@@ -417,55 +417,30 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	)
 
 	// An explicit --reindex or explicit --dir refreshes the targeted project.
-	// --this-project evaluates O(1) project freshness before paying the multi-runtime
-	// re-consolidation fold. Default search is answer-first: the O(1) per-project
-	// freshness check skips discovery entirely, and stale or UNKNOWN answers from
-	// the consolidated store while a throttled background ingest nudge repairs freshness.
-	switch {
-	case o.Reindex || o.DirSet:
+	// Default and --this-project search is answer-first: queries run directly against
+	// the consolidated store in single-digit milliseconds. Stale signal returns the
+	// existing answers immediately while a throttled background ingest nudge self-heals.
+	// Only explicit --reindex or explicit --dir overrides trigger synchronous refresh.
+	if o.Reindex || o.DirSet {
 		refreshThisProject(o)
-	case o.ThisProject:
+	} else {
 		td := resolveTDir(o.Dir, o.DirSet)
 		projLabel := ""
 		if td != "" {
 			projLabel = paths.ProjectLabel(td)
 		}
-		fresh := false
 		if con, _, err := index.OpenConsolidated(); err == nil {
 			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td, o.Source)
 			_ = con.Close()
-			fresh = fErr == nil && freshness.Fresh
-		}
-		if !fresh {
-			refreshThisProject(o)
-		}
-	default:
-		td := resolveTDir(o.Dir, o.DirSet)
-		projLabel := ""
-		if td != "" {
-			projLabel = paths.ProjectLabel(td)
-		}
-		stale := false
-		if con, _, err := index.OpenConsolidated(); err == nil {
-			freshness, fErr := index.CheckProjectFreshness(con, projLabel, td, o.Source)
-			_ = con.Close()
-			stale = fErr != nil || !freshness.Fresh
-		} else {
-			stale = true
-		}
-		if stale {
-			refreshThisProject(o)
-			if con, _, err := index.OpenConsolidated(); err == nil {
-				freshness, fErr := index.CheckProjectFreshness(con, projLabel, td, o.Source)
-				_ = con.Close()
-				if fErr != nil || !freshness.Fresh {
-					indexStale = true
-					staleNote = staleIngestNote()
-				}
-			} else {
+			if fErr != nil || !freshness.Fresh {
 				indexStale = true
 				staleNote = staleIngestNote()
+				maybeSpawnIngest("")
 			}
+		} else {
+			indexStale = true
+			staleNote = staleIngestNote()
+			maybeSpawnIngest("")
 		}
 	}
 
