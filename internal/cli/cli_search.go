@@ -37,7 +37,9 @@ func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool)
 		}
 	}
 	if td == "" || !isDir(td) {
-		fmt.Fprintf(w, "No transcript history for --dir %s. Try --list, or --all for every project.\n", realpathExpand(o.Dir))
+		if o.DirSet {
+			fmt.Fprintf(w, "No transcript history for --dir %s. Try --list, or --all for every project.\n", realpathExpand(o.Dir))
+		}
 		return nil, "", false
 	}
 	return []view.Scope{{Project: paths.ProjectLabel(td), TDir: td}}, td, true
@@ -79,6 +81,11 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 	}
 	sc, td, ok := thisScope(w, o)
 	if !ok {
+		if !o.DirSet {
+			fmt.Fprintf(w, "note: no local history in %s; showing recent sessions across all projects\n", realpathExpand(o.Dir))
+			universe := allScope(ctx, o.Source, o.Reindex, o.IncludePath, o.ExcludePath)
+			return runBrowseScoped(w, o, universe)
+		}
 		return nil
 	}
 	_ = sc
