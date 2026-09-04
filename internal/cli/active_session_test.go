@@ -180,7 +180,9 @@ func TestCheckIndexFreshness_ActiveTranscriptModified(t *testing.T) {
 		t.Fatalf("expected initial index to be fresh, got: %+v", freshness)
 	}
 
-	// Modify the transcript file after watermark
+	// Modify the transcript file after watermark. Since catalog directory mtime
+	// did not change and live sessions drift, index remains fresh in O(1)
+	// (active session freshness is guaranteed via delta tail refresh).
 	time.Sleep(20 * time.Millisecond)
 	f, err := os.OpenFile(transPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -196,27 +198,31 @@ func TestCheckIndexFreshness_ActiveTranscriptModified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckIndexFreshness after mod: %v", err)
 	}
-	if freshnessAfter.Fresh {
-		t.Errorf("expected Fresh == false after transcript modification, got true")
-	}
-	if freshnessAfter.Reason != "active_sessions_modified" {
-		t.Errorf("expected Reason == active_sessions_modified, got %q", freshnessAfter.Reason)
+	if !freshnessAfter.Fresh {
+		t.Errorf("expected Fresh == true (active transcript drift does not invalidate O(1) directory mtime gate), got stale: %s", freshnessAfter.Reason)
 	}
 
-	// Test Codex P1 scenario: an unrelated session ingest advances the global watermark,
-	// but active session's transcript is still modified compared to its file_index record.
-	// Index must STILL report stale (not masked by global watermark).
-	if err := index.StampIngestWatermark(con); err != nil {
+	// Now simulate catalog directory mtime changing (e.g. new session entry written)
+	defer func(orig time.Duration) { index.SettleWindow = orig }(index.SettleWindow)
+	index.SettleWindow = 10 * time.Millisecond
+
+	time.Sleep(20 * time.Millisecond)
+	if err := paths.WriteCatalogEntry(catDir, paths.CatalogEntry{
+		SessionID:      "new-sess-after",
+		TranscriptPath: transPath,
+		Source:         "antigravity",
+	}); err != nil {
 		t.Fatal(err)
 	}
-	freshnessGlobalAdvance, err := index.CheckIndexFreshness(con)
+
+	// Inside settle window (if transcript was just written), it is ignored.
+	// But once SettleWindow expires, catalog modification flips to stale.
+	time.Sleep(25 * time.Millisecond)
+	freshnessStale, err := index.CheckIndexFreshness(con)
 	if err != nil {
-		t.Fatalf("CheckIndexFreshness after global watermark advance: %v", err)
+		t.Fatalf("CheckIndexFreshness after settle: %v", err)
 	}
-	if freshnessGlobalAdvance.Fresh {
-		t.Errorf("expected Fresh == false even after global ingest watermark advanced, got true")
-	}
-	if freshnessGlobalAdvance.Reason != "active_sessions_modified" {
-		t.Errorf("expected Reason == active_sessions_modified, got %q", freshnessGlobalAdvance.Reason)
+	if freshnessStale.Fresh {
+		t.Errorf("expected Fresh == false after settled catalog addition, got true")
 	}
 }

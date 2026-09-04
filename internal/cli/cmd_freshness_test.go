@@ -248,8 +248,11 @@ func TestO1Freshness_CatalogBirth_FlipsIndexToStale(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	defer func(orig time.Duration) { index.SettleWindow = orig }(index.SettleWindow)
+	index.SettleWindow = 10 * time.Millisecond
+	time.Sleep(25 * time.Millisecond)
 
-	// 3. Freshness check immediately flips to stale
+	// 3. Freshness check flips to stale once settled
 	freshnessAfter, err := index.CheckIndexFreshness(con)
 	if err != nil {
 		t.Fatalf("CheckIndexFreshness after birth: %v", err)
