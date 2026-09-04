@@ -282,9 +282,10 @@ func TestRoutine_HigherRelevanceOutranksNormal(t *testing.T) {
 	sRoutine := "11111111-routine-high-cov"
 	sNormal := "22222222-normal-low-cov"
 
-	// sRoutine matches both "database" and "migration" (cov=2)
+	// No session matches all three query terms, so AND-first yields nothing and
+	// search falls back to OR, where coverage differs: sRoutine covers two terms,
+	// sNormal one. Coverage must outrank the routine demotion.
 	writeSession(t, proj, sRoutine, "u1111111-cov2", "database migration in production")
-	// sNormal matches only "database" (cov=1)
 	writeSession(t, proj, sNormal, "u2222222-cov1", "database query")
 
 	dbp, _, _, _ := index.EnsureIndexed(proj, false)
@@ -292,7 +293,7 @@ func TestRoutine_HigherRelevanceOutranksNormal(t *testing.T) {
 	markRoutine(t, dbp, sRoutine)
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
-	env := Search("database migration", scope, SearchOpts{Limit: 8}, nil)
+	env := Search("database migration warehouse", scope, SearchOpts{Limit: 8}, nil)
 
 	if len(env.Results) != 2 {
 		t.Fatalf("got %d results, want 2", len(env.Results))

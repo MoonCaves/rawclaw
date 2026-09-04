@@ -1543,26 +1543,33 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 		if entry.TranscriptPath == "" {
 			continue
 		}
+		watermark := lastCatMTime
+		if watermark == 0 {
+			watermark = lastIngestTime
+		}
+		// A catalog entry born or rewritten after the last ingest is a session the
+		// store has never folded in. That is stale regardless of how recently its
+		// transcript was written: the settle window below only excuses drift on
+		// transcripts that were already indexed.
+		if watermark > 0 && mtimeOf(cst) > watermark+0.001 {
+			return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
+		}
 		rawPath := filepath.Clean(backingFilePath(entry.TranscriptPath))
 		tst, statErr := os.Stat(rawPath)
 		if statErr != nil {
 			if os.IsNotExist(statErr) {
-				return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
+				// Purged transcript (e.g. Claude Code's 30-day cleanup); the catalog
+				// entry outlives it. Retained history is not staleness.
+				continue
 			}
 			return IndexFreshness{Fresh: false, Reason: "stat_transcript_failed"}, fmt.Errorf("stat transcript %q: %w", rawPath, statErr)
 		}
-
-		// Settle window: ignore any transcript modified within the settle window.
+		// Settle window: a transcript still being appended to by a live agent is
+		// streaming, not stale. Its tail is folded in by the next hook/ingest pass.
 		if now.Sub(tst.ModTime()) < SettleWindow {
 			continue
 		}
-
-		curCatEntryMTime := mtimeOf(cst)
-		curTransMTime := mtimeOf(tst)
-		if lastCatMTime > 0 && (curCatEntryMTime > lastCatMTime+0.001 || curTransMTime > lastCatMTime+0.001) {
-			return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
-		}
-		if lastCatMTime == 0 && lastIngestTime > 0 && (curCatEntryMTime > lastIngestTime+0.001 || curTransMTime > lastIngestTime+0.001) {
+		if watermark > 0 && mtimeOf(tst) > watermark+0.001 {
 			return IndexFreshness{Fresh: false, Reason: "catalog_modified_after_ingest"}, nil
 		}
 	}
