@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1510,42 +1509,85 @@ func CheckIndexFreshness(con *sql.DB) (IndexFreshness, error) {
 		}
 	}
 
-	// Check if any recent catalog session transcript was modified after last ingest
-	if lastIngestTime > 0 {
-		if entries, err := os.ReadDir(catDir); err == nil {
-			type cand struct {
-				name string
-				mt   time.Time
+	// Check catalog session transcripts against stored file_index watermarks.
+	// If a transcript has been modified since it was indexed, or is present in the catalog
+	// but missing from file_index, the index is stale.
+	entries, err := os.ReadDir(catDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return IndexFreshness{Fresh: true}, nil
+		}
+		return IndexFreshness{Fresh: false, Reason: "read_catalog_dir_failed"}, fmt.Errorf("read catalog directory %q: %w", catDir, err)
+	}
+
+	type watermark struct {
+		mtime    float64
+		size     int64
+		fp       string
+		hasMtime bool
+		hasSize  bool
+	}
+	watermarks := make(map[string]watermark)
+	rows, err := con.Query("SELECT path, mtime, size, fp FROM file_index")
+	if err != nil {
+		return IndexFreshness{Fresh: false, Reason: "query_file_index_failed"}, fmt.Errorf("query file_index: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p, fp sql.NullString
+		var mt sql.NullFloat64
+		var sz sql.NullInt64
+		if err := rows.Scan(&p, &mt, &sz, &fp); err != nil {
+			return IndexFreshness{Fresh: false, Reason: "scan_file_index_failed"}, fmt.Errorf("scan file_index: %w", err)
+		}
+		if p.Valid {
+			raw := filepath.Clean(backingFilePath(p.String))
+			wm := watermark{
+				mtime:    mt.Float64,
+				size:     sz.Int64,
+				fp:       fp.String,
+				hasMtime: mt.Valid,
+				hasSize:  sz.Valid,
 			}
-			var cands []cand
-			for _, e := range entries {
-				if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-					continue
-				}
-				if info, err := e.Info(); err == nil {
-					cands = append(cands, cand{name: e.Name(), mt: info.ModTime()})
-				}
+			watermarks[raw] = wm
+			watermarks[paths.Realpath(raw)] = wm
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return IndexFreshness{Fresh: false, Reason: "iterate_file_index_failed"}, fmt.Errorf("iterate file_index: %w", err)
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		catPath := filepath.Join(catDir, e.Name())
+		entry, err := paths.ReadCatalogEntry(catPath)
+		if err != nil {
+			return IndexFreshness{Fresh: false, Reason: "read_catalog_entry_failed"}, fmt.Errorf("read catalog entry %q: %w", catPath, err)
+		}
+		if entry.TranscriptPath == "" {
+			continue
+		}
+		rawPath := filepath.Clean(backingFilePath(entry.TranscriptPath))
+		curMTime, curSize, curFP, statErr := backingFileState(rawPath)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				continue
 			}
-			sort.Slice(cands, func(i, j int) bool {
-				return cands[i].mt.After(cands[j].mt)
-			})
-			if len(cands) > 10 {
-				cands = cands[:10]
-			}
-			for _, c := range cands {
-				entry, err := paths.ReadCatalogEntry(filepath.Join(catDir, c.name))
-				if err != nil || entry.TranscriptPath == "" {
-					continue
-				}
-				tst, err := os.Stat(entry.TranscriptPath)
-				if err != nil {
-					continue
-				}
-				curTransMTime := mtimeOf(tst)
-				if curTransMTime > lastIngestTime+0.001 {
-					return IndexFreshness{Fresh: false, Reason: "active_sessions_modified"}, nil
-				}
-			}
+			return IndexFreshness{Fresh: false, Reason: "stat_transcript_failed"}, fmt.Errorf("stat transcript %q: %w", rawPath, statErr)
+		}
+
+		wm, ok := watermarks[rawPath]
+		if !ok {
+			wm, ok = watermarks[paths.Realpath(rawPath)]
+		}
+		if !ok {
+			// Transcript is present in catalog but not indexed yet.
+			return IndexFreshness{Fresh: false, Reason: "active_sessions_modified"}, nil
+		}
+		if !wm.hasMtime || !wm.hasSize || absDiff(wm.mtime, curMTime) >= 0.001 || wm.size != curSize || (wm.fp != "" && wm.fp != curFP) {
+			return IndexFreshness{Fresh: false, Reason: "active_sessions_modified"}, nil
 		}
 	}
 
