@@ -21,7 +21,7 @@ func TestPrimeScripts_RenderedBytesMatchBaseline(t *testing.T) {
 		tmpl string
 		want string
 	}{
-		{name: "claude", tmpl: rawclawPrimeScript, want: "3dedcf43aea3a706e7dd7cd7c5278b1ef3fd1875ac7b3fbc63e946d10aac5312"},
+		{name: "claude", tmpl: rawclawPrimeScript, want: "05fc476d86778b7b207f873ea0c71ebf70483deea96ee853e527bc3cb551b6ad"},
 		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "5698ab96156f913de5a49dc3d550d9831359d93da408d94e1136686a3a751ed3"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -220,6 +220,39 @@ func TestAddRawclawHookIdempotentSecondCall(t *testing.T) {
 	arr := hooks["SessionStart"].([]any)
 	if len(arr) != 1 {
 		t.Fatalf("want exactly 1 entry after two calls, got %d: %#v", len(arr), arr)
+	}
+}
+
+// TestInstallRawclawHook_RegistersUserPromptSubmit verifies that installRawclawHook
+// registers SessionStart, Stop, and UserPromptSubmit in Claude Code settings.json.
+func TestInstallRawclawHook_RegistersUserPromptSubmit(t *testing.T) {
+	dir := t.TempDir()
+	if err := installRawclawHook(dir); err != nil {
+		t.Fatalf("installRawclawHook: %v", err)
+	}
+
+	scriptPath := hookScriptPath(dir)
+	if _, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("hook script missing: %v", err)
+	}
+
+	data, err := readJSONFile(settingsPath(dir))
+	if err != nil {
+		t.Fatalf("readJSONFile(settings.json): %v", err)
+	}
+	hooks, ok := data["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks missing or wrong type: %#v", data["hooks"])
+	}
+
+	for _, event := range []string{"SessionStart", "Stop", "UserPromptSubmit"} {
+		arr, ok := hooks[event].([]any)
+		if !ok || len(arr) != 1 {
+			t.Fatalf("%s = %#v, want one entry", event, hooks[event])
+		}
+		if !containsRawclaw(arr[0]) {
+			t.Errorf("%s entry does not carry the rawclaw marker: %#v", event, arr[0])
+		}
 	}
 }
 

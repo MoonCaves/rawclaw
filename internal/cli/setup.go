@@ -99,6 +99,13 @@ if [ "$hook_event_name" = "Stop" ]; then
 	exit 0
 fi
 
+if [ "$hook_event_name" = "UserPromptSubmit" ]; then
+	if [ -n "$session_id" ]; then
+		nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
+	exit 0
+fi
+
 # Session catalog keys are flat filenames. Invalid keys still ingest fail-soft,
 # but never become path components.
 if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
@@ -233,7 +240,11 @@ if [ -n "$termination_reason" ] && [ -z "$inv_num" ]; then
 fi
 
 # Gated to invocationNum 0 (first invocation in conversation). If unparseable, fall back to emitting.
+# On subsequent turns, kick a background ingest to keep the consolidated store current.
 if [ -n "$inv_num" ] && [ "$inv_num" -ne 0 ]; then
+	if [ -n "$session_id" ]; then
+		nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
 	exit 0
 fi
 
@@ -968,6 +979,9 @@ func installRawclawHookAt(configDir, configFile, primeTemplate string) error {
 	entries := map[string]string{
 		"SessionStart": scriptPath,
 		"Stop":         scriptPath,
+	}
+	if configFile == settingsPath(configDir) {
+		entries["UserPromptSubmit"] = scriptPath
 	}
 
 	data, err := readJSONFile(configFile)
