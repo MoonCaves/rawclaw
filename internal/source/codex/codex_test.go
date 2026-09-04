@@ -412,3 +412,31 @@ func TestDetect(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscoverCWD(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	sessionsDir := filepath.Join(tmp, "sessions", "2026", "09", "04")
+
+	fMatch := filepath.Join(sessionsDir, "rollout-2026-09-04T10-00-00-00000000-0000-0000-0000-000000000001.jsonl")
+	writeJSONL(t, fMatch, `{"type":"session_meta","payload":{"id":"sess-1","cwd":"/workspace/match","thread_source":"user"}}`)
+
+	fOther := filepath.Join(sessionsDir, "rollout-2026-09-04T10-00-00-00000000-0000-0000-0000-000000000002.jsonl")
+	writeJSONL(t, fOther, `{"type":"session_meta","payload":{"id":"sess-2","cwd":"/workspace/other","thread_source":"user"}}`)
+
+	t.Setenv("CODEX_HOME", tmp)
+	ad := New()
+	matched, err := ad.DiscoverCWD("/workspace/match")
+	if err != nil {
+		t.Fatalf("DiscoverCWD error: %v", err)
+	}
+	if len(matched) != 1 {
+		t.Fatalf("DiscoverCWD returned %d containers, want 1", len(matched))
+	}
+	if matched[0].ID != "sess-1" {
+		t.Errorf("matched ID = %q, want sess-1", matched[0].ID)
+	}
+	if matched[0].CWD != "/workspace/match" {
+		t.Errorf("matched CWD = %q, want /workspace/match", matched[0].CWD)
+	}
+}

@@ -143,6 +143,43 @@ func (a *Adapter) Discover() ([]source.Container, error) {
 	return a.DiscoverRoot(SessionsRoot())
 }
 
+// DiscoverCWD returns only the Codex sessions associated with a specific working directory.
+func (a *Adapter) DiscoverCWD(cwd string) ([]source.Container, error) {
+	root := SessionsRoot()
+	if root == "" || cwd == "" {
+		return nil, nil
+	}
+	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+		return nil, nil
+	}
+	cleanCWD := filepath.Clean(cwd)
+	var out []source.Container
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !isRollout(d.Name()) {
+			return nil
+		}
+		m, ok := readMeta(path)
+		if !ok {
+			return nil
+		}
+		if m.cwd == cwd || (m.cwd != "" && filepath.Clean(m.cwd) == cleanCWD) {
+			out = append(out, source.Container{
+				ID:         m.id,
+				Path:       path,
+				CWD:        m.cwd,
+				IsSubagent: m.isChild(),
+				ParentID:   m.parent(),
+				ResumeArgv: []string{"codex", "resume", m.id},
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("codex: walk %s: %w", root, err)
+	}
+	return out, nil
+}
+
 // DiscoverRoot is Discover against an EXPLICIT sessions tree — the same walk,
 // pointed at a replicated tree (another machine's rollouts synced onto this
 // disk) instead of this machine's $CODEX_HOME. "" yields (nil, nil).
