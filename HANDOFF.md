@@ -26,10 +26,10 @@
   - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`) with 0 race conditions, 0 deadlocks, and 100% `gofmt` compliance.
   - Linter: `golangci-lint run ./...` reports **0 issues**.
   - Graphify AST knowledge graph refreshed (4,140 nodes, 11,863 edges, 254 communities).
-  - Deployed binary `~/.local/bin/rawclaw` (MD5 `8734c9f904906f1d051a3eab36e63aeb`).
+  - Deployed binary `~/.local/bin/rawclaw` (MD5 `b98f3c95d5b6e68756cbf9a66a02bb5d`, commit `954a45f`).
   - Benchmarks:
-    - `time rawclaw "sit and wait for that" --this-project`: **0.390s – 0.465s** hot path.
-    - `rawclaw read 197cdecc:aec45473 --budget 20000`: **PASS** (instant excerpt).
+    - `time rawclaw "sit and wait for that" --this-project`: **0.266s – 0.359s** hot path.
+    - `rawclaw read 197cdecc:aec45473 --budget 20000`: **PASS** (instant excerpt, space-separated flag syntax).
     - `rawclaw outline 197cdecc`: **PASS** (prints `[user 197cdecc:c1ef7bfe]`, directly accepted by `rawclaw read`).
 
 ### ✅ Decisions
@@ -38,10 +38,11 @@
 - **Actionable Outline Refs** (2026-09-04): Outlines render `<sess8>:<uuid8>` tokens so agents can copy-paste refs directly into `read` without conversion.
 
 ### 🧵 Open threads (with status)
-- **Fleet Sync**: Commit clean changes and push to `origin/main`.
+- None.
 
 ### ⏭️ Next
-- Commit and push changes.
+- Monitor agent adoption of the hardened CLI surface (`read <ref> --budget N`, `outline <sess8>`, phrase quoting).
+- Revisit vector tier performance (e.g. per-project chunk scoping or dedicated on-disk indexing) as an opt-in roadmap item.
 
 ### ⛔ Blockers
 - None.
