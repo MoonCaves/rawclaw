@@ -489,10 +489,6 @@ func runRoot(cmd *cobra.Command, o *Options, args []string) error {
 		return runBrowse(ctx, out, o)
 	}
 
-	if machineStream(out) && !o.JSON {
-		o.Oneline = true
-	}
-
 	// Empty (or all-whitespace) query: a distinct coaching line, NOT the
 	// no-matches coaching — `rawclaw ""` asked for a search it never spelled.
 	// Under --json the same coaching ships as JSON, like every sibling shape.

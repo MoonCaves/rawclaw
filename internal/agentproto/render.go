@@ -141,11 +141,15 @@ func RenderSearchOneline(w io.Writer, env SearchEnvelope) {
 }
 
 func renderWarnings(w io.Writer, ws []Warning, suppress string) {
+	var msgs []string
 	for _, warn := range ws {
-		if suppress != "" && warn.Code == suppress {
+		if (suppress != "" && warn.Code == suppress) || warn.Code == WarnRawHistory {
 			continue
 		}
-		fmt.Fprintf(w, "note: %s\n", warn.Message)
+		msgs = append(msgs, warn.Message)
+	}
+	if len(msgs) > 0 {
+		fmt.Fprintf(w, "note: %s\n", strings.Join(msgs, " · "))
 	}
 }
 

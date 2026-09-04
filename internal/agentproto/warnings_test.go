@@ -297,12 +297,15 @@ func TestTextAndJSONCarryTheSameWarnings(t *testing.T) {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
 
-	if len(noteLines) != len(decoded.Warnings) {
-		t.Fatalf("text printed %d notes, json carries %d warnings:\n%s", len(noteLines), len(decoded.Warnings), buf.String())
+	if len(noteLines) != 1 {
+		t.Fatalf("text printed %d note lines, want exactly 1 collapsed note line:\n%s", len(noteLines), buf.String())
 	}
 	for i, w := range decoded.Warnings {
-		if noteLines[i] != w.Message {
-			t.Errorf("note %d: text %q, json %q", i, noteLines[i], w.Message)
+		if w.Code == WarnRawHistory {
+			continue
+		}
+		if !strings.Contains(noteLines[0], w.Message) {
+			t.Errorf("warning %d (%q) not found in collapsed note line: %q", i, w.Message, noteLines[0])
 		}
 		if w.Code == "" {
 			t.Errorf("warning %d (%q) has no code — an agent has nothing to branch on", i, w.Message)
