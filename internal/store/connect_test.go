@@ -34,6 +34,14 @@ func TestConnectROPragmas(t *testing.T) {
 	if busyTimeout != 5000 {
 		t.Errorf("PRAGMA busy_timeout = %d, want 5000", busyTimeout)
 	}
+
+	var cacheSize int
+	if err := ro.QueryRow("PRAGMA cache_size").Scan(&cacheSize); err != nil {
+		t.Fatalf("PRAGMA cache_size: %v", err)
+	}
+	if cacheSize != -64000 {
+		t.Errorf("PRAGMA cache_size = %d, want -64000", cacheSize)
+	}
 }
 
 // TestConnectRO_ConcurrentWriteSafety verifies that a read-only connection with
