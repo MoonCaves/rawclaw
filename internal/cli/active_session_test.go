@@ -158,6 +158,16 @@ func TestCheckIndexFreshness_ActiveTranscriptModified(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	st, err := os.Stat(transPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtime := float64(st.ModTime().UnixNano()) / 1e9
+	if _, err := con.Exec("INSERT INTO file_index(path, mtime, size, fp, session_id) VALUES(?,?,?,?,?)",
+		transPath, mtime, st.Size(), "", catEntry.SessionID); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := index.StampIngestWatermark(con); err != nil {
 		t.Fatalf("StampIngestWatermark: %v", err)
 	}
@@ -191,5 +201,22 @@ func TestCheckIndexFreshness_ActiveTranscriptModified(t *testing.T) {
 	}
 	if freshnessAfter.Reason != "active_sessions_modified" {
 		t.Errorf("expected Reason == active_sessions_modified, got %q", freshnessAfter.Reason)
+	}
+
+	// Test Codex P1 scenario: an unrelated session ingest advances the global watermark,
+	// but active session's transcript is still modified compared to its file_index record.
+	// Index must STILL report stale (not masked by global watermark).
+	if err := index.StampIngestWatermark(con); err != nil {
+		t.Fatal(err)
+	}
+	freshnessGlobalAdvance, err := index.CheckIndexFreshness(con)
+	if err != nil {
+		t.Fatalf("CheckIndexFreshness after global watermark advance: %v", err)
+	}
+	if freshnessGlobalAdvance.Fresh {
+		t.Errorf("expected Fresh == false even after global ingest watermark advanced, got true")
+	}
+	if freshnessGlobalAdvance.Reason != "active_sessions_modified" {
+		t.Errorf("expected Reason == active_sessions_modified, got %q", freshnessGlobalAdvance.Reason)
 	}
 }

@@ -93,6 +93,8 @@ func TestSpawnVectorTopupChild_DetachedChildRunsWithLog(t *testing.T) {
 		t.Skip("sh-script fake child")
 	}
 
+	t.Setenv("HOME", t.TempDir())
+
 	script := filepath.Join(t.TempDir(), "fake-rawclaw")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"child-argv $*\"\n"), 0o755); err != nil {
 		t.Fatal(err)
