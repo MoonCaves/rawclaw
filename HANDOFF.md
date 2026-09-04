@@ -7,33 +7,32 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-04 — Full-File Subagent Lineage Scan with Mtime Cache & CWDDiscoverer Shipped, Search Latency Certified at 33–38ms, Fleet Currency Deployed.**
+**2026-09-04 — Codex & Antigravity CWDDiscoverer Shipped, Scoped In-Repo Search Certified at 30–37ms, Fleet Currency Deployed.**
 
 ### 📍 Now
-- Commit `3ff274d` landed on `main` and pushed to `origin/main`:
-  1. **Fast Adapter Discovery & Scoped CWD Routing (`internal/source/antigravity`, `internal/scopes`)**:
-     - Added `CWDDiscoverer` interface in `internal/source/source.go`.
-     - Added `DiscoverCWD(cwd string)` in `internal/source/antigravity/antigravity.go` — filters directly by workspace in `history.jsonl`, with fallback to full discovery when unmapped or missing.
-     - Preserves full-file subagent scanning for `INVOKE_SUBAGENT` to prevent lineage drops (FoggySnow Ruling 2), gated behind an `(path, mtime, size)` cache storing both header and subagents.
-     - Header inspection (CWD/parent/isSub) checks the opening 50 records.
-     - Pinned with `TestDiscoverCWD`, `TestExtractCWDFromTranscript`, and `TestRebuildRefusesToLoseHistory`.
-  2. **Rowid High-Water Mark Incremental Consolidated Folding** (`internal/index/consolidated.go`):
-     - Bounded `mergeMessagesIncrementalSQL` to `s.id > prevMaxID`.
-     - Recounts messages only for touched sessions during incremental appends.
-  3. **Incremental Byte-Offset Transcript Ingestion** (`internal/index`, `internal/parse`):
-     - Streams unread tail bytes via `bufio.Reader` over `io.LimitReader`.
+- Commit `8534dc3` landed on `main` and pushed to `origin/main`:
+  1. **Codex CWDDiscoverer & Header Caching (`internal/source/codex`)**:
+     - Added `metaCache` map with `(path, mtime, size)` caching in `readMeta(path)` — eliminates 16MB buffer allocations and repeated JSON unmarshals across 1,236 Codex rollouts.
+     - Added `DiscoverCWD(cwd string)` in `internal/source/codex/codex.go` — filters rollouts directly down to matching CWD, dropping Codex scoped refresh from 4.1s–9.7s to **43ms**.
+     - Pinned with `TestDiscoverCWD`.
+  2. **ClaudeLive Scope Optimization (`internal/scopes`, `internal/cli`)**:
+     - Added `ClaudeLive()` in `internal/scopes/scopes.go` and wired into `refreshThisProject` in commit `2bf673e` — bypasses opening 562 orphan shard databases on in-repo search.
+  3. **Antigravity CWDDiscoverer & Full-File Subagent Lineage Cache (`internal/source/antigravity`)**:
+     - Added `DiscoverCWD(cwd)` and `(path, mtime, size)` cache storing header and subagent lineage in commit `3ff274d`.
 - Verified:
   - Full test suite passed with race detector: `CGO_ENABLED=0 go test -race -count=1 ./...` (39/39 packages).
   - Linter: `golangci-lint run ./...` reports **0 issues**.
   - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`).
-  - Graphify AST knowledge graph refreshed (4,124 nodes, 11,812 edges, 246 communities).
-  - Fleet binary `rawclaw v0.8.0 (commit 3ff274d)` deployed live across **Mac HQ**, **jay-m1**, **muppet-server**, and **ai-server**.
-  - **Live Search Timing Protocol**: Run 1 = 38ms (0.038s), Run 2 = 33ms (0.033s).
+  - Graphify AST knowledge graph refreshed (4,125 nodes, 11,815 edges, 246 communities).
+  - Fleet binary `rawclaw v0.8.0 (commit 8534dc3)` deployed live across **Mac HQ**, **jay-m1**, **muppet-server**, and **ai-server**.
+  - **Live Search Timing Protocol**:
+    - Codex-only (`--this-project --source codex`): Run 1 = 46ms, Run 2 = 43ms.
+    - Full in-repo search (`--this-project`): Run 1 = 37ms, Run 2 = 30ms.
 
 ### ✅ Decisions
-- **Full-File Subagent Scan with Mtime Cache** (2026-09-04): Adopts FoggySnow's ruling: scans full transcript for `INVOKE_SUBAGENT` but caches `(hdr, children)` by `(path, mtime, size)` so unchanged files cost 0 file reads.
-- **Scoped CWD Adapter Discovery** (2026-09-04): Implements `CWDDiscoverer` so local repo searches only inspect transcripts matching the current working directory.
-- **Rowid High-Water Mark Consolidated Folding** (2026-09-03): Bounds `consolidateOne` message merges to `s.id > prevMaxID` so live session folds do $O(\text{appended})$ work rather than $O(\text{total})$.
+- **Codex CWD Scoping & Header Cache** (2026-09-04): Implements `CWDDiscoverer` and `(path, mtime, size)` caching for Codex so 1,236 session files don't block in-repo searches.
+- **ClaudeLive Scoped Refresh** (2026-09-04): Bypasses 562-database orphan discovery sweeps on current-project queries.
+- **Full-File Subagent Scan with Mtime Cache** (2026-09-04): Caches `(hdr, children)` by `(path, mtime, size)` so unchanged files cost 0 file reads.
 
 ### 🧵 Open threads (with status)
 - **Cluster Git Governance Critique**: Dispatched open-ended critique request to OLUMBRA, Marrowlight, and cluster peers on Agent Mail thread `cluster-git-governance`.
