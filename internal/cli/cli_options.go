@@ -41,6 +41,7 @@ type Options struct {
 	Today            bool
 	Yesterday        bool
 	Week             bool
+	Vector           bool
 	NoVector         bool
 	ReindexVectors   bool
 	IncludePath      string
@@ -158,7 +159,7 @@ func (o *Options) params(rawMatch string) retrieve.SearchParams {
 func bindRootFlags(root *cobra.Command, opts *Options) {
 	f := root.Flags()
 	f.IntVarP(&opts.Limit, "limit", "n", 8, "max hits to return")
-	f.StringVarP(&opts.Query, "query", "q", "", "search query terms (flag alternative to positional args)")
+	f.StringVarP(&opts.Query, "query", "q", "", "search query terms (flag alternative to positional args); quote multi-word phrases (e.g. \"exact phrase\") for literal phrase matching")
 	f.IntVar(&opts.Offset, "offset", 0, "skip the first N hits (pagination)")
 	f.StringVar(&opts.Dir, "dir", cwd(), "the project's working directory (e.g. ~/code/my-project); encoded to find its transcripts. An already-encoded ~/.claude/projects path also works.")
 	f.BoolVar(&opts.ThisProject, "this-project", false, "narrow to THIS project only (default searches all projects)")
@@ -182,7 +183,9 @@ func bindRootFlags(root *cobra.Command, opts *Options) {
 	f.BoolVar(&opts.Today, "today", false, "filter to results from today only")
 	f.BoolVar(&opts.Yesterday, "yesterday", false, "filter to results from yesterday only")
 	f.BoolVar(&opts.Week, "week", false, "filter to results from the last 7 days")
-	f.BoolVar(&opts.NoVector, "no-vector", false, "force keyword-only (ignore any configured embedder)")
+	f.BoolVar(&opts.Vector, "vector", false, "enable semantic/vector search hybrid tier (opt-in; needs configured embedder)")
+	f.BoolVar(&opts.NoVector, "no-vector", false, "force keyword-only (deprecated; keyword-only is now the default)")
+	_ = f.MarkHidden("no-vector")
 	f.BoolVar(&opts.ReindexVectors, "reindex-vectors", false, "build/update the semantic index for the scope (needs RAWCLAW_EMBED_ENDPOINT)")
 	f.StringVar(&opts.IncludePath, "include-path", "", "only cover projects whose working dir matches this regex (search AND bare browse)")
 	f.StringVar(&opts.ExcludePath, "exclude-path", "", "skip projects whose working dir matches this regex, e.g. /tmp (search AND bare browse)")

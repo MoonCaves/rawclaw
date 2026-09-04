@@ -30,6 +30,7 @@ type ViewMsg struct {
 	Role   string `json:"role"`
 	Text   string `json:"text"`
 	Anchor bool   `json:"anchor,omitempty"`
+	UUID   string `json:"uuid,omitempty"`
 }
 
 // AnchoredView is the goal→match→resolution shape around one anchor message.
@@ -174,7 +175,7 @@ func RenderMsgs(msgs []store.Msg, includeTools bool, cap int) []ViewMsg {
 func RenderMsgsWith(msgs []store.Msg, includeTools, includeThinking bool, cap int) []ViewMsg {
 	out := make([]ViewMsg, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, ViewMsg{ID: m.ID, Role: m.Role, Text: displayText(m.Content, includeTools, includeThinking, cap)})
+		out = append(out, ViewMsg{ID: m.ID, Role: m.Role, Text: displayText(m.Content, includeTools, includeThinking, cap), UUID: m.UUID})
 	}
 	return out
 }

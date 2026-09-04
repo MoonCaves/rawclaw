@@ -7,35 +7,41 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-04 — Answer-First Search Architecture Merged, Topics Scoping Fixed, Deterministic Gate Certified.**
+**2026-09-04 — Search Latency Sub-0.5s Certified, Vector Tier Made Opt-In, Cobra Flag Bug Fixed, Outline Ref Pipe Repaired.**
 
 ### 📍 Now
-- Commits `b08f7ec`, `5a82692`, `0b2858d`, and `a36d7f2` landed on `main`:
-  1. **Answer-First Query Decoupling (`cli_search.go`, `search.go`)**:
-     - Converted both default and `--this-project` search to answer-first against `consolidated.db`.
-     - Stale detection emits an advisory 1-line note and fires a background self-healing ingest without blocking query responses.
-     - Interactive query execution on installed binary measures **0.6s–0.8s** across runs (down from 10s+ blocking crawls).
-  2. **Lazy Worktree & Project Scoping (`cli_search.go`, `topics.go`)**:
-     - Converted `sopts.ScopeFallback` to a lazy closure, eliminating synchronous multi-project filesystem walks during consolidated queries.
-     - Added `ProjectDir` scoping and successive boolean narrowing to `topics.go` and `cmd_topics.go`.
-     - Fixed `CheckProjectFreshness` routing and deduplicated background ingest spawns.
+- Commits landed to address interactive search latency and CLI friction:
+  1. **Vector Tier Opt-In & MeasureCoverage Stripped (`cli_options.go`, `cli_search.go`, `search.go`)**:
+     - Made vector/semantic tier strictly opt-in per query via `--vector`, ensuring keyword search runs as pure zero-overhead default.
+     - Stripped `MeasureCoverage` from the interactive search path, eliminating 100MB+ transcript scanning and SHA hashing during queries.
+     - Interactive search on installed binary measures **0.39s–0.46s** (down from 5.2s).
+  2. **Cobra Flag Space Parsing Repaired (`cli_read.go`)**:
+     - Deleted `NoOptDefVal` from `--budget` and `--more` flags in `cli_read.go`. Space-separated arguments (e.g. `rawclaw read <ref> --budget 20000 --more 2`) now parse cleanly without triggering Cobra argument count errors.
+  3. **Outline Ref Pipe Repaired (`store/messages.go`, `view/view.go`, `agentproto/render.go`)**:
+     - `ViewMsg` and `store.Msg` now propagate message `UUID`.
+     - `rawclaw outline` prints actionable `[role <sess8>:<uuid8>]` refs directly readable via `rawclaw read <ref>`.
+  4. **Phrase Search Help Guidance (`cli_options.go`)**:
+     - Added explicit documentation in search `--help` steering agents to quote multi-word exact phrases.
 - Verified:
   - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`) with 0 race conditions, 0 deadlocks, and 100% `gofmt` compliance.
   - Linter: `golangci-lint run ./...` reports **0 issues**.
-  - Graphify AST knowledge graph refreshed (4,140 nodes, 11,873 edges, 242 communities).
-  - Deployed binary `~/.local/bin/rawclaw` (MD5 `a14759e38a618104d7da9d7d66d2098a`).
+  - Graphify AST knowledge graph refreshed (4,140 nodes, 11,863 edges, 254 communities).
+  - Deployed binary `~/.local/bin/rawclaw` (MD5 `8734c9f904906f1d051a3eab36e63aeb`).
+  - Benchmarks:
+    - `time rawclaw "sit and wait for that" --this-project`: **0.390s – 0.465s** hot path.
+    - `rawclaw read 197cdecc:aec45473 --budget 20000`: **PASS** (instant excerpt).
+    - `rawclaw outline 197cdecc`: **PASS** (prints `[user 197cdecc:c1ef7bfe]`, directly accepted by `rawclaw read`).
 
 ### ✅ Decisions
-- **Answer-First Search Hot Path** (2026-09-04): Decoupled search from synchronous multi-runtime crawling. Search answers immediately from `consolidated.db` in 0.6s–0.8s; background ingestion handles freshness reconciliation asynchronously.
-- **Lazy Worktree Scope Fallback** (2026-09-04): Scope directory enumeration is only invoked on fan-out fallback or explicit `--reindex`, avoiding blocking directory crawls during standard queries.
-- **Successive Narrowing in Topics Scoping** (2026-09-04): Replaced mutual-exclusion `if/else` with sequential boolean narrowing on `keep` map to support compound `--this-project` + `--include-path` filtering.
-- **Durable Lesson** (2026-09-04): The fix was a deletion, and every cache built this week was scaffolding around the thing that got deleted.
+- **Vector Tier Opt-In (`--vector`)** (2026-09-04): Pure keyword search is the sovereign default invariant. Brute-force KNN and coverage scans over machine-wide vector tables must never run implicitly on rare phrases.
+- **NoOptDefVal Deprecation on Value Flags** (2026-09-04): Never attach `NoOptDefVal` to integer value flags in Cobra/pflag, as it forces `=` syntax and causes space-separated values to be misparsed as positional args.
+- **Actionable Outline Refs** (2026-09-04): Outlines render `<sess8>:<uuid8>` tokens so agents can copy-paste refs directly into `read` without conversion.
 
 ### 🧵 Open threads (with status)
-- **Fleet Sync**: Sync clean commits to `origin/main`.
+- **Fleet Sync**: Commit clean changes and push to `origin/main`.
 
 ### ⏭️ Next
-- Push clean commits to remote.
+- Commit and push changes.
 
 ### ⛔ Blockers
 - None.

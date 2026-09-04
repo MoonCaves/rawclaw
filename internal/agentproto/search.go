@@ -330,18 +330,6 @@ func searchOneStore(
 			qvecFn = nil
 		}
 	}
-	if qvecFn != nil {
-		vecCov.Ran = true
-		var cov semantic.CoverageStats
-		if narrowed {
-			cov, _ = semantic.MeasureCoverage(con, projects...)
-		} else {
-			cov, _ = semantic.MeasureCoverage(con)
-		}
-		vecCov.CandidateMsgs = cov.Candidates
-		vecCov.VectoredMsgs = cov.Vectored
-		vecCov.MissingMsgs = cov.Missing
-	}
 
 	if qvecFn != nil && store.HasVectors(con) {
 		rows = semantic.Fuse(con, rows, qvecFn(), fetch, p.IncludeSubagents)
@@ -479,13 +467,6 @@ func collectCandidates(
 			hitCeiling = true
 		}
 		lexicalEnough := len(rows) >= limit
-		if qvecFn != nil && !lexicalEnough {
-			vecCov.Ran = true
-			cov, _ := semantic.MeasureCoverage(con)
-			vecCov.CandidateMsgs += cov.Candidates
-			vecCov.VectoredMsgs += cov.Vectored
-			vecCov.MissingMsgs += cov.Missing
-		}
 		if qvecFn != nil && !lexicalEnough && store.HasVectors(con) {
 			rows = semantic.Fuse(con, rows, qvecFn(), fetch, p.IncludeSubagents)
 		}

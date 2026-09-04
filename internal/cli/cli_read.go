@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/MoonCaves/rawclaw/internal/agentproto"
@@ -127,9 +126,7 @@ func newReadCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&focus, "focus", "", "highlight the first match of this term in the window")
 	f.IntVar(&budget, "budget", agentproto.DefaultReadBudget, "cap the excerpt to N chars (omit for no cap)")
-	f.Lookup("budget").NoOptDefVal = strconv.Itoa(agentproto.DefaultReadBudget)
-	f.IntVar(&moreLevel, "more", 0, "widen the window: --more (1 level) or --more=N (N levels)")
-	f.Lookup("more").NoOptDefVal = "1"
+	f.IntVar(&moreLevel, "more", 0, "widen the window: --more 1 (1 level) or --more N (N levels)")
 	f.IntVar(&around, "around", 0, "re-center the window N messages from the anchor")
 	f.BoolVar(&includeTools, "include-tools", false, "include tool calls in the excerpt")
 	f.StringSliceVar(&withFlags, "with", nil, "include extra content in the excerpt: tools, thinking, subagents (comma-separated or repeated)")

@@ -8,11 +8,12 @@ import (
 	"database/sql"
 )
 
-// Msg is the (id, role, content) triple read by the window/bookend queries.
+// Msg is the (id, role, content, uuid) tuple read by the window/bookend queries.
 type Msg struct {
 	ID      int
 	Role    string
 	Content string
+	UUID    string
 }
 
 // MessagesBefore returns up to `limit` messages at or before anchorID
@@ -20,7 +21,7 @@ type Msg struct {
 // callers reverse for ascending display). [view.BuildAnchoredView]
 func MessagesBefore(con *sql.DB, sid string, anchorID, limit int) ([]Msg, error) {
 	return readMsgs(con,
-		`SELECT id,role,content FROM messages WHERE session_id=? AND id<=? ORDER BY id DESC LIMIT ?`,
+		`SELECT id,role,content,COALESCE(uuid,'') FROM messages WHERE session_id=? AND id<=? ORDER BY id DESC LIMIT ?`,
 		sid, anchorID, limit)
 }
 
@@ -28,7 +29,7 @@ func MessagesBefore(con *sql.DB, sid string, anchorID, limit int) ([]Msg, error)
 // (id>anchorID), ordered id ASC. [view.BuildAnchoredView]
 func MessagesAfter(con *sql.DB, sid string, anchorID, limit int) ([]Msg, error) {
 	return readMsgs(con,
-		`SELECT id,role,content FROM messages WHERE session_id=? AND id>? ORDER BY id ASC LIMIT ?`,
+		`SELECT id,role,content,COALESCE(uuid,'') FROM messages WHERE session_id=? AND id>? ORDER BY id ASC LIMIT ?`,
 		sid, anchorID, limit)
 }
 
@@ -46,7 +47,7 @@ func BookendMessages(con *sql.DB, sid string, boundID int, hasBound, asc bool, l
 		dir = "ASC"
 		bound = " AND id<?"
 	}
-	q := `SELECT id,role,content FROM messages WHERE session_id=?`
+	q := `SELECT id,role,content,COALESCE(uuid,'') FROM messages WHERE session_id=?`
 	args := []any{sid}
 	if hasBound {
 		q += bound
@@ -76,7 +77,7 @@ func CountMessagesBetween(con *sql.DB, sid string, afterID, beforeID int) (int, 
 	return n, nil
 }
 
-// readMsgs runs a (id, role, content) query and scans the rows.
+// readMsgs runs a (id, role, content, uuid) query and scans the rows.
 func readMsgs(con *sql.DB, query string, args ...any) ([]Msg, error) {
 	rows, err := con.Query(query, args...)
 	if err != nil {
@@ -85,10 +86,14 @@ func readMsgs(con *sql.DB, query string, args ...any) ([]Msg, error) {
 	defer rows.Close()
 	var out []Msg
 	for rows.Next() {
-		var m Msg
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content); err != nil {
+		var (
+			m    Msg
+			uuid sql.NullString
+		)
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &uuid); err != nil {
 			return nil, err
 		}
+		m.UUID = uuid.String
 		out = append(out, m)
 	}
 	return out, rows.Err()
