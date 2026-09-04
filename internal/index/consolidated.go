@@ -1521,10 +1521,6 @@ func CheckProjectFreshness(con *sql.DB, projectLabel, tdir string, sourceTool ..
 	if con == nil {
 		return IndexFreshness{Fresh: false, Reason: "no_connection"}, nil
 	}
-	globalFresh, err := CheckIndexFreshness(con)
-	if err != nil || !globalFresh.Fresh {
-		return globalFresh, err
-	}
 	if tdir == "" {
 		return IndexFreshness{Fresh: true}, nil
 	}
