@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -374,5 +375,40 @@ func TestBrowseConsolidated_ReindexSkipsConsolidated(t *testing.T) {
 	}
 	if !strings.Contains(reindexOut.String(), "aaaa3333") {
 		t.Errorf("expected reindex browse to discover newly written session 5, got:\n%s", reindexOut.String())
+	}
+}
+
+// TestBrowse_FallbackWhenNoLocalHistory verifies that bare rawclaw in a directory
+// with no local transcripts does not dead-end, but prints a notice and browses all projects.
+func TestBrowse_FallbackWhenNoLocalHistory(t *testing.T) {
+	_, _ = seedBrowseCorpus(t)
+
+	// An empty directory with no transcripts
+	scratchDir := t.TempDir()
+
+	// 1. Bare rawclaw in scratchDir (DirSet = false)
+	var out bytes.Buffer
+	optsBare := Options{Dir: scratchDir, DirSet: false, Limit: 10}
+	if err := runBrowse(context.Background(), &out, &optsBare); err != nil {
+		t.Fatalf("runBrowse bare: %v", err)
+	}
+	outStr := out.String()
+	if !strings.Contains(outStr, "note: no local history in") || !strings.Contains(outStr, "showing recent sessions across all projects") {
+		t.Errorf("expected fallback note, got:\n%s", outStr)
+	}
+	// Must contain sessions from the corpus
+	if !strings.Contains(outStr, "aaaa2222") && !strings.Contains(outStr, "bbbb2222") {
+		t.Errorf("expected browse results across all projects, got:\n%s", outStr)
+	}
+
+	// 2. Explicit rawclaw --dir in scratchDir (DirSet = true)
+	var outDir bytes.Buffer
+	optsDir := Options{Dir: scratchDir, DirSet: true, Limit: 10}
+	if err := runBrowse(context.Background(), &outDir, &optsDir); err != nil {
+		t.Fatalf("runBrowse with --dir: %v", err)
+	}
+	outDirStr := outDir.String()
+	if !strings.Contains(outDirStr, "No transcript history for --dir") {
+		t.Errorf("expected dead-end message for explicit --dir, got:\n%s", outDirStr)
 	}
 }
