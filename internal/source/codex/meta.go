@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"sync"
 )
 
 // meta is the lineage + cwd read from a rollout's own session_meta header (the
@@ -34,11 +35,36 @@ func (m meta) parent() string {
 	return m.forkedFromID
 }
 
+type metaCacheEntry struct {
+	mtime int64
+	size  int64
+	meta  meta
+	ok    bool
+}
+
+var (
+	metaCacheMu sync.RWMutex
+	metaCache   = make(map[string]metaCacheEntry)
+)
+
 // readMeta returns the first session_meta header in path. It scans a small
 // prefix (headers sit at the very top) and takes the FIRST session_meta — the
 // file's own — never a replayed parent's that may follow. ok=false when no
-// usable header with a non-empty id is found.
+// usable header with a non-empty id is found. Uses an mtime+size cache to avoid
+// opening unchanged files.
 func readMeta(path string) (meta, bool) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return meta{}, false
+	}
+
+	metaCacheMu.RLock()
+	if e, exists := metaCache[path]; exists && e.mtime == fi.ModTime().UnixNano() && e.size == fi.Size() {
+		metaCacheMu.RUnlock()
+		return e.meta, e.ok
+	}
+	metaCacheMu.RUnlock()
+
 	f, err := os.Open(path)
 	if err != nil {
 		return meta{}, false
@@ -46,8 +72,11 @@ func readMeta(path string) (meta, bool) {
 	defer f.Close()
 
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024) // headers embed the full system prompt
+	buf := make([]byte, 64*1024)
+	sc.Buffer(buf, 1024*1024)
 	const scanLimit = 8
+	var found meta
+	var ok bool
 	for i := 0; sc.Scan() && i < scanLimit; i++ {
 		var rec map[string]any
 		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
@@ -56,25 +85,37 @@ func readMeta(path string) (meta, bool) {
 		if t, _ := rec["type"].(string); t != "session_meta" {
 			continue
 		}
-		p, ok := rec["payload"].(map[string]any)
-		if !ok {
+		p, pok := rec["payload"].(map[string]any)
+		if !pok {
 			continue
 		}
 		id, _ := p["id"].(string)
 		if id == "" {
-			return meta{}, false
+			break
 		}
 		cwd, _ := p["cwd"].(string)
 		threadSource, _ := p["thread_source"].(string)
 		parentThreadID, _ := p["parent_thread_id"].(string) // null -> ""
 		forkedFromID, _ := p["forked_from_id"].(string)     // null -> ""
-		return meta{
+		found = meta{
 			id:             id,
 			cwd:            cwd,
 			threadSource:   threadSource,
 			parentThreadID: parentThreadID,
 			forkedFromID:   forkedFromID,
-		}, true
+		}
+		ok = true
+		break
 	}
-	return meta{}, false
+
+	metaCacheMu.Lock()
+	metaCache[path] = metaCacheEntry{
+		mtime: fi.ModTime().UnixNano(),
+		size:  fi.Size(),
+		meta:  found,
+		ok:    ok,
+	}
+	metaCacheMu.Unlock()
+
+	return found, ok
 }
