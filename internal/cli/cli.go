@@ -399,12 +399,12 @@ func newVersionCmd(build BuildInfo) *cobra.Command {
 // archive enumeration's git probes are under the watchdog as before.
 func verbScope(ctx context.Context, thisProject bool, dir string, dirSet bool) ([]view.Scope, agentproto.ScopeFn) {
 	if !thisProject {
-		return nil, func() []view.Scope { return allScope(ctx, "", false) }
+		return nil, func() []view.Scope { return allScope(ctx, "", false, false) }
 	}
 	td := resolveTDir(dir, dirSet)
 	if !dirSet || td != dir {
 		if gitRoot := paths.GitRoot(dir); gitRoot != "" {
-			all := allScope(ctx, "", false)
+			all := allScope(ctx, "", false, false)
 			matched := scopes.FilterByProjectDir(all, dir)
 			if len(matched) > 0 {
 				return matched, nil

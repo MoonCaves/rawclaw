@@ -29,7 +29,7 @@ func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool)
 	td = resolveTDir(o.Dir, o.DirSet)
 	if !o.DirSet || td != o.Dir {
 		if gitRoot := paths.GitRoot(o.Dir); gitRoot != "" {
-			all := allScope(context.Background(), o.Source, o.Reindex)
+			all := allScope(context.Background(), o.Source, o.Reindex, true)
 			matched := scopes.FilterByProjectDir(all, o.Dir)
 			if len(matched) > 0 {
 				return matched, td, true
@@ -47,7 +47,7 @@ func thisScope(w io.Writer, o *Options) (scope []view.Scope, td string, ok bool)
 // projects and/or Codex cwd-groups — via the scopes enumerator. source ""
 // spans all; "claude"/"codex" narrows. ctx (the run's watchdog context)
 // bounds the archive enumeration's git probes.
-func allScope(ctx context.Context, source string, reindex bool, paths ...string) []view.Scope {
+func allScope(ctx context.Context, source string, reindex, readOnly bool, paths ...string) []view.Scope {
 	var pathPred func(string) bool
 	if len(paths) > 0 {
 		include := paths[0]
@@ -59,7 +59,7 @@ func allScope(ctx context.Context, source string, reindex bool, paths ...string)
 			pathPred = query.PathPredicate(include, exclude)
 		}
 	}
-	return scopes.All(ctx, source, reindex, pathPred)
+	return scopes.All(ctx, source, reindex, readOnly, pathPred)
 }
 
 // runReindexVectors builds/updates the semantic index for the scope.
@@ -73,7 +73,7 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 			}
 			universe = sc
 		} else {
-			universe = allScope(ctx, o.Source, o.Reindex, o.IncludePath, o.ExcludePath)
+			universe = allScope(ctx, o.Source, o.Reindex, true, o.IncludePath, o.ExcludePath)
 		}
 		return runBrowseScoped(w, o, universe)
 	}
@@ -399,7 +399,7 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		}
 	} else {
 		sopts.ScopeFallback = func() []view.Scope {
-			return allScope(ctx, o.Source, o.Reindex, o.IncludePath, o.ExcludePath)
+			return allScope(ctx, o.Source, o.Reindex, true, o.IncludePath, o.ExcludePath)
 		}
 		label = "across all projects"
 	}

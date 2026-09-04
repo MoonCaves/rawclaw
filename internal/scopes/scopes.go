@@ -37,7 +37,11 @@ import (
 // location behind a Source adapter, unioned like Claude and Codex below.
 // Discovery is location-based only; an arbitrary jsonl-bearing folder never
 // enters implicitly (--dir is the explicit opt-in).
-func All(ctx context.Context, sourceFilter string, reindex bool, pathPreds ...func(string) bool) []view.Scope {
+// All enumerates scopes across every registered source. readOnly is the
+// answer-first read path: existing container dbs are served as-is (staleness
+// from a stat compare, no inline ingest); missing dbs still ensure inline.
+// Lifecycle/locate flows pass readOnly=false to keep ensure-on-enumerate.
+func All(ctx context.Context, sourceFilter string, reindex, readOnly bool, pathPreds ...func(string) bool) []view.Scope {
 	var pathPred func(string) bool
 	if len(pathPreds) > 0 {
 		pathPred = pathPreds[0]
@@ -59,7 +63,7 @@ func All(ctx context.Context, sourceFilter string, reindex bool, pathPreds ...fu
 		if labelFn == nil {
 			labelFn = func(cwd string) string { return defaultContainerLabel(reg.ID, cwd) }
 		}
-		out = append(out, containerScopes(reg.ID, reg.New(), labelFn, reindex, pathPred)...)
+		out = append(out, containerScopesMode(reg.ID, reg.New(), labelFn, reindex, readOnly, pathPred)...)
 	}
 	for _, sc := range Archive(ctx, reindex) {
 		if sourceFilter == "" || sc.Source == sourceFilter {

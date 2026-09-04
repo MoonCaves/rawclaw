@@ -35,7 +35,7 @@ func runReindexVectors(ctx context.Context, w io.Writer, o *Options) error {
 			scope = sc
 		}
 	} else {
-		scope = allScope(ctx, o.Source, o.Reindex)
+		scope = allScope(ctx, o.Source, o.Reindex, false)
 	}
 
 	// Index each scope FIRST, for its side effect only: resolving a scope folds
@@ -137,7 +137,7 @@ func runStatsFleet(ctx context.Context, w io.Writer, o *Options) error {
 	nProjects := 0
 	var per []projectStat
 
-	for _, sc := range allScope(ctx, o.Source, o.Reindex) {
+	for _, sc := range allScope(ctx, o.Source, o.Reindex, false) {
 		dbp, _, err := scopes.Resolve(sc, o.Reindex)
 		if err != nil {
 			continue

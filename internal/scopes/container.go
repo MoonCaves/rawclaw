@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -25,6 +26,16 @@ func containerScopes(sourceID string, adapter source.Source, labelFn func(string
 	if len(pathPreds) > 0 {
 		pathPred = pathPreds[0]
 	}
+	return containerScopesMode(sourceID, adapter, labelFn, reindex, false, pathPred)
+}
+
+// containerScopesMode is containerScopes with an explicit readOnly switch.
+// readOnly is the answer-first read path (search, agentproto): a cwd whose db
+// already exists is served as-is with no EnsureIndexedContainers call — the
+// detached background ingest and turn-end prewarms own its freshness. A cwd
+// with no db yet still ensures inline (first contact), so a brand-new source
+// is searchable on the very first query instead of invisibly empty.
+func containerScopesMode(sourceID string, adapter source.Source, labelFn func(string) string, reindex, readOnly bool, pathPred func(string) bool) []view.Scope {
 	containers, err := adapter.Discover()
 	if err != nil {
 		slog.Warn("scopes: "+sourceID+" discover failed", "err", err)
@@ -48,6 +59,31 @@ func containerScopes(sourceID string, adapter source.Source, labelFn func(string
 	for _, cwd := range cwds {
 		dbp := containerDBPath(sourceID, cwd)
 		liveDBs[dbp] = struct{}{}
+		if readOnly && !reindex {
+			if dfi, err := os.Stat(dbp); err == nil {
+				// Existing db: serve as-is. Freshness is owned by the
+				// detached background ingest + turn-end prewarms; Stale is
+				// a stat-only compare (any transcript newer than the db),
+				// same signal EnsureIndexedContainers' delta walker uses.
+				stale := false
+				for _, c := range byCWD[cwd] {
+					if sfi, serr := os.Stat(c.Path); serr == nil && sfi.ModTime().After(dfi.ModTime()) {
+						stale = true
+						break
+					}
+				}
+				out = append(out, view.Scope{
+					Project: labelFn(cwd),
+					DBP:     dbp,
+					CWD:     cwd,
+					Source:  sourceID,
+					Stale:   stale,
+				})
+				continue
+			}
+			// Missing db: fall through to ensure (first contact), so a
+			// brand-new source is searchable on the very first query.
+		}
 		_, istatus, ierr := index.EnsureIndexedContainers(dbp, reindex, byCWD[cwd], adapter.Messages, sourceID, "")
 		if ierr != nil {
 			slog.Warn("scopes: "+sourceID+" index failed", "cwd", cwd, "err", ierr)

@@ -225,7 +225,7 @@ func resolveRef(ref string) (string, string, error) {
 }
 
 func allScope() []view.Scope {
-	return scopes.All(context.Background(), "", false)
+	return scopes.All(context.Background(), "", false, true)
 }
 
 type ScopeFn func() []view.Scope

@@ -86,7 +86,7 @@ func TestTagWriteUsesCatalogBeforeCorpusSweep(t *testing.T) {
 	called := false
 	more := func() []view.Scope {
 		called = true
-		return scopes.All(context.Background(), "claude", false)
+		return scopes.All(context.Background(), "claude", false, false)
 	}
 	jsonIn := `[{"start_uuid":"` + firstUUID[:8] + `","topic":"catalog guard","summary":"deferred fold"}]`
 	var out strings.Builder

@@ -68,7 +68,7 @@ func TestGooseOptedOut_StillServesAlreadyIndexedHistory(t *testing.T) {
 		t.Fatal("test setup: expected goose to be opted OUT")
 	}
 
-	scopes := All(context.Background(), "", false)
+	scopes := All(context.Background(), "", false, false)
 	var found bool
 	for _, sc := range scopes {
 		if sc.Source == goose.ID {
