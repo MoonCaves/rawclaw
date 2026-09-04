@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -379,29 +380,21 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 	}
 	label := ""
 	if o.ThisProject {
-		sc, td, ok := thisScope(w, o)
-		if !ok {
-			return nil
+		td := resolveTDir(o.Dir, o.DirSet)
+		projLabel := ""
+		if td != "" && isDir(td) {
+			projLabel = paths.ProjectLabel(td)
+		} else {
+			projLabel = filepath.Base(realpathExpand(o.Dir))
 		}
-		var projs []string
-		for _, s := range sc {
-			if s.Project != "" {
-				projs = append(projs, s.Project)
-			}
+		sopts.ProjectDir = o.Dir
+		sopts.ScopeFallback = func() []view.Scope {
+			sc, _, _ := thisScope(w, o)
+			return sc
 		}
-		sopts.Projects = projs
-		if len(projs) == 1 {
-			sopts.Project = projs[0]
-		} else if td != "" && isDir(td) {
-			sopts.Project = paths.ProjectLabel(td)
-		}
-		sopts.ScopeFallback = func() []view.Scope { return sc }
-		switch {
-		case td != "" && isDir(td):
-			label = "on " + paths.ProjectLabel(td)
-		case len(projs) > 0:
-			label = "on " + projs[0]
-		default:
+		if projLabel != "" {
+			label = "on " + projLabel
+		} else {
 			label = "on this project"
 		}
 	} else {
