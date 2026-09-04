@@ -82,7 +82,7 @@ func runBrowse(ctx context.Context, w io.Writer, o *Options) error {
 	sc, td, ok := thisScope(w, o)
 	if !ok {
 		if !o.DirSet {
-			fmt.Fprintf(w, "note: no local history in %s; showing recent sessions across all projects\n", realpathExpand(o.Dir))
+			fmt.Fprintf(w, "No transcript history for %s; showing recent sessions across all projects.\n", realpathExpand(o.Dir))
 			universe := allScope(ctx, o.Source, o.Reindex, o.IncludePath, o.ExcludePath)
 			return runBrowseScoped(w, o, universe)
 		}

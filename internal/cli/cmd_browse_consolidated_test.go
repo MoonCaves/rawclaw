@@ -393,7 +393,7 @@ func TestBrowse_FallbackWhenNoLocalHistory(t *testing.T) {
 		t.Fatalf("runBrowse bare: %v", err)
 	}
 	outStr := out.String()
-	if !strings.Contains(outStr, "note: no local history in") || !strings.Contains(outStr, "showing recent sessions across all projects") {
+	if !strings.Contains(outStr, "No transcript history for") || !strings.Contains(outStr, "showing recent sessions across all projects") {
 		t.Errorf("expected fallback note, got:\n%s", outStr)
 	}
 	// Must contain sessions from the corpus
