@@ -7,42 +7,25 @@
 
 <!-- ───── header above is managed · write/edit your current state below ───── -->
 
-**2026-09-04 — Search Latency Sub-0.5s Certified, Vector Tier Made Opt-In, Cobra Flag Bug Fixed, Outline Ref Pipe Repaired.**
+**2026-09-04 — Target Commit 954a45f Verified, Search Latency Sub-0.3s, Vector Opt-In Confirmed.**
 
 ### 📍 Now
-- Commits landed to address interactive search latency and CLI friction:
-  1. **Vector Tier Opt-In & MeasureCoverage Stripped (`cli_options.go`, `cli_search.go`, `search.go`)**:
-     - Made vector/semantic tier strictly opt-in per query via `--vector`, ensuring keyword search runs as pure zero-overhead default.
-     - Stripped `MeasureCoverage` from the interactive search path, eliminating 100MB+ transcript scanning and SHA hashing during queries.
-     - Interactive search on installed binary measures **0.39s–0.46s** (down from 5.2s).
-  2. **Cobra Flag Space Parsing Repaired (`cli_read.go`)**:
-     - Deleted `NoOptDefVal` from `--budget` and `--more` flags in `cli_read.go`. Space-separated arguments (e.g. `rawclaw read <ref> --budget 20000 --more 2`) now parse cleanly without triggering Cobra argument count errors.
-  3. **Outline Ref Pipe Repaired (`store/messages.go`, `view/view.go`, `agentproto/render.go`)**:
-     - `ViewMsg` and `store.Msg` now propagate message `UUID`.
-     - `rawclaw outline` prints actionable `[role <sess8>:<uuid8>]` refs directly readable via `rawclaw read <ref>`.
-  4. **Phrase Search Help Guidance (`cli_options.go`)**:
-     - Added explicit documentation in search `--help` steering agents to quote multi-word exact phrases.
-- Verified:
-  - All 6 deterministic harness gates passed (`sh scripts/harness-gate.sh`) with 0 race conditions, 0 deadlocks, and 100% `gofmt` compliance.
-  - Linter: `golangci-lint run ./...` reports **0 issues**.
-  - Graphify AST knowledge graph refreshed (4,140 nodes, 11,863 edges, 254 communities).
-  - Deployed binary `~/.local/bin/rawclaw` (MD5 `b98f3c95d5b6e68756cbf9a66a02bb5d`, commit `954a45f`).
-  - Benchmarks:
-    - `time rawclaw "sit and wait for that" --this-project`: **0.266s – 0.359s** hot path.
-    - `rawclaw read 197cdecc:aec45473 --budget 20000`: **PASS** (instant excerpt, space-separated flag syntax).
-    - `rawclaw outline 197cdecc`: **PASS** (prints `[user 197cdecc:c1ef7bfe]`, directly accepted by `rawclaw read`).
+Target commit state is `954a45f` / `fdf3418`. Measured search latency on the installed binary (`/Users/jay-m4/.local/bin/rawclaw`) is **0.20s–0.35s** for pure lexical searches (down from 5.2s). Verified `--vector` is fully wired: on queries without saturated lexical hits, `--vector` invokes KNN scan over 124,407 chunks in `~/.cache/session-search/consolidated.db` (measuring ~1.75s). The core architectural lesson holds: the fastest search is the one that does not run the synchronous multi-runtime crawl or the default vector tier.
+
+### 👁️ Seen, not touched
+- **Withheld Turn Note in Oneline / Piped Stream**: Running `rawclaw '"sit and wait for that"' --this-project 2>&1 | head -3` in an agent environment (or piped) routes through `machineStream(out)`, which sets `o.Oneline = true`. `RenderSearchOneline` emits tab-separated match rows only and intentionally omits conversational notes/warnings to preserve machine-stream purity (enforced by `cmd_root_oneline_test.go`). In `--json`, the turn exclusion fires as designed (`excluded_current_turn: 1`, warning `current_turn_excluded`). In human multi-line mode, warnings are rendered as footers below all match entries rather than in the top 3 lines. Left strictly untouched per instructions.
+- **FoggySnow Worktree**: `worktree-foggysnow-readonly-scopes` left parked.
 
 ### ✅ Decisions
-- **Vector Tier Opt-In (`--vector`)** (2026-09-04): Pure keyword search is the sovereign default invariant. Brute-force KNN and coverage scans over machine-wide vector tables must never run implicitly on rare phrases.
-- **NoOptDefVal Deprecation on Value Flags** (2026-09-04): Never attach `NoOptDefVal` to integer value flags in Cobra/pflag, as it forces `=` syntax and causes space-separated values to be misparsed as positional args.
-- **Actionable Outline Refs** (2026-09-04): Outlines render `<sess8>:<uuid8>` tokens so agents can copy-paste refs directly into `read` without conversion.
+- **Vector Tier Opt-In (`--vector`)** (2026-09-04): Keyword search is the sovereign default invariant. Brute-force KNN and coverage scans over machine-wide vector tables must never run implicitly on rare phrases.
+- **NoOptDefVal Deprecation on Value Flags** (2026-09-04): Removed `NoOptDefVal` from `--budget` and `--more` in `cli_read.go` to prevent Cobra from treating space-separated values as extra positional arguments.
+- **Actionable Outline Refs** (2026-09-04): Outlines render `<sess8>:<uuid8>` tokens directly accepted by `rawclaw read`.
 
 ### 🧵 Open threads (with status)
 - None.
 
 ### ⏭️ Next
-- Monitor agent adoption of the hardened CLI surface (`read <ref> --budget N`, `outline <sess8>`, phrase quoting).
-- Revisit vector tier performance (e.g. per-project chunk scoping or dedicated on-disk indexing) as an opt-in roadmap item.
+- Keep monitoring agent usage of `rawclaw` keyword search and copy-paste outline refs.
 
 ### ⛔ Blockers
 - None.
