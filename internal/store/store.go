@@ -308,12 +308,12 @@ func Rebuild(con *sql.DB) error {
 	return nil
 }
 
-// ROMmapSize is the memory-mapped I/O size for read-only connections.
-const ROMmapSize = 1 << 28 // 256 MiB read-only mmap window
+// ROMmapSize is the memory-mapped I/O size for read-only connections (SQLite SQLITE_MAX_MMAP_SIZE ceiling).
+const ROMmapSize = 0x7fff0000 // ~2 GiB read-only mmap window
 
 // ConnectRO opens dbp in read-only mode (file:<dbp>?mode=ro). Exported so
-// sibling packages can reuse it. Configured with a 5s busy timeout and a
-// 256MB mmap_size so hot queries serve directly from memory-mapped pages.
+// sibling packages can reuse it. Configured with a 5s busy timeout, 64MB page cache,
+// and a 2GB mmap_size so hot queries serve directly from memory-mapped pages.
 //
 // SINGLE-CONN DISCIPLINE: the pool is capped at ONE connection, so a
 // caller MUST fully drain + close a result set (rows.Close) before issuing the
@@ -321,7 +321,7 @@ const ROMmapSize = 1 << 28 // 256 MiB read-only mmap window
 // rows from the first are still open — blocks forever waiting for a second
 // connection (the view.Browse / semantic.VecKNN deadlock class).
 func ConnectRO(dbp string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)&_pragma=mmap_size(%d)", dbp, ROMmapSize)
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)&_pragma=cache_size(-64000)&_pragma=mmap_size(%d)", dbp, ROMmapSize)
 	con, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only db: %w", err)
