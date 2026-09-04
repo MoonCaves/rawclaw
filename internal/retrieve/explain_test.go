@@ -130,10 +130,10 @@ func TestSearchExplained(t *testing.T) {
 			name: "multi-term coverage re-rank floats higher coverage up",
 			msgs: []testMsg{
 				{sessionID: "alpha", role: "user", tsISO: "2026-06-01", ts: 1, content: "only kubernetes here"},
-				{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "kubernetes and redis together"},
+				{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "redis and memcached together"},
 			},
-			query:      "kubernetes redis",
-			wantSIDs:   []string{"beta", "alpha"}, // beta covers both terms
+			query:      "kubernetes redis memcached",
+			wantSIDs:   []string{"beta", "alpha"}, // beta covers 2 terms, alpha covers 1
 			wantMethod: MethodBM25Coverage,
 			wantCov:    []int{2, 1},
 			wantBM25:   []int{-1, -1}, // not recoverable after coverage re-sort
@@ -143,9 +143,9 @@ func TestSearchExplained(t *testing.T) {
 			name: "sort overlay replaces relevance",
 			msgs: []testMsg{
 				{sessionID: "alpha", role: "user", tsISO: "2026-06-01", ts: 1, content: "only kubernetes here"},
-				{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "kubernetes and redis together"},
+				{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "redis and memcached together"},
 			},
-			query:      "kubernetes redis",
+			query:      "kubernetes redis memcached",
 			params:     SearchParams{Sort: "newest"},
 			wantSIDs:   []string{"beta", "alpha"}, // newest (ts=2) first
 			wantMethod: MethodSortOverlay,

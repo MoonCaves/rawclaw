@@ -102,15 +102,15 @@ func TestSearch(t *testing.T) {
 			wantSIDs: []string{"alpha", "beta"},
 		},
 		{
-			name: "coverage re-rank floats higher-coverage doc up",
+			name: "AND-first precision prefers doc matching all terms",
 			msgs: []testMsg{
-				// alpha matches one term; beta matches both -> beta first.
+				// alpha matches one term; beta matches both -> AND returns beta only.
 				{sessionID: "alpha", role: "user", tsISO: "2026-06-01", ts: 1, content: "only kubernetes here"},
 				{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "kubernetes and redis together"},
 			},
 			query:    "kubernetes redis",
 			limit:    10,
-			wantSIDs: []string{"beta", "alpha"},
+			wantSIDs: []string{"beta"},
 		},
 		{
 			name: "tool-only match excluded by default",
@@ -204,7 +204,7 @@ func TestSearch(t *testing.T) {
 			query:    "kubernetes redis",
 			limit:    10,
 			params:   SearchParams{Sort: "newest"},
-			wantSIDs: []string{"gamma", "alpha"}, // ts DESC, not coverage
+			wantSIDs: []string{"alpha"}, // alpha matches all terms (AND-first)
 		},
 		{
 			name: "sort oldest",
@@ -304,11 +304,11 @@ func TestMatchAnchors(t *testing.T) {
 	}
 	msgs := []testMsg{
 		{sessionID: "alpha", role: "user", tsISO: "2026-06-01", ts: 1, content: "only kubernetes here"},
-		{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "kubernetes and redis together"},
+		{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "redis and memcached together"},
 	}
 	con, _ := newTestDB(t, sessions, msgs)
 
-	got := MatchAnchors(con, "kubernetes redis", 100, SearchParams{})
+	got := MatchAnchors(con, "kubernetes redis memcached", 100, SearchParams{})
 	if len(got) != 2 {
 		t.Fatalf("got %d anchors, want 2", len(got))
 	}
@@ -491,6 +491,57 @@ func TestSubstringFallbackRoutingRule(t *testing.T) {
 			}
 			if len(terms) != 1 || terms[0] != strings.ToLower(strings.TrimSpace(tt.q)) {
 				t.Errorf("terms = %q, want the lowercased probe as the single highlight term", terms)
+			}
+		})
+	}
+}
+
+func TestSearch_ANDFirst_FallbackToOR(t *testing.T) {
+	tests := []struct {
+		name     string
+		msgs     []testMsg
+		query    string
+		wantSIDs []string
+	}{
+		{
+			name: "AND match succeeds, no OR fallback needed",
+			msgs: []testMsg{
+				{sessionID: "s1", role: "user", tsISO: "2026-06-01", ts: 1, content: "authentication tokens and security keys"},
+				{sessionID: "s2", role: "user", tsISO: "2026-06-02", ts: 2, content: "only authentication tokens here"},
+				{sessionID: "s3", role: "user", tsISO: "2026-06-03", ts: 3, content: "only security keys here"},
+			},
+			query:    "authentication security",
+			wantSIDs: []string{"s1"},
+		},
+		{
+			name: "AND match yields zero hits, falls back to OR alternation",
+			msgs: []testMsg{
+				{sessionID: "s2", role: "user", tsISO: "2026-06-02", ts: 2, content: "only authentication tokens here"},
+				{sessionID: "s3", role: "user", tsISO: "2026-06-03", ts: 3, content: "only security keys here"},
+			},
+			query:    "authentication security",
+			wantSIDs: []string{"s2", "s3"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			con, dbp := newTestDB(t, []testSession{
+				{id: "s1", msgCount: 1, lastTS: 100},
+				{id: "s2", msgCount: 1, lastTS: 200},
+				{id: "s3", msgCount: 1, lastTS: 300},
+			}, tc.msgs)
+			defer con.Close()
+
+			hits := Search(dbp, tc.query, 10, SearchParams{})
+			got := sids(hits)
+			if len(got) != len(tc.wantSIDs) {
+				t.Fatalf("Search(%q) got %v, want %v", tc.query, got, tc.wantSIDs)
+			}
+			for i := range got {
+				if got[i] != tc.wantSIDs[i] {
+					t.Errorf("hit %d = %q, want %q", i, got[i], tc.wantSIDs[i])
+				}
 			}
 		})
 	}

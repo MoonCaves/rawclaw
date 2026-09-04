@@ -147,31 +147,33 @@ func storeFilterSort(p SearchParams) (store.Filter, store.Sort) {
 }
 
 // buildMatch resolves the FTS5 MATCH expression and the highlight terms shared
+// buildMatch resolves the FTS5 MATCH expressions (AND-first, OR-fallback) and the highlight terms shared
 // by Search and MatchAnchors. ok=false means "no searchable token" — the caller
 // returns an empty result.
-func buildMatch(q string, p SearchParams) (match string, terms []string, multi, ok bool) {
+func buildMatch(q string, p SearchParams) (matchAND, matchOR string, terms []string, multi, ok bool) {
 	if p.RawMatch != "" {
 		// Explicit boolean query: use the pre-built FTS5 expr verbatim — no
 		// OR-rewrite, no coverage re-rank (the operators ARE the intent). terms
 		// are only for snippet highlighting.
-		return p.RawMatch, query.ParseTerms(stripBoolOps(q)), false, true
+		parsed := query.ParseTerms(stripBoolOps(q))
+		return p.RawMatch, p.RawMatch, parsed, false, true
 	}
 	clean := query.StripStopwords(query.SanitizeFTS5Query(q))
 	if clean == "" || !query.HasSearchableToken(clean) {
-		return "", nil, false, false
+		return "", "", nil, false, false
 	}
 	terms = query.ParseTerms(clean)
 	multi = len(terms) > 1
 	if !multi {
-		return clean, terms, false, true
+		return clean, clean, terms, false, true
 	}
-	// Multi-word queries OR their tokens (grep-style alternation), instead of
-	// FTS5 implicit-AND. Coverage re-rank keeps docs matching MORE terms on top.
+	// Multi-word queries: AND all tokens first. Only if AND yields 0 hits does
+	// the caller fall back to OR alternation.
 	quoted := make([]string, 0, len(terms))
 	for _, t := range terms {
 		quoted = append(quoted, `"`+strings.ReplaceAll(t, `"`, "")+`"`)
 	}
-	return strings.Join(quoted, " OR "), terms, true, true
+	return strings.Join(quoted, " "), strings.Join(quoted, " OR "), terms, true, true
 }
 
 // minTrigram is the shortest query the substring index can answer: a trigram
@@ -401,7 +403,7 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 	}
 	defer con.Close()
 
-	match, terms, multi, ok := buildMatch(q, p)
+	matchAND, matchOR, terms, multi, ok := buildMatch(q, p)
 	if !ok {
 		return nil, ExplainInputs{}
 	}
@@ -423,9 +425,14 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 	}
 
 	filt, srt := storeFilterSort(p)
-	hits, err := store.SearchHits(con, match, filt, srt, fetch)
+	hits, err := store.SearchHits(con, matchAND, filt, srt, fetch)
 	if err != nil {
 		return nil, ExplainInputs{}
+	}
+	if len(hits) == 0 && multi {
+		if orHits, orErr := store.SearchHits(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
+			hits = orHits
+		}
 	}
 	if subMatch, subTerms, route := substringFallback(q, p, len(hits)); route {
 		if sub, sErr := store.SearchHitsSubstring(con, subMatch, filt, srt, fetch); sErr == nil && len(sub) > 0 {
@@ -673,15 +680,20 @@ func LineageRoot(con *sql.DB, sid string) string {
 // OR/coverage logic of Search, returning message ids for the view layer).
 // `fetch` is the overfetch ceiling.
 func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
-	match, terms, multi, ok := buildMatch(q, p)
+	matchAND, matchOR, terms, multi, ok := buildMatch(q, p)
 	if !ok {
 		return []Anchor{}
 	}
 
 	filt, srt := storeFilterSort(p)
-	anchors, err := store.SearchAnchors(con, match, filt, srt, fetch)
+	anchors, err := store.SearchAnchors(con, matchAND, filt, srt, fetch)
 	if err != nil {
 		return []Anchor{}
+	}
+	if len(anchors) == 0 && multi {
+		if orAnchors, orErr := store.SearchAnchors(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
+			anchors = orAnchors
+		}
 	}
 	// Same substring routing as searchScored — the rule is documented once, on
 	// substringFallback.

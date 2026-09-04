@@ -91,12 +91,17 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 	sortCandidates(cands, opts.Sort)
 
 	seen := map[string]struct{}{}
+	seenUUID := map[string]struct{}{}
 	all := []SearchRef{}
 	picked := []retrieve.Anchor{}
 	for _, r := range cands {
 		if r.UUID == "" {
 			continue
 		}
+		if _, dup := seenUUID[r.UUID]; dup {
+			continue
+		}
+		seenUUID[r.UUID] = struct{}{}
 		key := r.Project + "\x00" + r.Root
 		if _, dup := seen[key]; dup {
 			continue
