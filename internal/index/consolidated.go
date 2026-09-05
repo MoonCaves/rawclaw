@@ -1461,6 +1461,7 @@ type IndexFreshness struct {
 	Reason string
 }
 
+// policy: 2026-09-04 60s settle see docs/design/decision-references.md#D10
 // SettleWindow defines the duration after a transcript's last modification during
 // which it is considered actively written and ignored by freshness checks.
 var SettleWindow = 60 * time.Second

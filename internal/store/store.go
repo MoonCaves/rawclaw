@@ -132,9 +132,9 @@ const TrigramBatchBoundSQL = `SELECT max(id) FROM (SELECT id FROM messages WHERE
 // whole migration on a rowid collision.
 const TrigramBatchFillSQL = `INSERT OR REPLACE INTO messages_fts_trigram(rowid, content) SELECT id, content FROM messages WHERE id > ? AND id <= ?`
 
-// ExactSQL is the UNSTEMMED, CODE-AWARE exact-token index: an external-content
-// FTS5 table over messages, tokenized with unicode61 and custom tokenchars so
-// code symbols, flags, paths, and punctuation remain intact as single tokens.
+// ExactSQL is the UNSTEMMED exact-token index: an external-content
+// FTS5 table over messages, tokenized with plain unicode61 without porter stemming
+// (copied from neilberkman/ccrider internal/core/db/schema.go:86–122, Decision D1, D2).
 //
 // Triggers use the ccrider / SQLite FTS5 external-content 'delete' command:
 // deleting an external-content row MUST supply 'delete', old.id, old.content
@@ -342,11 +342,13 @@ func Rebuild(con *sql.DB) error {
 	return nil
 }
 
+// policy: 2026-09-04 mmap 0x7fff0000 = SQLite ceiling see docs/design/decision-references.md#D2
 // ROMmapSize is the memory-mapped I/O size for read-only connections (SQLite SQLITE_MAX_MMAP_SIZE ceiling).
 const ROMmapSize = 0x7fff0000 // ~2 GiB read-only mmap window
 
 // ConnectRO opens dbp in read-only mode (file:<dbp>?mode=ro). Exported so
-// sibling packages can reuse it. Configured with a 5s busy timeout, 64MB page cache,
+// sibling packages can reuse it. Configured with a 5s busy timeout, 64MB page cache
+// (documented at https://sqlite.org/pragma.html#pragma_cache_size, measured 2026-09-04, Decision S4),
 // and a 2GB mmap_size so hot queries serve directly from memory-mapped pages.
 //
 // SINGLE-CONN DISCIPLINE: the pool is capped at ONE connection, so a
