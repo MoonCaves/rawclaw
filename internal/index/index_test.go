@@ -1532,25 +1532,41 @@ func TestExactIndexMigrationAndTriggers(t *testing.T) {
 		t.Errorf("expected 2 rows in exact index, got %d", count)
 	}
 
-	// 4. Verify code-aware token matching with tokenchars
+	// 4. Verify unstemmed exact token matching (no porter stemming bleed)
 	var matchCount int
-	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH '"auth-token"'`).Scan(&matchCount); err != nil {
+	// 'land' should NOT match 'landing' in exact unstemmed index
+	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH 'land'`).Scan(&matchCount); err != nil {
+		t.Fatalf("match exact token: %v", err)
+	}
+	if matchCount != 0 {
+		t.Errorf("expected 0 matches for 'land' on 'landing', got %d", matchCount)
+	}
+	// 'landing' matches exactly
+	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH 'landing'`).Scan(&matchCount); err != nil {
 		t.Fatalf("match exact token: %v", err)
 	}
 	if matchCount != 1 {
-		t.Errorf("expected 1 match for auth-token, got %d", matchCount)
+		t.Errorf("expected 1 match for 'landing', got %d", matchCount)
 	}
 
-	// 5. Test INSERT trigger
+	// 5. Test INSERT trigger with sentence-final punctuation and path fragments
 	if _, err := con.Exec(`INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES
-		('auth-session','user','third msg with my_cool_func()',300,'2026-01-03T10:00:00Z','u3');`); err != nil {
+		('auth-session','user','sentence ending with auth. In internal/store/store.go',300,'2026-01-03T10:00:00Z','u3');`); err != nil {
 		t.Fatal(err)
 	}
-	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH '"my_cool_func()"'`).Scan(&matchCount); err != nil {
-		t.Fatalf("match inserted exact token: %v", err)
+	// 'auth' matches sentence-final 'auth.'
+	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH 'auth'`).Scan(&matchCount); err != nil {
+		t.Fatalf("match sentence-final token: %v", err)
+	}
+	if matchCount != 3 {
+		t.Errorf("expected 3 matches for auth, got %d", matchCount)
+	}
+	// 'store.go' phrase matches path fragment
+	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH '"store.go"'`).Scan(&matchCount); err != nil {
+		t.Fatalf("match path fragment: %v", err)
 	}
 	if matchCount != 1 {
-		t.Errorf("expected 1 match for inserted token, got %d", matchCount)
+		t.Errorf("expected 1 match for store.go, got %d", matchCount)
 	}
 
 	// 6. Test UPDATE trigger
