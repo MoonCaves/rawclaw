@@ -279,99 +279,24 @@ func fillTrigramBatch(con *sql.DB, from, to int64) error {
 	return nil
 }
 
-const (
-	exactBackfillKey  = "exact_backfill_done"
-	exactWatermarkKey = "exact_backfill_watermark"
-	exactBatch        = 20000
-)
+const exactBackfillKey = "exact_backfill_done"
 
-// migrateExactIndex adds the unstemmed, code-aware exact FTS5 index to an
-// existing current-version db and fills it from the rows already there, in
-// place and WITHOUT bumping SchemaVersion.
+// migrateExactIndex adds the code-aware exact FTS5 index to an existing current-version
+// db and backfills it in place with a single native rebuild statement (Decision D15,
+// agentsview extract_db_test.go:624, ccrider schema.go:122).
 func migrateExactIndex(con *sql.DB) error {
-	if err := clearOrphanedExactMarker(con); err != nil {
-		return err
-	}
 	if _, err := con.Exec(store.ExactSQL); err != nil {
 		return fmt.Errorf("create exact index: %w", err)
 	}
 	var done string
 	if err := con.QueryRow("SELECT value FROM meta WHERE key=?", exactBackfillKey).Scan(&done); err == nil && done == "1" {
-		return nil // already filled — the triggers keep it current from here
+		return nil // already filled — triggers keep it current
 	}
-	at, err := exactResumePoint(con)
-	if err != nil {
-		return err
+	if _, err := con.Exec("INSERT INTO messages_fts_exact(messages_fts_exact) VALUES('rebuild')"); err != nil {
+		return fmt.Errorf("rebuild exact index: %w", err)
 	}
-	for {
-		var bound sql.NullInt64
-		if err := con.QueryRow(store.ExactBatchBoundSQL, at, exactBatch).Scan(&bound); err != nil {
-			return fmt.Errorf("read exact batch bound: %w", err)
-		}
-		if !bound.Valid {
-			break // no messages left above the watermark
-		}
-		if err := fillExactBatch(con, at, bound.Int64); err != nil {
-			return err
-		}
-		at = bound.Int64
-	}
-	if _, err := con.Exec(
-		"INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1'); DELETE FROM meta WHERE key='"+exactWatermarkKey+"'",
-		exactBackfillKey); err != nil {
+	if _, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,'1')", exactBackfillKey); err != nil {
 		return fmt.Errorf("stamp %s: %w", exactBackfillKey, err)
-	}
-	return nil
-}
-
-func clearOrphanedExactMarker(con *sql.DB) error {
-	var table, trigger int
-	if err := con.QueryRow(`SELECT
-	  COALESCE(SUM(name='messages_fts_exact'),0),
-	  COALESCE(SUM(name='messages_exact_ai'),0)
-	FROM sqlite_master WHERE name IN ('messages_fts_exact','messages_exact_ai')`).Scan(&table, &trigger); err != nil {
-		return fmt.Errorf("inspect exact objects: %w", err)
-	}
-	if table == 0 || trigger == 1 {
-		return nil
-	}
-	if _, err := con.Exec("DELETE FROM meta WHERE key IN (?,?)", exactBackfillKey, exactWatermarkKey); err != nil {
-		return fmt.Errorf("clear orphaned exact markers: %w", err)
-	}
-	return nil
-}
-
-func exactResumePoint(con *sql.DB) (int64, error) {
-	var raw string
-	err := con.QueryRow("SELECT value FROM meta WHERE key=?", exactWatermarkKey).Scan(&raw)
-	if err == nil {
-		if at, cerr := strconv.ParseInt(raw, 10, 64); cerr == nil {
-			return at, nil
-		}
-	}
-	if _, err := con.Exec(store.ExactResetSQL); err != nil {
-		return 0, fmt.Errorf("clear exact index: %w", err)
-	}
-	return 0, nil
-}
-
-func fillExactBatch(con *sql.DB, from, to int64) error {
-	tx, err := con.Begin()
-	if err != nil {
-		return fmt.Errorf("begin exact batch: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-	if _, err := tx.Exec(store.ExactBatchFillSQL, from, to); err != nil {
-		return fmt.Errorf("backfill exact index: %w", err)
-	}
-	if _, err := tx.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
-		exactWatermarkKey, strconv.FormatInt(to, 10)); err != nil {
-		return fmt.Errorf("stamp %s: %w", exactWatermarkKey, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit exact batch: %w", err)
 	}
 	return nil
 }
