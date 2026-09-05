@@ -251,10 +251,11 @@ func coverage(lterms []string, hayLower string, multi bool) int {
 	return cov
 }
 
-// scoredHit is an intermediate Hit carrying its coverage for the re-rank.
+// scoredHit is an intermediate Hit carrying its coverage and RRF score for the re-rank.
 type scoredHit struct {
 	Hit
-	cov int
+	cov   int
+	fused float64
 }
 
 // Ranking-regime labels reported by ScoreExplain.Method — the honest name of
@@ -397,23 +398,36 @@ func SearchExplained(dbp, q string, limit int, p SearchParams) (out []Hit, expla
 }
 
 // rrfAnchors fuses multiple lists of SearchAnchor using RRF with parameter k=60.
-// Lifted verbatim from yoanbernabeu/grepai search/hybrid.go L57–89 (MIT).
-func rrfAnchors(k float64, limit int, lists ...[]store.SearchAnchor) []store.SearchAnchor {
+// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L49-L60 (AGPL-3.0)
+// and yoanbernabeu/grepai search/hybrid.go#L57-L89 (MIT).
+// Rank computation consumes SQL DENSE_RANK() OVER (ORDER BY bm25) directly from store.SearchAnchor.Rank,
+// so equal-relevance hits produce equal Fused scores.
+func rrfAnchors(k float64, limit int, lists ...[]store.SearchAnchor) ([]store.SearchAnchor, map[string]float64) {
 	scores := make(map[string]float64)
 	anchorMap := make(map[string]store.SearchAnchor)
 	for _, list := range lists {
-		for rank, a := range list {
+		for _, a := range list {
 			key := a.UUID
 			if key == "" {
 				key = a.SessionID + ":" + a.ISO
 			}
-			scores[key] += 1.0 / (k + float64(rank) + 1.0)
+			scores[key] += 1.0 / (k + float64(a.Rank))
 			anchorMap[key] = a
 		}
 	}
+	seen := make(map[string]bool)
 	results := make([]store.SearchAnchor, 0, len(scores))
-	for key := range scores {
-		results = append(results, anchorMap[key])
+	for _, list := range lists {
+		for _, a := range list {
+			key := a.UUID
+			if key == "" {
+				key = a.SessionID + ":" + a.ISO
+			}
+			if !seen[key] {
+				seen[key] = true
+				results = append(results, a)
+			}
+		}
 	}
 	sort.Slice(results, func(i, j int) bool {
 		ki := results[i].UUID
@@ -427,32 +441,40 @@ func rrfAnchors(k float64, limit int, lists ...[]store.SearchAnchor) []store.Sea
 		if scores[ki] != scores[kj] {
 			return scores[ki] > scores[kj]
 		}
-		if results[i].ISO != results[j].ISO {
-			return results[i].ISO > results[j].ISO
-		}
+		// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L67 (ORDER BY score DESC, o.order_id)
 		return results[i].ID < results[j].ID
 	})
 	if limit > 0 && len(results) > limit {
 		results = results[:limit]
 	}
-	return results
+	return results, scores
 }
 
 // rrfHits fuses multiple lists of SearchHit using RRF with parameter k=60.
-// Lifted from yoanbernabeu/grepai search/hybrid.go L57–89 (MIT).
-func rrfHits(k float64, limit int, lists ...[]store.SearchHit) []store.SearchHit {
+// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L49-L60 (AGPL-3.0)
+// and yoanbernabeu/grepai search/hybrid.go#L57-L89 (MIT).
+// Rank computation consumes SQL DENSE_RANK() OVER (ORDER BY bm25) directly from store.SearchHit.Rank,
+// so equal-relevance hits produce equal Fused scores.
+func rrfHits(k float64, limit int, lists ...[]store.SearchHit) ([]store.SearchHit, map[string]float64) {
 	scores := make(map[string]float64)
 	hitMap := make(map[string]store.SearchHit)
 	for _, list := range lists {
-		for rank, h := range list {
+		for _, h := range list {
 			key := h.SessionID + ":" + h.ISO + ":" + h.Role
-			scores[key] += 1.0 / (k + float64(rank) + 1.0)
+			scores[key] += 1.0 / (k + float64(h.Rank))
 			hitMap[key] = h
 		}
 	}
+	seen := make(map[string]bool)
 	results := make([]store.SearchHit, 0, len(scores))
-	for key := range scores {
-		results = append(results, hitMap[key])
+	for _, list := range lists {
+		for _, h := range list {
+			key := h.SessionID + ":" + h.ISO + ":" + h.Role
+			if !seen[key] {
+				seen[key] = true
+				results = append(results, h)
+			}
+		}
 	}
 	sort.Slice(results, func(i, j int) bool {
 		ki := results[i].SessionID + ":" + results[i].ISO + ":" + results[i].Role
@@ -460,15 +482,13 @@ func rrfHits(k float64, limit int, lists ...[]store.SearchHit) []store.SearchHit
 		if scores[ki] != scores[kj] {
 			return scores[ki] > scores[kj]
 		}
-		if results[i].ISO != results[j].ISO {
-			return results[i].ISO > results[j].ISO
-		}
-		return results[i].SessionID < results[j].SessionID
+		// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L67 (ORDER BY score DESC, o.order_id)
+		return results[i].ID < results[j].ID
 	})
 	if limit > 0 && len(results) > limit {
 		results = results[:limit]
 	}
-	return results
+	return results, scores
 }
 
 // searchScored is the shared engine for Search/SearchExplained: it runs the FTS5
@@ -505,6 +525,7 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 
 	filt, srt := storeFilterSort(p)
 	var hits []store.SearchHit
+	var hitScores map[string]float64
 
 	if p.Exact {
 		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
@@ -529,7 +550,25 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 			}
 		}
 		if len(exactHits) > 0 || len(stemmedHits) > 0 {
-			hits = rrfHits(60.0, fetch, exactHits, stemmedHits)
+			// Lifted from meilisearch/meilisearch crates/milli/src/search/hybrid.rs#L51-L57: explicit sort pre-empts score fusion.
+			// Lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L56-L75: rank expression only under SortRelevance; Newest/Oldest order by created_at, no rank.
+			if p.Sort == "newest" || p.Sort == "oldest" {
+				// Time-order mode: SQL ORDER BY m.ts from wacli L99-105 / clickclack L56-75 is the ordering and must survive.
+				// Merge exact and stemmed lists by dedup, preserving SQL order.
+				seen := make(map[string]bool)
+				for _, h := range append(exactHits, stemmedHits...) {
+					key := h.SessionID + ":" + h.ISO + ":" + h.Role
+					if !seen[key] {
+						seen[key] = true
+						hits = append(hits, h)
+					}
+				}
+				if fetch > 0 && len(hits) > fetch {
+					hits = hits[:fetch]
+				}
+			} else {
+				hits, hitScores = rrfHits(60.0, fetch, exactHits, stemmedHits)
+			}
 		}
 	}
 
@@ -550,6 +589,11 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 			continue
 		}
 		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, h.Content)), multi)
+		key := h.SessionID + ":" + h.ISO + ":" + h.Role
+		var fused float64
+		if hitScores != nil {
+			fused = hitScores[key]
+		}
 		scored = append(scored, scoredHit{
 			Hit: Hit{
 				ISO:        h.ISO,
@@ -560,22 +604,16 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 				Snippet:    disp,
 				Routine:    routines[h.SessionID],
 			},
-			cov: cov,
+			cov:   cov,
+			fused: fused,
 		})
 	}
 
-	// Coverage re-rank and stable routine partition (relevance mode only):
-	// docs matching more distinct terms float up; at equal coverage, non-routine
-	// before routine; bm25 order is the tiebreak.
+	// Relevance mode re-rank:
+	// Lifted from yoanbernabeu/grepai search/hybrid.go#L81-L83 (fused RRF score takes precedence)
 	if p.Sort == "" {
 		sort.SliceStable(scored, func(i, j int) bool {
-			if scored[i].cov != scored[j].cov {
-				return scored[i].cov > scored[j].cov
-			}
-			if scored[i].Routine != scored[j].Routine {
-				return !scored[i].Routine && scored[j].Routine
-			}
-			return false
+			return scored[i].fused > scored[j].fused
 		})
 	}
 
@@ -783,9 +821,9 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 	if !ok {
 		return []Anchor{}
 	}
-
 	filt, srt := storeFilterSort(p)
 	var anchors []store.SearchAnchor
+	var anchorScores map[string]float64
 
 	if p.Exact {
 		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
@@ -810,7 +848,28 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			}
 		}
 		if len(exactAnchors) > 0 || len(stemmedAnchors) > 0 {
-			anchors = rrfAnchors(60.0, fetch, exactAnchors, stemmedAnchors)
+			// Lifted from meilisearch/meilisearch crates/milli/src/search/hybrid.rs#L51-L57: explicit sort pre-empts score fusion.
+			// Lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L56-L75: rank expression only under SortRelevance; Newest/Oldest order by created_at, no rank.
+			if p.Sort == "newest" || p.Sort == "oldest" {
+				// Time-order mode: SQL ORDER BY m.ts from wacli L99-105 / clickclack L56-75 is the ordering and must survive.
+				// Merge exact and stemmed lists by dedup, preserving SQL order.
+				seen := make(map[string]bool)
+				for _, a := range append(exactAnchors, stemmedAnchors...) {
+					key := a.UUID
+					if key == "" {
+						key = a.SessionID + ":" + a.ISO
+					}
+					if !seen[key] {
+						seen[key] = true
+						anchors = append(anchors, a)
+					}
+				}
+				if fetch > 0 && len(anchors) > fetch {
+					anchors = anchors[:fetch]
+				}
+			} else {
+				anchors, anchorScores = rrfAnchors(60.0, fetch, exactAnchors, stemmedAnchors)
+			}
 		}
 	}
 
@@ -831,6 +890,14 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			continue
 		}
 		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, a.Content)), multi)
+		key := a.UUID
+		if key == "" {
+			key = a.SessionID + ":" + a.ISO
+		}
+		var fused float64
+		if anchorScores != nil {
+			fused = anchorScores[key]
+		}
 		out = append(out, Anchor{
 			ID:            a.ID,
 			SessionID:     a.SessionID,
@@ -840,21 +907,18 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			Parent:        a.Parent,
 			Snip:          disp,
 			Cov:           cov,
+			Fused:         fused,
 			OnlyCopySince: a.OnlyCopySince, // 0 when NULL (present)
 			Project:       a.Project,       // "" from a database that predates the scope columns
 			Routine:       routines[a.SessionID],
 		})
 	}
 
+	// Relevance mode re-rank:
+	// Lifted from yoanbernabeu/grepai search/hybrid.go#L81-L83 (fused RRF score takes precedence)
 	if p.Sort == "" {
 		sort.SliceStable(out, func(i, j int) bool {
-			if out[i].Cov != out[j].Cov {
-				return out[i].Cov > out[j].Cov
-			}
-			if out[i].Routine != out[j].Routine {
-				return !out[i].Routine && out[j].Routine
-			}
-			return false
+			return out[i].Fused > out[j].Fused
 		})
 	}
 	return out
