@@ -641,3 +641,28 @@ func TestRRFUnits(t *testing.T) {
 		t.Errorf("rrfAnchors top anchor = %q, want u2", fusedAnchors[0].UUID)
 	}
 }
+
+func TestCASSRouter(t *testing.T) {
+	// 1. Code query indicators
+	if mode := detectSearchMode("store.go"); mode != "code" {
+		t.Errorf("detectSearchMode('store.go') = %q, want code", mode)
+	}
+	if mode := detectSearchMode("my_cool_function"); mode != "code" {
+		t.Errorf("detectSearchMode('my_cool_function') = %q, want code", mode)
+	}
+	if mode := detectSearchMode("myCoolFunc"); mode != "code" {
+		t.Errorf("detectSearchMode('myCoolFunc') = %q, want code", mode)
+	}
+	if mode := detectSearchMode("auth-token-v2"); mode != "code" {
+		t.Errorf("detectSearchMode('auth-token-v2') = %q, want code", mode)
+	}
+
+	// 2. Prose query indicators
+	if mode := detectSearchMode("where did we land on auth"); mode != "prose" {
+		t.Errorf("detectSearchMode('where did we land on auth') = %q, want prose", mode)
+	}
+	if mode := detectSearchMode("how do we handle errors"); mode != "prose" {
+		t.Errorf("detectSearchMode('how do we handle errors') = %q, want prose", mode)
+	}
+}
+
