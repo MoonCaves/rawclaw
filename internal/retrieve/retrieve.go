@@ -118,6 +118,13 @@ type SearchParams struct {
 	// resolved (a path pattern is matched in Go, never pushed into SQL).
 	Projects   []string
 	SourceTool string
+
+	// Exact forces queries directly against the exact tokenchars table
+	// (messages_fts_exact) without stemmed fallback (Decision D4, calibre-style).
+	Exact bool
+	// RankingMode controls the multi-table ranking strategy: "exact-first"
+	// (fallback to stemmed on 0 hits) or "rrf" (grepai Reciprocal Rank Fusion k=60).
+	RankingMode string
 }
 
 // storeFilterSort maps SearchParams onto the store's shared FTS Filter + Sort
@@ -198,7 +205,7 @@ const minTrigram = 3
 // An explicit boolean query (RawMatch) is excluded: its operators are the
 // intent, and a literal substring has no operators to honor.
 func substringFallback(q string, p SearchParams, wordHits int) (match string, terms []string, ok bool) {
-	if wordHits > 0 || p.RawMatch != "" {
+	if wordHits > 0 || p.RawMatch != "" || p.Exact {
 		return "", nil, false
 	}
 	probe := strings.TrimSpace(q)
@@ -392,6 +399,81 @@ func SearchExplained(dbp, q string, limit int, p SearchParams) (out []Hit, expla
 	return out, Explain(covs, in)
 }
 
+// rrfAnchors fuses multiple lists of SearchAnchor using RRF with parameter k=60.
+// Lifted verbatim from yoanbernabeu/grepai search/hybrid.go L57–89 (MIT).
+func rrfAnchors(k float64, limit int, lists ...[]store.SearchAnchor) []store.SearchAnchor {
+	scores := make(map[string]float64)
+	anchorMap := make(map[string]store.SearchAnchor)
+	for _, list := range lists {
+		for rank, a := range list {
+			key := a.UUID
+			if key == "" {
+				key = a.SessionID + ":" + a.ISO
+			}
+			scores[key] += 1.0 / (k + float64(rank) + 1.0)
+			anchorMap[key] = a
+		}
+	}
+	results := make([]store.SearchAnchor, 0, len(scores))
+	for key := range scores {
+		results = append(results, anchorMap[key])
+	}
+	sort.Slice(results, func(i, j int) bool {
+		ki := results[i].UUID
+		if ki == "" {
+			ki = results[i].SessionID + ":" + results[i].ISO
+		}
+		kj := results[j].UUID
+		if kj == "" {
+			kj = results[j].SessionID + ":" + results[j].ISO
+		}
+		if scores[ki] != scores[kj] {
+			return scores[ki] > scores[kj]
+		}
+		if results[i].ISO != results[j].ISO {
+			return results[i].ISO > results[j].ISO
+		}
+		return results[i].ID < results[j].ID
+	})
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results
+}
+
+// rrfHits fuses multiple lists of SearchHit using RRF with parameter k=60.
+// Lifted from yoanbernabeu/grepai search/hybrid.go L57–89 (MIT).
+func rrfHits(k float64, limit int, lists ...[]store.SearchHit) []store.SearchHit {
+	scores := make(map[string]float64)
+	hitMap := make(map[string]store.SearchHit)
+	for _, list := range lists {
+		for rank, h := range list {
+			key := h.SessionID + ":" + h.ISO + ":" + h.Role
+			scores[key] += 1.0 / (k + float64(rank) + 1.0)
+			hitMap[key] = h
+		}
+	}
+	results := make([]store.SearchHit, 0, len(scores))
+	for key := range scores {
+		results = append(results, hitMap[key])
+	}
+	sort.Slice(results, func(i, j int) bool {
+		ki := results[i].SessionID + ":" + results[i].ISO + ":" + results[i].Role
+		kj := results[j].SessionID + ":" + results[j].ISO + ":" + results[j].Role
+		if scores[ki] != scores[kj] {
+			return scores[ki] > scores[kj]
+		}
+		if results[i].ISO != results[j].ISO {
+			return results[i].ISO > results[j].ISO
+		}
+		return results[i].SessionID < results[j].SessionID
+	})
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results
+}
+
 // searchScored is the shared engine for Search/SearchExplained: it runs the FTS5
 // query, applies the coverage re-rank, and returns the FULLY ORDERED scoredHit
 // slice (pre-limit) plus the ExplainInputs that describe the regime used. The
@@ -425,15 +507,52 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 	}
 
 	filt, srt := storeFilterSort(p)
-	hits, err := store.SearchHits(con, matchAND, filt, srt, fetch)
-	if err != nil {
-		return nil, ExplainInputs{}
-	}
-	if len(hits) == 0 && multi {
-		if orHits, orErr := store.SearchHits(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
-			hits = orHits
+	var hits []store.SearchHit
+
+	if p.Exact {
+		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
+		hits, _ = store.SearchHitsExact(con, matchAND, filt, srt, fetch)
+		if len(hits) == 0 && multi {
+			if orHits, orErr := store.SearchHitsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
+				hits = orHits
+			}
+		}
+	} else if p.RankingMode == "rrf" {
+		// grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5)
+		exactHits, _ := store.SearchHitsExact(con, matchAND, filt, srt, fetch)
+		if len(exactHits) == 0 && multi {
+			if orHits, orErr := store.SearchHitsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
+				exactHits = orHits
+			}
+		}
+		stemmedHits, _ := store.SearchHits(con, matchAND, filt, srt, fetch)
+		if len(stemmedHits) == 0 && multi {
+			if orHits, orErr := store.SearchHits(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
+				stemmedHits = orHits
+			}
+		}
+		if len(exactHits) > 0 || len(stemmedHits) > 0 {
+			hits = rrfHits(60.0, fetch, exactHits, stemmedHits)
+		}
+	} else {
+		// Default mode: exact-first fallback (Decision D4)
+		// Query messages_fts_exact first; fall back to messages_fts on 0 hits.
+		hits, _ = store.SearchHitsExact(con, matchAND, filt, srt, fetch)
+		if len(hits) == 0 && multi {
+			if orHits, orErr := store.SearchHitsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
+				hits = orHits
+			}
+		}
+		if len(hits) == 0 {
+			hits, _ = store.SearchHits(con, matchAND, filt, srt, fetch)
+			if len(hits) == 0 && multi {
+				if orHits, orErr := store.SearchHits(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
+					hits = orHits
+				}
+			}
 		}
 	}
+
 	if subMatch, subTerms, route := substringFallback(q, p, len(hits)); route {
 		if sub, sErr := store.SearchHitsSubstring(con, subMatch, filt, srt, fetch); sErr == nil && len(sub) > 0 {
 			// One literal substring is one term, so the multi-term OR/coverage
@@ -686,15 +805,52 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 	}
 
 	filt, srt := storeFilterSort(p)
-	anchors, err := store.SearchAnchors(con, matchAND, filt, srt, fetch)
-	if err != nil {
-		return []Anchor{}
-	}
-	if len(anchors) == 0 && multi {
-		if orAnchors, orErr := store.SearchAnchors(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
-			anchors = orAnchors
+	var anchors []store.SearchAnchor
+
+	if p.Exact {
+		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
+		anchors, _ = store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
+		if len(anchors) == 0 && multi {
+			if orAnchors, orErr := store.SearchAnchorsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
+				anchors = orAnchors
+			}
+		}
+	} else if p.RankingMode == "rrf" {
+		// grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5)
+		exactAnchors, _ := store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
+		if len(exactAnchors) == 0 && multi {
+			if orAnchors, orErr := store.SearchAnchorsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
+				exactAnchors = orAnchors
+			}
+		}
+		stemmedAnchors, _ := store.SearchAnchors(con, matchAND, filt, srt, fetch)
+		if len(stemmedAnchors) == 0 && multi {
+			if orAnchors, orErr := store.SearchAnchors(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
+				stemmedAnchors = orAnchors
+			}
+		}
+		if len(exactAnchors) > 0 || len(stemmedAnchors) > 0 {
+			anchors = rrfAnchors(60.0, fetch, exactAnchors, stemmedAnchors)
+		}
+	} else {
+		// Default mode: exact-first fallback (Decision D4)
+		// Query messages_fts_exact first; fall back to messages_fts on 0 hits.
+		anchors, _ = store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
+		if len(anchors) == 0 && multi {
+			if orAnchors, orErr := store.SearchAnchorsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
+				anchors = orAnchors
+			}
+		}
+		if len(anchors) == 0 {
+			anchors, _ = store.SearchAnchors(con, matchAND, filt, srt, fetch)
+			if len(anchors) == 0 && multi {
+				if orAnchors, orErr := store.SearchAnchors(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
+					anchors = orAnchors
+				}
+			}
 		}
 	}
+
 	// Same substring routing as searchScored — the rule is documented once, on
 	// substringFallback.
 	if subMatch, subTerms, route := substringFallback(q, p, len(anchors)); route {
