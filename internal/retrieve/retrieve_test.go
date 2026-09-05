@@ -564,35 +564,22 @@ func TestExactAndRRFRanking(t *testing.T) {
 	con, dbp := newTestDB(t, sessions, msgs)
 	defer con.Close()
 
-	// 1. Exact-first mode: when exact match exists, exact-first returns exact_match only.
-	// (messages_fts_exact matches "connection" -> 1 hit, no fallback needed).
-	hitsExactFirst := Search(dbp, "connection", 10, SearchParams{RankingMode: "exact-first"})
-	if len(hitsExactFirst) != 1 || hitsExactFirst[0].SessionID != "exact_match" {
-		t.Fatalf("exact-first got %v, want [exact_match]", sids(hitsExactFirst))
+	// 1. Default mode (RRF): combines exact and stemmed lists using reciprocal rank fusion k=60
+	// (grepai search/hybrid.go:57–89, Decision D4, D5, D6).
+	hitsRRF := Search(dbp, "connection", 10, SearchParams{})
+	if len(hitsRRF) != 2 {
+		t.Fatalf("default rrf got %v (count %d), want 2 hits", sids(hitsRRF), len(hitsRRF))
+	}
+	// "exact_match" appears in both exact (rank 0) and stemmed (rank 0 or 1), so its RRF score is highest
+	if hitsRRF[0].SessionID != "exact_match" {
+		t.Fatalf("default rrf top hit = %q, want exact_match", hitsRRF[0].SessionID)
 	}
 
-	// 2. Exact-first fallback: when searching "connect", messages_fts_exact has 0 hits.
-	// It falls back to messages_fts (stemmed) which matches both "connection" and "connections"!
-	hitsFallback := Search(dbp, "connect", 10, SearchParams{RankingMode: "exact-first"})
-	if len(hitsFallback) != 2 {
-		t.Fatalf("exact-first fallback got %v (count %d), want 2 stemmed matches", sids(hitsFallback), len(hitsFallback))
-	}
-
-	// 3. --exact flag (calibre-style): forces exact table ONLY, no fallback!
+	// 2. --exact flag (calibre-style): forces exact table ONLY, no fallback!
 	// "connect" has 0 hits in messages_fts_exact, so --exact returns 0 hits.
 	hitsExactOnly := Search(dbp, "connect", 10, SearchParams{Exact: true})
 	if len(hitsExactOnly) != 0 {
 		t.Fatalf("--exact got %v, want 0 hits (no fallback)", sids(hitsExactOnly))
-	}
-
-	// 4. RRF mode: combines exact and stemmed lists using reciprocal rank fusion k=60
-	hitsRRF := Search(dbp, "connection", 10, SearchParams{RankingMode: "rrf"})
-	if len(hitsRRF) != 2 {
-		t.Fatalf("rrf got %v (count %d), want 2 hits", sids(hitsRRF), len(hitsRRF))
-	}
-	// "exact_match" appears in both exact (rank 0) and stemmed (rank 0 or 1), so its RRF score is highest
-	if hitsRRF[0].SessionID != "exact_match" {
-		t.Fatalf("rrf top hit = %q, want exact_match", hitsRRF[0].SessionID)
 	}
 }
 
@@ -639,29 +626,5 @@ func TestRRFUnits(t *testing.T) {
 	}
 	if fusedAnchors[0].UUID != "u2" {
 		t.Errorf("rrfAnchors top anchor = %q, want u2", fusedAnchors[0].UUID)
-	}
-}
-
-func TestCASSRouter(t *testing.T) {
-	// 1. Code query indicators
-	if mode := detectSearchMode("store.go"); mode != "code" {
-		t.Errorf("detectSearchMode('store.go') = %q, want code", mode)
-	}
-	if mode := detectSearchMode("my_cool_function"); mode != "code" {
-		t.Errorf("detectSearchMode('my_cool_function') = %q, want code", mode)
-	}
-	if mode := detectSearchMode("myCoolFunc"); mode != "code" {
-		t.Errorf("detectSearchMode('myCoolFunc') = %q, want code", mode)
-	}
-	if mode := detectSearchMode("auth-token-v2"); mode != "code" {
-		t.Errorf("detectSearchMode('auth-token-v2') = %q, want code", mode)
-	}
-
-	// 2. Prose query indicators
-	if mode := detectSearchMode("where did we land on auth"); mode != "prose" {
-		t.Errorf("detectSearchMode('where did we land on auth') = %q, want prose", mode)
-	}
-	if mode := detectSearchMode("how do we handle errors"); mode != "prose" {
-		t.Errorf("detectSearchMode('how do we handle errors') = %q, want prose", mode)
 	}
 }

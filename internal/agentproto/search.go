@@ -43,7 +43,6 @@ func Search(rawQuery string, scope []view.Scope, opts SearchOpts, embedder embed
 		MinMessages:      opts.MinMessages,
 		RawMatch:         rawMatch,
 		Exact:            opts.Exact,
-		RankingMode:      opts.RankingMode,
 	}
 
 	var qvecFn func() []float64
