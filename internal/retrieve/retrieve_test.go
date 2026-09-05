@@ -665,4 +665,3 @@ func TestCASSRouter(t *testing.T) {
 		t.Errorf("detectSearchMode('how do we handle errors') = %q, want prose", mode)
 	}
 }
-
