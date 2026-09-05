@@ -136,6 +136,7 @@ for f in d.get("findings",[]):
 print(verdict)
 for f in d.get("findings",[]):
     if f.get("class")=="MADE":
+        verdict="REJECT"  # any MADE finding is a REJECT regardless of the model's top-level verdict (Astra review 2026-09-06)
         print(f"  MADE {f.get('file')}:{f.get('line')} {f.get('reason')}", file=sys.stderr)
 EOF
 )
