@@ -144,7 +144,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts_exact USING fts5(
     content,
     content='messages',
     content_rowid='id',
-    tokenize="unicode61 tokenchars '-_./:@#%'"
+    tokenize="unicode61"
 );
 CREATE TRIGGER IF NOT EXISTS messages_exact_ai AFTER INSERT ON messages BEGIN
   INSERT INTO messages_fts_exact(rowid, content) VALUES (new.id, new.content);
