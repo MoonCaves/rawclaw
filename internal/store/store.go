@@ -158,18 +158,6 @@ CREATE TRIGGER IF NOT EXISTS messages_exact_au AFTER UPDATE ON messages BEGIN
 END;
 `
 
-// ExactResetSQL empties the exact-token index.
-const ExactResetSQL = `DELETE FROM messages_fts_exact`
-
-// ExactBatchBoundSQL returns the highest messages.id in the next backfill
-// batch — the upper bound of a half-open id window — or NULL when nothing is
-// left to copy.
-const ExactBatchBoundSQL = `SELECT max(id) FROM (SELECT id FROM messages WHERE id > ? ORDER BY id LIMIT ?)`
-
-// ExactBatchFillSQL copies one id window of messages into the exact-token
-// index. Args: the watermark (exclusive), the batch bound (inclusive).
-const ExactBatchFillSQL = `INSERT OR REPLACE INTO messages_fts_exact(rowid, content) SELECT id, content FROM messages WHERE id > ? AND id <= ?`
-
 // dropSQL drops every schema object before a full rebuild. Dropping messages
 // would take its triggers with it, but they are named here anyway so the drop
 // list reads as the complete inventory of what a rebuild removes.

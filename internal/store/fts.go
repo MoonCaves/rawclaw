@@ -70,6 +70,8 @@ const (
 	// wordTable is the unified word-tokenized index: the default, and the one whose
 	// bm25 ranking every existing result order is built on.
 	wordTable ftsTable = "messages_fts"
+	// exactTable is the code-aware exact tokenchars index (Decision D1, D2).
+	exactTable ftsTable = "messages_fts_exact"
 	// trigramTable is the substring index, for the queries wordTable cannot
 	// answer because they do not fall on token boundaries.
 	trigramTable ftsTable = "messages_fts_trigram"
@@ -199,6 +201,12 @@ func SearchHits(con *sql.DB, match string, f Filter, s Sort, limit int) ([]Searc
 	return searchHits(con, wordTable, match, f, s, limit)
 }
 
+// SearchHitsExact runs SearchHits against the exact tokenchars index
+// (Decision D1, D4).
+func SearchHitsExact(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
+	return searchHits(con, exactTable, match, f, s, limit)
+}
+
 // SearchHitsSubstring is SearchHits against the trigram index instead of the
 // word index: same filters, same order, same row shape. `match` is an FTS5
 // phrase, which the trigram tokenizer answers as a literal substring of the
@@ -280,6 +288,12 @@ type SearchAnchor struct {
 // layer to expand into bookend windows. [retrieve.MatchAnchors]
 func SearchAnchors(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
 	return searchAnchors(con, wordTable, match, f, s, limit)
+}
+
+// SearchAnchorsExact runs SearchAnchors against the exact tokenchars index
+// (Decision D1, D4).
+func SearchAnchorsExact(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
+	return searchAnchors(con, exactTable, match, f, s, limit)
 }
 
 // SearchAnchorsSubstring is SearchAnchors against the trigram index — the
