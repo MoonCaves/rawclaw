@@ -158,7 +158,7 @@ func buildMatch(q string, p SearchParams) (matchAND, matchOR string, terms []str
 		parsed := query.ParseTerms(stripBoolOps(q))
 		return p.RawMatch, p.RawMatch, parsed, false, true
 	}
-	clean := query.StripStopwords(query.SanitizeFTS5Query(q))
+	clean := query.SanitizeFTS5Query(query.StripStopwords(q))
 	if clean == "" || !query.HasSearchableToken(clean) {
 		return "", "", nil, false, false
 	}
@@ -509,7 +509,7 @@ func resolveSnippet(snippet, content string, terms []string, includeTools bool) 
 // NOTE: modernc.org/sqlite always has FTS5, so this path is dead in practice —
 // kept for parity with the FTS5 path.
 func LinearFallback(transcriptDir, q string, limit int, p SearchParams) []Hit {
-	clean := query.StripStopwords(query.SanitizeFTS5Query(q))
+	clean := query.SanitizeFTS5Query(query.StripStopwords(q))
 	terms := query.ParseTerms(clean)
 	if len(terms) == 0 {
 		return []Hit{}
