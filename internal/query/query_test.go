@@ -55,35 +55,16 @@ func TestConvertQuery(t *testing.T) {
 		{"pipe converted to OR", "apple | banana", "\"apple\"  OR  \"banana\""},
 		{"minus converted to NOT", "apple -banana", "\"apple\"  NOT \"banana\""},
 		{"parentheses preserved for grouping", "(apple OR banana)", `("apple" OR "banana")`},
+		{"empty query", "", ""},
+		{"whitespace only", "   ", "   "},
+		{"trailing wildcard", "rotat*", `"rotat"*`},
+		{"special characters", "user@example.com", `"user@example.com"`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := ConvertQuery(tt.in)
 			if got != tt.want {
 				t.Errorf("ConvertQuery(%q) = %q, want %q", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestEscapeFTS5Query(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"empty", "", ""},
-		{"whitespace only", "   ", ""},
-		{"plain terms", "api key", `"api" "key"`},
-		{"quoted phrase", `"api key"`, `"api key"`},
-		{"trailing wildcard", "rotat*", `"rotat"*`},
-		{"special characters", "user@example.com", `"user@example.com"`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := EscapeFTS5Query(tt.in)
-			if got != tt.want {
-				t.Errorf("EscapeFTS5Query(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}
