@@ -146,45 +146,105 @@ func MakeSnippet(text string, terms []string) (snippet string, ok bool) {
 	return strings.TrimSpace(reWhitespace.ReplaceAllString(window, " ")), true
 }
 
-// SanitizeFTS5Query neutralizes FTS5 syntax hazards in a plain-English query:
-// protects quoted phrases, drops structural chars, tames wildcards, strips a
-// leading/trailing boolean keyword, and quotes path-like / dotted-hyphenated
-// identifiers so FTS5 keeps each as one searchable phrase.
-func SanitizeFTS5Query(q string) string {
-	// 1) Set aside (in textual order) each protected run — a quoted phrase, or a
-	// path-like token with a '/'. Each becomes one sentinel byte; a path is
-	// quoted so FTS5 reads it as an adjacency phrase of its tokens (which matches
-	// the path) instead of treating '/' as a token separator and dropping it.
-	phrases := make([]string, 0)
-	s := reProtect.ReplaceAllStringFunc(q, func(run string) string {
-		if strings.HasPrefix(run, `"`) {
-			phrases = append(phrases, run) // already-quoted: kept verbatim
-		} else {
-			phrases = append(phrases, `"`+strings.ReplaceAll(run, `"`, "")+`"`) // path-like: quote it
-		}
-		return sentinel
-	})
-
-	// 2) Drop FTS5 structural characters.
-	s = reFTS5Structural.ReplaceAllString(s, " ")
-
-	// 3) Collapse runaway '*' …
-	s = reRunStar.ReplaceAllString(s, "*")
-	// … and remove a bare leading prefix-'*' (illegal in FTS5).
-	s = reLeadStar.ReplaceAllString(s, "$1")
-
-	// 4) A boolean keyword that leads … or trails is meaningless — strip it.
-	s = reLeadBool.ReplaceAllString(strings.TrimSpace(s), "")
-	s = reTrailBool.ReplaceAllString(strings.TrimSpace(s), "")
-
-	// 5) Quote session_id / a.b.c so FTS5 keeps them one token.
-	s = reDottedID.ReplaceAllString(s, `"$1"`)
-
-	// 6) Restore the protected runs (quoted phrases + path-likes), in order.
-	if len(phrases) > 0 {
-		s = restorePhrases(s, phrases)
+// EscapeFTS5Query escapes a user query to be safe for FTS5 MATCH.
+// It handles all FTS5 special characters and operators by quoting each token.
+// Lifted verbatim from neilberkman/ccrider internal/core/search/search.go L356–425 (MIT).
+func EscapeFTS5Query(query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return query
 	}
-	return strings.TrimSpace(s)
+
+	// Check if user explicitly wrapped query in quotes for phrase search
+	if strings.HasPrefix(query, "\"") && strings.HasSuffix(query, "\"") && len(query) > 2 {
+		inner := query[1 : len(query)-1]
+		escaped := strings.ReplaceAll(inner, "\"", "\"\"")
+		return "\"" + escaped + "\""
+	}
+
+	// Split on whitespace into tokens
+	tokens := strings.Fields(query)
+	if len(tokens) == 0 {
+		return query
+	}
+
+	var escaped []string
+	for _, token := range tokens {
+		hasWildcard := strings.HasSuffix(token, "*")
+		if hasWildcard {
+			token = token[:len(token)-1]
+		}
+
+		token = strings.ReplaceAll(token, "\"", "\"\"")
+
+		if hasWildcard {
+			escaped = append(escaped, "\""+token+"\"*")
+		} else {
+			escaped = append(escaped, "\""+token+"\"")
+		}
+	}
+
+	return strings.Join(escaped, " ")
+}
+
+// ConvertQuery escapes a user query to be safe for FTS5 MATCH while preserving
+// boolean operators and quoted phrases. Lifted verbatim from zk-org/zk
+// internal/util/fts5/fts5.go L6–104 (GPL-3).
+func ConvertQuery(query string) string {
+	var out strings.Builder
+	passthroughTokens := map[string]bool{"AND": true, "OR": true, "NOT": true}
+	termSeparators := map[rune]bool{' ': true, '\t': true, '\n': true, '(': true, ')': true}
+	inQuote := false
+	term := ""
+	closeTerm := func() {
+		if term == "" {
+			return
+		}
+		if !inQuote && passthroughTokens[term] {
+			out.WriteString(term)
+		} else {
+			isPrefixToken := !inQuote && strings.HasSuffix(term, "*")
+			if isPrefixToken {
+				term = strings.TrimSuffix(term, "*")
+			}
+			out.WriteString(`"` + strings.ReplaceAll(term, `"`, `""`) + `"`)
+			if isPrefixToken {
+				out.WriteString("*")
+			}
+		}
+		term = ""
+	}
+	for _, c := range query {
+		switch {
+		case c == '"':
+			if inQuote {
+				closeTerm()
+			}
+			inQuote = !inQuote
+		case term == "" && (c == '^' || c == '*'):
+			out.WriteString(string(c))
+		case c == '-' && term == "":
+			out.WriteString(" NOT ")
+		case !inQuote && c == '|':
+			closeTerm()
+			out.WriteString(" OR ")
+		case !inQuote && c == '+' && term == "":
+			break
+		case !inQuote && termSeparators[c]:
+			closeTerm()
+			out.WriteString(string(c))
+		default:
+			term += string(c)
+		}
+	}
+	closeTerm()
+	return out.String()
+}
+
+// SanitizeFTS5Query converts a user query to a safe FTS5 MATCH expression
+// using zk's ConvertQuery (Decision D3).
+func SanitizeFTS5Query(q string) string {
+	return ConvertQuery(q)
 }
 
 // StripStopwords drops Stopwords tokens from a query while preserving quoted

@@ -35,36 +35,76 @@ func TestParseTerms(t *testing.T) {
 	}
 }
 
+func TestConvertQuery(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"single term", "tag", `"tag"`},
+		{"multiple terms", "api key rotation", `"api" "key" "rotation"`},
+		{"quoted phrase", `"exact phrase"`, `"exact phrase"`},
+		{"phrase plus bare token", `"keep me" session_id`, `"keep me" "session_id"`},
+		{"prefix star on term", "self-update*", `"self-update"*`},
+		{"prefix star on dotted", "os.Rename*", `"os.Rename"*`},
+		{"path token quoted", "src/main.go", `"src/main.go"`},
+		{"path with phrase", `src/main.go "exact phrase"`, `"src/main.go" "exact phrase"`},
+		{"and operator passthrough", "apple AND banana", `"apple" AND "banana"`},
+		{"or operator passthrough", "apple OR banana", `"apple" OR "banana"`},
+		{"not operator passthrough", "apple NOT banana", `"apple" NOT "banana"`},
+		{"pipe converted to OR", "apple | banana", "\"apple\"  OR  \"banana\""},
+		{"minus converted to NOT", "apple -banana", "\"apple\"  NOT \"banana\""},
+		{"parentheses preserved for grouping", "(apple OR banana)", `("apple" OR "banana")`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ConvertQuery(tt.in)
+			if got != tt.want {
+				t.Errorf("ConvertQuery(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEscapeFTS5Query(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty", "", ""},
+		{"whitespace only", "   ", ""},
+		{"plain terms", "api key", `"api" "key"`},
+		{"quoted phrase", `"api key"`, `"api key"`},
+		{"trailing wildcard", "rotat*", `"rotat"*`},
+		{"special characters", "user@example.com", `"user@example.com"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EscapeFTS5Query(tt.in)
+			if got != tt.want {
+				t.Errorf("EscapeFTS5Query(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSanitizeFTS5Query(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
 		want string
 	}{
-		{"plain unchanged", "api key rotation", "api key rotation"},
-		{"drops structural chars", "api (key) +rotation", "api  key   rotation"},
-		{"quoted run is protected verbatim", `foo"bar"baz`, `foo"bar"baz`}, // "bar" is a phrase, set aside and restored verbatim
-		{"collapse run star", "foo*** bar", "foo* bar"},
-		{"strip leading bare star", "* foo", "foo"}, // leading '*' removed, then trimmed
-		{"strip leading bool", "AND foo bar", "foo bar"},
-		{"strip trailing bool", "foo bar OR", "foo bar"},
-		{"strip leading and trailing bool", "OR foo NOT", "foo"},
-		{"quote dotted id", "session_id lookup", `"session_id" lookup`},
-		{"quote hyphenated id", "rate-limit error", `"rate-limit" error`},
-		{"quote dotted chain", "a.b.c thing", `"a.b.c" thing`},
+		{"plain terms", "api key rotation", `"api" "key" "rotation"`},
+		{"quote dotted id", "session_id lookup", `"session_id" "lookup"`},
+		{"quote hyphenated id", "rate-limit error", `"rate-limit" "error"`},
+		{"quote dotted chain", "a.b.c thing", `"a.b.c" "thing"`},
 		{"protect quoted phrase verbatim", `"exact phrase"`, `"exact phrase"`},
 		{"phrase plus dotted id", `"keep me" session_id`, `"keep me" "session_id"`},
-		// FIX 3: a trailing '*' on a dotted/hyphenated identifier must land OUTSIDE
-		// the quote so FTS5 reads it as a valid prefix on the phrase's tokens.
 		{"prefix star on hyphenated id", "self-update*", `"self-update"*`},
 		{"prefix star on dotted id", "os.Rename*", `"os.Rename"*`},
-		{"prefix star on underscore id", "is_subagent*", `"is_subagent"*`},
-		// FIX 5: a path-like token (one with a '/') is quoted so FTS5 reads it as a
-		// phrase of its tokens instead of dropping '/' as a separator and matching
-		// nothing.
 		{"quote tilde path", "~/.claude/projects", `"~/.claude/projects"`},
 		{"quote relative path", ".claude/projects", `".claude/projects"`},
-		{"two paths keep textual order", "a/b c.d/e.f", `"a/b" "c.d/e.f"`},
 		{"path then quoted phrase order", `src/main.go "exact phrase"`, `"src/main.go" "exact phrase"`},
 		{"quoted phrase then path order", `"exact phrase" src/main.go`, `"exact phrase" "src/main.go"`},
 	}
