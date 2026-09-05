@@ -591,14 +591,14 @@ func TestRRFUnits(t *testing.T) {
 	// For doc3: 1/(60+1+1) = 1/62 = ~0.01612
 	// Expect doc2 ranked first!
 	listA := []store.SearchHit{
-		{SessionID: "doc1", ISO: "2026-06-01", Role: "user"},
-		{SessionID: "doc2", ISO: "2026-06-02", Role: "user"},
+		{SessionID: "doc1", ISO: "2026-06-01", Role: "user", BM25: -2.0, Rank: 1},
+		{SessionID: "doc2", ISO: "2026-06-02", Role: "user", BM25: -1.0, Rank: 2},
 	}
 	listB := []store.SearchHit{
-		{SessionID: "doc2", ISO: "2026-06-02", Role: "user"},
-		{SessionID: "doc3", ISO: "2026-06-03", Role: "user"},
+		{SessionID: "doc2", ISO: "2026-06-02", Role: "user", BM25: -2.0, Rank: 1},
+		{SessionID: "doc3", ISO: "2026-06-03", Role: "user", BM25: -1.0, Rank: 2},
 	}
-	fusedHits := rrfHits(60.0, 10, listA, listB)
+	fusedHits, hitScores := rrfHits(60.0, 10, listA, listB)
 	if len(fusedHits) != 3 {
 		t.Fatalf("rrfHits count = %d, want 3", len(fusedHits))
 	}
@@ -613,18 +613,77 @@ func TestRRFUnits(t *testing.T) {
 	}
 
 	anchorsA := []store.SearchAnchor{
-		{SessionID: "doc1", ISO: "2026-06-01", UUID: "u1"},
-		{SessionID: "doc2", ISO: "2026-06-02", UUID: "u2"},
+		{SessionID: "doc1", ISO: "2026-06-01", UUID: "u1", BM25: -2.0, Rank: 1},
+		{SessionID: "doc2", ISO: "2026-06-02", UUID: "u2", BM25: -1.0, Rank: 2},
 	}
 	anchorsB := []store.SearchAnchor{
-		{SessionID: "doc2", ISO: "2026-06-02", UUID: "u2"},
-		{SessionID: "doc3", ISO: "2026-06-03", UUID: "u3"},
+		{SessionID: "doc2", ISO: "2026-06-02", UUID: "u2", BM25: -2.0, Rank: 1},
+		{SessionID: "doc3", ISO: "2026-06-03", UUID: "u3", BM25: -1.0, Rank: 2},
 	}
-	fusedAnchors := rrfAnchors(60.0, 10, anchorsA, anchorsB)
+	fusedAnchors, anchorScores := rrfAnchors(60.0, 10, anchorsA, anchorsB)
 	if len(fusedAnchors) != 3 {
 		t.Fatalf("rrfAnchors count = %d, want 3", len(fusedAnchors))
 	}
 	if fusedAnchors[0].UUID != "u2" {
 		t.Errorf("rrfAnchors top anchor = %q, want u2", fusedAnchors[0].UUID)
+	}
+
+	// ParadeDB dense rank check: items with identical BM25 share rank and receive identical scores
+	tiedAnchors := []store.SearchAnchor{
+		{SessionID: "tie1", ISO: "2026-06-01", UUID: "t1", BM25: -2.0, Rank: 1},
+		{SessionID: "tie2", ISO: "2026-06-01", UUID: "t2", BM25: -2.0, Rank: 1},
+	}
+	_, tiedScores := rrfAnchors(60.0, 10, tiedAnchors)
+	if tiedScores["t1"] != tiedScores["t2"] {
+		t.Errorf("tied BM25 scores should produce identical RRF scores, got %v and %v", tiedScores["t1"], tiedScores["t2"])
+	}
+	_ = hitScores
+	_ = anchorScores
+}
+
+// TestMatchAnchorsPreservesRRFOrderOverCoverage verifies Finding F6:
+// In default search, RRF fused scores must determine candidate ordering.
+// A candidate with higher RRF score (from matching exact + stemmed lists)
+// must NOT be demoted by an OR-fallback candidate with higher raw term coverage.
+func TestMatchAnchorsPreservesRRFOrderOverCoverage(t *testing.T) {
+	sessions := []testSession{
+		{id: "doc_rrf_winner", msgCount: 5, lastTS: 100},
+		{id: "doc_cov_inflated", msgCount: 5, lastTS: 200},
+	}
+	msgs := []testMsg{
+		// doc_rrf_winner matches exact terms "deploy cluster test" -> appears in exact table (rank 0) AND stemmed table (rank 1).
+		{sessionID: "doc_rrf_winner", role: "user", tsISO: "2026-06-01", ts: 1, content: "deploy cluster test"},
+		// doc_cov_inflated matches stemmed variations "deploying clustering testing monitoring" -> only in stemmed table (rank 0), but has higher Cov (4 vs 3).
+		{sessionID: "doc_cov_inflated", role: "user", tsISO: "2026-06-02", ts: 2, content: "deploying clustering testing monitoring"},
+	}
+	con, _ := newTestDB(t, sessions, msgs)
+
+	// 5-term query where neither doc matches AND, so both exact and stemmed fall back to OR:
+	query := "deploy cluster test monitor production"
+	got := MatchAnchors(con, query, 10, SearchParams{})
+	if len(got) != 2 {
+		t.Fatalf("got %d anchors, want 2", len(got))
+	}
+
+	var rrfWinner, covWinner Anchor
+	for _, a := range got {
+		if a.SessionID == "doc_rrf_winner" {
+			rrfWinner = a
+		} else if a.SessionID == "doc_cov_inflated" {
+			covWinner = a
+		}
+	}
+	if rrfWinner.Cov >= covWinner.Cov {
+		t.Fatalf("test precondition failed: rrfWinner.Cov (%d) should be < covWinner.Cov (%d)", rrfWinner.Cov, covWinner.Cov)
+	}
+
+	// RRF winner (score ~0.0325) must be ranked first before cov winner (score ~0.0164).
+	// On unfixed main, MatchAnchors inverts this order because Anchor.Fused is 0.0 and it sorts on Cov.
+	if got[0].SessionID != "doc_rrf_winner" {
+		t.Fatalf("F6 defect reproduced: MatchAnchors ranked %s (cov %d) before %s (cov %d); want RRF score to govern order",
+			got[0].SessionID, got[0].Cov, got[1].SessionID, got[1].Cov)
+	}
+	if got[0].Fused <= got[1].Fused || got[0].Fused == 0.0 {
+		t.Fatalf("Anchor.Fused = %v, want > %v (must carry positive RRF score)", got[0].Fused, got[1].Fused)
 	}
 }

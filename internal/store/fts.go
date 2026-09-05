@@ -70,7 +70,7 @@ const (
 	// wordTable is the unified word-tokenized index: the default, and the one whose
 	// bm25 ranking every existing result order is built on.
 	wordTable ftsTable = "messages_fts"
-	// exactTable is the code-aware exact tokenchars index (Decision D1, D2).
+	// exactTable is the unstemmed exact index (Decision D1, D2).
 	exactTable ftsTable = "messages_fts_exact"
 	// trigramTable is the substring index, for the queries wordTable cannot
 	// answer because they do not fall on token boundaries.
@@ -184,6 +184,7 @@ func DistinctScopes(con *sql.DB) ([]ProjectScope, error) {
 // the raw content (for the tool-stripped snippet rebuild + coverage count) and
 // the FTS5-built snippet.
 type SearchHit struct {
+	ID         int
 	SessionID  string
 	Role       string
 	ISO        string
@@ -191,6 +192,8 @@ type SearchHit struct {
 	Parent     string
 	Content    string
 	Snippet    string
+	BM25       float64
+	Rank       int
 }
 
 // SearchHits runs the flat FTS5 keyword query and returns up to `limit` rows in
@@ -201,7 +204,7 @@ func SearchHits(con *sql.DB, match string, f Filter, s Sort, limit int) ([]Searc
 	return searchHits(con, wordTable, match, f, s, limit)
 }
 
-// SearchHitsExact runs SearchHits against the exact tokenchars index
+// SearchHitsExact runs SearchHits against the unstemmed exact index
 // (Decision D1, D4).
 func SearchHitsExact(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
 	return searchHits(con, exactTable, match, f, s, limit)
@@ -217,20 +220,30 @@ func SearchHitsSubstring(con *sql.DB, match string, f Filter, s Sort, limit int)
 
 // searchHits is the shared body: identical SQL for both indexes, with the FTS
 // table it joins and snippets from selected by tbl.
+// Lifted from paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L32-L60 (DENSE_RANK window query over BM25).
 func searchHits(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit int) ([]SearchHit, error) {
 	where, args := ftsWhere(tbl, match, f)
-	sqlText := `SELECT m.session_id, m.role, m.ts_iso, s.is_subagent, s.parent_id, m.content,
-	                   snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip
-	            FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
-	            JOIN sessions s ON s.id=m.session_id
-	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
-	args = append(args, limit)
+	offsetClause := ""
+	innerArgs := append([]any{}, args...)
+	innerArgs = append(innerArgs, limit)
 	if f.Offset > 0 {
-		sqlText += " OFFSET ?"
-		args = append(args, f.Offset)
+		offsetClause = " OFFSET ?"
+		innerArgs = append(innerArgs, f.Offset)
 	}
 
-	rows, err := con.Query(sqlText, args...)
+	// SQLite FTS5 bm25() returns negative values where lower is better (sqlite.org/fts5.html#bm25), so ascending order puts the best hits first (matching ParadeDB score DESC).
+	sqlText := `SELECT id, session_id, role, ts_iso, is_subagent, parent_id, content, snip, bm25_score,
+	                   RANK() OVER (ORDER BY bm25_score) AS rank
+	            FROM (
+	                SELECT m.id, m.ts, m.session_id, m.role, m.ts_iso, s.is_subagent, s.parent_id, m.content,
+	                       snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip,
+	                       bm25(` + string(tbl) + `) AS bm25_score
+	                FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
+	                JOIN sessions s ON s.id=m.session_id
+	                WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + ` LIMIT ?` + offsetClause + `
+	            ) m ` + orderClause(s)
+
+	rows, err := con.Query(sqlText, innerArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -239,18 +252,22 @@ func searchHits(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit
 	var out []SearchHit
 	for rows.Next() {
 		var (
-			sid     string
-			role    sql.NullString
-			iso     sql.NullString
-			isSub   int
-			parent  sql.NullString
-			content sql.NullString
-			snip    sql.NullString
+			id        int
+			sid       string
+			role      sql.NullString
+			iso       sql.NullString
+			isSub     int
+			parent    sql.NullString
+			content   sql.NullString
+			snip      sql.NullString
+			bm25Score sql.NullFloat64
+			denseRank int
 		)
-		if err := rows.Scan(&sid, &role, &iso, &isSub, &parent, &content, &snip); err != nil {
+		if err := rows.Scan(&id, &sid, &role, &iso, &isSub, &parent, &content, &snip, &bm25Score, &denseRank); err != nil {
 			return nil, err
 		}
 		out = append(out, SearchHit{
+			ID:         id,
 			SessionID:  sid,
 			Role:       role.String,
 			ISO:        iso.String,
@@ -258,6 +275,8 @@ func searchHits(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit
 			Parent:     parent.String,
 			Content:    content.String,
 			Snippet:    snip.String,
+			BM25:       bm25Score.Float64,
+			Rank:       denseRank,
 		})
 	}
 	return out, rows.Err()
@@ -281,6 +300,8 @@ type SearchAnchor struct {
 	// it; in the one store it is the only thing that says where a hit came
 	// from, so it has to ride along with the row.
 	Project string
+	BM25    float64
+	Rank    int
 }
 
 // SearchAnchors runs the anchor-recall FTS5 query — the same filters and order
@@ -290,7 +311,7 @@ func SearchAnchors(con *sql.DB, match string, f Filter, s Sort, limit int) ([]Se
 	return searchAnchors(con, wordTable, match, f, s, limit)
 }
 
-// SearchAnchorsExact runs SearchAnchors against the exact tokenchars index
+// SearchAnchorsExact runs SearchAnchors against the unstemmed exact index
 // (Decision D1, D4).
 func SearchAnchorsExact(con *sql.DB, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
 	return searchAnchors(con, exactTable, match, f, s, limit)
@@ -303,21 +324,31 @@ func SearchAnchorsSubstring(con *sql.DB, match string, f Filter, s Sort, limit i
 }
 
 // searchAnchors is the shared body for both indexes; see searchHits.
+// Lifted from paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L32-L60 (DENSE_RANK window query over BM25).
 func searchAnchors(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, limit int) ([]SearchAnchor, error) {
 	where, args := ftsWhere(tbl, match, f)
-	sqlText := `SELECT m.id, m.session_id, m.uuid, m.role, m.ts_iso, s.parent_id, m.content, s.only_copy_since,
-	                   COALESCE(s.project,'') AS project,
-	                   snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip
-	            FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
-	            JOIN sessions s ON s.id=m.session_id
-	            WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + " LIMIT ?"
-	args = append(args, limit)
+	offsetClause := ""
+	innerArgs := append([]any{}, args...)
+	innerArgs = append(innerArgs, limit)
 	if f.Offset > 0 {
-		sqlText += " OFFSET ?"
-		args = append(args, f.Offset)
+		offsetClause = " OFFSET ?"
+		innerArgs = append(innerArgs, f.Offset)
 	}
 
-	rows, err := con.Query(sqlText, args...)
+	// SQLite FTS5 bm25() returns negative values where lower is better (sqlite.org/fts5.html#bm25), so ascending order puts the best hits first (matching ParadeDB score DESC).
+	sqlText := `SELECT mid, sid, uuid, role, iso, parent, content, onlyCopy, project, snip, bm25_score,
+	                   RANK() OVER (ORDER BY bm25_score) AS rank
+	            FROM (
+	                SELECT m.id, m.ts, m.id AS mid, m.session_id AS sid, m.uuid, m.role, m.ts_iso AS iso, s.parent_id AS parent, m.content, s.only_copy_since AS onlyCopy,
+	                       COALESCE(s.project,'') AS project,
+	                       snippet(` + string(tbl) + `,0,'>>>','<<<','…',16) AS snip,
+	                       bm25(` + string(tbl) + `) AS bm25_score
+	                FROM ` + string(tbl) + ` JOIN messages m ON m.id=` + string(tbl) + `.rowid
+	                JOIN sessions s ON s.id=m.session_id
+	                WHERE ` + strings.Join(where, " AND ") + " " + orderClause(s) + ` LIMIT ?` + offsetClause + `
+	            ) m ` + orderClause(s)
+
+	rows, err := con.Query(sqlText, innerArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -326,18 +357,20 @@ func searchAnchors(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, li
 	var out []SearchAnchor
 	for rows.Next() {
 		var (
-			mid      int
-			sid      string
-			uuid     sql.NullString
-			role     sql.NullString
-			iso      sql.NullString
-			parent   sql.NullString
-			content  sql.NullString
-			onlyCopy sql.NullFloat64
-			project  string
-			snip     sql.NullString
+			mid       int
+			sid       string
+			uuid      sql.NullString
+			role      sql.NullString
+			iso       sql.NullString
+			parent    sql.NullString
+			content   sql.NullString
+			onlyCopy  sql.NullFloat64
+			project   string
+			snip      sql.NullString
+			bm25Score sql.NullFloat64
+			denseRank int
 		)
-		if err := rows.Scan(&mid, &sid, &uuid, &role, &iso, &parent, &content, &onlyCopy, &project, &snip); err != nil {
+		if err := rows.Scan(&mid, &sid, &uuid, &role, &iso, &parent, &content, &onlyCopy, &project, &snip, &bm25Score, &denseRank); err != nil {
 			return nil, err
 		}
 		out = append(out, SearchAnchor{
@@ -351,6 +384,8 @@ func searchAnchors(con *sql.DB, tbl ftsTable, match string, f Filter, s Sort, li
 			OnlyCopySince: onlyCopy.Float64, // 0 when NULL (present)
 			Snippet:       snip.String,
 			Project:       project,
+			BM25:          bm25Score.Float64,
+			Rank:          denseRank,
 		})
 	}
 	return out, rows.Err()
