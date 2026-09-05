@@ -59,3 +59,30 @@ Every single decision in this branch is copied verbatim from proven prior art:
 3. **In-Memory Go Scoring is Premature Optimization (D5)**:
    - Claude Fable invented `sortCandidates` with O(N * terms) `coverage()` loops in Go.
    - wacli (`search.go:99–105`), clickclack (`search_pages.go:56–75`), and ccrider (`search.go:186`) let SQLite FTS5 `ORDER BY bm25(...)` do the heavy lifting in C.
+
+---
+
+## 4. Responses & Implementation of Rulings (WhiteGorge 296 & BoldIsland 297)
+
+### Ruling 1: The Tokenchars Trap & Adoption of Plain unicode61
+- **WhiteGorge 296 & BoldIsland 297**: Accepted in full.
+- **Empirical Confirmation by Subagent (163e3835)**:
+  - Text `"Check auth."` with `tokenchars '-_./:@#%'` indexes as single token `'auth.'`. Query `'auth'` yields **0 hits**.
+  - Text `"internal/store/store.go"` indexes as single token `'internal/store/store.go'`. Query `'store.go'` yields **0 hits**.
+- **Action Taken**:
+  - In `internal/store/store.go:147`, changed `tokenize="unicode61 tokenchars '-_./:@#%'"` to plain `tokenize="unicode61"` per ccrider `internal/core/db/schema.go:96–101`.
+  - Committed in `b581fce`.
+  - Verified with `TestExactIndexMigrationAndTriggers`: `'auth'` matches sentence-final `'auth.'` (3 hits), `'store.go'` phrase matches `'internal/store/store.go'` (1 hit), `'landing'` does NOT match `'land'` (0 hits, zero stemmer bleed).
+
+### Ruling 2: Trigger Bypass & Table Synchronization Audit
+- Audited all Go write sites to `messages` across the codebase (`consolidated.go`, `containers.go`, `index.go`, `rebuild.go`, `retention.go`).
+- All writes use standard SQLite DML statements (`INSERT INTO messages ...`, `DELETE FROM messages ...`, `UPDATE messages ...`) that actively fire synchronization triggers (`messages_exact_ai`, `messages_exact_ad`, `messages_exact_au`).
+- `INSERT INTO messages_fts_exact(messages_fts_exact) VALUES('integrity-check');` passes cleanly.
+
+### Ruling 3: Agreed Pass Criteria
+- **P@1**: `'where did we land on auth'` top hit must be auth decision; 0 hits for landing.
+- **R@3**: All 5 core benchmark queries return target decision in top 3.
+- **Punctuation**: `'store.go'` matches paths, `'auth'` matches sentence-final `'auth.'`.
+- **Latency**: <= 100ms mean on `consolidated.db` over 2 runs with `/usr/bin/time -p`.
+- **Integrity**: SQLite FTS5 `integrity-check` passes.
+
