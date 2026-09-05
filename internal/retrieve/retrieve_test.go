@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoonCaves/rawclaw/internal/store"
 	"github.com/MoonCaves/rawclaw/internal/store/storetest"
 )
 
@@ -544,5 +545,99 @@ func TestSearch_ANDFirst_FallbackToOR(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExactAndRRFRanking(t *testing.T) {
+	// Test distinguishing exact token vs stemmed token
+	// "connection" vs "connections" and "connect" vs "connected"
+	// messages_fts uses porter stemmer, so "connect" matches "connected".
+	// messages_fts_exact uses unicode61 without porter stemmer, so "connect" does NOT match "connected".
+	sessions := []testSession{
+		{id: "exact_match", msgCount: 1, lastTS: 100},
+		{id: "stem_match", msgCount: 1, lastTS: 200},
+	}
+	msgs := []testMsg{
+		{sessionID: "exact_match", role: "user", tsISO: "2026-06-01", ts: 1, content: "active database connection established"},
+		{sessionID: "stem_match", role: "user", tsISO: "2026-06-02", ts: 2, content: "closing all connections cleanly"},
+	}
+	con, dbp := newTestDB(t, sessions, msgs)
+	defer con.Close()
+
+	// 1. Exact-first mode: when exact match exists, exact-first returns exact_match only.
+	// (messages_fts_exact matches "connection" -> 1 hit, no fallback needed).
+	hitsExactFirst := Search(dbp, "connection", 10, SearchParams{RankingMode: "exact-first"})
+	if len(hitsExactFirst) != 1 || hitsExactFirst[0].SessionID != "exact_match" {
+		t.Fatalf("exact-first got %v, want [exact_match]", sids(hitsExactFirst))
+	}
+
+	// 2. Exact-first fallback: when searching "connect", messages_fts_exact has 0 hits.
+	// It falls back to messages_fts (stemmed) which matches both "connection" and "connections"!
+	hitsFallback := Search(dbp, "connect", 10, SearchParams{RankingMode: "exact-first"})
+	if len(hitsFallback) != 2 {
+		t.Fatalf("exact-first fallback got %v (count %d), want 2 stemmed matches", sids(hitsFallback), len(hitsFallback))
+	}
+
+	// 3. --exact flag (calibre-style): forces exact table ONLY, no fallback!
+	// "connect" has 0 hits in messages_fts_exact, so --exact returns 0 hits.
+	hitsExactOnly := Search(dbp, "connect", 10, SearchParams{Exact: true})
+	if len(hitsExactOnly) != 0 {
+		t.Fatalf("--exact got %v, want 0 hits (no fallback)", sids(hitsExactOnly))
+	}
+
+	// 4. RRF mode: combines exact and stemmed lists using reciprocal rank fusion k=60
+	hitsRRF := Search(dbp, "connection", 10, SearchParams{RankingMode: "rrf"})
+	if len(hitsRRF) != 2 {
+		t.Fatalf("rrf got %v (count %d), want 2 hits", sids(hitsRRF), len(hitsRRF))
+	}
+	// "exact_match" appears in both exact (rank 0) and stemmed (rank 0 or 1), so its RRF score is highest
+	if hitsRRF[0].SessionID != "exact_match" {
+		t.Fatalf("rrf top hit = %q, want exact_match", hitsRRF[0].SessionID)
+	}
+}
+
+func TestRRFUnits(t *testing.T) {
+	// List A: doc1 at rank 0, doc2 at rank 1
+	// List B: doc2 at rank 0, doc3 at rank 1
+	// For doc2: 1/(60+0+1) + 1/(60+1+1) = 1/61 + 1/62 = ~0.0325
+	// For doc1: 1/(60+0+1) = 1/61 = ~0.01639
+	// For doc3: 1/(60+1+1) = 1/62 = ~0.01612
+	// Expect doc2 ranked first!
+	listA := []store.SearchHit{
+		{SessionID: "doc1", ISO: "2026-06-01", Role: "user"},
+		{SessionID: "doc2", ISO: "2026-06-02", Role: "user"},
+	}
+	listB := []store.SearchHit{
+		{SessionID: "doc2", ISO: "2026-06-02", Role: "user"},
+		{SessionID: "doc3", ISO: "2026-06-03", Role: "user"},
+	}
+	fusedHits := rrfHits(60.0, 10, listA, listB)
+	if len(fusedHits) != 3 {
+		t.Fatalf("rrfHits count = %d, want 3", len(fusedHits))
+	}
+	if fusedHits[0].SessionID != "doc2" {
+		t.Errorf("rrfHits top hit = %q, want doc2", fusedHits[0].SessionID)
+	}
+	if fusedHits[1].SessionID != "doc1" {
+		t.Errorf("rrfHits second hit = %q, want doc1", fusedHits[1].SessionID)
+	}
+	if fusedHits[2].SessionID != "doc3" {
+		t.Errorf("rrfHits third hit = %q, want doc3", fusedHits[2].SessionID)
+	}
+
+	anchorsA := []store.SearchAnchor{
+		{SessionID: "doc1", ISO: "2026-06-01", UUID: "u1"},
+		{SessionID: "doc2", ISO: "2026-06-02", UUID: "u2"},
+	}
+	anchorsB := []store.SearchAnchor{
+		{SessionID: "doc2", ISO: "2026-06-02", UUID: "u2"},
+		{SessionID: "doc3", ISO: "2026-06-03", UUID: "u3"},
+	}
+	fusedAnchors := rrfAnchors(60.0, 10, anchorsA, anchorsB)
+	if len(fusedAnchors) != 3 {
+		t.Fatalf("rrfAnchors count = %d, want 3", len(fusedAnchors))
+	}
+	if fusedAnchors[0].UUID != "u2" {
+		t.Errorf("rrfAnchors top anchor = %q, want u2", fusedAnchors[0].UUID)
 	}
 }
