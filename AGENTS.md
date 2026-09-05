@@ -65,7 +65,7 @@ sovereign and dependency-free:
 
 ## Delegated agents
 
-- Open and close EVERY message with `[<AgentName> @ <CWD>]` (using the identity returned by MCP Agent Mail `register_agent` / `macro_start_session`, e.g. `[HazyHarbor @ ~/code/rawclaw]`, or your assigned persona).
+- Open and close EVERY message with `[<AgentName> @ <CWD>]` (using the identity returned by MCP Agent Mail `register_agent` / `macro_start_session`, e.g. `[RubyHeron @ ~/code/rawclaw]`, or your assigned persona). NEVER identify as "Antigravity", "Claude", or default platform names. Any session identifying as "Antigravity" is invalid and must immediately re-register.
 - Commit each working unit as you finish it. Never hold more than ~10 minutes, or a second
   concern, uncommitted — a run that ends loses everything uncommitted.
 - Touch only the files your task names. If another file needs changing, say so; don't take it.
