@@ -30,23 +30,12 @@ const sentinel = "\x00"
 
 // Precompiled patterns used across the query transforms.
 var (
-	reQuotedNonEmpty = regexp.MustCompile(`"([^"]+)"`)                 // phrase with non-empty body
-	reQuotedAny      = regexp.MustCompile(`"[^"]*"`)                   // any quoted run (may be empty)
-	reFTS5Structural = regexp.MustCompile(`[+(){}"^]`)                 // FTS5 structural characters
-	reLeadStar       = regexp.MustCompile(`(^|\s)\*`)                  // leading bare prefix-star
-	reRunStar        = regexp.MustCompile(`\*{2,}`)                    // runaway star run
-	reLeadBool       = regexp.MustCompile(`(?i)^\s*(AND|OR|NOT)\b\s*`) // leading boolean keyword
-	reTrailBool      = regexp.MustCompile(`(?i)\s+(AND|OR|NOT)\s*$`)   // trailing boolean keyword
-	reDottedID       = regexp.MustCompile(`\b(\w+(?:[._-]\w+)+)\b`)    // dotted/hyphenated identifier
-	// reProtect matches, in textual order, the runs SanitizeFTS5Query sets aside
-	// as one sentinel each: a quoted run (may be empty) OR a path-like token (one
-	// containing '/', e.g. ~/.claude/projects). Path tokens stop at whitespace and
-	// the NUL sentinel so a path can't swallow an already-protected phrase.
-	reProtect    = regexp.MustCompile(`"[^"]*"|[^\s\x00]*/[^\s\x00]*`)
-	reWhitespace = regexp.MustCompile(`\s+`)           // snippet whitespace collapse
-	reBoolAnd    = regexp.MustCompile(`\s*&&\s*`)      // && operator
-	reBoolOr     = regexp.MustCompile(`\s*\|\|\s*`)    // || operator
-	reInfixNot   = regexp.MustCompile(`\S\s+NOT\s+\S`) // an infix, uppercase NOT (FTS5 only treats uppercase as the operator; excludes a leading/trailing-only NOT)
+	reQuotedNonEmpty = regexp.MustCompile(`"([^"]+)"`)     // phrase with non-empty body
+	reQuotedAny      = regexp.MustCompile(`"[^"]*"`)       // any quoted run (may be empty)
+	reWhitespace     = regexp.MustCompile(`\s+`)           // snippet whitespace collapse
+	reBoolAnd        = regexp.MustCompile(`\s*&&\s*`)      // && operator
+	reBoolOr         = regexp.MustCompile(`\s*\|\|\s*`)    // || operator
+	reInfixNot       = regexp.MustCompile(`\S\s+NOT\s+\S`) // an infix, uppercase NOT (FTS5 only treats uppercase as the operator; excludes a leading/trailing-only NOT)
 )
 
 // ParseTerms splits a query into lowercased phrases (quoted) + bare terms,
@@ -144,47 +133,6 @@ func MakeSnippet(text string, terms []string) (snippet string, ok bool) {
 	}
 
 	return strings.TrimSpace(reWhitespace.ReplaceAllString(window, " ")), true
-}
-
-// EscapeFTS5Query escapes a user query to be safe for FTS5 MATCH.
-// It handles all FTS5 special characters and operators by quoting each token.
-// Lifted verbatim from neilberkman/ccrider internal/core/search/search.go L356–425 (MIT).
-func EscapeFTS5Query(query string) string {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return query
-	}
-
-	// Check if user explicitly wrapped query in quotes for phrase search
-	if strings.HasPrefix(query, "\"") && strings.HasSuffix(query, "\"") && len(query) > 2 {
-		inner := query[1 : len(query)-1]
-		escaped := strings.ReplaceAll(inner, "\"", "\"\"")
-		return "\"" + escaped + "\""
-	}
-
-	// Split on whitespace into tokens
-	tokens := strings.Fields(query)
-	if len(tokens) == 0 {
-		return query
-	}
-
-	var escaped []string
-	for _, token := range tokens {
-		hasWildcard := strings.HasSuffix(token, "*")
-		if hasWildcard {
-			token = token[:len(token)-1]
-		}
-
-		token = strings.ReplaceAll(token, "\"", "\"\"")
-
-		if hasWildcard {
-			escaped = append(escaped, "\""+token+"\"*")
-		} else {
-			escaped = append(escaped, "\""+token+"\"")
-		}
-	}
-
-	return strings.Join(escaped, " ")
 }
 
 // ConvertQuery escapes a user query to be safe for FTS5 MATCH while preserving
