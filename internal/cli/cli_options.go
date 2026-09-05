@@ -53,6 +53,8 @@ type Options struct {
 	Oneline          bool
 	Format           string
 	CurrentSession   string
+	Exact            bool
+	RankingMode      string
 }
 
 func (o *Options) normalizeDates() {
@@ -150,6 +152,7 @@ func (o *Options) params(rawMatch string) retrieve.SearchParams {
 		Role: o.Role, Sort: o.Sort, IncludeTools: o.IncludeTools,
 		IncludeSubagents: o.IncludeSubagents, Since: o.Since, Before: o.Before,
 		Offset: o.Offset, RawMatch: rawMatch, MinMessages: o.MinMessages,
+		Exact: o.Exact, RankingMode: o.RankingMode,
 	}
 }
 
@@ -195,6 +198,8 @@ func bindRootFlags(root *cobra.Command, opts *Options) {
 	f.BoolVar(&opts.Oneline, "oneline", false, "output search hits in one-line format (<read_ref>\t<started_iso>\t<project>\t<snippet>)")
 	f.StringVar(&opts.Format, "format", "", "output format (text|oneline|line|json)")
 	f.StringVar(&opts.CurrentSession, "current-session", "", "the session you are searching FROM (id or 8-char prefix); its CURRENT TURN — the prompt just typed and this turn's tool output — is withheld, since it is not recall and it outranks the archive on its own words. That session's earlier history stays searchable. Defaults to $CLAUDE_CODE_SESSION_ID or $ANTIGRAVITY_CONVERSATION_ID; pass `off` to search your own live turn too.")
+	f.BoolVar(&opts.Exact, "exact", false, "force exact token matching using messages_fts_exact without stemmed fallback (Decision D4, calibre-style)")
+	f.StringVar(&opts.RankingMode, "ranking-mode", "exact-first", "ranking mode: exact-first (fallback to stemmed on 0 hits) or rrf (grepai RRF k=60)")
 }
 
 func PrintResults(w io.Writer, res []retrieve.Hit, nSessions int) {

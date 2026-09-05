@@ -386,6 +386,8 @@ func runSearch(ctx context.Context, w io.Writer, o *Options, args []string) erro
 		Source:           o.Source,
 		CurrentSession:   o.currentSession(),
 		Oneline:          o.oneline(),
+		Exact:            o.Exact,
+		RankingMode:      o.RankingMode,
 	}
 	label := ""
 	if o.ThisProject {
