@@ -1506,3 +1506,78 @@ func TestEnsureIndexedTree_ErrorReturnsUnknownStatus(t *testing.T) {
 		t.Errorf("EnsureIndexedTree status on error = %v, want IndexStatusUnknown (%v)", status, IndexStatusUnknown)
 	}
 }
+
+func TestExactIndexMigrationAndTriggers(t *testing.T) {
+	con, _ := openTestDB(t)
+
+	// 1. Insert messages before exact index migration
+	if _, err := con.Exec(
+		`INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES
+		   ('auth-session','user','landing on auth-token in /Users/jay/code',100,'2026-01-01T10:00:00Z','u1'),
+		   ('auth-session','assistant','verified auth-token-v2 implementation',200,'2026-01-02T10:00:00Z','u2');`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Run migrateExactIndex
+	if err := migrateExactIndex(con); err != nil {
+		t.Fatalf("migrateExactIndex failed: %v", err)
+	}
+
+	// 3. Verify backfill populated messages_fts_exact
+	var count int
+	if err := con.QueryRow("SELECT COUNT(*) FROM messages_fts_exact").Scan(&count); err != nil {
+		t.Fatalf("count exact index: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 rows in exact index, got %d", count)
+	}
+
+	// 4. Verify code-aware token matching with tokenchars
+	var matchCount int
+	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH '"auth-token"'`).Scan(&matchCount); err != nil {
+		t.Fatalf("match exact token: %v", err)
+	}
+	if matchCount != 1 {
+		t.Errorf("expected 1 match for auth-token, got %d", matchCount)
+	}
+
+	// 5. Test INSERT trigger
+	if _, err := con.Exec(`INSERT INTO messages(session_id,role,content,ts,ts_iso,uuid) VALUES
+		('auth-session','user','third msg with my_cool_func()',300,'2026-01-03T10:00:00Z','u3');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH '"my_cool_func()"'`).Scan(&matchCount); err != nil {
+		t.Fatalf("match inserted exact token: %v", err)
+	}
+	if matchCount != 1 {
+		t.Errorf("expected 1 match for inserted token, got %d", matchCount)
+	}
+
+	// 6. Test UPDATE trigger
+	if _, err := con.Exec(`UPDATE messages SET content = 'third msg with updated_func()' WHERE uuid = 'u3';`); err != nil {
+		t.Fatal(err)
+	}
+	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH '"updated_func()"'`).Scan(&matchCount); err != nil {
+		t.Fatalf("match updated exact token: %v", err)
+	}
+	if matchCount != 1 {
+		t.Errorf("expected 1 match for updated token, got %d", matchCount)
+	}
+	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH '"my_cool_func()"'`).Scan(&matchCount); err != nil {
+		t.Fatalf("match old exact token: %v", err)
+	}
+	if matchCount != 0 {
+		t.Errorf("expected 0 matches for replaced token, got %d", matchCount)
+	}
+
+	// 7. Test DELETE trigger ('delete' command)
+	if _, err := con.Exec(`DELETE FROM messages WHERE uuid = 'u3';`); err != nil {
+		t.Fatal(err)
+	}
+	if err := con.QueryRow(`SELECT COUNT(*) FROM messages_fts_exact WHERE messages_fts_exact MATCH '"updated_func()"'`).Scan(&matchCount); err != nil {
+		t.Fatalf("match deleted exact token: %v", err)
+	}
+	if matchCount != 0 {
+		t.Errorf("expected 0 matches after delete, got %d", matchCount)
+	}
+}

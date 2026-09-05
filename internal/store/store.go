@@ -132,6 +132,44 @@ const TrigramBatchBoundSQL = `SELECT max(id) FROM (SELECT id FROM messages WHERE
 // whole migration on a rowid collision.
 const TrigramBatchFillSQL = `INSERT OR REPLACE INTO messages_fts_trigram(rowid, content) SELECT id, content FROM messages WHERE id > ? AND id <= ?`
 
+// ExactSQL is the UNSTEMMED, CODE-AWARE exact-token index: an external-content
+// FTS5 table over messages, tokenized with unicode61 and custom tokenchars so
+// code symbols, flags, paths, and punctuation remain intact as single tokens.
+//
+// Triggers use the ccrider / SQLite FTS5 external-content 'delete' command:
+// deleting an external-content row MUST supply 'delete', old.id, old.content
+// because the underlying content row is already gone in AFTER DELETE.
+const ExactSQL = `
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts_exact USING fts5(
+    content,
+    content='messages',
+    content_rowid='id',
+    tokenize="unicode61 tokenchars '-_./:@#%'"
+);
+CREATE TRIGGER IF NOT EXISTS messages_exact_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts_exact(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_exact_ad AFTER DELETE ON messages BEGIN
+  INSERT INTO messages_fts_exact(messages_fts_exact, rowid, content) VALUES ('delete', old.id, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_exact_au AFTER UPDATE ON messages BEGIN
+  INSERT INTO messages_fts_exact(messages_fts_exact, rowid, content) VALUES ('delete', old.id, old.content);
+  INSERT INTO messages_fts_exact(rowid, content) VALUES (new.id, new.content);
+END;
+`
+
+// ExactResetSQL empties the exact-token index.
+const ExactResetSQL = `DELETE FROM messages_fts_exact`
+
+// ExactBatchBoundSQL returns the highest messages.id in the next backfill
+// batch — the upper bound of a half-open id window — or NULL when nothing is
+// left to copy.
+const ExactBatchBoundSQL = `SELECT max(id) FROM (SELECT id FROM messages WHERE id > ? ORDER BY id LIMIT ?)`
+
+// ExactBatchFillSQL copies one id window of messages into the exact-token
+// index. Args: the watermark (exclusive), the batch bound (inclusive).
+const ExactBatchFillSQL = `INSERT OR REPLACE INTO messages_fts_exact(rowid, content) SELECT id, content FROM messages WHERE id > ? AND id <= ?`
+
 // dropSQL drops every schema object before a full rebuild. Dropping messages
 // would take its triggers with it, but they are named here anyway so the drop
 // list reads as the complete inventory of what a rebuild removes.
@@ -141,9 +179,13 @@ DROP TRIGGER IF EXISTS messages_au;
 DROP TRIGGER IF EXISTS messages_tri_ai;
 DROP TRIGGER IF EXISTS messages_tri_ad;
 DROP TRIGGER IF EXISTS messages_tri_au;
+DROP TRIGGER IF EXISTS messages_exact_ai;
+DROP TRIGGER IF EXISTS messages_exact_ad;
+DROP TRIGGER IF EXISTS messages_exact_au;
 DROP TABLE IF EXISTS messages_fts;
 DROP TABLE IF EXISTS messages_code_fts;
 DROP TABLE IF EXISTS messages_fts_trigram;
+DROP TABLE IF EXISTS messages_fts_exact;
 DROP TABLE IF EXISTS messages;
 DROP TABLE IF EXISTS session_sources;
 DROP TABLE IF EXISTS sessions;
@@ -300,6 +342,10 @@ func Rebuild(con *sql.DB) error {
 	// from the start and only an already-populated db needs the migration.
 	if _, err := con.Exec(TrigramSQL); err != nil {
 		return fmt.Errorf("rebuild trigram fts: %w", err)
+	}
+	// The exact-token index is part of the rebuilt shape.
+	if _, err := con.Exec(ExactSQL); err != nil {
+		return fmt.Errorf("rebuild exact fts: %w", err)
 	}
 	_, err := con.Exec("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)", strconv.Itoa(SchemaVersion))
 	if err != nil {
