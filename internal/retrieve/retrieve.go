@@ -12,7 +12,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/parse"
@@ -123,9 +122,6 @@ type SearchParams struct {
 	// Exact forces queries directly against the exact tokenchars table
 	// (messages_fts_exact) without stemmed fallback (Decision D4, calibre-style).
 	Exact bool
-	// RankingMode controls the multi-table ranking strategy: "exact-first"
-	// (fallback to stemmed on 0 hits) or "rrf" (grepai Reciprocal Rank Fusion k=60).
-	RankingMode string
 }
 
 // storeFilterSort maps SearchParams onto the store's shared FTS Filter + Sort
@@ -475,51 +471,6 @@ func rrfHits(k float64, limit int, lists ...[]store.SearchHit) []store.SearchHit
 	return results
 }
 
-// detectSearchMode implements CASS src/pages/fts.rs:84–179 detect_search_mode (MIT/Apache2).
-// Returns "code" or "prose".
-func detectSearchMode(query string) string {
-	hasCodeChars := strings.ContainsAny(query, "_./\\#@$%") || strings.Contains(query, "::")
-	hasCodePatterns := hasCamelCase(query) || hasKebabCase(query)
-	isCodeQuery := hasCodeChars || hasCodePatterns
-	words := strings.Fields(query)
-	lower := strings.ToLower(query)
-	hasProseIndicators := len(words) > 3 ||
-		strings.HasPrefix(lower, "how ") || strings.HasPrefix(lower, "what ") ||
-		strings.HasPrefix(lower, "why ") || strings.HasPrefix(lower, "when ") ||
-		strings.HasPrefix(lower, "where ") ||
-		strings.Contains(lower, " the ") || strings.Contains(lower, " is ") ||
-		strings.Contains(lower, " are ") || strings.Contains(lower, " was ") ||
-		strings.Contains(lower, " were ")
-	if isCodeQuery && !hasProseIndicators {
-		return "code"
-	} else if hasProseIndicators && !isCodeQuery {
-		return "prose"
-	} else if isCodeQuery {
-		return "code"
-	}
-	return "prose"
-}
-
-func hasKebabCase(s string) bool {
-	runes := []rune(s)
-	for i := 2; i < len(runes); i++ {
-		if runes[i-1] == '-' && unicode.IsLetter(runes[i-2]) && unicode.IsLetter(runes[i]) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasCamelCase(s string) bool {
-	runes := []rune(s)
-	for i := 1; i < len(runes); i++ {
-		if unicode.IsLower(runes[i-1]) && unicode.IsUpper(runes[i]) {
-			return true
-		}
-	}
-	return false
-}
-
 // searchScored is the shared engine for Search/SearchExplained: it runs the FTS5
 // query, applies the coverage re-rank, and returns the FULLY ORDERED scoredHit
 // slice (pre-limit) plus the ExplainInputs that describe the regime used. The
@@ -563,8 +514,8 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 				hits = orHits
 			}
 		}
-	} else if p.RankingMode == "rrf" {
-		// grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5)
+	} else {
+		// Default mode: grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5, D6)
 		exactHits, _ := store.SearchHitsExact(con, matchAND, filt, srt, fetch)
 		if len(exactHits) == 0 && multi {
 			if orHits, orErr := store.SearchHitsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
@@ -579,40 +530,6 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 		}
 		if len(exactHits) > 0 || len(stemmedHits) > 0 {
 			hits = rrfHits(60.0, fetch, exactHits, stemmedHits)
-		}
-	} else if p.RankingMode == "cass-router" {
-		// CASS query-shape router (CASS src/pages/fts.rs:84–179, Decision D4)
-		if detectSearchMode(q) == "code" {
-			hits, _ = store.SearchHitsExact(con, matchAND, filt, srt, fetch)
-			if len(hits) == 0 && multi {
-				if orHits, orErr := store.SearchHitsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
-					hits = orHits
-				}
-			}
-		} else {
-			hits, _ = store.SearchHits(con, matchAND, filt, srt, fetch)
-			if len(hits) == 0 && multi {
-				if orHits, orErr := store.SearchHits(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
-					hits = orHits
-				}
-			}
-		}
-	} else {
-		// Default mode: exact-first fallback (Decision D4)
-		// Query messages_fts_exact first; fall back to messages_fts on 0 hits.
-		hits, _ = store.SearchHitsExact(con, matchAND, filt, srt, fetch)
-		if len(hits) == 0 && multi {
-			if orHits, orErr := store.SearchHitsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
-				hits = orHits
-			}
-		}
-		if len(hits) == 0 {
-			hits, _ = store.SearchHits(con, matchAND, filt, srt, fetch)
-			if len(hits) == 0 && multi {
-				if orHits, orErr := store.SearchHits(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
-					hits = orHits
-				}
-			}
 		}
 	}
 
@@ -878,8 +795,8 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 				anchors = orAnchors
 			}
 		}
-	} else if p.RankingMode == "rrf" {
-		// grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5)
+	} else {
+		// Default mode: grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5, D6)
 		exactAnchors, _ := store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
 		if len(exactAnchors) == 0 && multi {
 			if orAnchors, orErr := store.SearchAnchorsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
@@ -894,40 +811,6 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 		}
 		if len(exactAnchors) > 0 || len(stemmedAnchors) > 0 {
 			anchors = rrfAnchors(60.0, fetch, exactAnchors, stemmedAnchors)
-		}
-	} else if p.RankingMode == "cass-router" {
-		// CASS query-shape router (CASS src/pages/fts.rs:84–179, Decision D4)
-		if detectSearchMode(q) == "code" {
-			anchors, _ = store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
-			if len(anchors) == 0 && multi {
-				if orAnchors, orErr := store.SearchAnchorsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
-					anchors = orAnchors
-				}
-			}
-		} else {
-			anchors, _ = store.SearchAnchors(con, matchAND, filt, srt, fetch)
-			if len(anchors) == 0 && multi {
-				if orAnchors, orErr := store.SearchAnchors(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
-					anchors = orAnchors
-				}
-			}
-		}
-	} else {
-		// Default mode: exact-first fallback (Decision D4)
-		// Query messages_fts_exact first; fall back to messages_fts on 0 hits.
-		anchors, _ = store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
-		if len(anchors) == 0 && multi {
-			if orAnchors, orErr := store.SearchAnchorsExact(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
-				anchors = orAnchors
-			}
-		}
-		if len(anchors) == 0 {
-			anchors, _ = store.SearchAnchors(con, matchAND, filt, srt, fetch)
-			if len(anchors) == 0 && multi {
-				if orAnchors, orErr := store.SearchAnchors(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
-					anchors = orAnchors
-				}
-			}
 		}
 	}
 

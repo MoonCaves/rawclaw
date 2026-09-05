@@ -150,4 +150,25 @@ Measured via `/tmp/rawclaw_bench` with `CLAUDE_CODE_SESSION_ID` unset, `HOME=/tm
   - `coolify deploy dashboard token`: Exact AND = 378 | Stemmed AND = 1,348 | Stemmed OR = 153,023
 - **Overfetch finding**: For all multi-term queries with substantial AND-match density, `storeAnchors` satisfies `distinctSessions(rows) >= limit` on the initial window (`fetch = limit * 8 = 64` rows). The window expansion toward `maxStoreWindow` (20,000) only triggers on sparse queries falling back to broad OR combinations. Overfetch in the exact tier is bounded and efficient.
 
+---
+
+## 6. Deletion of Measured Losers & Final Flag Surface (Message 306 Implementation)
+
+Per BoldIsland directive (Message 306) and referee consensus (Message 304), all experimental modes that lost on empirical measurement have been completely excised from the codebase:
+
+1. **Deleted `exact-first`**:
+   - **Empirical reason**: Failed the recall gate on `handling credential leaks in commits` (suppressed 28 stemmed matches down to 2). Never won on precision over RRF on any of the 8 queries.
+   - **Action**: Completely removed `exact-first` fallback branches, internal parameters, and tests.
+2. **Deleted `cass-router`**:
+   - **Empirical reason**: Failed the primary precision gate P@1 on `where did we land on auth` (heuristic prose routing sent the query to the stemmed table, reproducing the exact `land`→`landing`/`landed` noise that prompted this lift).
+   - **Action**: Completely removed `cass-router` branch, `detectSearchMode`, `hasCamelCase`, `hasKebabCase`, and tests.
+3. **Removed `--ranking-mode` Flag**:
+   - With RRF established as the strictly superior ranking strategy, the internal switch flag has been removed.
+   - Two clean, predictable search behaviours remain:
+     1. **Default Search**: Automated Reciprocal Rank Fusion ($k=60$) blending unstemmed `messages_fts_exact` and stemmed `messages_fts` (grepai `search/hybrid.go:57–89`, MIT).
+     2. **`--exact` Search**: Explicit forced unstemmed search against `messages_fts_exact` with zero stemmed fallback (calibre `src/calibre/db/fts/connect.py:164–165`, GPL-3).
+4. **Codebase Net Reduction**:
+   - `6 files changed, 14 insertions(+), 172 deletions(-)`: **Net -158 lines deleted**.
+
+
 
