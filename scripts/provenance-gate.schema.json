@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "required": [
+    "verdict",
+    "findings"
+  ],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "APPROVE",
+        "REJECT"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "file",
+          "line",
+          "class",
+          "reason"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "class": {
+            "type": "string",
+            "enum": [
+              "FOUND",
+              "POLICY",
+              "MADE"
+            ]
+          },
+          "trailer": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "upstream_quote": {
+            "type": "string",
+            "description": "For FOUND: a verbatim substring (>=12 chars) copied from the fetched upstream lines that expresses this decision. Empty otherwise."
+          }
+        }
+      }
+    }
+  }
+}
