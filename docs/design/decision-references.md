@@ -152,3 +152,15 @@ Licenses are recorded, never a filter. Companion: `steal-code.md` (verbatim bloc
 - Loki promtail `positions.go` — no longer at the reported path.
 - Continue `FullTextSearchCodebaseIndex.ts` — one scout found it, another could not; line numbers above from the first.
 - xoai/sage-wiki, philippgille/chromem-go, coder/hnsw — unread.
+
+## Additions 2026-09-05, scout RubyHeron (message 323 in thread prior-art-lines)
+
+Verified by RubyHeron on Sourcegraph; line numbers not supplied, paths and defaults as reported.
+
+- **D3 stopwords** — apache/lucene `lucene/analysis/common/src/resources/org/apache/lucene/analysis/snowball/english_stop.txt` (Apache-2.0; list itself Snowball BSD-3): 174 words, one per line, `|` comments. postgres/postgres `src/backend/snowball/stopwords/english.stop` (PostgreSQL licence): identical 174 words, read by `readstoplist()` in `src/backend/tsearch/ts_utils.c`. Either replaces `query.Stopwords`.
+- **D1/D15 FTS5 external-content contract** — sqlite/sqlite `ext/fts5/test/fts5content.test`: the canonical trigger triple (`'delete'` form on delete and update) and `INSERT INTO t(t) VALUES('rebuild')`. `ext/fts5/test/fts5integrity.test`: `('integrity-check', 0)` checks B-trees only; `('integrity-check', 1)` also checks 1:1 against the content table. Our exact table should be checked with rank=1.
+- **D10 settle window** — elastic/beats `filebeat/input/log/config.go`: `CloseInactive: 5 * time.Minute`, timer starts at EOF. facebook/watchman `watchman/cmds/trigger.cpp` and `.watchmanconfig`: `settle` default 20 ms. Our 60 s sits between a build tool and a log shipper; it is policy, and these are the two reference points.
+
+## Addition 2026-09-05, scout RubyHeron (message 379), verified by BoldIsland by fetch
+
+- **D4/D5 sort overrides fusion** — meilisearch/meilisearch `crates/milli/src/search/hybrid.rs` L51–57 and L163–176 @1d8619825c3b1871398c539cb566f2de38564493 (MIT): in hybrid (keyword+vector) search, `compare_scores` returns the `ScoreValue::Sort` ordering before any relevance comparison, so an explicit sort pre-empts fusion. Source for RawClaw's rule "newest/oldest skip RRF and keep the SQL ORDER BY". Corroborated by clickclack `search_pages.go` L56–75 (rank expression only under SortRelevance).

@@ -35,12 +35,13 @@ fi
 # --- BEGIN RAWCLAW DECISION GATE (docs/agents/doctrine.md rule 12) ---
 # Runs on every push from every worktree: this directory is tracked in git and core.hooksPath points here.
 # Range = what this push adds relative to the remote main. Fail-closed on internal/ logic.
-_root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
+_hooks=$(cd "$(dirname "$0")" && pwd)
 _base=$(git merge-base HEAD origin/main 2>/dev/null || git rev-parse HEAD~1)
-if [ -x "$_root/scripts/provenance-gate.sh" ]; then
-  "$_root/scripts/provenance-gate.sh" --range "$_base..HEAD" || exit 1
+# Always the gate that ships WITH the hooks, never the copy on the branch being pushed.
+if [ -x "$_hooks/gate/provenance-gate.sh" ]; then
+  "$_hooks/gate/provenance-gate.sh" --range "$_base..HEAD" || exit 1
 else
-  echo "[decision-gate] scripts/provenance-gate.sh missing or not executable; refusing to push code without the gate." >&2
+  echo "[decision-gate] $_hooks/gate/provenance-gate.sh missing; refusing to push internal/ logic without the gate." >&2
   git diff --quiet "$_base..HEAD" -- 'internal/**/*.go' ':!internal/**/*_test.go' || exit 1
 fi
 # --- END RAWCLAW DECISION GATE ---

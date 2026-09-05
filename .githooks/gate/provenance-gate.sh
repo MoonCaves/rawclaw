@@ -9,12 +9,15 @@
 # a gate that cannot reach its model or its sources rejects, and says why. Fail-open for everything else.
 #
 # Usage:
-#   as hook:   scripts/provenance-gate.sh .git/COMMIT_EDITMSG
-#   by hand:   scripts/provenance-gate.sh --range <base>..<head>      (CI / audit of existing commits)
+#   by hand:   .githooks/gate/provenance-gate.sh --range <base>..<head>
+#   as hook:   invoked by .githooks/pre-push; never from a branch copy
 # Env:
 #   PROVENANCE_MODEL   agy model name (default: gemini-3.8-flash-low, fastest tier in `agy models`)
 #   PROVENANCE_TIMEOUT seconds for the model call (default 90)
 set -u
+# GATE_DIR is where THIS script lives (the tracked hooks dir); prompt and schema are read from here, never from
+# the branch under test, so a branch cannot weaken its own gate (found 2026-09-05: a worktree ran a stale copy).
+GATE_DIR=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 cd "$ROOT" || exit 0
 MODEL="${PROVENANCE_MODEL:-gemini-3.8-flash-low}"
@@ -92,7 +95,7 @@ $DIFF_CMD -- $FILES > "$TMP/diff.patch"
   echo "DOCTRINE:"; cat docs/agents/doctrine.md 2>/dev/null || echo "(doctrine.md missing: treat every logic line as DRIFT)"
   echo; echo "TRAILERS AND FETCHED UPSTREAM LINES:"; cat "$TMP/trailers"; cat "$TMP/upstream.txt"
   echo; echo "DIFF:"; cat "$TMP/diff.patch"
-  echo; cat docs/agents/provenance-gate-prompt.md
+  echo; cat "$GATE_DIR/provenance-gate-prompt.md"
 } > "$TMP/prompt.txt"
 
 if ! command -v agy >/dev/null 2>&1; then
@@ -100,7 +103,7 @@ if ! command -v agy >/dev/null 2>&1; then
 fi
 TO=timeout; command -v timeout >/dev/null 2>&1 || { command -v gtimeout >/dev/null 2>&1 && TO=gtimeout || TO=""; }
 # agy reads the prompt from the -p argument, not stdin (verified 2026-09-05: stdin form errors out).
-if ! $TO ${TO:+"$TIMEOUT"} agy --model "$MODEL" --output-format json --json-schema scripts/provenance-gate.schema.json \
+if ! $TO ${TO:+"$TIMEOUT"} agy --model "$MODEL" --output-format json --json-schema "$GATE_DIR/provenance-gate.schema.json" \
       -p "$(cat "$TMP/prompt.txt")" > "$TMP/verdict.json" 2> "$TMP/agy.err"; then
   echo "[provenance-gate] REJECT: model call failed or timed out ($TIMEOUT s). stderr:" >&2; tail -5 "$TMP/agy.err" >&2; exit 1
 fi
@@ -108,7 +111,9 @@ fi
 VERDICT=$(python3 - "$TMP/verdict.json" "$TMP/upstream.txt" <<'EOF'
 import json,sys
 raw=open(sys.argv[1]).read()
-upstream=open(sys.argv[2]).read() if len(sys.argv)>2 else ""
+import re
+def norm(t): return re.sub(r"\s+"," ",t).strip()
+upstream=norm(open(sys.argv[2]).read()) if len(sys.argv)>2 else ""
 try:
     d=json.loads(raw)
 except Exception:
@@ -124,7 +129,7 @@ verdict=d.get("verdict","REJECT")
 # Deterministic backstop: a FOUND must quote upstream bytes that actually exist. Otherwise it is MADE.
 for f in d.get("findings",[]):
     if f.get("class")=="FOUND":
-        q=(f.get("upstream_quote") or "").strip()
+        q=norm(f.get("upstream_quote") or "")
         if len(q)<12 or q not in upstream:
             f["class"]="MADE"; f["reason"]="FOUND without a verifiable upstream quote -> MADE. "+str(f.get("reason",""))
             verdict="REJECT"
@@ -135,9 +140,14 @@ for f in d.get("findings",[]):
 EOF
 )
 if [ "$FETCH_FAIL" = 1 ]; then echo "[provenance-gate] one or more cited sources could not be fetched (see above)." >&2; fi
-# Verdict log (357 #21): same diff hash appearing as REJECT then APPROVE is visible to the auditor.
+# Verdict ledger (357 #21) as a git note on HEAD: a tracked git object, pushed with refs/notes/*, no worktree
+# mutation, readable from any clone. Lifted from git's own notes mechanism (git/git Documentation/git-notes.txt);
+# suggested by RubyHeron 366. A REJECT followed by an APPROVE on the same diff hash is visible in `git notes
+# --ref=decision-gate show <sha>` history.
 DIFF_HASH=$(shasum -a 256 "$TMP/diff.patch" | cut -c1-12)
-printf '%s %s %s %s %s\n' "$(date -u +%FT%TZ)" "${RANGE:-staged}" "$DIFF_HASH" "$MODEL" "$VERDICT" >> "$(git rev-parse --git-common-dir)/decision-gate.log"
+NOTE=$(printf '%s range=%s diff=%s model=%s verdict=%s' "$(date -u +%FT%TZ)" "${RANGE:-staged}" "$DIFF_HASH" "$MODEL" "$VERDICT")
+git notes --ref=decision-gate append -m "$NOTE" HEAD >/dev/null 2>&1 || true
+printf '%s\n' "$NOTE" >> "$(git rev-parse --git-common-dir)/decision-gate.log"
 case "$VERDICT" in
   APPROVE) echo "[provenance-gate] APPROVE ($MODEL)" >&2; exit 0;;
   *) echo "[provenance-gate] REJECT ($MODEL): a decision above was MADE by an agent instead of FOUND on the internet. Cite the source line in a Prior-Art trailer, or label a measured constant // policy:." >&2; exit 1;;
