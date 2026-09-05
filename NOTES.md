@@ -86,3 +86,68 @@ Every single decision in this branch is copied verbatim from proven prior art:
 - **Latency**: <= 100ms mean on `consolidated.db` over 2 runs with `/usr/bin/time -p`.
 - **Integrity**: SQLite FTS5 `integrity-check` passes.
 
+---
+
+## 5. Benchmark Results & Referee Submissions (Message 302 Deliverables)
+
+### A. 8-Query Benchmark Results (`--before 2026-09-03`, `.backup` Store, 728,001 Messages)
+
+Measured via `/tmp/rawclaw_bench` with `CLAUDE_CODE_SESSION_ID` unset, `HOME=/tmp/rawclaw_bench_home`, through pipe `| cat`, two runs each:
+
+| Query | Mode | Run 1 (s) | Run 2 (s) | Top-3 Refs (`session_id:match_id`) | Pass Notes |
+|---|---|---|---|---|---|
+| **1. where did we land on auth** | `exact-first` | 0.03 | 0.02 | `87db4ed2:d2fe283b`, `6ba4e8c7:05a4b05a`, `f4cdf71b:38c7e824` | Rank 1 is OAuth explanation! Zero landing noise. |
+| | `rrf` | 0.04 | 0.04 | `87db4ed2:d2fe283b`, `6ba4e8c7:05a4b05a`, `f4cdf71b:38c7e824` | Identical top-3 to exact-first. Zero landing noise. |
+| | `cass-router` | 0.03 | 0.03 | `de33e5e2:4c146e98`, `b95b3aa6:114f888a`, `2265d0e9:6a113188` | **FAILS P@1**: Prose router sent query to stemmed; all 3 hits are `land` noise. |
+| | `--exact` | 0.02 | 0.02 | `87db4ed2:d2fe283b`, `6ba4e8c7:05a4b05a`, `f4cdf71b:38c7e824` | Identical top-3. Fastest (20ms). |
+| **2. split brain agent mail** | `exact-first` | 0.05 | 0.05 | `01a05c45:896d0e4f`, `cfa0574b:27c34bcb`, `c79f93fe:42c6df07` | Target split-brain session at #1. |
+| | `rrf` | 0.10 | 0.10 | `ab8b0b48:27c34bcb`, `01a05c45:896d0e4f`, `c79f93fe:42c6df07` | Target session twins at #1 and #2. |
+| | `cass-router` | 0.08 | 0.08 | `c79f93fe:734cc215`, `cfa0574b:27c34bcb`, `01a05c45:896d0e4f` | Target session at #2. |
+| | `--exact` | 0.05 | 0.05 | `01a05c45:896d0e4f`, `cfa0574b:27c34bcb`, `c79f93fe:42c6df07` | Target session at #1. |
+| **3. per-transcript watermark** | `exact-first` | 0.02 | 0.02 | `3b4374e5:4bad1ebb`, `14b3040b:7fb43348`, `547be07f:52efee3c` | Target watermark design at #1. |
+| | `rrf` | 0.03 | 0.03 | `3b4374e5:4bad1ebb`, `14b3040b:7fb43348`, `547be07f:52efee3c` | Identical top-3. |
+| | `cass-router` | 0.02 | 0.02 | `3b4374e5:4bad1ebb`, `14b3040b:7fb43348`, `547be07f:52efee3c` | Identical top-3. |
+| | `--exact` | 0.02 | 0.02 | `3b4374e5:4bad1ebb`, `14b3040b:7fb43348`, `547be07f:52efee3c` | Identical top-3. |
+| **4. answer-first** | `exact-first` | 0.12 | 0.12 | `a8ddaca7:9b0de328`, `a11320dc:d53b5fb5`, `c19897de:2e90fecf` | Target answer-first convention at #1. |
+| | `rrf` | 0.24 | 0.24 | `a8ddaca7:9b0de328`, `a11320dc:d53b5fb5`, `c19897de:2e90fecf` | Identical top-3. |
+| | `cass-router` | 0.12 | 0.12 | `a8ddaca7:9b0de328`, `a11320dc:d53b5fb5`, `c19897de:2e90fecf` | Identical top-3. |
+| | `--exact` | 0.12 | 0.12 | `a8ddaca7:9b0de328`, `a11320dc:d53b5fb5`, `c19897de:2e90fecf` | Identical top-3. |
+| **5. coolify deploy dashboard token** | `exact-first` | 0.03 | 0.03 | `01a03a3b:89d51893`, `3dffdb16:665e4416`, `eff98f2e:982291bc` | Target coolify token run at #1. |
+| | `rrf` | 0.06 | 0.06 | `3dffdb16:665e4416`, `01a03a3b:89d51893`, `eff98f2e:982291bc` | Target coolify run at #1. |
+| | `cass-router` | 0.05 | 0.05 | `3dffdb16:665e4416`, `01a03a3b:89d51893`, `eff98f2e:982291bc` | Target coolify run at #1. |
+| | `--exact` | 0.03 | 0.03 | `01a03a3b:89d51893`, `3dffdb16:665e4416`, `eff98f2e:982291bc` | Target coolify run at #1. |
+| **6. where did we land on auth.** | `exact-first` | 0.02 | 0.02 | `6ba4e8c7:05a4b05a`, `b95b3aa6:2fa5ef93`, `0a7f2b2a:7af33ace` | Sentence-final punctuation immune! |
+| | `rrf` | 0.04 | 0.04 | `6ba4e8c7:05a4b05a`, `b95b3aa6:2fa5ef93`, `8d29847e:b8ebd44f` | Punctuation immune. |
+| | `cass-router` | 0.03 | 0.02 | `6ba4e8c7:05a4b05a`, `b95b3aa6:2fa5ef93`, `0a7f2b2a:7af33ace` | Punctuation immune. |
+| | `--exact` | 0.03 | 0.02 | `6ba4e8c7:05a4b05a`, `b95b3aa6:2fa5ef93`, `0a7f2b2a:7af33ace` | Punctuation immune. |
+| **7. store.go** | `exact-first` | 0.06 | 0.06 | `2e90b92d:08b0ba08`, `c19897de:1e9f84bd`, `485f4824:a509fcf4` | Matches subpaths cleanly under unicode61. |
+| | `rrf` | 0.10 | 0.10 | `2e90b92d:08b0ba08`, `c19897de:1e9f84bd`, `485f4824:a509fcf4` | Identical top-3. |
+| | `cass-router` | 0.05 | 0.05 | `2e90b92d:08b0ba08`, `c19897de:1e9f84bd`, `485f4824:a509fcf4` | Identical top-3. |
+| | `--exact` | 0.05 | 0.06 | `2e90b92d:08b0ba08`, `c19897de:1e9f84bd`, `485f4824:a509fcf4` | Identical top-3. |
+| **8. handling credential leaks in commits** | `exact-first` | 0.03 | 0.03 | `dd028898:99b2b859`, `47caa113:f01f942c` | **RECALL DEFECT CONFIRMED**: Only 2 hits returned. Exact cutoff suppressed 28 stemmed matches. |
+| | `rrf` | 0.08 | 0.08 | `dd028898:99b2b859`, `eae5d05a:ce2b3150`, `01a03786:34115211` | **RECALL HOLE HEALED**: Blends exact #1 with top stemmed matches (#2, #3). |
+| | `cass-router` | 0.07 | 0.08 | `eae5d05a:ce2b3150`, `01a03786:34115211`, `dd028898:99b2b859` | Routes to stemmed, includes all matches. |
+| | `--exact` | 0.03 | 0.03 | `dd028898:99b2b859`, `47caa113:f01f942c` | 2 hits as expected for strict unstemmed mode. |
+
+---
+
+### B. Decision on the Exact-First Recall Hole (Ruling Item 2)
+- **Problem**: In `exact-first` mode, any non-zero hit count from `messages_fts_exact` halts search and never queries `messages_fts`. On `handling credential leaks in commits`, 2 partial exact matches prevented all 28 rich stemmed matches from surfacing.
+- **Decision Grounded in Prior Art**:
+  - Make **`rrf` (Reciprocal Rank Fusion, $k=60$)** the default ranking mode (grepai `search/hybrid.go:57–89`, Decision D6). RRF calculates $R = \sum \frac{1}{60 + \text{rank}_i}$, giving exact matches higher weight at rank 1/2 while allowing the top stemmed matches to populate ranks 3 through $N$.
+  - Keep `--exact` (calibre `src/calibre/db/fts/connect.py:164–165`, Decision D4) for users/agents explicitly demanding zero stemmed fallback.
+  - Drop `exact-first` from default consideration. This eliminates the recall hole completely without inventing arbitrary threshold heuristics like Typesense `drop_tokens_threshold`.
+
+---
+
+### C. Overfetch Candidate Count Measurements (Ruling Item 3)
+- Source of "20,000" number: `const maxStoreWindow = 20000` in `internal/agentproto/search.go:376` (`storeAnchors`).
+- Real raw match counts in `/tmp/bench_consolidated.db` (728k messages):
+  - `where did we land on auth`: Exact AND = 823 | Stemmed AND = 1,537 | Stemmed OR = 26,586
+  - `split brain agent mail`: Exact AND = 129 | Stemmed AND = 153 | Stemmed OR = 171,309
+  - `per-transcript watermark`: Exact AND = 1,421 | Stemmed AND = 2,058 | Stemmed OR = 38,084
+  - `answer-first`: Exact AND = 7,125 | Stemmed AND = 8,854 | Stemmed OR = 54,499
+  - `coolify deploy dashboard token`: Exact AND = 378 | Stemmed AND = 1,348 | Stemmed OR = 153,023
+- **Overfetch finding**: For all multi-term queries with substantial AND-match density, `storeAnchors` satisfies `distinctSessions(rows) >= limit` on the initial window (`fetch = limit * 8 = 64` rows). The window expansion toward `maxStoreWindow` (20,000) only triggers on sparse queries falling back to broad OR combinations. Overfetch in the exact tier is bounded and efficient.
+
+
