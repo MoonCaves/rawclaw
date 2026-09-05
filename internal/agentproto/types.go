@@ -162,6 +162,8 @@ type SearchOpts struct {
 	Projects         []string
 	ProjectDir       string
 	Source           string
+	Exact            bool
+	RankingMode      string
 	ScopeFallback    func() []view.Scope
 }
 
