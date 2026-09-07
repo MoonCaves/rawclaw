@@ -402,46 +402,33 @@ func SearchExplained(dbp, q string, limit int, p SearchParams) (out []Hit, expla
 // and yoanbernabeu/grepai search/hybrid.go#L57-L89 (MIT).
 // Rank computation consumes SQL DENSE_RANK() OVER (ORDER BY bm25) directly from store.SearchAnchor.Rank,
 // so equal-relevance hits produce equal Fused scores.
-func rrfAnchors(k float64, limit int, lists ...[]store.SearchAnchor) ([]store.SearchAnchor, map[string]float64) {
-	scores := make(map[string]float64)
-	anchorMap := make(map[string]store.SearchAnchor)
+func rrfAnchors(k float64, limit int, lists ...[]store.SearchAnchor) ([]store.SearchAnchor, map[int]float64) {
+	// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L49-L60 (AGPL-3.0) @c9395676e2299d2b156ae827161efdd15f08486a:
+	// sum(1.0 / (60 + rank)) grouped by entity id, consuming SQL RANK() OVER (ORDER BY bm25) directly.
+	// Chunk accumulator with last-wins retention keyed by native integer row ID a.ID lifted from yoanbernabeu/grepai search/hybrid.go#L61-L68 (MIT) @b355512615aafbea65baeaa6a478fbd1c70f3e24.
+	scores := make(map[int]float64)
+	anchorMap := make(map[int]store.SearchAnchor)
 	for _, list := range lists {
 		for _, a := range list {
-			key := a.UUID
-			if key == "" {
-				key = a.SessionID + ":" + a.ISO
-			}
-			scores[key] += 1.0 / (k + float64(a.Rank))
-			anchorMap[key] = a
+			id := a.ID
+			scores[id] += 1.0 / (k + float64(a.Rank))
+			anchorMap[id] = a
 		}
 	}
-	seen := make(map[string]bool)
+	// Lifted from yoanbernabeu/grepai search/hybrid.go#L70-L75 (MIT) @b355512615aafbea65baeaa6a478fbd1c70f3e24:
+	// materialize slice directly from scores map.
 	results := make([]store.SearchAnchor, 0, len(scores))
-	for _, list := range lists {
-		for _, a := range list {
-			key := a.UUID
-			if key == "" {
-				key = a.SessionID + ":" + a.ISO
-			}
-			if !seen[key] {
-				seen[key] = true
-				results = append(results, a)
-			}
-		}
+	for id := range scores {
+		results = append(results, anchorMap[id])
 	}
+	// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L67 (AGPL-3.0) @c9395676e2299d2b156ae827161efdd15f08486a:
+	// ORDER BY score DESC, o.order_id (secondary tie-break by ID).
 	sort.Slice(results, func(i, j int) bool {
-		ki := results[i].UUID
-		if ki == "" {
-			ki = results[i].SessionID + ":" + results[i].ISO
+		si := scores[results[i].ID]
+		sj := scores[results[j].ID]
+		if si != sj {
+			return si > sj
 		}
-		kj := results[j].UUID
-		if kj == "" {
-			kj = results[j].SessionID + ":" + results[j].ISO
-		}
-		if scores[ki] != scores[kj] {
-			return scores[ki] > scores[kj]
-		}
-		// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L67 (ORDER BY score DESC, o.order_id)
 		return results[i].ID < results[j].ID
 	})
 	if limit > 0 && len(results) > limit {
@@ -823,7 +810,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 	}
 	filt, srt := storeFilterSort(p)
 	var anchors []store.SearchAnchor
-	var anchorScores map[string]float64
+	var anchorScores map[int]float64
 
 	if p.Exact {
 		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
@@ -890,13 +877,11 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			continue
 		}
 		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, a.Content)), multi)
-		key := a.UUID
-		if key == "" {
-			key = a.SessionID + ":" + a.ISO
-		}
+		// Lifted from yoanbernabeu/grepai search/hybrid.go#L70-L75 (MIT) @b355512615aafbea65baeaa6a478fbd1c70f3e24:
+		// direct lookup by native integer ID a.ID.
 		var fused float64
 		if anchorScores != nil {
-			fused = anchorScores[key]
+			fused = anchorScores[a.ID]
 		}
 		out = append(out, Anchor{
 			ID:            a.ID,

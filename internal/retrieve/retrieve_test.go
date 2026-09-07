@@ -613,12 +613,12 @@ func TestRRFUnits(t *testing.T) {
 	}
 
 	anchorsA := []store.SearchAnchor{
-		{SessionID: "doc1", ISO: "2026-06-01", UUID: "u1", BM25: -2.0, Rank: 1},
-		{SessionID: "doc2", ISO: "2026-06-02", UUID: "u2", BM25: -1.0, Rank: 2},
+		{ID: 1, SessionID: "doc1", ISO: "2026-06-01", UUID: "u1", BM25: -2.0, Rank: 1},
+		{ID: 2, SessionID: "doc2", ISO: "2026-06-02", UUID: "u2", BM25: -1.0, Rank: 2},
 	}
 	anchorsB := []store.SearchAnchor{
-		{SessionID: "doc2", ISO: "2026-06-02", UUID: "u2", BM25: -2.0, Rank: 1},
-		{SessionID: "doc3", ISO: "2026-06-03", UUID: "u3", BM25: -1.0, Rank: 2},
+		{ID: 2, SessionID: "doc2", ISO: "2026-06-02", UUID: "u2", BM25: -2.0, Rank: 1},
+		{ID: 3, SessionID: "doc3", ISO: "2026-06-03", UUID: "u3", BM25: -1.0, Rank: 2},
 	}
 	fusedAnchors, anchorScores := rrfAnchors(60.0, 10, anchorsA, anchorsB)
 	if len(fusedAnchors) != 3 {
@@ -630,12 +630,12 @@ func TestRRFUnits(t *testing.T) {
 
 	// ParadeDB dense rank check: items with identical BM25 share rank and receive identical scores
 	tiedAnchors := []store.SearchAnchor{
-		{SessionID: "tie1", ISO: "2026-06-01", UUID: "t1", BM25: -2.0, Rank: 1},
-		{SessionID: "tie2", ISO: "2026-06-01", UUID: "t2", BM25: -2.0, Rank: 1},
+		{ID: 1, SessionID: "tie1", ISO: "2026-06-01", UUID: "t1", BM25: -2.0, Rank: 1},
+		{ID: 2, SessionID: "tie2", ISO: "2026-06-01", UUID: "t2", BM25: -2.0, Rank: 1},
 	}
 	_, tiedScores := rrfAnchors(60.0, 10, tiedAnchors)
-	if tiedScores["t1"] != tiedScores["t2"] {
-		t.Errorf("tied BM25 scores should produce identical RRF scores, got %v and %v", tiedScores["t1"], tiedScores["t2"])
+	if tiedScores[1] != tiedScores[2] {
+		t.Errorf("tied BM25 scores should produce identical RRF scores, got %v and %v", tiedScores[1], tiedScores[2])
 	}
 	_ = hitScores
 	_ = anchorScores
