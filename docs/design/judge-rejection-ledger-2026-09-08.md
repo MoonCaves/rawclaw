@@ -621,7 +621,12 @@ Earlier tonight I reported Fable "12/12 identical at temperature 0". That prompt
 temp 0: The Rusty Anchor / The Rusted Anchor / The Rusted Anchor / The Rusted Anvil
 temp 1: The Gilded Otter / The Rusted Anchor / The Rusted Anchor / The Rusted Anvil
 ```
-Conclusion: temperature 0 through this gateway does NOT make Fable byte-deterministic; outputs vary at both settings, with slightly less spread at 0. The 10/10 identical judge findings earlier are therefore a property of the prompt being highly constrained, not of the sampling being fixed. This applies to the Sonnet and Opus rows too until tested the same way. My earlier "deterministic" claim is withdrawn.
+Conclusion: temperature 0 through this gateway does NOT make Fable byte-deterministic; outputs vary at both settings, with slightly less spread at 0. The 10/10 identical judge findings earlier are therefore a property of the prompt being highly constrained, not of the sampling being fixed. Same nonce test on the other two, temp 0, 4 calls each:
+```
+opus-5:   The Copper Wren / The Copper Wren / The Idle Compiler / The Copper Wren   (varies)
+sonnet-5: The Rusty Anchor x4                                                        (no variance in this sample)
+```
+So: Sonnet was byte-stable on this tiny probe, Opus and Fable were not. None of this is a determinism guarantee; it is four calls. My earlier "deterministic" claim is withdrawn for all three.
 
 Also: `antigravity-flash-fast` resolves to `openai/gemini-3-flash` (an older generation), not 3.7. Not a candidate.
 
