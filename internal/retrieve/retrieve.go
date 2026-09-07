@@ -172,7 +172,7 @@ func buildMatch(q string, p SearchParams) (matchAND, matchOR string, terms []str
 		return clean, clean, terms, false, true
 	}
 	// Multi-word queries: AND all tokens first. Only if AND yields 0 hits does
-	// the caller fall back to OR alternation (ddxfish/sapphire plugins/memory/tools/knowledge_tools.py:1163–1182, AGPL-3.0 @a439e660619af7914228e8b9fc64cfd614103aa6, Decision D3/D4).
+	// the caller (relevance mode only; time-sort modes issue a single query) fall back to OR alternation (ddxfish/sapphire plugins/memory/tools/knowledge_tools.py:1163–1182, AGPL-3.0 @a439e660619af7914228e8b9fc64cfd614103aa6, Decision D3/D4).
 	quoted := make([]string, 0, len(terms))
 	for _, t := range terms {
 		quoted = append(quoted, `"`+strings.ReplaceAll(t, `"`, "")+`"`)
@@ -524,6 +524,10 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 	} else if p.Sort == "newest" || p.Sort == "oldest" {
 		// Time-order mode bypasses rank expressions and score fusion entirely, ordering purely by SQL timestamp
 		// (lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L81-L84, MIT @fa52084a04bf72e926eb593db02775043b3271fc).
+		// rawclaw: clickclack shows only SearchSortNewest; "oldest" is the same comparator with ASC, language scaffolding.
+		// rawclaw: no AND->OR retry on this path by design; the retry is cited for relevance mode only (buildMatch, sapphire).
+		// policy: 2026-09-07 single stemmed query suffices: messages_fts (porter) is a measured superset of messages_fts_exact
+		// (0 exact-only rows across 4 benchmark queries) see docs/design/exact-tier-notes.md
 		hits, _ = store.SearchHits(con, matchAND, filt, srt, fetch)
 	} else {
 		// Default mode: grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5, D6)
@@ -809,6 +813,10 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 	} else if p.Sort == "newest" || p.Sort == "oldest" {
 		// Time-order mode bypasses rank expressions and score fusion entirely, ordering purely by SQL timestamp
 		// (lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L81-L84, MIT @fa52084a04bf72e926eb593db02775043b3271fc).
+		// rawclaw: clickclack shows only SearchSortNewest; "oldest" is the same comparator with ASC, language scaffolding.
+		// rawclaw: no AND->OR retry on this path by design; the retry is cited for relevance mode only (buildMatch, sapphire).
+		// policy: 2026-09-07 single stemmed query suffices: messages_fts (porter) is a measured superset of messages_fts_exact
+		// (0 exact-only rows across 4 benchmark queries) see docs/design/exact-tier-notes.md
 		anchors, _ = store.SearchAnchors(con, matchAND, filt, srt, fetch)
 	} else {
 		// Default mode: grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5, D6)
