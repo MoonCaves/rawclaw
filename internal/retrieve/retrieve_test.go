@@ -591,12 +591,12 @@ func TestRRFUnits(t *testing.T) {
 	// For doc3: 1/(60+1+1) = 1/62 = ~0.01612
 	// Expect doc2 ranked first!
 	listA := []store.SearchHit{
-		{SessionID: "doc1", ISO: "2026-06-01", Role: "user", BM25: -2.0, Rank: 1},
-		{SessionID: "doc2", ISO: "2026-06-02", Role: "user", BM25: -1.0, Rank: 2},
+		{ID: 1, SessionID: "doc1", ISO: "2026-06-01", Role: "user", BM25: -2.0, Rank: 1},
+		{ID: 2, SessionID: "doc2", ISO: "2026-06-02", Role: "user", BM25: -1.0, Rank: 2},
 	}
 	listB := []store.SearchHit{
-		{SessionID: "doc2", ISO: "2026-06-02", Role: "user", BM25: -2.0, Rank: 1},
-		{SessionID: "doc3", ISO: "2026-06-03", Role: "user", BM25: -1.0, Rank: 2},
+		{ID: 2, SessionID: "doc2", ISO: "2026-06-02", Role: "user", BM25: -2.0, Rank: 1},
+		{ID: 3, SessionID: "doc3", ISO: "2026-06-03", Role: "user", BM25: -1.0, Rank: 2},
 	}
 	fusedHits, hitScores := rrfHits(60.0, 10, listA, listB)
 	if len(fusedHits) != 3 {

@@ -442,34 +442,33 @@ func rrfAnchors(k float64, limit int, lists ...[]store.SearchAnchor) ([]store.Se
 // and yoanbernabeu/grepai search/hybrid.go#L57-L89 (MIT).
 // Rank computation consumes SQL DENSE_RANK() OVER (ORDER BY bm25) directly from store.SearchHit.Rank,
 // so equal-relevance hits produce equal Fused scores.
-func rrfHits(k float64, limit int, lists ...[]store.SearchHit) ([]store.SearchHit, map[string]float64) {
-	scores := make(map[string]float64)
-	hitMap := make(map[string]store.SearchHit)
+func rrfHits(k float64, limit int, lists ...[]store.SearchHit) ([]store.SearchHit, map[int]float64) {
+	// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L49-L60 (AGPL-3.0) @c9395676e2299d2b156ae827161efdd15f08486a:
+	// sum(1.0 / (60 + rank)) grouped by entity id, consuming SQL RANK() OVER (ORDER BY bm25) directly.
+	// Chunk accumulator with last-wins retention keyed by native integer row ID h.ID lifted from yoanbernabeu/grepai search/hybrid.go#L61-L68 (MIT) @b355512615aafbea65baeaa6a478fbd1c70f3e24.
+	scores := make(map[int]float64)
+	hitMap := make(map[int]store.SearchHit)
 	for _, list := range lists {
 		for _, h := range list {
-			key := h.SessionID + ":" + h.ISO + ":" + h.Role
-			scores[key] += 1.0 / (k + float64(h.Rank))
-			hitMap[key] = h
+			id := h.ID
+			scores[id] += 1.0 / (k + float64(h.Rank))
+			hitMap[id] = h
 		}
 	}
-	seen := make(map[string]bool)
+	// Lifted from yoanbernabeu/grepai search/hybrid.go#L70-L75 (MIT) @b355512615aafbea65baeaa6a478fbd1c70f3e24:
+	// materialize slice directly from scores map.
 	results := make([]store.SearchHit, 0, len(scores))
-	for _, list := range lists {
-		for _, h := range list {
-			key := h.SessionID + ":" + h.ISO + ":" + h.Role
-			if !seen[key] {
-				seen[key] = true
-				results = append(results, h)
-			}
-		}
+	for id := range scores {
+		results = append(results, hitMap[id])
 	}
+	// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L67 (AGPL-3.0) @c9395676e2299d2b156ae827161efdd15f08486a:
+	// ORDER BY score DESC, o.order_id (secondary tie-break by ID).
 	sort.Slice(results, func(i, j int) bool {
-		ki := results[i].SessionID + ":" + results[i].ISO + ":" + results[i].Role
-		kj := results[j].SessionID + ":" + results[j].ISO + ":" + results[j].Role
-		if scores[ki] != scores[kj] {
-			return scores[ki] > scores[kj]
+		si := scores[results[i].ID]
+		sj := scores[results[j].ID]
+		if si != sj {
+			return si > sj
 		}
-		// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L67 (ORDER BY score DESC, o.order_id)
 		return results[i].ID < results[j].ID
 	})
 	if limit > 0 && len(results) > limit {
@@ -512,7 +511,7 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 
 	filt, srt := storeFilterSort(p)
 	var hits []store.SearchHit
-	var hitScores map[string]float64
+	var hitScores map[int]float64
 
 	if p.Exact {
 		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
@@ -576,10 +575,11 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 			continue
 		}
 		cov := coverage(lterms, strings.ToLower(haystackFor(p.IncludeTools, h.Content)), multi)
-		key := h.SessionID + ":" + h.ISO + ":" + h.Role
+		// Lifted from yoanbernabeu/grepai search/hybrid.go#L70-L75 (MIT) @b355512615aafbea65baeaa6a478fbd1c70f3e24:
+		// direct integer chunk score lookup.
 		var fused float64
 		if hitScores != nil {
-			fused = hitScores[key]
+			fused = hitScores[h.ID]
 		}
 		scored = append(scored, scoredHit{
 			Hit: Hit{
