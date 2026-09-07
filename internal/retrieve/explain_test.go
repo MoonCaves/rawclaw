@@ -142,14 +142,14 @@ func TestSearchExplained(t *testing.T) {
 		{
 			name: "sort overlay replaces relevance",
 			msgs: []testMsg{
-				{sessionID: "alpha", role: "user", tsISO: "2026-06-01", ts: 1, content: "only kubernetes here"},
-				{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "redis and memcached together"},
+				{sessionID: "alpha", role: "user", tsISO: "2026-06-01", ts: 1, content: "kubernetes and redis alpha"},
+				{sessionID: "beta", role: "user", tsISO: "2026-06-02", ts: 2, content: "kubernetes and redis beta"},
 			},
-			query:      "kubernetes redis memcached",
+			query:      "kubernetes redis",
 			params:     SearchParams{Sort: "newest"},
 			wantSIDs:   []string{"beta", "alpha"}, // newest (ts=2) first
 			wantMethod: MethodSortOverlay,
-			wantCov:    []int{2, 1},
+			wantCov:    []int{2, 2},
 			wantBM25:   []int{-1, -1},
 			wantRec:    []float64{1, 1},
 		},

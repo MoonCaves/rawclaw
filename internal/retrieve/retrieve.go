@@ -172,7 +172,7 @@ func buildMatch(q string, p SearchParams) (matchAND, matchOR string, terms []str
 		return clean, clean, terms, false, true
 	}
 	// Multi-word queries: AND all tokens first. Only if AND yields 0 hits does
-	// the caller fall back to OR alternation.
+	// the caller fall back to OR alternation (ddxfish/sapphire plugins/memory/tools/knowledge_tools.py:1163–1182, AGPL-3.0 @a439e660619af7914228e8b9fc64cfd614103aa6, Decision D3/D4).
 	quoted := make([]string, 0, len(terms))
 	for _, t := range terms {
 		quoted = append(quoted, `"`+strings.ReplaceAll(t, `"`, "")+`"`)
@@ -522,14 +522,9 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 			}
 		}
 	} else if p.Sort == "newest" || p.Sort == "oldest" {
-		// Lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L81-L84 (MIT) @fa52084a04bf72e926eb593db02775043b3271fc:
-		// time-order mode bypasses rank expressions and score fusion entirely, ordering purely by SQL timestamp.
+		// Time-order mode bypasses rank expressions and score fusion entirely, ordering purely by SQL timestamp
+		// (lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L81-L84, MIT @fa52084a04bf72e926eb593db02775043b3271fc).
 		hits, _ = store.SearchHits(con, matchAND, filt, srt, fetch)
-		if len(hits) == 0 && multi {
-			if orHits, orErr := store.SearchHits(con, matchOR, filt, srt, fetch); orErr == nil && len(orHits) > 0 {
-				hits = orHits
-			}
-		}
 	} else {
 		// Default mode: grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5, D6)
 		exactHits, _ := store.SearchHitsExact(con, matchAND, filt, srt, fetch)
@@ -812,14 +807,9 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			}
 		}
 	} else if p.Sort == "newest" || p.Sort == "oldest" {
-		// Lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L81-L84 (MIT) @fa52084a04bf72e926eb593db02775043b3271fc:
-		// time-order mode bypasses rank expressions and score fusion entirely, ordering purely by SQL timestamp.
+		// Time-order mode bypasses rank expressions and score fusion entirely, ordering purely by SQL timestamp
+		// (lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L81-L84, MIT @fa52084a04bf72e926eb593db02775043b3271fc).
 		anchors, _ = store.SearchAnchors(con, matchAND, filt, srt, fetch)
-		if len(anchors) == 0 && multi {
-			if orAnchors, orErr := store.SearchAnchors(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
-				anchors = orAnchors
-			}
-		}
 	} else {
 		// Default mode: grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5, D6)
 		exactAnchors, _ := store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
