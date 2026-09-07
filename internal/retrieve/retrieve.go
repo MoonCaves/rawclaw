@@ -811,6 +811,15 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 				anchors = orAnchors
 			}
 		}
+	} else if p.Sort == "newest" || p.Sort == "oldest" {
+		// Lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L81-L84 (MIT) @fa52084a04bf72e926eb593db02775043b3271fc:
+		// time-order mode bypasses rank expressions and score fusion entirely, ordering purely by SQL timestamp.
+		anchors, _ = store.SearchAnchors(con, matchAND, filt, srt, fetch)
+		if len(anchors) == 0 && multi {
+			if orAnchors, orErr := store.SearchAnchors(con, matchOR, filt, srt, fetch); orErr == nil && len(orAnchors) > 0 {
+				anchors = orAnchors
+			}
+		}
 	} else {
 		// Default mode: grepai ReciprocalRankFusion k=60 over exact + stemmed lists (grepai search/hybrid.go:57–89, Decision D4, D5, D6)
 		exactAnchors, _ := store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
@@ -826,15 +835,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 			}
 		}
 		if len(exactAnchors) > 0 || len(stemmedAnchors) > 0 {
-			// Lifted from meilisearch/meilisearch crates/milli/src/search/hybrid.rs#L51-L57: explicit sort pre-empts score fusion.
-			// Lifted from openclaw/clickclack apps/api/internal/store/sqlite/search_pages.go#L81-L84: under a time sort the rank
-			// expression is "0.0" and ORDER BY created_at is the only ordering; there is no fusion and no second list to merge.
-			// Stemmed index is a measured superset of exact (docs/design/exact-tier-notes.md, 2026-09-07).
-			if p.Sort == "newest" || p.Sort == "oldest" {
-				anchors = stemmedAnchors
-			} else {
-				anchors, anchorScores = rrfAnchors(60.0, fetch, exactAnchors, stemmedAnchors)
-			}
+			anchors, anchorScores = rrfAnchors(60.0, fetch, exactAnchors, stemmedAnchors)
 		}
 	}
 
