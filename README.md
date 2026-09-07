@@ -115,7 +115,7 @@ Search defaults to **answer-first**: queries answer instantly from the consolida
 
 Bare browse (`rawclaw`) follows the same answer-first pattern from the consolidated store; use `--reindex` to bypass the consolidated store and refresh source indexes before browsing.
 
-`rawclaw ingest [session8]` refreshes one session (full id or prefix) into the consolidated search store; without an argument it refreshes all discoverable active sessions. `rawclaw setup` starts the targeted form in the background at SessionStart, so normal reads and searches usually query an already-indexed store. Repeated or concurrent ingests are safe: unchanged sessions are skipped and the consolidated-store write is serialized with bounded retry.
+`rawclaw ingest [session8]` refreshes one session (full id or prefix) into the consolidated search store; without an argument it refreshes all discoverable active sessions. Before search or browse executes, rawclaw ensures that recent/active sessions (including the caller's current session, if any) have their latest appended turns folded into the consolidated store. Repeated or concurrent ingests are safe: unchanged sessions are skipped and the consolidated-store write is serialized with bounded retry.
 
 **A search that finds nothing exits `0`** — an empty result set is a valid answer, not an error (scripts should branch on output, and reserve non-zero for real failures).
 
