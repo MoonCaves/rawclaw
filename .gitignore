@@ -25,3 +25,22 @@ HANDOFF.md
 docs/design/judge-calibration-protocol-2026-09-08.md
 docs/design/judge-rejection-ledger-2026-09-08.md
 docs/design/recon-*/
+
+# Internal working docs — never publish to the open-source repo
+docs/notes/
+docs/agents/
+docs/design/model-research-*/
+docs/design/prior-art/
+docs/design/harness-review-*.md
+docs/design/decision-references.md
+docs/design/exact-tier-notes.md
+docs/design/steal-code.md
+docs/design/prior-art-steal-list.md
+docs/GAME-THEORETIC-AUTO-MERGE-PROTOCOL.md
+.githooks/
+scripts/lrvl-merge.sh
+scripts/harness-gate.sh
+ISSUE55_FINISH.md
+FINDINGS.md
+REVIEW-BRIEF.md
+scripts/prior-art-guard.sh
