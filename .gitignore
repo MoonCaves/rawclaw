@@ -19,3 +19,9 @@
 storage.sqlite3*
 graphify-out/
 
+
+# internal working state — never publish (2026-09-08 incident)
+HANDOFF.md
+docs/design/judge-calibration-protocol-2026-09-08.md
+docs/design/judge-rejection-ledger-2026-09-08.md
+docs/design/recon-*/
