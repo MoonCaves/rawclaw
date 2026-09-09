@@ -287,11 +287,10 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 		if !opts.IncludeTools && m.Role != "user" && m.Role != "assistant" && !isAnchor {
 			continue
 		}
-		// The anchored message is the one the agent chose to read — render it WHOLE
-		// (cap -1 = no truncation). Neighbors stay snippets (dispCap) for context
-		// without dumping the window. --more widens; --budget caps if needed.
+		// policy: 2026-09-09 system prompts average 41,669 chars across 134 segments; cap to dispCap unless IncludeTools is true see docs/design/takeover-path-measurements.md
+		// Lifted from BurntSushi/ripgrep crates/printer/src/standard.rs L300-L330
 		cap := dispCap
-		if isAnchor {
+		if isAnchor && (m.Role != "system" || opts.IncludeTools) {
 			cap = -1
 		}
 		text := displayText(m.Content, opts.IncludeTools, opts.IncludeThinking, cap)

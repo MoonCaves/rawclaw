@@ -185,7 +185,6 @@ func uuid8(uuid string) string {
 	return string(r)
 }
 
-var reNumericRef = regexp.MustCompile(`^[0-9]+$`)
 var reHexPrefix = regexp.MustCompile(`^[0-9a-f]+$`)
 
 func normalizeRefArg(ref string) string {
@@ -215,9 +214,6 @@ func resolveRef(ref string) (string, string, error) {
 	session8, uuidPrefix := parts[0], strings.ToLower(parts[1])
 	if uuidPrefix == "" {
 		return "", "", fmt.Errorf("bad ref %q — expected <session8>:<uuid8> (e.g. a1b2c3d4:9f3e1c20)", ref)
-	}
-	if reNumericRef.MatchString(uuidPrefix) {
-		return "", "", fmt.Errorf("ref %q looks like an old numeric ref; re-run search to get a uuid ref", ref)
 	}
 	if !reHexPrefix.MatchString(uuidPrefix) {
 		return "", "", fmt.Errorf("bad ref %q — uuid8 must be hex [0-9a-f] (e.g. a1b2c3d4:9f3e1c20)", ref)

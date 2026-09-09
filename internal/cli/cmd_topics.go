@@ -20,22 +20,24 @@ func newTopicsCmd() *cobra.Command {
 		thisProject bool
 		dir         string
 		includePath string
+		session     string
 		jsonOut     bool
 	)
 	cmd := &cobra.Command{
-		Use:   "topics <query>",
+		Use:   "topics [flags] [query]",
 		Short: "Find tagged topics when a normal search is ambiguous (on-demand)",
 		Long: "Search ONLY the topic layer — the concept labels a tagging subagent attached to past sessions — " +
 			"and print, per hit, `<topic> · <project> · read ref=<sess8>:<uuid8>` pointing at where that topic " +
 			"begins. Topics are NOT in the default search ranking; reach for this when a normal `rawclaw \"query\"` " +
-			"is ambiguous. Searches every project by default; --this-project (with --dir) to narrow. ",
+			"is ambiguous. Searches every project by default; --this-project (with --dir) to narrow. " +
+			"Use --session <id> to list or filter topics for a single session.",
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			q := strings.Join(args, " ")
 			scope, more := verbScope(cmd.Context(), thisProject, dir, cmd.Flags().Changed("dir"))
-			opts := agentproto.TopicsOpts{Limit: limit, IncludePath: includePath, ScopeFallback: more}
+			opts := agentproto.TopicsOpts{Limit: limit, IncludePath: includePath, ScopeFallback: more, Session: session}
 			if thisProject {
 				opts.ProjectDir = dir
 			}
@@ -53,6 +55,7 @@ func newTopicsCmd() *cobra.Command {
 	f.BoolVar(&thisProject, "this-project", false, "limit to this project (default: all projects)")
 	f.StringVar(&dir, "dir", cwd(), "project working dir for --this-project")
 	f.StringVar(&includePath, "include-path", "", "only search projects whose working dir matches this regex")
+	f.StringVar(&session, "session", "", "list or filter topic segments for a single session ID/ref")
 	f.BoolVar(&jsonOut, "json", false, "machine-readable JSON output")
 	return cmd
 }

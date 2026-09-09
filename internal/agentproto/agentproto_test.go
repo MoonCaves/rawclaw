@@ -53,8 +53,8 @@ func TestResolveRef(t *testing.T) {
 		{name: "short uuid prefix", ref: "abc:9f3e", wantSID: "abc", wantUUID: "9f3e"},
 		{name: "no colon", ref: "a1b2c3d4", wantErr: "expected <session8>"},
 		{name: "too many colons", ref: "a:b:c", wantErr: "expected <session8>"},
-		{name: "empty uuid", ref: "abc:", wantErr: "expected <session8>"},
-		{name: "old numeric ref", ref: "a1b2c3d4:42", wantErr: "old numeric ref"},
+		{name: "all-digit hex uuid", ref: "a1b2c3d4:42", wantSID: "a1b2c3d4", wantUUID: "42"},
+		{name: "8-digit hex uuid", ref: "0014079c:10836404", wantSID: "0014079c", wantUUID: "10836404"},
 		{name: "non-hex uuid", ref: "abc:xyz", wantErr: "must be hex"},
 		// Search output prints refs as `read ref=<session8>:<uuid8>` — agents
 		// paste that token verbatim, so the parser must accept it.
@@ -1240,6 +1240,63 @@ func TestTopicsCommand(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "deployment rollback") || !strings.Contains(out, "read ref="+wantRef) {
 		t.Errorf("renderTopics missing topic/ref line:\n%s", out)
+	}
+}
+
+func TestTopicsSessionFlag(t *testing.T) {
+	proj := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	uuid1 := "9f3e1c20-aaaa-bbbb-cccc-000000000001"
+	uuid2 := "9f3e1c20-aaaa-bbbb-cccc-000000000002"
+	writeMultiSession(t, proj, "sessmulti", [][2]string{
+		{uuid1, "msg 1"},
+		{uuid2, "msg 2"},
+	})
+
+	dbp, _, _, err := index.EnsureIndexed(proj, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed: %v", err)
+	}
+	con := openCacheRW(t, dbp)
+	if err := store.EnsureTopicSchema(con); err != nil {
+		t.Fatalf("EnsureTopicSchema: %v", err)
+	}
+	if err := store.UpsertTopicSegment(con, "sessmulti", uuid1, "", "setup infrastructure", "configured servers", 1.0); err != nil {
+		t.Fatalf("UpsertTopicSegment 1: %v", err)
+	}
+	if err := store.UpsertTopicSegment(con, "sessmulti", uuid2, "", "deploy binary", "shipped release", 2.0); err != nil {
+		t.Fatalf("UpsertTopicSegment 2: %v", err)
+	}
+	con.Close()
+	if err := index.SyncConsolidatedFrom(dbp); err != nil {
+		t.Fatalf("SyncConsolidatedFrom: %v", err)
+	}
+
+	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
+
+	// List all topic segments in session order
+	res, err := Topics("", scope, TopicsOpts{Session: "sessmulti"})
+	if err != nil {
+		t.Fatalf("Topics(session): %v", err)
+	}
+	if len(res.Hits) != 2 {
+		t.Fatalf("Topics hits = %d, want 2", len(res.Hits))
+	}
+	if res.Hits[0].Topic != "setup infrastructure" || res.Hits[1].Topic != "deploy binary" {
+		t.Errorf("unexpected hits order: %+v", res.Hits)
+	}
+	if res.Hits[0].Summary != "configured servers" {
+		t.Errorf("hit Summary = %q, want 'configured servers'", res.Hits[0].Summary)
+	}
+	// Render test for session topics
+	var buf bytes.Buffer
+	renderTopics(&buf, res)
+	rendered := buf.String()
+	if !strings.Contains(rendered, "topic segment(s), in session order:") {
+		t.Errorf("rendered output missing session order header:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "configured servers") {
+		t.Errorf("rendered output missing summary:\n%s", rendered)
 	}
 }
 

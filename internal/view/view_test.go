@@ -577,3 +577,67 @@ func TestRenderMsgsWithPreservesMultilineCode(t *testing.T) {
 		t.Fatalf("RenderMsgsWith() = %#v, want exact fenced content", got)
 	}
 }
+
+func TestSystemAnchorIsCapped(t *testing.T) {
+	const sid = "s"
+	big := strings.Repeat("x", dispCap*4)
+	msgs := []seedMsg{
+		{1, "user", "u"},
+		{2, "system", big}, // anchor: non-conversational system prompt
+		{3, "assistant", "a"},
+	}
+	con := newTestDB(t, sid, msgs)
+
+	av := BuildAnchoredView(con, sid, 2, AnchoredViewOpts{Window: 2, Bookend: 0})
+	if av == nil {
+		t.Fatal("nil view")
+	}
+	var anchor *ViewMsg
+	for i := range av.Window {
+		if av.Window[i].Anchor {
+			anchor = &av.Window[i]
+		}
+	}
+	if anchor == nil {
+		t.Fatal("anchor not in window")
+	}
+	if len(anchor.Text) >= len(big) {
+		t.Errorf("system anchor rendered uncapped: %d chars (source %d)", len(anchor.Text), len(big))
+	}
+
+	// Opt back in: --with tools restores the whole record.
+	av2 := BuildAnchoredView(con, sid, 2, AnchoredViewOpts{Window: 2, Bookend: 0, IncludeTools: true})
+	for _, m := range av2.Window {
+		if m.Anchor && len(m.Text) < len(big) {
+			t.Errorf("--with tools should render the system anchor whole, got %d chars", len(m.Text))
+		}
+	}
+}
+
+func TestToolAnchorStaysWhole(t *testing.T) {
+	const sid = "s"
+	big := strings.Repeat("z", dispCap*4)
+	con := newTestDB(t, sid, []seedMsg{{1, "user", "u"}, {2, "tool", big}})
+	av := BuildAnchoredView(con, sid, 2, AnchoredViewOpts{Window: 2, Bookend: 0})
+	if av == nil {
+		t.Fatal("nil view")
+	}
+	for _, m := range av.Window {
+		if m.Anchor && len(m.Text) < len(big) {
+			t.Errorf("tool anchor was capped: %d chars, want %d", len(m.Text), len(big))
+		}
+	}
+}
+
+func TestUserAnchorStaysWhole(t *testing.T) {
+	const sid = "s"
+	big := strings.Repeat("y", dispCap*4)
+	con := newTestDB(t, sid, []seedMsg{{1, "user", big}, {2, "assistant", "a"}})
+	av := BuildAnchoredView(con, sid, 1, AnchoredViewOpts{Window: 2, Bookend: 0})
+	if av == nil || len(av.Window) == 0 {
+		t.Fatal("nil view for user anchor")
+	}
+	if got := len(av.Window[0].Text); got < len(big) {
+		t.Errorf("user anchor was capped: %d chars, want %d", got, len(big))
+	}
+}

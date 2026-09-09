@@ -20,6 +20,7 @@ type TopicHit struct {
 	Project string `json:"project"`
 	ReadRef string `json:"read_ref"`
 	Routine bool   `json:"routine,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 type TopicsResult struct {
@@ -37,12 +38,17 @@ type TopicsOpts struct {
 	ProjectDir    string
 	IncludePath   string
 	ScopeFallback ScopeFn
+	Session       string
 }
 
 func Topics(query string, scope []view.Scope, opts TopicsOpts) (TopicsResult, error) {
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = DefaultSearchLimit
+	}
+
+	if opts.Session != "" {
+		return topicsFromSession(query, scope, limit, opts)
 	}
 
 	if con, _, err := index.OpenConsolidated(); err == nil {
@@ -52,6 +58,44 @@ func Topics(query string, scope []view.Scope, opts TopicsOpts) (TopicsResult, er
 		}
 	}
 	return topicsByFanOut(query, scope, limit, opts)
+}
+
+// Lifted from cli/cli pkg/cmd/issue/list/list.go L48-L95
+func topicsFromSession(q string, scope []view.Scope, limit int, opts TopicsOpts) (TopicsResult, error) {
+	session8 := normalizeSessionArg(opts.Session)
+	dbp, fullSID, proj, locErr := locateSession(scope, opts.ScopeFallback, session8)
+	if locErr != nil {
+		return TopicsResult{}, locErr
+	}
+
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		return TopicsResult{}, fmt.Errorf("open %q: %w", dbp, err)
+	}
+	defer con.Close()
+
+	segs, err := store.TopicsForSession(con, fullSID)
+	if err != nil {
+		return TopicsResult{}, fmt.Errorf("topics for %q: %w", opts.Session, err)
+	}
+
+	hits := make([]TopicHit, 0, len(segs))
+	for _, sg := range segs {
+		if sg.Topic == "" {
+			continue
+		}
+		hits = append(hits, TopicHit{
+			Topic:   sg.Topic,
+			Project: proj,
+			ReadRef: fmtRef(fullSID, sg.StartUUID),
+			Summary: sg.Summary,
+		})
+	}
+	res := TopicsResult{Query: q, Hits: hits}
+	if len(hits) == 0 {
+		res.Note = fmt.Sprintf("no topics tagged for session %s", sid8(fullSID))
+	}
+	return res, nil
 }
 
 func topicsFromStore(con *sql.DB, query string, limit int, opts TopicsOpts) (TopicsResult, bool) {
@@ -279,12 +323,20 @@ func renderTopics(w io.Writer, r TopicsResult) {
 		fmt.Fprintf(w, "No topics matching '%s'. Try a different concept word, or widen scope.\n", r.Query)
 		return
 	}
-	fmt.Fprintf(w, "%d topic(s) matching '%s':\n\n", len(r.Hits), r.Query)
+	if r.Query == "" {
+		fmt.Fprintf(w, "%d topic segment(s), in session order:\n\n", len(r.Hits))
+	} else {
+		fmt.Fprintf(w, "%d topic(s) matching '%s':\n\n", len(r.Hits), r.Query)
+	}
 	for _, h := range r.Hits {
 		routine := ""
 		if h.Routine {
 			routine = " · routine"
 		}
-		fmt.Fprintf(w, "  %s  ·  %s%s  ·  read ref=%s\n", h.Topic, h.Project, routine, h.ReadRef)
+		summary := ""
+		if h.Summary != "" {
+			summary = fmt.Sprintf(" — %s", h.Summary)
+		}
+		fmt.Fprintf(w, "  %s  ·  %s%s  ·  read ref=%s%s\n", h.Topic, h.Project, routine, h.ReadRef, summary)
 	}
 }
