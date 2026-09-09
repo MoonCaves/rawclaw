@@ -14,15 +14,16 @@ const outlineBookendScan = 40
 const outlineDispCap = 300
 
 type OutlineResult struct {
-	Project      string         `json:"project"`
-	SessionID    string         `json:"session_id"`
-	ISO          string         `json:"iso"`
-	MessageCount int            `json:"message_count"`
-	Start        []view.ViewMsg `json:"start"`
-	End          []view.ViewMsg `json:"end"`
-	MidCount     int            `json:"mid_count"`
-	Topics       []string       `json:"topics,omitempty"`
-	Subagents    []SubagentInfo `json:"subagents,omitempty"`
+	Project            string         `json:"project"`
+	SessionID          string         `json:"session_id"`
+	ISO                string         `json:"iso"`
+	MessageCount       int            `json:"message_count"`
+	Start              []view.ViewMsg `json:"start"`
+	End                []view.ViewMsg `json:"end"`
+	MidCount           int            `json:"mid_count"`
+	Topics             []string       `json:"topics,omitempty"`
+	LastHumanDirective *view.ViewMsg  `json:"last_human_directive,omitempty"`
+	Subagents          []SubagentInfo `json:"subagents,omitempty"`
 }
 
 type OutlineOpts struct {
@@ -106,6 +107,18 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, opts OutlineOpts
 		}
 	}
 
+	var lastHuman *view.ViewMsg
+	if len(topics) == 0 {
+		if hid, herr := store.NewestHumanMessageID(con, fullSID); herr == nil && hid > 0 {
+			if hmsgs, herr2 := store.MessagesBefore(con, fullSID, hid, 1); herr2 == nil && len(hmsgs) > 0 {
+				rendered := view.RenderMsgsWith(hmsgs, opts.IncludeTools, opts.IncludeThinking, outlineDispCap)
+				if len(rendered) > 0 {
+					lastHuman = &rendered[0]
+				}
+			}
+		}
+	}
+
 	var subagents []SubagentInfo
 	if opts.IncludeSubagents {
 		if subs, err := store.SubagentsForSession(con, fullSID); err == nil {
@@ -119,15 +132,16 @@ func outline(session8 string, scope []view.Scope, more ScopeFn, opts OutlineOpts
 	}
 
 	return &OutlineResult{
-		Project:      proj,
-		SessionID:    fullSID,
-		ISO:          iso,
-		MessageCount: nmsg,
-		Start:        startOut,
-		End:          endOut,
-		MidCount:     midCount,
-		Topics:       topics,
-		Subagents:    subagents,
+		Project:            proj,
+		SessionID:          fullSID,
+		ISO:                iso,
+		MessageCount:       nmsg,
+		Start:              startOut,
+		End:                endOut,
+		MidCount:           midCount,
+		Topics:             topics,
+		LastHumanDirective: lastHuman,
+		Subagents:          subagents,
 	}, nil
 }
 

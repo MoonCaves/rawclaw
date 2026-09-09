@@ -225,6 +225,23 @@ func renderOutline(w io.Writer, r *OutlineResult) {
 	if r.MidCount > 0 {
 		fmt.Fprintf(w, "\n  … %d messages in between …\n\n", r.MidCount)
 	}
+	if r.LastHumanDirective != nil {
+		isDup := false
+		for _, m := range r.Start {
+			if m.ID == r.LastHumanDirective.ID {
+				isDup = true
+				break
+			}
+		}
+		if !isDup {
+			fmt.Fprintln(w, "  ── LAST HUMAN INSTRUCTION ──")
+			ref := fmt.Sprintf("#%d", r.LastHumanDirective.ID)
+			if r.LastHumanDirective.UUID != "" {
+				ref = fmtRef(r.SessionID, r.LastHumanDirective.UUID)
+			}
+			fmt.Fprintf(w, "     [%s %s] %s\n\n", r.LastHumanDirective.Role, ref, r.LastHumanDirective.Text)
+		}
+	}
 	if len(r.End) > 0 {
 		fmt.Fprintln(w, "  ── RESOLUTION (session close) ──")
 		for _, m := range r.End {

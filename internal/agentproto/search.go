@@ -554,99 +554,47 @@ func currentTurnStart(dbp, sessionID string) int {
 	return id
 }
 
-type dbConnCache struct {
-	conns map[string]*sql.DB
-}
-
-func (c *dbConnCache) get(dbp string) (*sql.DB, error) {
-	if c.conns == nil {
-		c.conns = make(map[string]*sql.DB)
-	}
-	if db, ok := c.conns[dbp]; ok && db != nil {
-		return db, nil
-	}
-	db, err := store.ConnectRO(dbp)
-	if err != nil {
-		return nil, err
-	}
-	c.conns[dbp] = db
-	return db, nil
-}
-
-func (c *dbConnCache) close() {
-	for _, db := range c.conns {
-		if db != nil {
-			_ = db.Close()
-		}
-	}
-	c.conns = nil
-}
-
-func attachTopicsWithCache(refs []SearchRef, anchors []retrieve.Anchor, cache *dbConnCache) {
-	if len(refs) == 0 || len(refs) != len(anchors) {
-		return
-	}
-	byDB := map[string][]int{}
-	for i := range anchors {
-		if anchors[i].DBP == "" || anchors[i].UUID == "" {
-			continue
-		}
-		byDB[anchors[i].DBP] = append(byDB[anchors[i].DBP], i)
-	}
-	for dbp, idxs := range byDB {
-		con, err := cache.get(dbp)
-		if err != nil {
-			continue
-		}
-		for _, i := range idxs {
-			topic := store.TopicForMessage(con, anchors[i].SessionID, anchors[i].UUID)
-			if topic == "" {
-				topic = view.SessionPreview(con, anchors[i].SessionID, searchTitleCap)
-			}
-			refs[i].Topic = topic
-		}
-	}
-}
-
 const searchTitleCap = 70
 
-func attachLastActivityWithCache(refs []SearchRef, anchors []retrieve.Anchor, cache *dbConnCache) {
+// enrichSearchResults attaches topic labels and last-activity lines in a single pass,
+// opening each backing database exactly once to eliminate connection cache churn.
+func enrichSearchResults(refs []SearchRef, anchors []retrieve.Anchor) {
 	if len(refs) == 0 || len(refs) != len(anchors) {
 		return
 	}
 	byDB := map[string][]int{}
 	for i := range anchors {
-		if anchors[i].DBP == "" || anchors[i].SessionID == "" {
+		if anchors[i].DBP == "" || (anchors[i].UUID == "" && anchors[i].SessionID == "") {
 			continue
 		}
 		byDB[anchors[i].DBP] = append(byDB[anchors[i].DBP], i)
 	}
 	for dbp, idxs := range byDB {
-		con, err := cache.get(dbp)
+		con, err := store.ConnectRO(dbp)
 		if err != nil {
 			continue
 		}
 		seenLast := map[string]string{}
 		for _, i := range idxs {
-			sid := anchors[i].SessionID
-			last, done := seenLast[sid]
-			if !done {
-				last = view.SessionLastActivity(con, sid)
-				seenLast[sid] = last
+			if anchors[i].UUID != "" {
+				topic := store.TopicForMessage(con, anchors[i].SessionID, anchors[i].UUID)
+				if topic == "" {
+					topic = view.SessionPreview(con, anchors[i].SessionID, searchTitleCap)
+				}
+				refs[i].Topic = topic
 			}
-			refs[i].Last = last
+			if anchors[i].SessionID != "" {
+				sid := anchors[i].SessionID
+				last, done := seenLast[sid]
+				if !done {
+					last = view.SessionLastActivity(con, sid)
+					seenLast[sid] = last
+				}
+				refs[i].Last = last
+			}
 		}
+		_ = con.Close()
 	}
-}
-
-func enrichSearchResults(refs []SearchRef, anchors []retrieve.Anchor) {
-	if len(refs) == 0 || len(refs) != len(anchors) {
-		return
-	}
-	cache := &dbConnCache{}
-	defer cache.close()
-	attachTopicsWithCache(refs, anchors, cache)
-	attachLastActivityWithCache(refs, anchors, cache)
 }
 
 func sortCandidates(cands []retrieve.Anchor, mode string) {
