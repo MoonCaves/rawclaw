@@ -1,7 +1,7 @@
 # Issue 89 hook protocol provenance delta
 
-Date: 2026-11-04  
-Candidate: `7ba119abbdfc8d4258fc9a19599a8561e5027042`  
+Date: 2026-11-04
+Candidate: `7ba119abbdfc8d4258fc9a19599a8561e5027042`
 Scope: newly published POSIX quotation and Infisical exporter evidence, applied to the existing provenance review. This is a delta; the prior 13-item rejection matrix is not repeated.
 
 ## Delta matrix
