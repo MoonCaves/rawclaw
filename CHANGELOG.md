@@ -12,6 +12,7 @@ All notable changes to RawClaw are documented in this file.
 ### Fixed
 
 - Clarified `read` help: neighboring previews and default system anchors are capped; documented the existing system-anchor display override.
+- Clarified `topics --session` help: it lists all session topic segments and ignores the query, `--limit`, and `--include-path`.
 
 ## [v0.12.0] - 2026-09-02
 

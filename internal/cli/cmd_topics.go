@@ -30,7 +30,8 @@ func newTopicsCmd() *cobra.Command {
 			"and print, per hit, `<topic> · <project> · read ref=<sess8>:<uuid8>` pointing at where that topic " +
 			"begins. Topics are NOT in the default search ranking; reach for this when a normal `rawclaw \"query\"` " +
 			"is ambiguous. Searches every project by default; --this-project (with --dir) to narrow. " +
-			"Use --session <id> to list or filter topics for a single session.",
+			"Use --session <id> to list all tagged topic segments for one session; the positional query, " +
+			"--limit, and --include-path are ignored. --this-project scopes session lookup.",
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -55,7 +56,7 @@ func newTopicsCmd() *cobra.Command {
 	f.BoolVar(&thisProject, "this-project", false, "limit to this project (default: all projects)")
 	f.StringVar(&dir, "dir", cwd(), "project working dir for --this-project")
 	f.StringVar(&includePath, "include-path", "", "only search projects whose working dir matches this regex")
-	f.StringVar(&session, "session", "", "list or filter topic segments for a single session ID/ref")
+	f.StringVar(&session, "session", "", "list all topic segments for a session ID/ref (query, --limit, --include-path ignored)")
 	f.BoolVar(&jsonOut, "json", false, "machine-readable JSON output")
 	return cmd
 }
