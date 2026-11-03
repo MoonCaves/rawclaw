@@ -4,6 +4,10 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Clarified `topics --session` help: it lists all session topic segments and ignores the query, `--limit`, and `--include-path`.
+
 ## [v0.12.0] - 2026-09-02
 
 ### Added
