@@ -4,6 +4,10 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Clarified `read` help: neighboring previews and default system anchors are capped; documented the existing system-anchor display override.
+
 ## [v0.12.0] - 2026-09-02
 
 ### Added
