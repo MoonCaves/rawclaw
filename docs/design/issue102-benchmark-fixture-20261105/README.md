@@ -18,11 +18,11 @@ Official Go source, fetched before editing:
 defines the common testing methods, including `Helper` and `Fatal`, and asserts
 that `*testing.B` implements them. Go is licensed under BSD-3-Clause.
 
-This does not change fixture bytes, workload, timer calls, result assertions,
+The ownership repair did not change fixture bytes, workload, timer calls, result assertions,
 the existing ignored Discover error, or runtime code. It establishes no speedup,
 historical-branch adoption, timer correction, or issue closure.
 
-Validation used package race tests and the existing Antigravity benchmarks
+Ownership-repair validation used package race tests and the existing Antigravity benchmarks
 for one iteration with Go 1.27.3. HOME/cache/config/catalog were isolated;
 XDG_DATA_HOME was unset so benchmark HOME fixtures retained their existing fallback.
 
@@ -46,3 +46,21 @@ These are execution checks, not a before/after performance comparison.
 
 The repository contract and design-note index were checked and left unchanged;
 this repair does not move a runtime contract.
+
+
+## Follow-up: incremental fixture readiness
+
+Source: direct inspection and an isolated diagnostic at
+`e8165f7aab8e5d29756b49f424369957d38c8dc6`, created here as a follow-up to
+failure ownership. Changing only the incremental fixture transcript basename
+to an unrecognized name left zero discovered and indexed sessions, yet the
+benchmark returned `IndexFresh` and `PASS`. The unmodified control discovered
+and indexed the intended single session. This was a one-iteration behavior
+probe, not a performance comparison.
+
+The minimal follow-up checks discovery error/count and the warmup session count
+before `ResetTimer`, using the existing native `b.Fatalf` pattern. The fixture
+already seeds exactly one session. These checks preserve fixture bytes/paths,
+timer calls, the timed loop, shared helper and production code. A count of one
+does not establish full message-content parity. No speedup, source adoption or
+issue closure is claimed.
