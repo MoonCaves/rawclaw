@@ -22,6 +22,7 @@ func TestTopicsSessionFallsBackToProjectDB(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
+			t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 			project := t.TempDir()
 			const sessionID = "aaaaaaaa-1111-2222-3333-000000000001"

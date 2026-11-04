@@ -37,6 +37,7 @@ func writeSession(t *testing.T, proj, stem, uuid, content string) {
 func scopeFor(t *testing.T, proj string) []view.Scope {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	return []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
 }
 
@@ -1246,6 +1247,7 @@ func TestTopicsCommand(t *testing.T) {
 func TestTopicsSessionFlag(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	uuid1 := "9f3e1c20-aaaa-bbbb-cccc-000000000001"
 	uuid2 := "bbbbbbbb-aaaa-bbbb-cccc-000000000002"
 	uuid3 := "cccccccc-aaaa-bbbb-cccc-000000000003"
