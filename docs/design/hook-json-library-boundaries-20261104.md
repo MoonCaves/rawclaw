@@ -51,9 +51,92 @@ backslash: exit=0 valid=True emitted=b'{  "cwd": "/tmp/a\\\\b"}'
 
 Parser replacement alone therefore cannot promise valid catalog JSON for decoded strings; the existing writer also needs JSON literal serialization or an explicitly narrower scope that leaves this defect open.
 
+## Current Goose/Hermes extraction and template probe
+
+This separate probe pins public main `0afecdfab2321abb49733746f7250e6572d5ec5e`, extracts the current Goose and Hermes raw Go templates, and runs each whole template with JSON hook input, isolated temporary state, and a stub `rawclaw` ingest command. The synthetic `cwd` values use `/tmp` paths. Plain paths survive; quote, backslash, and newline paths produce an empty extracted `cwd` for both templates. The resulting catalog entries are valid JSON with `cwd` set to the empty string. In all eight cases the shell exits 0, prints the banner, and calls the ingest stub.
+
+For these inputs the extracted value is empty, not a truncated path prefix. This measures current extraction before catalog serialization. It does not contradict the preceding hypothetical probe, which feeds already-decoded special characters directly into the catalog writer and observes invalid JSON for quote/newline values. The two probes exercise different values at the writer boundary.
+
+Run from the pinned checkout with Python 3 and `/bin/sh`:
+
+```python
+import hashlib, json, os, platform, re, shlex, subprocess, tempfile
+from pathlib import Path
+
+REV = "0afecdfab2321abb49733746f7250e6572d5ec5e"
+src = subprocess.check_output(["git", "show", f"{REV}:internal/cli/setup.go"])
+text = src.decode()
+
+def raw(name):
+    m = re.search(rf"const\s+{name}\s*=\s*`(.*?)`", text, re.S)
+    if not m:
+        raise RuntimeError(f"missing raw Go constant {name}")
+    return m.group(1)
+
+banner = raw("rawclawBanner")
+templates = {"goose": raw("rawclawGooseCatalogScript"),
+             "hermes": raw("rawclawHermesCatalogScript")}
+print(f"source_revision={REV}")
+print(f"setup_go_sha256={hashlib.sha256(src).hexdigest()}")
+print(f"platform={platform.system()} shell=/bin/sh")
+
+for runtime, template in templates.items():
+    outcomes, exits, banners, calls, valid = [], 0, 0, 0, 0
+    for label, tail in [("plain", "plain"), ("quote", 'a"b'),
+                        ("backslash", r"a\b"), ("newline", "a\nb")]:
+        with tempfile.TemporaryDirectory(prefix=f"rc89-{runtime}-{label}-") as temp:
+            root = Path(temp)
+            sid = f"rc89-{runtime}-{label}-session"
+            cwd = f"/tmp/{sid}/{tail}"
+            event = {"session_id": sid}
+            event.update({"hook_event_name": "SessionStart", "working_dir": cwd}
+                         if runtime == "goose" else {"cwd": cwd})
+            payload = json.dumps(event, separators=(",", ":"))
+            stub, log = root / "rawclaw-stub", root / "calls.log"
+            stub.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$RAWCLAW_TEST_CALLS"\n')
+            stub.chmod(0o755)
+            script = template.replace("@@RAWCLAW@@", shlex.quote(str(stub)))
+            script = script.replace("@@BANNER_RAW@@", banner)
+            script = script.replace("set -eu\n", "set -eu\ntrap 'wait' 0\n", 1)
+            hook = root / "hook.sh"
+            hook.write_text(script)
+            hook.chmod(0o755)
+            env = dict(os.environ, HOME=str(root / "home"),
+                       XDG_DATA_HOME=str(root / "data"),
+                       XDG_CACHE_HOME=str(root / "cache"),
+                       RAWCLAW_CATALOG_DIR=str(root / "catalog"),
+                       RAWCLAW_TEST_CALLS=str(log))
+            Path(env["HOME"]).mkdir()
+            p = subprocess.run(["/bin/sh", str(hook)], input=payload.encode(),
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               env=env, timeout=10, check=False)
+            exits += p.returncode == 0
+            banners += banner.encode() in p.stdout
+            calls += log.exists() and log.read_text().splitlines() == [f"ingest -- {sid}"]
+            record = json.loads((root / "catalog" / sid).read_bytes())
+            valid += 1
+            outcomes.append("preserved" if record.get("cwd") == cwd else
+                            "empty" if record.get("cwd") == "" else "different")
+    print(f"{runtime}: cwd={','.join(outcomes)} exit={exits}/4 "
+          f"banner={banners}/4 stub_calls={calls}/4 valid_catalog_json={valid}/4")
+```
+
+Observed on Darwin with `/bin/sh`:
+
+```text
+source_revision=0afecdfab2321abb49733746f7250e6572d5ec5e
+setup_go_sha256=88057095f725f6511837122a955b00af4b49657e1cf77e3953fe73750e3a9a8a
+platform=Darwin shell=/bin/sh
+goose: cwd=preserved,empty,empty,empty exit=4/4 banner=4/4 stub_calls=4/4 valid_catalog_json=4/4
+hermes: cwd=preserved,empty,empty,empty exit=4/4 banner=4/4 stub_calls=4/4 valid_catalog_json=4/4
+```
+
+The stub call proves only that the template invoked the command with the tested session ID; it does not establish ingestion success. The fixture does not emulate an editor/provider accepting the payload, or establish live hook behavior on other shells or platforms. It records source-only behavior at this revision; it proposes no runtime fix or JSON-library adoption. [5]
+
 ## Sources
 
 [1] https://github.com/tidwall/gjson/blob/690362d6edf4bcbde1e9f54d552d3814f1cd5bcb/gjson.go
 [2] https://github.com/tidwall/gjson/blob/690362d6edf4bcbde1e9f54d552d3814f1cd5bcb/go.mod
 [3] https://github.com/tidwall/gjson/blob/690362d6edf4bcbde1e9f54d552d3814f1cd5bcb/LICENSE
 [4] https://github.com/MoonCaves/rawclaw/blob/754cf4ab3045f2196be8b32c3c7b69d48332af52/internal/cli/setup.go
+[5] https://github.com/MoonCaves/rawclaw/blob/0afecdfab2321abb49733746f7250e6572d5ec5e/internal/cli/setup.go
