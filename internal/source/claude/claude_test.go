@@ -149,6 +149,7 @@ func TestDiscover(t *testing.T) {
 	// Not parallel: mutates CLAUDE_CONFIG_DIR via t.Setenv.
 	root := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", root)
+	t.Setenv("CLAUDE_CLI_NAME", "claude path")
 	proj := filepath.Join(root, "projects", "-Users-octocat-demo")
 	writeJSONL(t, filepath.Join(proj, "top.jsonl"),
 		`{"type":"user","uuid":"a","timestamp":"2026-06-01T10:00:00Z","cwd":"/Users/octocat/demo","message":{"role":"user","content":"hi"}}`,
@@ -180,7 +181,10 @@ func TestDiscover(t *testing.T) {
 	if sub.ID != "top/sub" || sub.ParentID != "top" {
 		t.Errorf("subagent container wrong: %+v", *sub)
 	}
-	if len(top.ResumeArgv) != 3 || top.ResumeArgv[0] != "claude" || top.ResumeArgv[2] != "top" {
+	if len(top.ResumeArgv) != 3 || top.ResumeArgv[0] != "claude path" || top.ResumeArgv[2] != "top" {
 		t.Errorf("top resume argv wrong: %v", top.ResumeArgv)
+	}
+	if len(sub.ResumeArgv) != 3 || sub.ResumeArgv[0] != "claude path" || sub.ResumeArgv[2] != "sub" {
+		t.Errorf("subagent resume argv wrong: %v", sub.ResumeArgv)
 	}
 }

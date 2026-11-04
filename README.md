@@ -101,7 +101,7 @@ rawclaw read <session8>:<uuid8>             # bounded excerpt around a ref (--mo
 rawclaw outline <session8>                  # the session's goal → resolution arc
 rawclaw                                      # browse: your most recent sessions
 rawclaw --include-path <regex>              # browse only the projects whose working dir matches
-rawclaw --resume <session8>                 # paste-ready `claude --resume` for that session
+rawclaw --resume <session8>                 # paste-ready resume command for that session
 rawclaw --stats                             # corpus overview (this project; --all for everything)
 rawclaw "query" --json                      # machine-readable output for scripts/agents
 rawclaw "query" --since 2026-01-01 --before 2026-02-01   # date-scoped
@@ -110,6 +110,11 @@ rawclaw delete --yes --files <session8>     # delete a session non-interactively
 rawclaw version                             # print the version + build stamp
 rawclaw --timeout 2m "query"                # raise the self-terminating deadline (0 disables it)
 ```
+
+For Claude sessions, `CLAUDE_CLI_NAME` selects the executable in the printed resume command. When
+unset, it defaults to `claude`; an explicitly empty value stays empty. Each argument is quoted as
+one shell word, so executable paths and session IDs with spaces or shell-special characters remain
+single arguments.
 
 Search defaults to **answer-first**: queries answer instantly from the consolidated search store instead of waiting on a synchronous disk crawl or reindex. If recent sessions are not yet ingested (or the store is behind), search returns available hits immediately with an honest staleness note (`note: sessions not yet ingested — background ingest triggered` or `note: sessions not yet ingested — run 'rawclaw ingest' to refresh`; in `--json`, `stale: true` and an `index_stale` structured warning) and triggers a background ingest pass. When you need guaranteed synchronous freshness before searching, passing `--reindex`, `--dir`, or `--this-project` refreshes the targeted scope before answering.
 

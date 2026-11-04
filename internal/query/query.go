@@ -177,6 +177,7 @@ func ConvertQuery(query string) string {
 			closeTerm()
 			out.WriteString(" OR ")
 		case !inQuote && c == '+' && term == "":
+			//nolint:staticcheck // Preserve zk's inert switch break; leading plus is ignored and query scanning continues.
 			break
 		case !inQuote && termSeparators[c]:
 			closeTerm()
