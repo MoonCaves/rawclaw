@@ -137,3 +137,111 @@ ok  	github.com/MoonCaves/rawclaw/internal/agentproto	4.108s
 exit=0
 ambient_XDG_files=['rawclaw/transcripts/localsess.jsonl', 'rawclaw/transcripts/localsess.meta.json']
 ```
+
+## Focused correction checks
+
+The correction adds 33 native XDG assignments across the eleven owning fixture files. All four commands above were repeated with new temporary outer HOME/XDG roots. Each command exited zero and its inherited XDG guard remained empty. Full-suite verification is separate.
+
+### agentproto
+
+```text
+go test -race -count=1 -v -run ^Test(Routine_(HigherRelevanceOutranksNormal|Rendering_ShowsRoutineMarker|FTS_SoleMatchReturned|Topics_SoleMatchReturned)|CurrentTurn(FindsAPromptBuriedUnderADeepTail|StartSkipsThisTurnsMachinery)|LocateSession(StillFlagsDistinctIDCollision|HonorsProjectNarrowing|ReturnsMergedRow|FallsBackWhenOneStoreEmpty|SkipsScopeListWhenOneStoreAnswers|BuildsScopeListWhenOneStoreCannotAnswer|EmptyScopeResolvesNothing)|Outline(CountsOnlyItsOwnMessagesInBetween|_UntaggedSessionTailFallback|_TaggedSessionSkipsFallback)|Search(SkipsEmbeddingWhenStoreHasNoVectors|EmbedsAtMostOncePerSearch|SkipsEmbeddingWhenLexicalLimitIsFull|IncludeExcludePath|WidensUntilItHasEnoughConversations|FallsBackWhenTheStoreIsAbsent)|LastActivityDoesNotAffectOrdering)$ ./internal/agentproto
+=== RUN   TestRoutine_FTS_SoleMatchReturned
+--- PASS: TestRoutine_FTS_SoleMatchReturned (0.82s)
+=== RUN   TestRoutine_Topics_SoleMatchReturned
+--- PASS: TestRoutine_Topics_SoleMatchReturned (0.79s)
+=== RUN   TestRoutine_HigherRelevanceOutranksNormal
+--- PASS: TestRoutine_HigherRelevanceOutranksNormal (0.80s)
+=== RUN   TestRoutine_Rendering_ShowsRoutineMarker
+--- PASS: TestRoutine_Rendering_ShowsRoutineMarker (0.96s)
+=== RUN   TestSearchIncludeExcludePath
+--- PASS: TestSearchIncludeExcludePath (0.86s)
+=== RUN   TestSearchFallsBackWhenTheStoreIsAbsent
+--- PASS: TestSearchFallsBackWhenTheStoreIsAbsent (0.52s)
+=== RUN   TestSearchWidensUntilItHasEnoughConversations
+--- PASS: TestSearchWidensUntilItHasEnoughConversations (2.37s)
+=== RUN   TestCurrentTurnStartSkipsThisTurnsMachinery
+--- PASS: TestCurrentTurnStartSkipsThisTurnsMachinery (0.40s)
+=== RUN   TestCurrentTurnFindsAPromptBuriedUnderADeepTail
+--- PASS: TestCurrentTurnFindsAPromptBuriedUnderADeepTail (1.30s)
+=== RUN   TestLastActivityDoesNotAffectOrdering
+--- PASS: TestLastActivityDoesNotAffectOrdering (0.71s)
+=== RUN   TestSearchSkipsEmbeddingWhenStoreHasNoVectors
+--- PASS: TestSearchSkipsEmbeddingWhenStoreHasNoVectors (0.70s)
+=== RUN   TestSearchEmbedsAtMostOncePerSearch
+--- PASS: TestSearchEmbedsAtMostOncePerSearch (0.85s)
+=== RUN   TestSearchSkipsEmbeddingWhenLexicalLimitIsFull
+--- PASS: TestSearchSkipsEmbeddingWhenLexicalLimitIsFull (0.63s)
+=== RUN   TestLocateSessionSkipsScopeListWhenOneStoreAnswers
+--- PASS: TestLocateSessionSkipsScopeListWhenOneStoreAnswers (0.59s)
+=== RUN   TestLocateSessionBuildsScopeListWhenOneStoreCannotAnswer
+2026/11/05 03:43:36 WARN the consolidated store is missing or unreadable, so this lookup falls back to the per-project indexes; run `rawclaw consolidate` to build it path=$TEST_TMP err="unable to open database file: out of memory (14)"
+--- PASS: TestLocateSessionBuildsScopeListWhenOneStoreCannotAnswer (0.59s)
+=== RUN   TestLocateSessionEmptyScopeResolvesNothing
+--- PASS: TestLocateSessionEmptyScopeResolvesNothing (0.61s)
+=== RUN   TestOutline_UntaggedSessionTailFallback
+--- PASS: TestOutline_UntaggedSessionTailFallback (0.62s)
+=== RUN   TestOutline_TaggedSessionSkipsFallback
+--- PASS: TestOutline_TaggedSessionSkipsFallback (0.41s)
+=== RUN   TestLocateSessionReturnsMergedRow
+--- PASS: TestLocateSessionReturnsMergedRow (0.91s)
+=== RUN   TestLocateSessionStillFlagsDistinctIDCollision
+2026/11/05 03:43:39 WARN the consolidated store is missing or unreadable, so this lookup falls back to the per-project indexes; run `rawclaw consolidate` to build it path=$TEST_TMP err="unable to open database file: out of memory (14)"
+--- PASS: TestLocateSessionStillFlagsDistinctIDCollision (0.51s)
+=== RUN   TestLocateSessionHonorsProjectNarrowing
+--- PASS: TestLocateSessionHonorsProjectNarrowing (0.97s)
+=== RUN   TestLocateSessionFallsBackWhenOneStoreEmpty
+2026/11/05 03:43:40 WARN the consolidated store is missing or unreadable, so this lookup falls back to the per-project indexes; run `rawclaw consolidate` to build it path=$TEST_TMP err="unable to open database file: out of memory (14)"
+--- PASS: TestLocateSessionFallsBackWhenOneStoreEmpty (0.55s)
+=== RUN   TestOutlineCountsOnlyItsOwnMessagesInBetween
+--- PASS: TestOutlineCountsOnlyItsOwnMessagesInBetween (0.97s)
+PASS
+ok  	github.com/MoonCaves/rawclaw/internal/agentproto	20.885s
+exit=0
+ambient_XDG_files=[]
+```
+
+
+### view
+
+```text
+go test -race -count=1 -v -run ^Test(BrowseReturnsPreviewsWithoutDeadlock|SessionLastActivity(ShowsNewestRealMessage|EmptyWhenTailIsAllMachinery|SkipsRedactedThinking))$ ./internal/view
+=== RUN   TestBrowseReturnsPreviewsWithoutDeadlock
+--- PASS: TestBrowseReturnsPreviewsWithoutDeadlock (0.34s)
+=== RUN   TestSessionLastActivityShowsNewestRealMessage
+--- PASS: TestSessionLastActivityShowsNewestRealMessage (0.31s)
+=== RUN   TestSessionLastActivityEmptyWhenTailIsAllMachinery
+--- PASS: TestSessionLastActivityEmptyWhenTailIsAllMachinery (0.30s)
+=== RUN   TestSessionLastActivitySkipsRedactedThinking
+--- PASS: TestSessionLastActivitySkipsRedactedThinking (0.51s)
+PASS
+ok  	github.com/MoonCaves/rawclaw/internal/view	3.432s
+exit=0
+ambient_XDG_files=[]
+```
+
+
+### archive-helper
+
+```text
+go test -race -count=1 -v -run ^TestAll_SplicesArchiveScopes$ ./internal/scopes
+=== RUN   TestAll_SplicesArchiveScopes
+--- PASS: TestAll_SplicesArchiveScopes (2.05s)
+PASS
+ok  	github.com/MoonCaves/rawclaw/internal/scopes	4.039s
+exit=0
+ambient_XDG_files=[]
+```
+
+
+### archive-helper search consumer
+
+```text
+go test -race -count=1 -v -run ^TestSearch_NoDuplicateLocalHits$ ./internal/agentproto
+=== RUN   TestSearch_NoDuplicateLocalHits
+--- PASS: TestSearch_NoDuplicateLocalHits (2.80s)
+PASS
+ok  	github.com/MoonCaves/rawclaw/internal/agentproto	4.620s
+exit=0
+ambient_XDG_files=[]
+```
