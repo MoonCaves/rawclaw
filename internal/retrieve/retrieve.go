@@ -402,6 +402,8 @@ func SearchExplained(dbp, q string, limit int, p SearchParams) (out []Hit, expla
 // and yoanbernabeu/grepai search/hybrid.go#L57-L89 (MIT).
 // Rank computation consumes SQL DENSE_RANK() OVER (ORDER BY bm25) directly from store.SearchAnchor.Rank,
 // so equal-relevance hits produce equal Fused scores.
+//
+//nolint:dupl // Preserve the cited RRF port for this native result type without a shared runtime adapter.
 func rrfAnchors(k float64, limit int, lists ...[]store.SearchAnchor) ([]store.SearchAnchor, map[int]float64) {
 	// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L49-L60 (AGPL-3.0) @c9395676e2299d2b156ae827161efdd15f08486a:
 	// sum(1.0 / (60 + rank)) grouped by entity id, consuming SQL RANK() OVER (ORDER BY bm25) directly.
@@ -442,6 +444,8 @@ func rrfAnchors(k float64, limit int, lists ...[]store.SearchAnchor) ([]store.Se
 // and yoanbernabeu/grepai search/hybrid.go#L57-L89 (MIT).
 // Rank computation consumes SQL DENSE_RANK() OVER (ORDER BY bm25) directly from store.SearchHit.Rank,
 // so equal-relevance hits produce equal Fused scores.
+//
+//nolint:dupl // Preserve the cited RRF port for this native result type without a shared runtime adapter.
 func rrfHits(k float64, limit int, lists ...[]store.SearchHit) ([]store.SearchHit, map[int]float64) {
 	// Lifted from paradedb/paradedb pg_search/tests/pg_regress/sql/reciprocal_rank_fusion.sql#L49-L60 (AGPL-3.0) @c9395676e2299d2b156ae827161efdd15f08486a:
 	// sum(1.0 / (60 + rank)) grouped by entity id, consuming SQL RANK() OVER (ORDER BY bm25) directly.
@@ -513,6 +517,7 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 	var hits []store.SearchHit
 	var hitScores map[int]float64
 
+	//nolint:dupl // Keep native hit and anchor dispatch parallel without callback orchestration.
 	if p.Exact {
 		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
 		hits, _ = store.SearchHitsExact(con, matchAND, filt, srt, fetch)
@@ -801,6 +806,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 	var anchors []store.SearchAnchor
 	var anchorScores map[int]float64
 
+	//nolint:dupl // Keep native hit and anchor dispatch parallel without callback orchestration.
 	if p.Exact {
 		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
 		anchors, _ = store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
