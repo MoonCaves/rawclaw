@@ -517,7 +517,7 @@ func searchScored(dbp, q string, limit int, p SearchParams) ([]scoredHit, Explai
 	var hits []store.SearchHit
 	var hitScores map[int]float64
 
-	//nolint:dupl // Keep native hit and anchor dispatch parallel without callback orchestration.
+	//nolint:dupl,gocritic // Keep native hit and anchor dispatch shape without callbacks or style-only switch rewrites.
 	if p.Exact {
 		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
 		hits, _ = store.SearchHitsExact(con, matchAND, filt, srt, fetch)
@@ -806,7 +806,7 @@ func MatchAnchors(con *sql.DB, q string, fetch int, p SearchParams) []Anchor {
 	var anchors []store.SearchAnchor
 	var anchorScores map[int]float64
 
-	//nolint:dupl // Keep native hit and anchor dispatch parallel without callback orchestration.
+	//nolint:dupl,gocritic // Keep native hit and anchor dispatch shape without callbacks or style-only switch rewrites.
 	if p.Exact {
 		// Calibre-style --exact flag (calibre src/calibre/db/fts/connect.py:164–165, Decision D4)
 		anchors, _ = store.SearchAnchorsExact(con, matchAND, filt, srt, fetch)
