@@ -70,3 +70,25 @@ ambient_XDG_files=[rawclaw/.deleted]
 ## Correction boundary
 
 Use native `t.Setenv` to pin XDG to each temporary HOME's `.local/share` in the archive helper and scope fixtures that set HOME directly. Preserve assertions, fixtures, and runtime behavior. The owning AGENTS contract was checked and requires no change. These probes establish the two fixture failures; they do not establish full-suite containment.
+
+## Focused correction check
+
+After the fixture setup correction, the same Go 1.27.3 race run used a fresh outer HOME and a fresh inherited XDG guard:
+
+```text
+go test -race -count=1 -v -run '^Test(CodexUnionsOrphanedDBs_TombstonedExcluded|PushLocal_(TombstonedFileNotResurrected|DeleteReportsOnce))$' ./internal/scopes ./internal/archive
+=== RUN   TestCodexUnionsOrphanedDBs_TombstonedExcluded
+--- PASS: TestCodexUnionsOrphanedDBs_TombstonedExcluded (0.35s)
+PASS
+ok  github.com/MoonCaves/rawclaw/internal/scopes 2.754s
+=== RUN   TestPushLocal_TombstonedFileNotResurrected
+--- PASS: TestPushLocal_TombstonedFileNotResurrected (1.06s)
+=== RUN   TestPushLocal_DeleteReportsOnce
+--- PASS: TestPushLocal_DeleteReportsOnce (2.03s)
+PASS
+ok  github.com/MoonCaves/rawclaw/internal/archive 5.791s
+exit=0
+ambient_XDG_files=[]
+```
+
+This check covers the three named tests; independent package and full-suite gates remain separate.

@@ -30,7 +30,9 @@ func (scopedContainerSource) Messages(source.Container) ([]model.Message, error)
 }
 
 func TestContainerScopesFiltersCWDsBeforeIndexing(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	matching := "/work/project"
 	nonMatching := "/work/other"
 	adapter := scopedContainerSource{containers: []source.Container{
@@ -252,6 +254,7 @@ func TestCodexUnionsOrphanedDBs_NoLiveContainers(t *testing.T) {
 func TestCodexUnionsOrphanedDBs_CoveredNotDuplicated(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)
 
@@ -278,6 +281,7 @@ func TestCodexUnionsOrphanedDBs_CoveredNotDuplicated(t *testing.T) {
 func TestCodexUnionsOrphanedDBs_TombstonedExcluded(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	codexHome := t.TempDir() // no sessions/ subdir -> Discover() sees zero containers
 	t.Setenv("CODEX_HOME", codexHome)
 
@@ -319,6 +323,7 @@ func TestCodexOrphanLabel(t *testing.T) {
 func TestCodex_WriteLockContention(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)
 
@@ -425,6 +430,7 @@ func (r *testLogRecorder) Warns() []slog.Record {
 func TestCodex_IndexingFailure_SingleHandlingLog(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	codexHome := t.TempDir()
 	t.Setenv("CODEX_HOME", codexHome)
 
