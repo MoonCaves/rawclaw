@@ -252,6 +252,87 @@ func readDetachedIngestCalls(t *testing.T, logPath string) []string {
 	return calls
 }
 
+func TestPrimeScripts_LeadingHyphenIDsAreLiteralIngestArguments(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+
+	templates := []struct {
+		name           string
+		script         string
+		requiresPython bool
+	}{
+		{name: "claude", script: rawclawPrimeScript},
+		{name: "codex", script: rawclawCodexPrimeScript, requiresPython: true},
+		{name: "antigravity"},
+	}
+
+	for _, template := range templates {
+		for _, sessionID := range []string{"--help", "--sort", "ordinary-session-id"} {
+			t.Run(template.name+"/"+sessionID, func(t *testing.T) {
+				if template.requiresPython {
+					if _, err := exec.LookPath("python3"); err != nil {
+						t.Skip("no python3 available")
+					}
+				}
+				script := renderHookScript(template.script, "''")
+				input := `{"session_id":"` + sessionID + `"}`
+				if template.name == "claude" {
+					input = `{"session_id":"` + sessionID + `","hook_event_name":"SessionStart"}`
+				}
+				if template.name == "antigravity" {
+					input = `{"conversationId":"` + sessionID + `","invocationNum":0}`
+					var err error
+					script, err = renderAntigravityPrimeScript("''")
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				scriptPath := filepath.Join(t.TempDir(), "prime.sh")
+				// Wait for the detached child so the argv log is complete before
+				// inspecting it.
+				if err := os.WriteFile(scriptPath, []byte("trap 'wait' 0\n"+script), 0o755); err != nil {
+					t.Fatal(err)
+				}
+
+				stubDir := t.TempDir()
+				stubPath := stubRawclaw(t, stubDir)
+				logPath := filepath.Join(t.TempDir(), "argv.log")
+				// Print one argument per line so the test observes argv boundaries;
+				// joining with "$*" would hide whether --help was a flag or operand.
+				stub := `#!/bin/sh
+for arg do printf '%s\n' "$arg" >> "$RAWCLAW_TEST_LOG"; done
+printf '\n' >> "$RAWCLAW_TEST_LOG"
+`
+				if err := os.WriteFile(stubPath, []byte(stub), 0o755); err != nil {
+					t.Fatal(err)
+				}
+
+				cmd := exec.Command(shell, scriptPath)
+				cmd.Env = append(os.Environ(),
+					"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+					"RAWCLAW_CATALOG_DIR="+filepath.Join(t.TempDir(), "catalog"),
+					"RAWCLAW_TEST_LOG="+logPath,
+				)
+				cmd.Stdin = strings.NewReader(input)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("run %s hook for session ID %q: %v; output=%q", template.name, sessionID, err, out)
+				}
+
+				got, err := os.ReadFile(logPath)
+				if err != nil {
+					t.Fatalf("read rawclaw argv log: %v", err)
+				}
+				want := "ingest\n--\n" + sessionID + "\n\n"
+				if string(got) != want {
+					t.Fatalf("rawclaw argv log = %q, want one call with argv [ingest -- %s]", got, sessionID)
+				}
+			})
+		}
+	}
+}
+
 // TestClaudePrimeScript_CreatesSessionCatalogEntry verifies that starting a new
 // Claude session creates a catalog entry named by the full session_id, recording
 // transcript_path + cwd + source ("claude"), prints the banner once, and dedups
