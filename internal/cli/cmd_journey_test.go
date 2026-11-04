@@ -116,7 +116,7 @@ func TestCLIJourney_AntigravityEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume failed: %v\nout: %s", err, outResume)
 	}
-	if !strings.Contains(outResume, "'agy' --conversation "+sessID) {
+	if !strings.Contains(outResume, "'agy' '--conversation' '"+sessID+"'") {
 		t.Errorf("resume output missing agy command:\n%s", outResume)
 	}
 

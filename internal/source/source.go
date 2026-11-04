@@ -183,7 +183,7 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// shellQuoteExecutable quotes a command-position word unconditionally.
+// shellQuoteExecutable quotes a shell word unconditionally.
 // Lifted from git/git quote.c L11-L48 @b8242b093d9e941a34460d715e3ce616a34ac3fe.
 // rawclaw: immutable Go strings replace strbuf accumulation and its alias handling.
 func shellQuoteExecutable(s string) string {
@@ -195,7 +195,12 @@ func shellQuoteExecutable(s string) string {
 // it comes out of a transcript, so it is untrusted input being pasted into a shell.
 func ResumeCommand(sourceTool, sessionID, cwd string) string {
 	argv := ResumeArgv(sourceTool, sessionID)
-	argv[0] = shellQuoteExecutable(argv[0])
+	// Lifted from git/git quote.c L85-L95 @b8242b093d9e941a34460d715e3ce616a34ac3fe.
+	// rawclaw: a Go slice replaces the null-terminated vector; quote each local
+	// element, then retain Join for separators instead of strbuf's leading spaces.
+	for i, arg := range argv {
+		argv[i] = shellQuoteExecutable(arg)
+	}
 	cmd := strings.Join(argv, " ")
 	if cwd != "" {
 		return "cd " + shellQuote(cwd) + " && " + cmd

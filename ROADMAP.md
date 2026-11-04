@@ -36,8 +36,8 @@ single keyword binary:
   message (a "hi"-opener still gets a real title), preferring Claude Code's own `ai_title` / `summary` /
   `custom_title`; low-signal messages (warmup, `/clear`, command-envelope markup) are filtered from previews
   **without dropping the session**.
-- **`--resume <session8>`** prints the paste-ready resume command (`claude --resume`, `codex resume`, `agy --conversation`) with `cd` to the recorded working directory.
-- **Claude resume executable selection** — `CLAUDE_CLI_NAME` selects the command used by Claude resume output and Claude adapter discovery; when unset, it defaults to `claude`.
+- **`--resume <session8>`** prints a paste-ready, shell-quoted command for the session's runtime, with `cd` to its recorded working directory.
+- **Claude resume executable selection** — `CLAUDE_CLI_NAME` selects the command used by Claude resume output and Claude adapter discovery; when unset, it defaults to `claude`. Printed resume arguments are shell-quoted.
 - **`--stats`** corpus overview (per-project, or `--all` for everything).
 - **Pluggable Source port & Multi-Agent Ingestion** — unified, source-agnostic indexing across **Claude Code**, **Codex**, **Google Antigravity (`agy`)**, and **Goose** transcripts with deterministic message UUIDs, subagent lineage tracking, and live write-through consolidation.
 - **Optional RRF-fused semantic tier** — bring-your-own-embedder, pure-Go cosine over BLOB vectors

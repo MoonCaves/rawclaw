@@ -43,7 +43,7 @@ func TestRunResumeDoesNotEmitRetainedLocalCommand(t *testing.T) {
 	if err := runResume(&out, &Options{Resume: id}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "'claude' --resume") {
+	if strings.Contains(out.String(), "'claude' '--resume'") {
 		t.Fatalf("retained session emitted runnable local command: %s", out.String())
 	}
 	if !strings.Contains(out.String(), "cannot produce a safe local resume command") {
@@ -113,7 +113,7 @@ func TestRunResumeFindsUncatalogedLiveExactHitWithEmptyStore(t *testing.T) {
 	if err := runResume(&out, &Options{Resume: id}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "'claude' --resume "+id) {
+	if !strings.Contains(out.String(), "'claude' '--resume' '"+id+"'") {
 		t.Fatalf("uncataloged exact live hit was not resolved:\n%s", out.String())
 	}
 }
@@ -142,7 +142,7 @@ func TestRunResumeAuthoritativeMetadataSkipsAdapterLookup(t *testing.T) {
 	if called {
 		t.Fatal("authoritative live metadata should not invoke adapter Lookup")
 	}
-	if !strings.Contains(out.String(), "'claude' --resume "+id) {
+	if !strings.Contains(out.String(), "'claude' '--resume' '"+id+"'") {
 		t.Fatalf("authoritative metadata did not produce a resume command:\n%s", out.String())
 	}
 }
@@ -185,7 +185,7 @@ func TestRunResumeParentMetadataSkipsAdapterLookup(t *testing.T) {
 	if called {
 		t.Fatal("parent metadata should not invoke adapter Lookup")
 	}
-	if strings.Contains(out.String(), "--resume "+id) {
+	if strings.Contains(out.String(), "'--resume' '"+id+"'") {
 		t.Fatalf("parent metadata emitted a runnable command:\n%s", out.String())
 	}
 }
@@ -252,7 +252,7 @@ func TestRunResumeIncompleteExactLookupDeduplicatesCatalogFallback(t *testing.T)
 	if err := runResume(&out, &Options{Resume: id}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "2 sessions match") || strings.Count(out.String(), "'claude' --resume "+id) != 1 {
+	if strings.Contains(out.String(), "2 sessions match") || strings.Count(out.String(), "'claude' '--resume' '"+id+"'") != 1 {
 		t.Fatalf("incomplete exact lookup duplicated its catalog candidate:\n%s", out.String())
 	}
 }
@@ -296,7 +296,7 @@ func TestRunResumeRetainedMetadataNeverBecomesRunnable(t *testing.T) {
 	if err := runResume(&out, &Options{Resume: id}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "--resume "+id) {
+	if strings.Contains(out.String(), "'--resume' '"+id+"'") {
 		t.Fatalf("retained metadata emitted a runnable command:\n%s", out.String())
 	}
 }
@@ -312,7 +312,7 @@ func TestRunResumeLiveMetadataMissingSourcePathIsNotRunnable(t *testing.T) {
 	if err := runResume(&out, &Options{Resume: id}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "--resume "+id) {
+	if strings.Contains(out.String(), "'--resume' '"+id+"'") {
 		t.Fatalf("metadata without a source path emitted a runnable command:\n%s", out.String())
 	}
 }
@@ -342,7 +342,7 @@ func TestRunResumeRetainedMetadataDoesNotProbeAnotherSource(t *testing.T) {
 	if called {
 		t.Fatal("retained metadata should not probe another source")
 	}
-	if strings.Contains(out.String(), "--resume "+id) {
+	if strings.Contains(out.String(), "'--resume' '"+id+"'") {
 		t.Fatalf("retained metadata emitted a runnable command:\n%s", out.String())
 	}
 }
@@ -369,7 +369,7 @@ func TestRunResumeRejectsChildExactAdapterContainers(t *testing.T) {
 	if !called {
 		t.Fatal("exact source lookup was not used")
 	}
-	if strings.Contains(out.String(), "--resume "+id) {
+	if strings.Contains(out.String(), "'--resume' '"+id+"'") {
 		t.Fatalf("child exact container emitted a runnable command:\n%s", out.String())
 	}
 }
@@ -1174,7 +1174,7 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 		t.Fatalf("runResume: %v", err)
 	}
 
-	if !strings.Contains(out.String(), "'claude' --resume resume01-catalog-session-uuid") {
+	if !strings.Contains(out.String(), "'claude' '--resume' 'resume01-catalog-session-uuid'") {
 		t.Fatalf("runResume output missing expected resume command:\n%s", out.String())
 	}
 }

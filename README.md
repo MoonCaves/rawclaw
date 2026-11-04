@@ -112,8 +112,9 @@ rawclaw --timeout 2m "query"                # raise the self-terminating deadlin
 ```
 
 For Claude sessions, `CLAUDE_CLI_NAME` selects the executable in the printed resume command. When
-unset, it defaults to `claude`; an explicitly empty value stays empty. The executable is quoted as
-one shell word, so paths containing spaces and shell-special characters remain a single value.
+unset, it defaults to `claude`; an explicitly empty value stays empty. Each argument is quoted as
+one shell word, so executable paths and session IDs with spaces or shell-special characters remain
+single arguments.
 
 Search defaults to **answer-first**: queries answer instantly from the consolidated search store instead of waiting on a synchronous disk crawl or reindex. If recent sessions are not yet ingested (or the store is behind), search returns available hits immediately with an honest staleness note (`note: sessions not yet ingested — background ingest triggered` or `note: sessions not yet ingested — run 'rawclaw ingest' to refresh`; in `--json`, `stale: true` and an `index_stale` structured warning) and triggers a background ingest pass. When you need guaranteed synchronous freshness before searching, passing `--reindex`, `--dir`, or `--this-project` refreshes the targeted scope before answering.
 

@@ -74,7 +74,7 @@ func TestResume_ForeignSessionDegrades(t *testing.T) {
 	if !strings.Contains(out, archivetest.ForeignName) {
 		t.Errorf("degrade message does not name the machine:\n%s", out)
 	}
-	if !strings.Contains(out, "'claude' --resume "+archivetest.ForeignSession) {
+	if !strings.Contains(out, "'claude' '--resume' '"+archivetest.ForeignSession+"'") {
 		t.Errorf("degrade message missing the remote-side resume command:\n%s", out)
 	}
 	if !strings.Contains(out, "another machine") {
@@ -110,7 +110,7 @@ func TestResume_LocalStillWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("--resume local: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "'claude' --resume localsess") {
+	if !strings.Contains(out, "'claude' '--resume' 'localsess'") {
 		t.Errorf("local resume broken:\n%s", out)
 	}
 	if strings.Contains(out, "another machine") {
