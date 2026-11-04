@@ -4,6 +4,8 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+- **Setup help guidance.** Disclose that Goose and Hermes shell hooks can record an empty working directory for paths containing double quotes, backslashes, or newlines; hook behavior is unchanged.
+
 ## [v0.12.0] - 2026-09-02
 
 ### Added
