@@ -1,0 +1,70 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    2712	    434734 ns/op	   26002 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1384	    858772 ns/op	   31785 B/op	     664 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    3422	    423022 ns/op	   26001 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1762	    808928 ns/op	   31776 B/op	     664 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    3408	    424448 ns/op	   26001 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1758	    824702 ns/op	   31779 B/op	     664 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    3427	    427800 ns/op	   26001 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1366	    859079 ns/op	   31780 B/op	     664 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    3548	    420727 ns/op	   26001 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1416	    829393 ns/op	   31779 B/op	     664 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    3402	    422181 ns/op	   26001 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1356	    880583 ns/op	   31784 B/op	     664 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    3427	    423552 ns/op	   26001 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1770	    824687 ns/op	   31774 B/op	     664 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    2677	    441634 ns/op	   26002 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1414	    835976 ns/op	   31780 B/op	     664 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    3410	    435055 ns/op	   26001 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1398	    842967 ns/op	   31785 B/op	     664 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+BenchmarkFTS5Search/Warm         	    3380	    429124 ns/op	   26001 B/op	     583 allocs/op
+BenchmarkFTS5Search/Cold         	    1776	    909511 ns/op	   31778 B/op	     664 allocs/op
+PASS
