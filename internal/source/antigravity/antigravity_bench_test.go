@@ -89,11 +89,14 @@ func BenchmarkAntigravityEnsureIndexed_Incremental(b *testing.B) {
 		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:05Z","content":"Build complete"}`,
 	)
 
-	cs, _ := ad.Discover()
+	cs, err := ad.Discover()
+	if err != nil || len(cs) != 1 {
+		b.Fatalf("discover failed: %v (got %d, want 1)", err, len(cs))
+	}
 	// Warm up initial index
-	_, _, err := index.EnsureIndexedContainers(dbp, true, cs, ad.Messages, antigravity.ID, "")
-	if err != nil {
-		b.Fatalf("initial indexing failed: %v", err)
+	nSessions, _, err := index.EnsureIndexedContainers(dbp, true, cs, ad.Messages, antigravity.ID, "")
+	if err != nil || nSessions != 1 {
+		b.Fatalf("initial indexing failed: %v (got %d sessions, want 1)", err, nSessions)
 	}
 
 	b.ResetTimer()

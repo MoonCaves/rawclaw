@@ -58,9 +58,27 @@ benchmark returned `IndexFresh` and `PASS`. The unmodified control discovered
 and indexed the intended single session. This was a one-iteration behavior
 probe, not a performance comparison.
 
-The minimal follow-up checks discovery error/count and the warmup session count
+The follow-up checks discovery error/count and the warmup session count
 before `ResetTimer`, using the existing native `b.Fatalf` pattern. The fixture
 already seeds exactly one session. These checks preserve fixture bytes/paths,
 timer calls, the timed loop, shared helper and production code. A count of one
 does not establish full message-content parity. No speedup, source adoption or
 issue closure is claimed.
+
+
+Follow-up validation used Go 1.27.3 darwin/arm64 with isolated HOME, cache,
+config, Claude and catalog roots, XDG_DATA_HOME unset, and existing Go caches.
+
+```text
+$ CGO_ENABLED=0 go test -race -count=1 ./internal/source/antigravity
+ok  	github.com/MoonCaves/rawclaw/internal/source/antigravity	2.857s
+$ CGO_ENABLED=0 go test -run '^$' -bench '^BenchmarkAntigravity' -benchtime=1x -count=1 ./internal/source/antigravity
+PASS
+ok  	github.com/MoonCaves/rawclaw/internal/source/antigravity	0.949s
+```
+
+The benchmark output above includes its final lines only. The same single
+basename mutation, applied through an isolated Go overlay, now fails before
+timing with `discover failed: <nil> (got 0, want 1)` and exit 1. The original
+fixture passes. These checks establish fixture readiness behavior, not a
+performance improvement or full-suite result.
