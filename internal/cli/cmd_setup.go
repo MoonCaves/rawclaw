@@ -49,7 +49,9 @@ func newSetupCmd() *cobra.Command {
 			"and a config file that still holds one survives with it intact. Ejecting on a " +
 			"machine with nothing installed is a clean no-op. Known limitation: Codex may keep " +
 			"a stale per-hook trust-state row in its own config after eject — that format is " +
-			"undocumented and deliberately not touched here, so review it yourself if it matters.",
+			"undocumented and deliberately not touched here, so review it yourself if it matters. " +
+			"Known limitation: the Claude Code, Codex, and Antigravity shell hooks can truncate JSON string values " +
+			"containing escaped quotes, which can make catalog paths incorrect.",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
