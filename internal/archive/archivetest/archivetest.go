@@ -49,6 +49,9 @@ func Setup(t *testing.T, foreignDate string) *Fixture {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Adopted fixture pattern: cisco-ai-defense/defenseclaw internal/testenv/home.go
+	// L27-L34 @6b6888d75e09c1134e0dfd3a874bec9b318cac42 (Apache-2.0).
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	// os.UserHomeDir reads USERPROFILE on Windows (HOME everywhere else) —
 	// set both so the isolation holds on every OS instead of touching real
 	// user state.

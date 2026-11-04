@@ -48,6 +48,7 @@ func msgUUID(stem string, i int) string {
 func seedTwoProjectStore(t *testing.T) (bigLabel, smallLabel string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	big := t.TempDir()
 	storeSession(t, big, "sessbig", "/src/billing", 1, "advancing the retention watermark")
@@ -185,6 +186,7 @@ func TestSearchNarrowsTheOneStoreByIncludePath(t *testing.T) {
 // than return a confident empty answer from a store that was never filled.
 func TestSearchFallsBackWhenTheStoreIsAbsent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	proj := t.TempDir()
 	storeSession(t, proj, "sessone", "/src/billing", 1, "advancing the retention watermark")
 	if _, _, _, err := index.EnsureIndexed(proj, false); err != nil {
@@ -224,6 +226,7 @@ func TestSearchFallsBackWhenTheStoreIsAbsent(t *testing.T) {
 // (#22), which is the guarantee, not a regression.
 func TestSearchFallsBackWhenTheStoreHasNotHeardOfTheProject(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	kept := t.TempDir()
 	storeSession(t, kept, "sesskpt", "/src/billing", 1, "advancing the retention watermark")
@@ -278,6 +281,7 @@ func TestSearchFallsBackWhenTheStoreHasNotHeardOfTheProject(t *testing.T) {
 // incomplete instead of passing for a full corpus.
 func TestSearchNamesProjectDatabasesTheStoreNeverFolded(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	kept := t.TempDir()
 	storeSession(t, kept, "sesskpt", "/src/billing", 1, "advancing the retention watermark")
@@ -321,6 +325,7 @@ func TestSearchNamesProjectDatabasesTheStoreNeverFolded(t *testing.T) {
 // store would hand back a visibly thinner answer for the same query.
 func TestSearchWidensUntilItHasEnoughConversations(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	proj := t.TempDir()
 	// Six conversations, each long enough that two of them exhaust the opening
 	// window on their own (limit 4 opens a window of 30 anchors).
@@ -348,6 +353,7 @@ func TestSearchWidensUntilItHasEnoughConversations(t *testing.T) {
 // Only a wider window that finds nothing new proves the corpus is exhausted.
 func TestSearchProvesExhaustionBeforeCallingATotalExact(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	proj := t.TempDir()
 	for i := 0; i < 6; i++ {
 		storeSession(t, proj, fmt.Sprintf("sess%03d", i), "/src/billing", 25,

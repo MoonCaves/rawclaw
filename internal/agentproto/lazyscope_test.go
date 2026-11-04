@@ -23,6 +23,7 @@ import (
 // store comes up empty.
 func TestLocateSessionSkipsScopeListWhenOneStoreAnswers(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	proj := t.TempDir()
 	const sid = "3ae91b70-0000-4000-8000-0000000000ab"
@@ -61,6 +62,7 @@ func TestLocateSessionSkipsScopeListWhenOneStoreAnswers(t *testing.T) {
 // indexes.
 func TestLocateSessionBuildsScopeListWhenOneStoreCannotAnswer(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	proj := t.TempDir()
 	const sid = "6dc4f281-0000-4000-8000-0000000000cd"
@@ -101,6 +103,7 @@ func TestLocateSessionBuildsScopeListWhenOneStoreCannotAnswer(t *testing.T) {
 // than silently searching every project and returning a stranger's session.
 func TestLocateSessionEmptyScopeResolvesNothing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	proj := t.TempDir()
 	const sid = "81f0c3d9-0000-4000-8000-0000000000ef"

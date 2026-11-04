@@ -126,6 +126,7 @@ func TestSearchHitLastActivityEmptyWhenTailIsAllMachinery(t *testing.T) {
 // corpora, so the read-refs are comparable byte-for-byte.
 func TestLastActivityDoesNotAffectOrdering(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	strongMsg := msgSpec{role: "user", uuid: "44444444-aaaa-bbbb-cccc-000000000001",
 		content: "deployment deployment deployment notes about the deployment"}

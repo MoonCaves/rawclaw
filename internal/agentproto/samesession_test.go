@@ -42,6 +42,7 @@ func writeSessionHalf(t *testing.T, proj, stem string, uuids []string) {
 // outline and tag.
 func TestLocateSessionReturnsMergedRow(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	firstDir := t.TempDir()
 	secondDir := t.TempDir()
@@ -119,6 +120,7 @@ func TestLocateSessionReturnsMergedRow(t *testing.T) {
 // raise, because there a longer prefix really can disambiguate.
 func TestLocateSessionStillFlagsDistinctIDCollision(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	projA := t.TempDir()
 	projB := t.TempDir()
@@ -153,6 +155,7 @@ func TestLocateSessionStillFlagsDistinctIDCollision(t *testing.T) {
 // still "works", just against the whole machine.
 func TestLocateSessionHonorsProjectNarrowing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	mine := t.TempDir()
 	theirs := t.TempDir()
@@ -197,6 +200,7 @@ func TestLocateSessionHonorsProjectNarrowing(t *testing.T) {
 // indexes instead of reporting a session that exists as missing.
 func TestLocateSessionFallsBackWhenOneStoreEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	proj := t.TempDir()
 	const sid = "5b2c9d10-0000-4000-8000-0000000000fa"
@@ -236,6 +240,7 @@ func TestLocateSessionFallsBackWhenOneStoreEmpty(t *testing.T) {
 // session was reported as tens of thousands of messages "in between".
 func TestOutlineCountsOnlyItsOwnMessagesInBetween(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	firstDir := t.TempDir()
 	secondDir := t.TempDir()

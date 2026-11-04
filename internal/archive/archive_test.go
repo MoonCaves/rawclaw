@@ -14,6 +14,7 @@ func newTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	// os.UserHomeDir reads USERPROFILE on Windows (HOME everywhere else) —
 	// set both so the isolation holds on every OS instead of touching real
 	// user state.
