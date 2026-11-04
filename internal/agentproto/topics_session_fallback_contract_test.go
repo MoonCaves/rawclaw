@@ -3,6 +3,7 @@ package agentproto
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/index"
@@ -102,5 +103,96 @@ func TestTopicsSessionFallsBackToProjectDB(t *testing.T) {
 					got, topic, "aaaaaaaa:11111111", summary, paths.ProjectLabel(project))
 			}
 		})
+	}
+}
+
+func TestTopicsSessionPartialCatalogStillDetectsRetainedPrefixCollision(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("RAWCLAW_CATALOG_DIR", t.TempDir())
+
+	live := t.TempDir()
+	const liveSessionID = "aaaaaaaa-1111-2222-3333-000000000001"
+	const liveMessageUUID = "11111111-aaaa-bbbb-cccc-000000000001"
+	writeSession(t, live, liveSessionID, liveMessageUUID, "the live catalog session")
+	tagInto(t, live, liveSessionID, liveMessageUUID, "live topic", "live session summary")
+	liveDB, _, _, err := index.EnsureIndexed(live, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed(live): %v", err)
+	}
+	if err := paths.WriteCatalogEntry(paths.CatalogDir(), paths.CatalogEntry{
+		SessionID:      liveSessionID,
+		TranscriptPath: filepath.Join(live, liveSessionID+".jsonl"),
+		CWD:            live,
+		Source:         "claude",
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry(live): %v", err)
+	}
+
+	retained := t.TempDir()
+	const retainedSessionID = "aaaaaaaa-9999-8888-7777-000000000002"
+	const retainedMessageUUID = "22222222-aaaa-bbbb-cccc-000000000002"
+	const retainedTopic = "retained topic"
+	const retainedSummary = "retained session summary"
+	writeSession(t, retained, retainedSessionID, retainedMessageUUID, "the retained indexed session")
+	tagInto(t, retained, retainedSessionID, retainedMessageUUID, retainedTopic, retainedSummary)
+	retainedDB, _, _, err := index.EnsureIndexed(retained, false)
+	if err != nil {
+		t.Fatalf("EnsureIndexed(retained): %v", err)
+	}
+	if err := os.Remove(filepath.Join(retained, retainedSessionID+".jsonl")); err != nil {
+		t.Fatalf("remove retained transcript: %v", err)
+	}
+	if err := os.RemoveAll(retained); err != nil {
+		t.Fatalf("remove retained project: %v", err)
+	}
+	if _, err := index.EnsureOrphanReconciled(retainedDB); err != nil {
+		t.Fatalf("EnsureOrphanReconciled(retained): %v", err)
+	}
+
+	scope := []view.Scope{
+		{Project: paths.ProjectLabel(live), DBP: liveDB},
+		{Project: paths.ProjectLabel(retained), DBP: retainedDB},
+	}
+	res, err := Topics("", scope, TopicsOpts{Session: retainedSessionID})
+	if err != nil {
+		t.Fatalf("Topics(exact retained session): %v", err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("Topics exact-session hits = %+v, want one retained topic", res.Hits)
+	}
+	got := res.Hits[0]
+	if got.Topic != retainedTopic || got.ReadRef != "aaaaaaaa:22222222" || got.Summary != retainedSummary || got.Project != paths.ProjectLabel(retained) {
+		t.Errorf("Topics exact-session hit = %+v, want topic %q, read ref %q, summary %q, project %q",
+			got, retainedTopic, "aaaaaaaa:22222222", retainedSummary, paths.ProjectLabel(retained))
+	}
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("remove consolidated store%s: %v", suffix, err)
+		}
+	}
+	if _, err := os.Stat(index.ConsolidatedPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("consolidated store stat error = %v, want absent immediately before prefix lookup", err)
+	}
+	_, err = Topics("", scope, TopicsOpts{Session: "aaaaaaaa"})
+	var ambiguous *ErrAmbiguousSession
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("Topics(prefix) error = %v, want *ErrAmbiguousSession", err)
+	}
+	if len(ambiguous.Candidates) != 2 {
+		t.Fatalf("ambiguous candidates = %+v, want the live and retained sessions", ambiguous.Candidates)
+	}
+	wantIDs := map[string]bool{liveSessionID: true, retainedSessionID: true}
+	for _, candidate := range ambiguous.Candidates {
+		if !wantIDs[candidate.SessionID] {
+			t.Errorf("ambiguous candidate session = %q, want %v", candidate.SessionID, wantIDs)
+		}
+		delete(wantIDs, candidate.SessionID)
+	}
+	if len(wantIDs) != 0 {
+		t.Errorf("ambiguous candidates missing sessions: %v", wantIDs)
 	}
 }
