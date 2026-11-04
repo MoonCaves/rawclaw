@@ -923,6 +923,7 @@ func TestScopeReportAllSearched(t *testing.T) {
 func TestScopeReportSkipsLocked(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	proj := t.TempDir()
 	writeSession(t, proj, "a1b2c3d4eeee", "f0000000aaaa", "searchable content")
@@ -960,6 +961,7 @@ func TestScopeReportSkipsLocked(t *testing.T) {
 func TestSearch_WriteLockContentionSurfacesStale(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	proj := t.TempDir()
 	writeSession(t, proj, "sess-lock-contention", "u-init", "searchable original content")
@@ -1057,6 +1059,7 @@ func openCacheRW(t *testing.T, dbp string) *sql.DB {
 func TestSearchCarriesTopicLabel(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	writeSession(t, proj, "sessone", "11111111-aaaa-bbbb-cccc-000000000001", "discussing the deployment rollback procedure")
 
 	dbp, _, _, err := index.EnsureIndexed(proj, false)
@@ -1090,6 +1093,7 @@ func TestSearchCarriesTopicLabel(t *testing.T) {
 func TestSearchUntaggedSessionTitledByOpeningAsk(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	writeSession(t, proj, "sessone", "11111111-aaaa-bbbb-cccc-000000000001", "discussing the deployment rollback procedure")
 
 	scope := []view.Scope{{Project: paths.ProjectLabel(proj), TDir: proj}}
@@ -1114,6 +1118,7 @@ func TestSearchUntaggedSessionTitledByOpeningAsk(t *testing.T) {
 func TestTopicLabelDoesNotAffectOrdering(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	// Strong textual match for "deployment": the word appears repeatedly.
 	writeSession(t, proj, "sessstrong", "22222222-aaaa-bbbb-cccc-000000000001",
 		"deployment deployment deployment notes about the deployment")
@@ -1184,6 +1189,7 @@ func TestTopicLabelDoesNotAffectOrdering(t *testing.T) {
 func TestTopicsCommand(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	uuid := "9f3e1c20-aaaa-bbbb-cccc-000000000001" // hex prefix with letters → resolveRef-valid
 	writeSession(t, proj, "sessone", uuid, "discussing the deployment rollback procedure")
 
@@ -1348,6 +1354,7 @@ func tagInto(t *testing.T, proj, sid, uuid, topic, summary string) {
 // separate lists back to back.
 func TestTopicsRanksAcrossProjectsFromTheStore(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	big := t.TempDir()
 	writeSession(t, big, "sessbig", "9f3e1c20-aaaa-bbbb-cccc-000000000001", "advancing the retention watermark")
@@ -1408,6 +1415,7 @@ func TestTopicsRanksAcrossProjectsFromTheStore(t *testing.T) {
 // that never had the answer.
 func TestTopicsFallsBackWhenTheStoreHasNotHeardOfTheProject(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	kept := t.TempDir()
 	writeSession(t, kept, "sesskpt", "9f3e1c20-aaaa-bbbb-cccc-000000000001", "advancing the retention watermark")
@@ -1445,6 +1453,7 @@ func TestTopicsFallsBackWhenTheStoreHasNotHeardOfTheProject(t *testing.T) {
 func TestTopicsEmptyState(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	writeSession(t, proj, "sessone", "11111111-aaaa-bbbb-cccc-000000000001", "a session with no topics tagged")
 	if _, _, _, err := index.EnsureIndexed(proj, false); err != nil {
 		t.Fatalf("EnsureIndexed: %v", err)
@@ -1473,6 +1482,7 @@ func TestTopicsEmptyState(t *testing.T) {
 func TestOutlineListsTopics(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	writeSession(t, proj, "sesstwo", "22222222-aaaa-bbbb-cccc-000000000002", "an opening message for the outline")
 
 	if _, _, _, err := index.EnsureIndexed(proj, false); err != nil {
@@ -1555,6 +1565,7 @@ func TestSearchFlagsRetainedMissing(t *testing.T) {
 func TestSearchDiscoversOrphanedProject(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 
 	projDir := filepath.Join(home, ".claude", "projects", "-tmp-orphanproj")
@@ -1610,6 +1621,7 @@ func TestSearchDiscoversOrphanedProject(t *testing.T) {
 func TestTopicsCollapsesRepeatedLabel(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	// One session, four messages, so segments can start at distinct anchors.
 	uuids := []string{
 		"aaaaaaaa-1111-2222-3333-000000000001",
