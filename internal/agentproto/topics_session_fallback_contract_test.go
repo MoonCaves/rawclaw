@@ -107,21 +107,28 @@ func TestTopicsSessionFallsBackToProjectDB(t *testing.T) {
 }
 
 func TestTopicsSessionPartialCatalogStillDetectsRetainedPrefixCollision(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	t.Setenv("RAWCLAW_CATALOG_DIR", t.TempDir())
-
-	live := t.TempDir()
+	root := t.TempDir()
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
+	config := filepath.Join(root, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(root, "catalog"))
+	live := filepath.Join(config, "projects", "live")
+	retained := filepath.Join(config, "projects", "retained")
+	for _, dir := range []string{
+		filepath.Join(root, "home"), filepath.Join(root, "cache"), filepath.Join(root, "data"),
+		live, retained,
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+	}
 	const liveSessionID = "aaaaaaaa-1111-2222-3333-000000000001"
 	const liveMessageUUID = "11111111-aaaa-bbbb-cccc-000000000001"
 	writeSession(t, live, liveSessionID, liveMessageUUID, "the live catalog session")
 	tagInto(t, live, liveSessionID, liveMessageUUID, "live topic", "live session summary")
-	liveDB, _, _, err := index.EnsureIndexed(live, false)
-	if err != nil {
-		t.Fatalf("EnsureIndexed(live): %v", err)
-	}
+	liveDB := index.DBPath(live)
 	if err := paths.WriteCatalogEntry(paths.CatalogDir(), paths.CatalogEntry{
 		SessionID:      liveSessionID,
 		TranscriptPath: filepath.Join(live, liveSessionID+".jsonl"),
@@ -130,18 +137,17 @@ func TestTopicsSessionPartialCatalogStillDetectsRetainedPrefixCollision(t *testi
 	}); err != nil {
 		t.Fatalf("WriteCatalogEntry(live): %v", err)
 	}
+	if got := paths.ProjectDirOf(filepath.Join(live, liveSessionID+".jsonl")); got != paths.Realpath(live) {
+		t.Fatalf("ProjectDirOf(live transcript) = %q, want %q", got, paths.Realpath(live))
+	}
 
-	retained := t.TempDir()
 	const retainedSessionID = "aaaaaaaa-9999-8888-7777-000000000002"
 	const retainedMessageUUID = "22222222-aaaa-bbbb-cccc-000000000002"
 	const retainedTopic = "retained topic"
 	const retainedSummary = "retained session summary"
 	writeSession(t, retained, retainedSessionID, retainedMessageUUID, "the retained indexed session")
 	tagInto(t, retained, retainedSessionID, retainedMessageUUID, retainedTopic, retainedSummary)
-	retainedDB, _, _, err := index.EnsureIndexed(retained, false)
-	if err != nil {
-		t.Fatalf("EnsureIndexed(retained): %v", err)
-	}
+	retainedDB := index.DBPath(retained)
 	if err := os.Remove(filepath.Join(retained, retainedSessionID+".jsonl")); err != nil {
 		t.Fatalf("remove retained transcript: %v", err)
 	}
@@ -156,7 +162,16 @@ func TestTopicsSessionPartialCatalogStillDetectsRetainedPrefixCollision(t *testi
 		{Project: paths.ProjectLabel(live), DBP: liveDB},
 		{Project: paths.ProjectLabel(retained), DBP: retainedDB},
 	}
-	res, err := Topics("", scope, TopicsOpts{Session: retainedSessionID})
+	resetConsolidated := func() {
+		t.Helper()
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("remove consolidated store%s: %v", suffix, err)
+			}
+		}
+	}
+	resetConsolidated()
+	res, err := Topics("", scope[1:], TopicsOpts{Session: retainedSessionID})
 	if err != nil {
 		t.Fatalf("Topics(exact retained session): %v", err)
 	}
@@ -169,13 +184,13 @@ func TestTopicsSessionPartialCatalogStillDetectsRetainedPrefixCollision(t *testi
 			got, retainedTopic, "aaaaaaaa:22222222", retainedSummary, paths.ProjectLabel(retained))
 	}
 
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("remove consolidated store%s: %v", suffix, err)
-		}
-	}
+	resetConsolidated()
 	if _, err := os.Stat(index.ConsolidatedPath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("consolidated store stat error = %v, want absent immediately before prefix lookup", err)
+		t.Fatalf("consolidated store stat error = %v, want absent before prefix lookup", err)
+	}
+	catalogHits := paths.ResolveSession("aaaaaaaa")
+	if len(catalogHits) != 1 || catalogHits[0].SessionID != liveSessionID {
+		t.Fatalf("catalog hits = %+v, want only live session %q", catalogHits, liveSessionID)
 	}
 	_, err = Topics("", scope, TopicsOpts{Session: "aaaaaaaa"})
 	var ambiguous *ErrAmbiguousSession
