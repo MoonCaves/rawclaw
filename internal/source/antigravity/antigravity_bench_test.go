@@ -11,7 +11,7 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 )
 
-func writeJSONL(t *testing.T, path string, lines ...string) {
+func writeJSONL(t testing.TB, path string, lines ...string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -33,12 +33,12 @@ func BenchmarkAntigravityDiscover(b *testing.B) {
 		sessID := fmt.Sprintf("bench-sess-%04d", i)
 		histLines = append(histLines, fmt.Sprintf(`{"conversationId":"%s","workspace":"/workspace/bench"}`, sessID))
 		tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
-		writeJSONL(&testing.T{}, tPath,
+		writeJSONL(b, tPath,
 			`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:00Z","content":"<USER_REQUEST>run query benchmark</USER_REQUEST>"}`,
 			`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:05Z","content":"Optimizing execution plan"}`,
 		)
 	}
-	writeJSONL(&testing.T{}, filepath.Join(tmp, "history.jsonl"), histLines...)
+	writeJSONL(b, filepath.Join(tmp, "history.jsonl"), histLines...)
 
 	b.ResetTimer()
 	for b.Loop() {
@@ -80,11 +80,11 @@ func BenchmarkAntigravityEnsureIndexed_Incremental(b *testing.B) {
 	ad := antigravity.NewRoot(tmp)
 
 	sessID := "bench-incremental"
-	writeJSONL(&testing.T{}, filepath.Join(tmp, "history.jsonl"),
+	writeJSONL(b, filepath.Join(tmp, "history.jsonl"),
 		fmt.Sprintf(`{"conversationId":"%s","workspace":"/workspace/bench"}`, sessID),
 	)
 	tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
-	writeJSONL(&testing.T{}, tPath,
+	writeJSONL(b, tPath,
 		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:00Z","content":"<USER_REQUEST>initial build</USER_REQUEST>"}`,
 		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:05Z","content":"Build complete"}`,
 	)
