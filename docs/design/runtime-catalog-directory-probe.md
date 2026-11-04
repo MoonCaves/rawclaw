@@ -14,7 +14,7 @@ The existing `TestPrimeScripts_SessionStartCatalogClaimIsPathSafe` covers Claude
 
 ## Reproduction
 
-Run from the repository root. The Python harness extracts the pinned raw templates and banner, applies the same binary and banner substitutions as `renderRuntimeScript`, and runs the resulting scripts through `/bin/sh`. The stub logs its first three arguments and does not ingest.
+Run from the repository root. The Python harness extracts the pinned raw templates and banner, applies the same binary and banner substitutions as `renderRuntimeScript`, and runs the resulting scripts through `/bin/sh`. The stub logs its first three arguments and does not ingest. The harness asserts hook exit codes and per-case ingest counts before printing results.
 
 ```sh
 python3 - <<'PY'
@@ -66,6 +66,9 @@ for runtime, const in [("goose", "rawclawGooseCatalogScript"),
                 if calls.exists() and len(calls.read_text().splitlines()) == 3: break
                 time.sleep(0.02)
             argv = calls.read_text().splitlines() if calls.exists() else []
+            assert exits == [0, 0, 0], (runtime, case, exits)
+            expected_calls = {"directory": 3, "symlink-directory": 3, "regular-file": 0, "new-file": 1}[case]
+            assert len(argv) == expected_calls, (runtime, case, argv)
             assert all(line == f"ingest\t--\t{sid}" for line in argv)
             nested = list(entry.glob(".tmp.*.json")) if entry.is_dir() and not entry.is_symlink() else []
             linked = list(target.glob(".tmp.*.json")) if target.exists() else []
