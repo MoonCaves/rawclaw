@@ -176,7 +176,7 @@ func bindRootFlags(root *cobra.Command, opts *Options) {
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
 	f.BoolVar(&opts.Reindex, "reindex", false, "force a full re-index before searching or browsing")
 	f.BoolVar(&opts.JSON, "json", false, "machine-readable JSON output (for agents/scripts)")
-	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready resume command (claude/codex/agy/goose/pi/opencode) for a session id (use the 8-char id from search output)")
+	f.StringVar(&opts.Resume, "resume", "", "print the paste-ready resume command for a session id (use the 8-char id from search output); Claude uses $CLAUDE_CLI_NAME when set, otherwise claude")
 	f.BoolVar(&opts.Stats, "stats", false, "corpus overview (sessions/messages/date span) for this project, or --all for every project")
 	f.StringVar(&opts.Since, "since", "", "only results on/after this date (YYYY-MM-DD or relative like -7d)")
 	f.StringVar(&opts.Before, "before", "", "only results on/before this date (YYYY-MM-DD or relative like -24h)")

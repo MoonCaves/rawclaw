@@ -4,6 +4,10 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- `--resume` honors `CLAUDE_CLI_NAME` for Claude sessions and safely quotes the selected executable as one shell word.
+
 ## [v0.12.0] - 2026-09-02
 
 ### Added

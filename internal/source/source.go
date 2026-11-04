@@ -12,6 +12,7 @@
 package source
 
 import (
+	"os"
 	"strings"
 	"sync"
 
@@ -112,6 +113,17 @@ func DetectID(path string) string {
 	return ""
 }
 
+// claudeExecutable selects the configured Claude executable, preserving explicit empty values.
+// Lifted from git/git connect.c L1406-L1408 @b8242b093d9e941a34460d715e3ce616a34ac3fe.
+// rawclaw: translate C getenv presence to LookupEnv; bind the env/default names to Claude.
+func claudeExecutable() string {
+	name, ok := os.LookupEnv("CLAUDE_CLI_NAME")
+	if !ok {
+		name = "claude"
+	}
+	return name
+}
+
 // ResumeArgv returns the CLI argument vector to resume a session given its source
 // tool and session ID.
 func ResumeArgv(sourceTool, sessionID string) []string {
@@ -127,7 +139,7 @@ func ResumeArgv(sourceTool, sessionID string) []string {
 	case "goose":
 		return []string{"goose", "session", "--resume", "--session-id", sessionID}
 	case "claude":
-		return []string{"claude", "--resume", sessionID}
+		return []string{claudeExecutable(), "--resume", sessionID}
 	default:
 		return []string{"claude", "--resume", sessionID}
 	}
@@ -171,11 +183,20 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// shellQuoteExecutable quotes a command-position word unconditionally.
+// Lifted from git/git quote.c L11-L48 @b8242b093d9e941a34460d715e3ce616a34ac3fe.
+// rawclaw: immutable Go strings replace strbuf accumulation and its alias handling.
+func shellQuoteExecutable(s string) string {
+	return "'" + strings.NewReplacer("'", `'\''`, "!", `'\!'`).Replace(s) + "'"
+}
+
 // ResumeCommand formats the complete shell command line string to resume a session,
 // optionally prefixing a `cd <cwd> &&` if cwd is non-empty. The cwd is shell-quoted:
 // it comes out of a transcript, so it is untrusted input being pasted into a shell.
 func ResumeCommand(sourceTool, sessionID, cwd string) string {
-	cmd := strings.Join(ResumeArgv(sourceTool, sessionID), " ")
+	argv := ResumeArgv(sourceTool, sessionID)
+	argv[0] = shellQuoteExecutable(argv[0])
+	cmd := strings.Join(argv, " ")
 	if cwd != "" {
 		return "cd " + shellQuote(cwd) + " && " + cmd
 	}

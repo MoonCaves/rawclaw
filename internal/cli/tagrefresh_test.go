@@ -43,7 +43,7 @@ func TestRunResumeDoesNotEmitRetainedLocalCommand(t *testing.T) {
 	if err := runResume(&out, &Options{Resume: id}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "claude --resume") {
+	if strings.Contains(out.String(), "'claude' --resume") {
 		t.Fatalf("retained session emitted runnable local command: %s", out.String())
 	}
 	if !strings.Contains(out.String(), "cannot produce a safe local resume command") {
@@ -59,6 +59,7 @@ func isolateResume(t *testing.T) string {
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	t.Setenv("CLAUDE_CLI_NAME", "claude")
 	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(home, "catalog"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("ANTIGRAVITY_HOME", filepath.Join(home, ".gemini", "antigravity-cli"))
@@ -112,7 +113,7 @@ func TestRunResumeFindsUncatalogedLiveExactHitWithEmptyStore(t *testing.T) {
 	if err := runResume(&out, &Options{Resume: id}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "claude --resume "+id) {
+	if !strings.Contains(out.String(), "'claude' --resume "+id) {
 		t.Fatalf("uncataloged exact live hit was not resolved:\n%s", out.String())
 	}
 }
@@ -141,7 +142,7 @@ func TestRunResumeAuthoritativeMetadataSkipsAdapterLookup(t *testing.T) {
 	if called {
 		t.Fatal("authoritative live metadata should not invoke adapter Lookup")
 	}
-	if !strings.Contains(out.String(), "claude --resume "+id) {
+	if !strings.Contains(out.String(), "'claude' --resume "+id) {
 		t.Fatalf("authoritative metadata did not produce a resume command:\n%s", out.String())
 	}
 }
@@ -251,7 +252,7 @@ func TestRunResumeIncompleteExactLookupDeduplicatesCatalogFallback(t *testing.T)
 	if err := runResume(&out, &Options{Resume: id}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "2 sessions match") || strings.Count(out.String(), "claude --resume "+id) != 1 {
+	if strings.Contains(out.String(), "2 sessions match") || strings.Count(out.String(), "'claude' --resume "+id) != 1 {
 		t.Fatalf("incomplete exact lookup duplicated its catalog candidate:\n%s", out.String())
 	}
 }
@@ -1141,6 +1142,7 @@ func TestRunTagPrepCmdStaleCatalogEntryFallsThrough(t *testing.T) {
 }
 
 func TestRunResumeResolvesCatalogSession(t *testing.T) {
+	t.Setenv("CLAUDE_CLI_NAME", "claude")
 	configDir := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
 	t.Setenv("HOME", configDir)
@@ -1172,7 +1174,7 @@ func TestRunResumeResolvesCatalogSession(t *testing.T) {
 		t.Fatalf("runResume: %v", err)
 	}
 
-	if !strings.Contains(out.String(), "claude --resume resume01-catalog-session-uuid") {
+	if !strings.Contains(out.String(), "'claude' --resume resume01-catalog-session-uuid") {
 		t.Fatalf("runResume output missing expected resume command:\n%s", out.String())
 	}
 }
