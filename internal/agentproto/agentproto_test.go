@@ -1266,10 +1266,10 @@ func TestTopicsSessionFlag(t *testing.T) {
 	if err := store.UpsertTopicSegment(con, "sessmulti", uuid1, "", "setup infrastructure", "configured servers", 3.0); err != nil {
 		t.Fatalf("UpsertTopicSegment 1: %v", err)
 	}
-	if err := store.UpsertTopicSegment(con, "sessmulti", uuid2, "", "deploy binary", "shipped release", 2.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sessmulti", uuid2, "", "deploy binary", "shipped release", 1.0); err != nil {
 		t.Fatalf("UpsertTopicSegment 2: %v", err)
 	}
-	if err := store.UpsertTopicSegment(con, "sessmulti", uuid3, "", "setup infrastructure", "revisited servers", 1.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sessmulti", uuid3, "", "setup infrastructure", "revisited servers", 2.0); err != nil {
 		t.Fatalf("UpsertTopicSegment 3: %v", err)
 	}
 	con.Close()
@@ -1285,7 +1285,7 @@ func TestTopicsSessionFlag(t *testing.T) {
 		t.Fatalf("Topics(session): %v", err)
 	}
 	// Session mode keeps distinct segments even when their topic labels repeat.
-	// Tagged times run backwards to distinguish insertion order from time order.
+	// Non-monotonic tagged times distinguish insertion order from time order.
 	want := []struct {
 		topic, ref, summary string
 	}{
