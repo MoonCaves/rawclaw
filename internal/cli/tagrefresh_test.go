@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -144,6 +145,49 @@ func TestRunResumeAuthoritativeMetadataSkipsAdapterLookup(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "'claude' '--resume' '"+id+"'") {
 		t.Fatalf("authoritative metadata did not produce a resume command:\n%s", out.String())
+	}
+}
+
+func TestRunResumeHermesAuthoritativeMetadataCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		json bool
+	}{
+		{name: "text"},
+		{name: "json", json: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := isolateResume(t)
+			t.Setenv("HERMES_HOME", filepath.Join(home, ".hermes"))
+			t.Setenv("CLAUDE_CLI_NAME", "/custom/claude")
+			id := "12345678-1234-4234-8234-12345678900f"
+			sourcePath := filepath.Join(t.TempDir(), "state.db")
+			writeTagSourceFile(t, sourcePath, "")
+			if err := durable.StoreMessages(durable.Meta{
+				ID: id, Source: "hermes", CWD: "/tmp/hermes project $(id)", SourcePath: sourcePath,
+			}, nil); err != nil {
+				t.Fatal(err)
+			}
+
+			var out strings.Builder
+			if err := runResume(&out, &Options{Resume: id, JSON: tc.json}); err != nil {
+				t.Fatal(err)
+			}
+			want := "cd '/tmp/hermes project $(id)' && 'hermes' '--resume' '" + id + "'"
+			if tc.json {
+				var result struct {
+					Command string `json:"command"`
+				}
+				if err := json.Unmarshal([]byte(out.String()), &result); err != nil {
+					t.Fatal(err)
+				}
+				if result.Command != want {
+					t.Errorf("JSON command = %q, want %q", result.Command, want)
+				}
+			} else if !strings.Contains(out.String(), "\n\n  "+want+"\n") {
+				t.Errorf("text output = %q, want command %q", out.String(), want)
+			}
+		})
 	}
 }
 

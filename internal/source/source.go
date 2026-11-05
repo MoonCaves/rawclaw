@@ -138,6 +138,11 @@ func ResumeArgv(sourceTool, sessionID string) []string {
 		return []string{"agy", "--conversation", sessionID}
 	case "goose":
 		return []string{"goose", "session", "--resume", "--session-id", sessionID}
+	case "hermes":
+		// Lifted from NousResearch/hermes-agent hermes_cli/_parser.py L179-L181 @d8c79e4b6b8c63e6c40167ff95ec28e7b1fee189.
+		// rawclaw: map the native --resume option into the existing runtime argv table;
+		// the hermes executable is defined in pyproject.toml L587 at the same commit.
+		return []string{"hermes", "--resume", sessionID}
 	case "claude":
 		return []string{claudeExecutable(), "--resume", sessionID}
 	default:
