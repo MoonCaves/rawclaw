@@ -73,3 +73,55 @@ Source: `MoonCaves/rawclaw` at immutable revision `2e5b6573555d3fc01aa844fe5ecc8
 This records historical assertion patterns for prospective reuse, not independent evidence of native Hermes semantics. A prospective adaptation must identify exact copied blocks and explain source/session/CWD fixture substitutions, JSON options and the decoded `Scope` to `Command` field substitution at each copy site. Use separate text and JSON cases, a complete literal command expectation and a command-substring check without adding text-frame expectations. Do not import the unrelated adapter-Lookup assertion or its registration.
 
 RawClaw's existing generic `ResumeCommand` quotes each source's argv without a Hermes-specific quoting branch. The Hermes native CLI source above covers its executable/option contract, not quotation; the existing shell-quotation source retains its stated scope. Any adoption is limited to fixture/field wiring through existing generic behavior; it must not introduce quoting or runtime rules. These sources establish no native arbitrary-ID acceptance. Exact adaptations still require source-before-edit ACK, three-way review and the ordinary provenance gate. This entry neither establishes provenance for PR131 or its held donor, reverses their HOLD, authorizes implementation, nor grants general same-repository source eligibility.
+
+## Native hook publication boundaries (2026-11-06)
+
+These bounded native hook sources show distinct state and dispatch contracts. None of the inspected chains establishes a complete session-catalog record followed by no-clobber ownership and ownership/error-dependent ingest or fallback.
+
+### Gentle AI Claude review hook
+
+At [`Gentleman-Programming/gentle-ai` revision `3ea08cdfbdce671053c82377a4365915799abe57`](https://github.com/Gentleman-Programming/gentle-ai/tree/3ea08cdfbdce671053c82377a4365915799abe57), [`internal/components/agenthooks/claude.go` lines 46–56](https://github.com/Gentleman-Programming/gentle-ai/blob/3ea08cdfbdce671053c82377a4365915799abe57/internal/components/agenthooks/claude.go) configures a Claude SessionStart/Stop command. The inspected handler at [`internal/cli/review_stop_hook.go` lines 33–48, 117–160, 331–350, 358–384](https://github.com/Gentleman-Programming/gentle-ai/blob/3ea08cdfbdce671053c82377a4365915799abe57/internal/cli/review_stop_hook.go) parses typed hook input but persists review-baseline/reminder identities. It reads and updates the existing reminder record, treats corrupt JSON as missing, and writes through [`internal/components/filemerge/writer.go` lines 29–33, 92–143, 252–304](https://github.com/Gentleman-Programming/gentle-ai/blob/3ea08cdfbdce671053c82377a4365915799abe57/internal/components/filemerge/writer.go), whose publication replaces the destination by `os.Rename`. This is mutable review state, not complete session metadata with no-clobber ownership or dependent ingest.
+
+- [`go.mod` lines 1–3](https://github.com/Gentleman-Programming/gentle-ai/blob/3ea08cdfbdce671053c82377a4365915799abe57/go.mod) declares Go 1.25.10. License: [MIT, `LICENSE`](https://github.com/Gentleman-Programming/gentle-ai/blob/3ea08cdfbdce671053c82377a4365915799abe57/LICENSE), Copyright (c) 2025 Gentleman Programming.
+
+### Engram Claude host-session binding
+
+At [`Gentleman-Programming/engram` revision `2c71ca11bc198eb5cf52a12d6a44032c616d3b54`](https://github.com/Gentleman-Programming/engram/tree/2c71ca11bc198eb5cf52a12d6a44032c616d3b54), [`plugin/claude-code/hooks/hooks.json` lines 29–38](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/plugin/claude-code/hooks/hooks.json) registers SessionStart binding. The handler reads the hook session ID and calls `hostbind.Publish`; the caller discards publish errors ([`cmd/engram/hook_bind.go` lines 33–71](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/cmd/engram/hook_bind.go)). [`internal/hostbind/hostbind.go` lines 33–43, 45–81](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/internal/hostbind/hostbind.go) stores PID/start/session_id/updated_at in a PID-keyed JSON file and publishes by rename replacement. [`internal/hostbind/hostbind_test.go` lines 34–45](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/internal/hostbind/hostbind_test.go) explicitly expects sess-b to replace sess-a for the same PID. This is a mutable host-session locator, not complete catalog metadata with ownership-dependent ingest.
+
+- [`go.mod` lines 1–3](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/go.mod) declares Go 1.26.10. License: [MIT, `LICENSE`](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/LICENSE), Copyright (c) 2026 Alan Buscaglia.
+
+### Engram Codex Windows UserPromptSubmit
+
+At the same Engram revision, [`plugin/codex/hooks/hooks.json` lines 41–49](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/plugin/codex/hooks/hooks.json) defines the UserPromptSubmit hook with a Windows PowerShell dispatcher. Its encoded command resolves to `scripts\run-native-hook.ps1`; [`plugin/codex/scripts/run-native-hook.ps1` lines 8–41](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/plugin/codex/scripts/run-native-hook.ps1) reads the first-line `engram-windows-hook-command-v1` marker from Codex `config.toml`, validates the rooted executable path, and invokes `hook codex-user-prompt-submit`. [`cmd/engram/main.go` lines 920–922](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/cmd/engram/main.go) and [`cmd/engram/hook_claude.go` lines 75–77](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/cmd/engram/hook_claude.go) dispatch to the handler.
+
+In [`cmd/engram/hook_codex.go` lines 24–28, 53–87, 366–380](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/cmd/engram/hook_codex.go), the first-prompt helper creates and closes an empty `O_CREATE|O_EXCL` marker; the result selects ToolSearch fallback. With valid project authority, resolved runtime identity, and nonempty prompt/session ID, the handler POSTs to `/prompts` independently of whether the marker is new or already exists. The marker is not completed catalog JSON and its result does not dispatch catalog ingest. The source test at [`cmd/engram/hook_codex_test.go` lines 547–580](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/cmd/engram/hook_codex_test.go) asserts two prompt posts across two handler calls; this test was inspected, not run.
+
+RawClaw's comparator is its shell hook publication and ownership dispatch in [`internal/cli/setup.go` lines 26–61](https://github.com/MoonCaves/rawclaw/blob/efb62d1687ab409002f14b463a327720735905f4/internal/cli/setup.go#L26-L61): a completed JSON entry is hard-linked into place and the claimed/existing/absent cases select ingest or exit. The generic [`paths.WriteCatalogEntry` in `internal/paths/paths.go` lines 122–162](https://github.com/MoonCaves/rawclaw/blob/efb62d1687ab409002f14b463a327720735905f4/internal/paths/paths.go#L122-L162) also publishes by rename, so the comparison is scoped to the shell-hook ownership contract, not every catalog helper. The Codex finding above is limited to the inspected Windows UserPromptSubmit route; it makes no claim about all Codex paths or the absence of another donor.
+
+The two upstream module declarations do not establish incompatibility of separable standard-library code with Go 1.24. The source record makes no implementation, runtime, approval, or closure claim.
+
+#### Full-file SHA256 ledger
+
+All hashes below are for complete files fetched from the immutable revisions cited above. Retain the linked MIT license notice if a substantial portion is copied.
+
+| Repository | File | SHA256 |
+| --- | --- | --- |
+| MoonCaves/rawclaw | `internal/cli/setup.go` | `88057095f725f6511837122a955b00af4b49657e1cf77e3953fe73750e3a9a8a` |
+| MoonCaves/rawclaw | `internal/paths/paths.go` | `4ec65e2aed2311fa489b28fa3b89b6efb61d29e3a9ae0c2f77511657c772d133` |
+| gentle-ai | `internal/components/agenthooks/claude.go` | `d6ac1ca2b667e2d353f85962f37c30da1b20678a9c419caac59f86b58eaf872d` |
+| gentle-ai | `internal/cli/review_stop_hook.go` | `d15fd767b349b5683acfe767fb66348f306b4c497c8ce0219ad2185cb9bd7ac3` |
+| gentle-ai | `internal/components/filemerge/writer.go` | `7940af9374b8a2bd9ea0d1eca519acafe98fe302cc4f5dbf54e7a8a75d7b02bd` |
+| gentle-ai | [`go.mod`](https://github.com/Gentleman-Programming/gentle-ai/blob/3ea08cdfbdce671053c82377a4365915799abe57/go.mod) | `4ec66689d196bf08d2dbbee4c8dcc3b1367b9a96a668ec4b1cfd18099b813574` |
+| gentle-ai | [`LICENSE`](https://github.com/Gentleman-Programming/gentle-ai/blob/3ea08cdfbdce671053c82377a4365915799abe57/LICENSE) | `2806e215dd306b614fe3211e24186652c7d56c1a57340537fc8f2f6822bc74f5` |
+| engram | `plugin/claude-code/hooks/hooks.json` | `4dd00b7d9f6f841dc0b05ad3411fdb12f7c005a1cc343ce08dc92e2aefdaeb04` |
+| engram | `cmd/engram/hook_bind.go` | `02d552d7206fc61f856ca156b0ce2948de7fdc43255e09904617cc2453ce31d4` |
+| engram | `internal/hostbind/hostbind.go` | `eb37f4d7858c9bfa468c1c9227145d9bcb378e6b8f6123f3d6779b372c639afd` |
+| engram | `internal/hostbind/hostbind_test.go` | `b5f898116022cabfe2a88ca29ed3b99db79fa4bf12f08a1dd9adcce40847890f` |
+| engram | `plugin/codex/hooks/hooks.json` | `463cb77fc10111f6fc8ed7955750db3e407c2c26428aaa3daa504fdf5cb132c5` |
+| engram | `plugin/codex/scripts/run-native-hook.ps1` | `7504826bae4037230e4c83fa1b25170fe5442adc4d83859c04d4b07cac82517f` |
+| engram | `cmd/engram/main.go` | `16882536e73e146a80dae5bcd8f340e15c35300257ea1fccfa4d5d5953a1dc68` |
+| engram | `cmd/engram/hook_claude.go` | `0f94f8dbe0c808f21f983d4ead11f23f5ab5b017b1c97e1f94f0bdd059ae7b88` |
+| engram | `cmd/engram/hook_codex.go` | `2fe369cc1137f00176dda2424f9bc70918a8a172e9be3f8f8f1e9bfe1d86e5f2` |
+| engram | `cmd/engram/hook_codex_test.go` | `2bd02eac0dc7ee4d827b6aa70ecfa5ce19be884d3b0898b9fb4e4fecfeed5c03` |
+| engram | [`go.mod`](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/go.mod) | `4a3ad075945ecd6bc1caf89e79b0469eca11707865adb0e714cacbc193949f9c` |
+| engram | [`LICENSE`](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/LICENSE) | `09608597ddda4e5f9033ac407a0d401986d96376c47f6d46789ca38db672dc15` |
