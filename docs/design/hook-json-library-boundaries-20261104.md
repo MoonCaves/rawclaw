@@ -164,3 +164,76 @@ The helper first requires both absolute cleaned parent-directory strings to matc
 The fetched [tests, `internal/server/atomic_publish_test.go` L11-L33, L35-L87 and L89-L101](https://github.com/antibyte/AuraGo/blob/a2f36c6dacb41e77e68ac5788a8802115953881d/internal/server/atomic_publish_test.go#L11-L101), cover existing-target preservation, a competing O_EXCL writer, and different-directory rejection. They were not executed for this source record; the competing writer test does not establish absence of transient partial content for that separate O_EXCL writer. The primitive differs from RawClaw's existing `WriteCatalogEntry`, which replaces its target with rename and returns no first-claim result. Connecting a decoder, serializer and no-replace publication still leaves staging, ID, claim/fallback and editor invocation relationships to establish.
 
 Complete helper, tests, caller, [MIT `LICENSE` L1-L21](https://github.com/antibyte/AuraGo/blob/a2f36c6dacb41e77e68ac5788a8802115953881d/LICENSE#L1-L21), Copyright (c) 2025 AuraGo contributors, and [go.mod L1-L3](https://github.com/antibyte/AuraGo/blob/a2f36c6dacb41e77e68ac5788a8802115953881d/go.mod#L1-L3) were fetched on 2026-11-05. The application module requires Go 1.27.3, above RawClaw's Go 1.24 floor; it is not a drop-in module dependency. Any prospective copied unit needs exact source/import/sentinel/test boundaries, source-before-edit ACK, three-way review and the ordinary gate. This record does not source the complete RawClaw hook protocol, retroactively source a held candidate, reverse a HOLD, change gate scope, or authorize implementation.
+
+## Generated Claude/Codex cwd preservation probe
+
+Date: 2026-11-05. Source: existing generated hooks at immutable [RawClaw `3e988fa0e2d77864ae5e3b75f434f4a401de14be`, `internal/cli/setup.go`](https://github.com/MoonCaves/rawclaw/blob/3e988fa0e2d77864ae5e3b75f434f4a401de14be/internal/cli/setup.go#L26-L166).
+
+The following probe builds that checkout and runs its actual `setup --yes` generator inside temporary configuration roots. It then replaces only the temporary executable with an argv-logging stub, leaving the generated scripts unchanged. Each runtime receives valid JSON and an ordinary session ID. Both actual cwd directories exist. Plain cwd survives; an escaped quote produces a truncated decoded cwd ending in a backslash; a newline between the `cwd` key and its value produces empty cwd. All six hooks exit 0, print the banner and request exactly one stub `ingest -- SESSION`; all six published catalog records parse as JSON.
+
+This is valid-but-wrong catalog data from the current extraction path. It differs from the earlier conditional writer probe, which feeds already-decoded quote/newline values directly to serialization and observes invalid JSON. Correct decoding alone does not establish correct serialization. This synthetic probe establishes neither editor-produced payloads nor successful real ingestion, and grants no copied-unit eligibility or implementation approval.
+
+Run from the pinned checkout with Go, Python 3 and `/bin/sh`. Only CASE/CATALOG output normalizes the generated temporary root to `<temp>`; setup also prints its temporary generated paths. The excerpts below are literal normalized CASE lines, not fabricated full output.
+
+```sh
+python3 - <<'PY'
+import hashlib,json,os,pathlib,subprocess,tempfile,time
+repo=pathlib.Path.cwd()
+with tempfile.TemporaryDirectory(prefix='rawclaw-hook89-tick222-') as scratch:
+ root=pathlib.Path(scratch); binary=root/'rawclaw'; home=root/'home'; home.mkdir(); (root/'tmp').mkdir()
+ b=subprocess.run(['go','build','-o',str(binary),'./cmd/rawclaw'],env=dict(os.environ,CGO_ENABLED='0'),capture_output=True,text=True)
+ print('BUILD CGO_ENABLED=0 go build -o <temp>/rawclaw ./cmd/rawclaw exit='+str(b.returncode)+' stdout='+repr(b.stdout)+' stderr='+repr(b.stderr)); assert b.returncode==0
+ claude=root/'claude'; codex=root/'codex'; codex.mkdir()
+ env={'PATH':os.environ['PATH'],'HOME':str(home),'TMPDIR':str(root/'tmp'),'XDG_CONFIG_HOME':str(root/'config'),'XDG_DATA_HOME':str(root/'data'),'XDG_CACHE_HOME':str(root/'cache'),'CLAUDE_CONFIG_DIR':str(claude),'CODEX_HOME':str(codex),'ANTIGRAVITY_HOME':str(root/'absent-agy'),'RAWCLAW_CATALOG_DIR':str(root/'setup-catalog')}
+ s=subprocess.run([str(binary),'setup','--yes'],env=env,cwd=root,capture_output=True,text=True,timeout=20)
+ print('SETUP actual temporary-config generator exit='+str(s.returncode));print(s.stdout,end='');print('SETUP stderr='+repr(s.stderr));assert s.returncode==0
+ hooks={name:base/'hooks/rawclaw/prime.sh' for name,base in [('claude',claude),('codex',codex)]}
+ before={name:hashlib.sha256(p.read_bytes()).hexdigest() for name,p in hooks.items()}
+ binary.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" >> "$RAWCLAW_TEST_CALLS"\n: > "$RAWCLAW_TEST_DONE"\nexit 0\n');binary.chmod(0o755)
+ work=root/'work';work.mkdir(); plain=work/'plain';plain.mkdir(); quoted=work/'a"b';quoted.mkdir(); transcript=root/'transcript.jsonl';transcript.write_text('')
+ for runtime,hook in hooks.items():
+  for case,cwd in [('plain',plain),('escaped-quote',quoted),('multiline-value',plain)]:
+   sid='rc89-'+runtime+'-'+case
+   event={'session_id':sid,'hook_event_name':'SessionStart','transcript_path':str(transcript),'cwd':str(cwd)}
+   payload=json.dumps(event,separators=(',',':'))
+   if case=='multiline-value':payload=payload.replace('"cwd":','"cwd":\n')
+   assert json.loads(payload)==event
+   catalog=root/(runtime+'-'+case+'-catalog');log=root/(runtime+'-'+case+'.calls');done=root/(runtime+'-'+case+'.done')
+   caseenv=dict(env,RAWCLAW_CATALOG_DIR=str(catalog),RAWCLAW_TEST_CALLS=str(log),RAWCLAW_TEST_DONE=str(done))
+   p=subprocess.run(['/bin/sh',str(hook)],input=payload.encode(),cwd=cwd,env=caseenv,capture_output=True,timeout=10)
+   for _ in range(100):
+    if done.exists():break
+    time.sleep(.02)
+   assert done.exists(),'detached stub did not complete'
+   raw=(catalog/sid).read_bytes();record=json.loads(raw);calls=log.read_bytes().split(b'\0')[:-1]
+   assert calls==[b'ingest',b'--',sid.encode()],calls
+   def normalized(value):return value.replace(str(root),'<temp>')
+   result={'runtime':runtime,'case':case,'payload_valid_json':True,'cwd_exists':cwd.is_dir(),'expected_cwd':normalized(str(cwd)),'actual_decoded_cwd':normalized(record['cwd']),'cwd_preserved':record['cwd']==str(cwd),'catalog_valid_json':True,'hook_exit':p.returncode,'banner':b'[rawclaw]' in p.stdout,'stub_argv':[x.decode() for x in calls],'stderr':p.stderr.decode()}
+   print('CASE '+json.dumps(result,sort_keys=True))
+   print('CATALOG '+normalized(raw.decode()).replace('\n','\\n'))
+   assert p.returncode==0 and b'[rawclaw]' in p.stdout
+   assert record['session_id']==sid and record['source']==runtime
+   assert (record['cwd']==str(cwd))==(case=='plain')
+   if runtime=='codex':assert json.loads(p.stdout)['hookSpecificOutput']['hookEventName']=='SessionStart'
+ assert before=={name:hashlib.sha256(p.read_bytes()).hexdigest() for name,p in hooks.items()}
+ print('generated_hooks_unchanged=true')
+ print('side_effects=temporary setup config/scripts, fake executable/call logs, six catalog entries; no real ingest or live editor')
+print('temporary_fixture_removed=true')
+PY
+```
+
+Observed on Darwin with `/bin/sh`; the independent rerun produced the same six CASE and six CATALOG lines. Both complete probe processes exited 0. Selected output:
+
+```text
+BUILD CGO_ENABLED=0 go build -o <temp>/rawclaw ./cmd/rawclaw exit=0 stdout='' stderr=''
+CASE {"actual_decoded_cwd": "<temp>/work/plain", "banner": true, "case": "plain", "catalog_valid_json": true, "cwd_exists": true, "cwd_preserved": true, "expected_cwd": "<temp>/work/plain", "hook_exit": 0, "payload_valid_json": true, "runtime": "claude", "stderr": "", "stub_argv": ["ingest", "--", "rc89-claude-plain"]}
+CASE {"actual_decoded_cwd": "<temp>/work/a\\", "banner": true, "case": "escaped-quote", "catalog_valid_json": true, "cwd_exists": true, "cwd_preserved": false, "expected_cwd": "<temp>/work/a\"b", "hook_exit": 0, "payload_valid_json": true, "runtime": "claude", "stderr": "", "stub_argv": ["ingest", "--", "rc89-claude-escaped-quote"]}
+CASE {"actual_decoded_cwd": "", "banner": true, "case": "multiline-value", "catalog_valid_json": true, "cwd_exists": true, "cwd_preserved": false, "expected_cwd": "<temp>/work/plain", "hook_exit": 0, "payload_valid_json": true, "runtime": "claude", "stderr": "", "stub_argv": ["ingest", "--", "rc89-claude-multiline-value"]}
+CASE {"actual_decoded_cwd": "<temp>/work/plain", "banner": true, "case": "plain", "catalog_valid_json": true, "cwd_exists": true, "cwd_preserved": true, "expected_cwd": "<temp>/work/plain", "hook_exit": 0, "payload_valid_json": true, "runtime": "codex", "stderr": "", "stub_argv": ["ingest", "--", "rc89-codex-plain"]}
+CASE {"actual_decoded_cwd": "<temp>/work/a\\", "banner": true, "case": "escaped-quote", "catalog_valid_json": true, "cwd_exists": true, "cwd_preserved": false, "expected_cwd": "<temp>/work/a\"b", "hook_exit": 0, "payload_valid_json": true, "runtime": "codex", "stderr": "", "stub_argv": ["ingest", "--", "rc89-codex-escaped-quote"]}
+CASE {"actual_decoded_cwd": "", "banner": true, "case": "multiline-value", "catalog_valid_json": true, "cwd_exists": true, "cwd_preserved": false, "expected_cwd": "<temp>/work/plain", "hook_exit": 0, "payload_valid_json": true, "runtime": "codex", "stderr": "", "stub_argv": ["ingest", "--", "rc89-codex-multiline-value"]}
+generated_hooks_unchanged=true
+temporary_fixture_removed=true
+```
+
+The scripts, configuration files, stub logs and catalog entries exist only within `TemporaryDirectory` and are removed on return. This records reproduction evidence only; parsing, serialization, native hook protocol and adoption decisions remain open.
