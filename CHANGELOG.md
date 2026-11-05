@@ -4,6 +4,10 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Clarified `topics --session` help: it lists all session topic segments and ignores the query, `--limit`, and `--include-path`.
+
 ### Changed
 
 - `--resume` honors `CLAUDE_CLI_NAME` for Claude sessions and quotes each printed argument as one shell word.
