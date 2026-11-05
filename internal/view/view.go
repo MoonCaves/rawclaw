@@ -287,7 +287,7 @@ func BuildAnchoredView(con *sql.DB, sessionID string, anchorID int, opts Anchore
 		if !opts.IncludeTools && m.Role != "user" && m.Role != "assistant" && !isAnchor {
 			continue
 		}
-		// policy: 2026-09-09 system prompts average 41,669 chars across 134 segments; cap to dispCap unless IncludeTools is true see docs/design/takeover-path-measurements.md
+		// policy: 2026-09-09 historical notes record 134 system-anchored segments and one 41,669-character anchor; cap to dispCap unless IncludeTools is true see docs/design/takeover-path-measurements.md
 		// Lifted from BurntSushi/ripgrep crates/printer/src/standard.rs L300-L330
 		cap := dispCap
 		if isAnchor && (m.Role != "system" || opts.IncludeTools) {
