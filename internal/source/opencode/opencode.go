@@ -1,4 +1,4 @@
-// Package opencode is the Source adapter for OpenCode / Crush AI coding agent
+// Package opencode is the Source adapter for OpenCode AI coding agent
 // session transcripts stored in SQLite database format (~/.local/share/opencode/opencode.db,
 // $XDG_DATA_HOME/opencode/opencode.db, $OPENCODE_DATA_DIR/opencode.db).
 //
