@@ -125,9 +125,9 @@ The read protocol (source-stable uuid refs, git-style ambiguity guards, whole-by
 `--budget` ceiling, `--more` / `--around` expand-in-place, never-silent trims, and incompleteness-as-data)
 **shipped** — see *Already shipped*. Likewise the LLM-free **titles + low-signal filtering**, and the
 **`--debug-search`** scoring explainer (honest about bm25 / coverage / sort-overlay and routine sort-tier
-regimes). Remaining refinements, **(planned)**: the orthogonal **`--with tools|thinking|subagents`** richness axis (layer detail
-onto the *same* window, distinct from `--more` widening it), and **content-hash refs** as a second-phase
-hardening for very large corpora (the `uuid8` prefix is already collision-guarded).
+regimes). The **`--with tools|thinking|subagents`** options are implemented for `read` and `outline`.
+**Content-hash refs** remain **planned** as a second-phase hardening for very large corpora
+(the `uuid8` prefix is already collision-guarded).
 
 ### Output ergonomics — grep-composability + mode discoverability
 
