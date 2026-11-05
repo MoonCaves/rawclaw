@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -894,5 +895,103 @@ func TestTailEdge_FingerprintWindowBoundaries(t *testing.T) {
 		if prefixFP != wantFP {
 			t.Errorf("offset %d: checkPrefixFingerprint = %q, want FileFingerprint = %q", off, prefixFP, wantFP)
 		}
+	}
+}
+
+// Lifted from MoonCaves/rawclaw internal/index/tail_edge_test.go L205-L255
+// and internal/index/incremental_test.go L173-L243
+// @38a52389987296ba5ca6ca76813fe515534c382b (MIT).
+// rawclaw: use the real full reader as the ordered message oracle;
+// append synthetic metadata, empty messages, incomplete JSON and invalid JSON.
+// Zero/one ingest count literals retain those donor assertions, not timing policy.
+func TestTailEdge_CodexMetadataFullReaderParity(t *testing.T) {
+	dir := isolateCache(t)
+	f := filepath.Join(dir, "codex_metadata.jsonl")
+	dbp := filepath.Join(dir, "codex_metadata.db")
+	c := source.Container{ID: "sess-codex-metadata", Path: f, CWD: "/work"}
+	adapter := &codex.Adapter{}
+	header := `{"type":"session_meta","payload":{"id":"sess-codex-metadata","cwd":"/work"}}` + "\n"
+	item := `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Codex prompt"}]},"timestamp":"2026-08-25T10:00:00Z"}` + "\n"
+	contents := header + item
+	writeFile(t, f, contents)
+	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, adapter.Messages, "codex", ""); err != nil {
+		t.Fatal(err)
+	}
+	con, err := store.ConnectRO(dbp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer con.Close()
+
+	metadata := `{"type":"token_usage_record","payload":{}}` + "\n"
+	empty := `{"type":"response_item","payload":{"type":"message","role":"assistant","content":[]}}` + "\n"
+	partial := `{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Codex in-progress`
+	steps := []struct {
+		name            string
+		tail            string
+		wantIncremental int64
+		wantFull        int64
+		pending         bool
+	}{
+		{"mixed metadata", metadata + item +
+			`{"type":"event_msg","payload":{"type":"token_count"}}` + "\n" +
+			`{"type":"turn_context","payload":{}}` + "\n" +
+			`{"type":"response_item","payload":{"type":"unknown"}}` + "\n" +
+			`{"type":"response_item","payload":{"type":"function_call_output","output":"tool result"},"timestamp":"2026-08-25T10:00:01Z"}` + "\n" + metadata + item, 1, 0, false},
+		{"metadata only", metadata, 1, 0, false},
+		{"empty normalized message", empty, 1, 0, false},
+		{"incomplete JSON", partial, 0, 0, true},
+		{"completed JSON", ` done"}]},"timestamp":"2026-08-25T10:00:05Z"}` + "\n", 1, 0, false},
+		{"invalid complete JSON", `{"type":"response_item", broken` + "\n", 0, 1, false},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			beforeOffset := scalarInt(t, con, "SELECT byte_offset FROM file_index WHERE session_id=?", c.ID)
+			appendFile(t, f, step.tail)
+			contents += step.tail
+			ResetIngestCountersForTesting()
+			if _, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, adapter.Messages, "codex", ""); err != nil {
+				t.Fatal(err)
+			}
+			if got := IncrementalIngestCount.Load(); got != step.wantIncremental {
+				t.Errorf("incremental = %d, want %d", got, step.wantIncremental)
+			}
+			if got := FullReindexCount.Load(); got != step.wantFull {
+				t.Errorf("full reindex = %d, want %d", got, step.wantFull)
+			}
+			wantOffset := len(contents)
+			if step.pending {
+				wantOffset = beforeOffset
+			}
+			if got := scalarInt(t, con, "SELECT byte_offset FROM file_index WHERE session_id=?", c.ID); got != wantOffset {
+				t.Errorf("byte_offset = %d, want %d", got, wantOffset)
+			}
+			want, err := adapter.Messages(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, err := con.Query("SELECT role,content,ts,ts_iso,uuid FROM messages WHERE session_id=? ORDER BY id ASC", c.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			var got []model.Message
+			for rows.Next() {
+				var msg model.Message
+				if err := rows.Scan(&msg.Role, &msg.Text, &msg.TS, &msg.TSISO, &msg.UUID); err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, msg)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("indexed messages = %#v, full reader = %#v", got, want)
+			}
+			if count := scalarInt(t, con, "SELECT message_count FROM sessions WHERE id=?", c.ID); count != len(want) {
+				t.Errorf("session message_count = %d, want %d", count, len(want))
+			}
+		})
 	}
 }
