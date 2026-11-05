@@ -69,11 +69,20 @@ func TestResumeArgvOtherSourcesAndUnknownFallback(t *testing.T) {
 		{"goose", []string{"goose", "session", "--resume", "--session-id", "S"}},
 		{"pi", []string{"pi", "--session", "S"}},
 		{"opencode", []string{"opencode", "--session", "S"}},
+		{"hermes", []string{"hermes", "--resume", "S"}},
 		{"unknown", []string{"claude", "--resume", "S"}},
 	} {
 		argv := ResumeArgv(tc.source, "S")
 		if !slices.Equal(argv, tc.want) {
 			t.Errorf("ResumeArgv(%q) = %#v, want %#v", tc.source, argv, tc.want)
 		}
+	}
+}
+
+func TestResumeCommandHermesQuotesSessionAndCWD(t *testing.T) {
+	t.Setenv("CLAUDE_CLI_NAME", "/custom/claude")
+	want := "cd '/tmp/project $(id)' && 'hermes' '--resume' '$(id)'"
+	if got := ResumeCommand("hermes", "$(id)", "/tmp/project $(id)"); got != want {
+		t.Errorf("ResumeCommand(hermes) = %q, want %q", got, want)
 	}
 }
