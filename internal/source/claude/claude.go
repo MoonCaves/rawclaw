@@ -90,7 +90,7 @@ func (a *Adapter) Discover() ([]source.Container, error) {
 				CWD:        cwd,
 				IsSubagent: isSub == 1,
 				ParentID:   parent,
-				ResumeArgv: []string{"claude", "--resume", resumeID(sid)},
+				ResumeArgv: source.ResumeArgv("claude", resumeID(sid)),
 			})
 		}
 	}
