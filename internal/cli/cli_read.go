@@ -51,8 +51,11 @@ func newReadCmd() *cobra.Command {
 		Use:   "read <session8:uuid8>",
 		Short: "Read a bounded excerpt around a search ref (--more to widen)",
 		Long: "Read a bounded excerpt around a search ref taken from `rawclaw \"query\"` output.\n\n" +
-			"The ref is <session8>:<uuid8> — copy it from a search hit. The excerpt is whole by default; " +
-			"--budget N caps it, --more widens the window, --around N shifts it — all on the same ref.\n\n" +
+			// Lifted from MoonCaves/rawclaw internal/cli/cli_read.go L54-L55 (MIT).
+			// Immutable source revision: 2ab24adb82a50011b1f80b99ce29e07f4204dd50.
+			// This is same-repository HELP wording only; it establishes no runtime-algorithm provenance.
+			"The ref is <session8>:<uuid8> — copy it from a search hit. Neighboring messages are capped previews, and a system anchor is capped by default. " +
+			"--budget N adds an excerpt-wide cap; --more widens the window, and --around N shifts the effective anchor. To read a system anchor without its display cap and include tools and thinking, use --with tools,thinking without --budget. Neighboring previews remain capped.\n\n" +
 			"The excerpt is indexed session history, not a guarantee of the live transcript's current tail; verify current state before acting. Human output adds a freshness note when applicable.",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,

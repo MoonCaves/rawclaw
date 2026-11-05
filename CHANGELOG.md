@@ -7,6 +7,7 @@ All notable changes to RawClaw are documented in this file.
 ### Fixed
 
 - Render already-resolved Hermes resume commands with `hermes --resume` instead of the Claude fallback; ordinary Hermes ID/prefix discovery remains unchanged.
+- Corrected `read` help to describe capped neighboring previews, the default system-anchor cap, and `--budget`/`--with` behavior.
 
 - Corrected the documented reader roster and the roadmap status of `--source`.
 - Corrected the roadmap status of the existing `read` and `outline` `--with` options; content-hash refs remain planned.
