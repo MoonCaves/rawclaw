@@ -230,6 +230,7 @@ func runCloseoutTaggerContext(parent context.Context, argv []string, prep []byte
 	case <-ctx.Done():
 		killErr := terminateCloseout(cmd)
 		select {
+		//nolint:errcheck // Wait only confirms cleanup here; cancellation and cleanup errors are returned below.
 		case <-done:
 		case <-time.After(time.Second):
 			copyCloseoutStderr(stderrFile, stderr)

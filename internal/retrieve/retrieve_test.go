@@ -667,9 +667,10 @@ func TestMatchAnchorsPreservesRRFOrderOverCoverage(t *testing.T) {
 
 	var rrfWinner, covWinner Anchor
 	for _, a := range got {
-		if a.SessionID == "doc_rrf_winner" {
+		switch a.SessionID {
+		case "doc_rrf_winner":
 			rrfWinner = a
-		} else if a.SessionID == "doc_cov_inflated" {
+		case "doc_cov_inflated":
 			covWinner = a
 		}
 	}
