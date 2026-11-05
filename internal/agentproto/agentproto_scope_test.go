@@ -126,6 +126,8 @@ func TestSearchMinMessages(t *testing.T) {
 // --exclude-path drops them (#1). Two projects, the query matches in both.
 func TestSearchIncludeExcludePath(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	root := t.TempDir()
 	// paths.ProjectCWD decodes the transcript-dir basename; build two dirs whose
 	// decoded cwd contains "alpha" vs "bravo".

@@ -163,6 +163,8 @@ func TestIsCurrentSession(t *testing.T) {
 func TestCurrentTurnStartSkipsThisTurnsMachinery(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	writeRichSession(t, proj, "machsess01", "2026-06-01", []msgSpec{
 		{role: "user", uuid: "33333333-aaaa-bbbb-cccc-000000000001",
 			content: "old history about the runbook"},
@@ -224,6 +226,8 @@ const deepMachineryTail = 120
 func TestCurrentTurnFindsAPromptBuriedUnderADeepTail(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	msgs := []msgSpec{
 		{role: "user", uuid: "44444444-aaaa-bbbb-cccc-000000000001",
