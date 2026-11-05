@@ -1308,8 +1308,8 @@ func TestTopicsSessionFlag(t *testing.T) {
 	var buf bytes.Buffer
 	renderTopics(&buf, res)
 	rendered := buf.String()
-	if !strings.Contains(rendered, "topic segment(s), in session order:") {
-		t.Errorf("rendered output missing session order header:\n%s", rendered)
+	if !strings.Contains(rendered, "topic segment(s):") {
+		t.Errorf("rendered output missing topic segment header:\n%s", rendered)
 	}
 	if !strings.Contains(rendered, "configured servers") {
 		t.Errorf("rendered output missing summary:\n%s", rendered)

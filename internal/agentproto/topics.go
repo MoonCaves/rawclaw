@@ -324,9 +324,9 @@ func renderTopics(w io.Writer, r TopicsResult) {
 		return
 	}
 	if r.Query == "" {
-		fmt.Fprintf(w, "%d topic segment(s), in session order:\n\n", len(r.Hits))
+		fmt.Fprintf(w, "%d topic segment(s):\n\n", len(r.Hits))
 	} else {
-		fmt.Fprintf(w, "%d topic(s) matching '%s':\n\n", len(r.Hits), r.Query)
+		fmt.Fprintf(w, "Returned %d topic(s) (query input: '%s'):\n\n", len(r.Hits), r.Query)
 	}
 	for _, h := range r.Hits {
 		routine := ""
