@@ -146,6 +146,62 @@ func TestRunResumeForkPreservesCrossSourceAmbiguity(t *testing.T) {
 	}
 }
 
+func TestRunResumeForkPreservesMixedClaudeUnsupportedAmbiguity(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		json bool
+	}{
+		{name: "text"},
+		{name: "json", json: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := isolateResume(t)
+			id := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+			claudeDir := filepath.Join(home, ".claude", "projects", "claude-project")
+			if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeTagSourceFile(t, filepath.Join(claudeDir, id+".jsonl"), `{"cwd":"/project/claude"}`+"\n")
+			registerResumeSources(t, resumeLookupRegistration("resume-unsupported", id, "/unsupported/other"))
+
+			var out strings.Builder
+			if err := runResume(&out, &Options{Resume: id, ForkSession: true, JSON: tc.json}); err != nil {
+				t.Fatalf("runResume fork: %v", err)
+			}
+			if tc.json {
+				var rows []map[string]any
+				if err := json.Unmarshal([]byte(out.String()), &rows); err != nil {
+					t.Fatalf("decode ambiguity rows: %v\n%s", err, out.String())
+				}
+				if len(rows) != 2 {
+					t.Fatalf("got %d JSON rows, want Claude and unsupported candidates:\n%s", len(rows), out.String())
+				}
+				if _, ok := rows[0]["command"]; ok {
+					t.Fatalf("ambiguous JSON emitted a command:\n%s", out.String())
+				}
+				cwds := map[string]bool{}
+				for _, row := range rows {
+					cwd, ok := row["cwd"].(string)
+					if !ok {
+						t.Fatalf("JSON ambiguity row has no cwd string: %+v", row)
+					}
+					cwds[cwd] = true
+				}
+				if !cwds["/project/claude"] || !cwds["/unsupported/other"] {
+					t.Fatalf("JSON ambiguity did not include both Claude and unsupported candidates: %+v", rows)
+				}
+				return
+			}
+			if !strings.Contains(out.String(), "2 sessions match") || strings.Contains(out.String(), "--fork-session") {
+				t.Fatalf("fork capability ran before mixed-source ambiguity:\n%s", out.String())
+			}
+			if !strings.Contains(out.String(), "(claude)") || !strings.Contains(out.String(), "(other)") {
+				t.Fatalf("text ambiguity did not include both Claude and unsupported candidates:\n%s", out.String())
+			}
+		})
+	}
+}
+
 func TestRunResumeForkRendersClaudeAndRejectsUnsupportedLocal(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
