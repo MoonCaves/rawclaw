@@ -27,9 +27,10 @@ single keyword binary:
 - **Top-level `read` / `outline` verbs** — the agent read-protocol. Refs are **source-stable**
   (`<session8>:<uuid8>`, anchored on Claude Code's own message uuid, so a citation survives re-index and
   transcript appends), and **ambiguity is rejected git-style** (a colliding prefix returns candidates, never
-  the wrong session/message). A `read` returns the message **whole by default**; `--budget N` is an opt-in
-  ceiling for multi-message ranges; `--more` / `--around` **expand in place on the same ref** (no re-search);
-  any trim emits the literal recovery command (`[+N chars · … --more]`) — never silent.
+  the wrong session/message). Neighboring messages are capped previews, and a system anchor is capped by default.
+  `--budget N` adds an excerpt-wide cap; `--more` widens the window, and `--around N` shifts the effective anchor.
+  To read a system anchor without its display cap and include tools and thinking, use `--with tools,thinking`
+  without `--budget`. Neighboring previews remain capped.
 - **Incompleteness-as-data** — search reports which scopes were `searched` / `empty` / `skipped` / `stale`,
   so an agent never reads a partial result as complete.
 - **LLM-free titles + noise filtering** — a session's "about" line comes from its first *substantive* user
@@ -121,9 +122,8 @@ Provide unified `SessionStart` / lifecycle hook priming for RawClaw closeout and
 
 ### Progressive read — shipped
 
-The read protocol (source-stable uuid refs, git-style ambiguity guards, whole-by-default reads with an opt-in
-`--budget` ceiling, `--more` / `--around` expand-in-place, never-silent trims, and incompleteness-as-data)
-**shipped** — see *Already shipped*. Likewise the LLM-free **titles + low-signal filtering**, and the
+The read protocol **shipped** — see *Already shipped* for display caps, budget, and recovery.
+Likewise the LLM-free **titles + low-signal filtering**, and the
 **`--debug-search`** scoring explainer (honest about bm25 / coverage / sort-overlay and routine sort-tier
 regimes). The **`--with tools|thinking|subagents`** options are implemented for `read` and `outline`.
 **Content-hash refs** remain **planned** as a second-phase hardening for very large corpora
