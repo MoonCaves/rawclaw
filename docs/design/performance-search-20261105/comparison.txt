@@ -1,0 +1,21 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/MoonCaves/rawclaw/internal/index
+cpu: Apple M4
+                │ main.bench.txt │           perf.bench.txt            │
+                │     sec/op     │   sec/op     vs base                │
+FTS5Search/Warm      426.1µ ± 2%   267.7µ ± 1%  -37.18% (p=0.000 n=10)
+FTS5Search/Cold      839.5µ ± 5%   644.6µ ± 3%  -23.22% (p=0.000 n=10)
+geomean              598.1µ        415.4µ       -30.55%
+
+                │ main.bench.txt │            perf.bench.txt            │
+                │      B/op      │     B/op      vs base                │
+FTS5Search/Warm     25.39Ki ± 0%   22.34Ki ± 0%  -12.00% (p=0.000 n=10)
+FTS5Search/Cold     31.03Ki ± 0%   27.64Ki ± 0%  -10.93% (p=0.000 n=10)
+geomean             28.07Ki        24.85Ki       -11.47%
+
+                │ main.bench.txt │           perf.bench.txt           │
+                │   allocs/op    │ allocs/op   vs base                │
+FTS5Search/Warm       583.0 ± 0%   492.0 ± 0%  -15.61% (p=0.000 n=10)
+FTS5Search/Cold       664.0 ± 0%   564.0 ± 0%  -15.06% (p=0.000 n=10)
+geomean               622.2        526.8       -15.34%
