@@ -162,9 +162,12 @@ func parseTailMessages(con *sql.DB, c source.Container, sourceID, rawPath string
 			if err := json.Unmarshal(line, &rec); err != nil {
 				return err
 			}
+			// Lifted from MoonCaves/rawclaw internal/source/codex/codex.go L245-L248
+			// @38a52389987296ba5ca6ca76813fe515534c382b (MIT).
+			// rawclaw: qualify the adapter; callback return nil replaces loop continue.
 			role, text, ok := codex.NormalizeRecord(rec)
-			if !ok {
-				return errors.New("unrecognized codex tail record")
+			if !ok || text == "" {
+				return nil
 			}
 			msg = model.Message{Role: role, Text: text, UUID: codex.MintUUID(c.ID, ordinal)}
 			msg.TSISO, _ = rec["timestamp"].(string)
