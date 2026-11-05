@@ -90,6 +90,7 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [README.md](README.md) — what RawClaw is and its full verb/flag surface, from the user's side.
 - [ROADMAP.md](ROADMAP.md) — the north-star constraints and the forward plan (planned / exploring / speculative).
 - [CONTRIBUTING.md](CONTRIBUTING.md) — clean checkout → green build: prerequisites, build, test, lint.
+- [FINDINGS.md](FINDINGS.md) — source and regression contract for Codex metadata during incremental ingestion.
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
 - [docs/design/runtime-catalog-directory-probe.md](docs/design/runtime-catalog-directory-probe.md) — bounded Goose/Hermes catalog directory and symlink-to-directory reproduction.
 - [docs/agents/session-closeout.md](docs/agents/session-closeout.md) — operational closeout semantics for supervisor and harness sessions.
