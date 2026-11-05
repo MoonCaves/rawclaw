@@ -17,7 +17,7 @@ The core is small and self-contained: read local agent transcripts, index them (
 `search` / `read` / `outline`. Capability that isn't core rides a **seam**, so the core stays
 sovereign and dependency-free:
 
-- **Sources are adapters.** Claude Code, Codex, Antigravity, and Goose today; more are new *readers*, not changes to
+- **Sources are adapters.** Implemented readers include Claude Code, Codex, Antigravity, Goose, Pi, OpenCode, and Hermes; more are new *readers*, not changes to
   search. A source teaches RawClaw to parse one transcript shape — nothing downstream should care
   which source a session came from.
 - **The archive is any git remote — there is no RawClaw server.** Backup and cross-machine sync are

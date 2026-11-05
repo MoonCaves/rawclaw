@@ -6,6 +6,7 @@ All notable changes to RawClaw are documented in this file.
 
 ### Fixed
 
+- Corrected the documented reader roster and the roadmap status of `--source`.
 - Corrected the roadmap status of the existing `read` and `outline` `--with` options; content-hash refs remain planned.
 - Made topic result headers neutral about ordering and whether the query filtered the returned topics.
 - Clarified `topics --session` help: it lists all session topic segments and ignores the query, `--limit`, and `--include-path`.

@@ -40,6 +40,7 @@ single keyword binary:
 - **Claude resume executable selection** — `CLAUDE_CLI_NAME` selects the command used by Claude resume output and Claude adapter discovery; when unset, it defaults to `claude`. Printed resume arguments are shell-quoted.
 - **`--stats`** corpus overview (per-project, or `--all` for everything).
 - **Pluggable Source port & Multi-Agent Ingestion** — unified, source-agnostic indexing across **Claude Code**, **Codex**, **Google Antigravity (`agy`)**, and **Goose** transcripts with deterministic message UUIDs, subagent lineage tracking, and live write-through consolidation.
+- **Additional implemented readers** — Pi JSONL, OpenCode SQLite, and Hermes SQLite adapters.
 - **Optional RRF-fused semantic tier** — bring-your-own-embedder, pure-Go cosine over BLOB vectors
   (no numpy, no GPU), `--no-vector` for byte-identical keyword-only. See below for the tuning still ahead.
 
@@ -49,19 +50,18 @@ single keyword binary:
 
 ### Additional Source Adapters
 
-The `Source` port has shipped, with adapters covering the JSONL family (Claude Code, Codex,
-Antigravity) and the first SQLite reader (Goose). The coding-agent runtimes still unread fall
-into three format families:
+The `Source` port has shipped. Implemented readers cover Claude Code, Codex, Antigravity,
+and Pi JSONL, plus Goose, OpenCode, and Hermes SQLite. Additional reader candidates include:
 
-- **SQLite** — Crush (`<repo>/.crush/crush.db`), opencode (`~/.local/share/opencode/opencode.db`).
+- **SQLite** — Crush (`<repo>/.crush/crush.db`).
 - **JSON-array** — Cline / Roo Code (VS Code globalStorage `tasks/<id>/api_conversation_history.json`),
   Continue (`~/.continue/sessions/<id>.json`).
 - **Markdown / flat files** — Aider (`.aider.chat.history.md`, role inferred from line prefix),
   Cursor (composer transcripts).
 
 Each is one adapter implementing `Source`; the FTS5 index, fusion, rendering, and the `agent` protocol
-stay identical. A `--source` flag (and auto-detection by path) lets one RawClaw search across mixed
-histories, or scope to one tool. **(planned)**
+stay identical. The `--source` flag already scopes searches to one runtime. Additional adapters and path
+auto-detection remain **(planned)**.
 
 > Why this is the opening: of those 11 runtimes, only 3 search their own session *content* (Codex, Gemini,
 > Goose — all by substring or a TUI filter) and 4 ship a *title-only* filter dressed up as search. None rank,
