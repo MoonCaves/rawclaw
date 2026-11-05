@@ -4,6 +4,10 @@ All notable changes to RawClaw are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added `--fork-session` as a `--resume` modifier that prints Claude Code's native fork command; RawClaw does not run Claude Code.
+
 ### Fixed
 
 - Render already-resolved Hermes resume commands with `hermes --resume` instead of the Claude fallback; ordinary Hermes ID/prefix discovery remains unchanged.

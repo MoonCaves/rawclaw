@@ -86,3 +86,71 @@ func TestResumeCommandHermesQuotesSessionAndCWD(t *testing.T) {
 		t.Errorf("ResumeCommand(hermes) = %q, want %q", got, want)
 	}
 }
+
+// Lifted from openclaw/openclaw src/agents/cli-runner/helpers.system-prompt-resume.test.ts L53-L69
+// @6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8.
+// rawclaw: assert only session-level fork and nofork resume behavior; omit checkpoint arguments.
+func TestResumeCommandWithForkQuotesAllWordsAndPreservesNoFork(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		executable string
+		sessionID  string
+		cwd        string
+		forkResume bool
+		want       string
+	}{
+		{
+			name:       "no fork keeps empty executable and hostile values quoted",
+			executable: "",
+			sessionID:  "$(id)",
+			cwd:        "/tmp/project $(id)",
+			want:       "cd '/tmp/project $(id)' && '' '--resume' '$(id)'",
+		},
+		{
+			name:       "fork appends one argument after quoted resume values",
+			executable: "/path/with spaces/claude",
+			sessionID:  "O'Reilly!",
+			cwd:        "/tmp/dir's $HOME!",
+			forkResume: true,
+			want:       "cd '/tmp/dir'\\''s $HOME!' && '/path/with spaces/claude' '--resume' 'O'\\''Reilly'\\!'' '--fork-session'",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CLI_NAME", tc.executable)
+			got, err := ResumeCommandWithFork("claude", tc.sessionID, tc.cwd, tc.forkResume)
+			if err != nil {
+				t.Fatalf("ResumeCommandWithFork() error = %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("ResumeCommandWithFork() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Lifted from openclaw/openclaw src/agents/cli-runner/helpers.system-prompt-resume.test.ts L75-L77
+// @6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8.
+func TestResumeCommandWithForkRejectsUnsupportedSources(t *testing.T) {
+	for _, sourceTool := range []string{"codex", "antigravity", "goose", "pi", "opencode", "hermes", "unknown"} {
+		t.Run(sourceTool, func(t *testing.T) {
+			got, err := ResumeCommandWithFork(sourceTool, "session", "/project", true)
+			if err == nil || err.Error() != "CLI backend does not support forked session resume" {
+				t.Fatalf("ResumeCommandWithFork() error = %v, want unsupported-source error", err)
+			}
+			if got != "" {
+				t.Errorf("ResumeCommandWithFork() command = %q, want empty", got)
+			}
+		})
+	}
+}
+
+func TestResumeCommandWithForkKeepsUnknownNoForkFallback(t *testing.T) {
+	t.Setenv("CLAUDE_CLI_NAME", "/custom/claude")
+	got, err := ResumeCommandWithFork("unknown", "session", "", false)
+	if err != nil {
+		t.Fatalf("ResumeCommandWithFork() error = %v", err)
+	}
+	if want := "'claude' '--resume' 'session'"; got != want {
+		t.Errorf("ResumeCommandWithFork(unknown, false) = %q, want %q", got, want)
+	}
+}

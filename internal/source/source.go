@@ -12,6 +12,7 @@
 package source
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -199,7 +200,29 @@ func shellQuoteExecutable(s string) string {
 // optionally prefixing a `cd <cwd> &&` if cwd is non-empty. The cwd is shell-quoted:
 // it comes out of a transcript, so it is untrusted input being pasted into a shell.
 func ResumeCommand(sourceTool, sessionID, cwd string) string {
+	return renderResumeCommand(ResumeArgv(sourceTool, sessionID), cwd)
+}
+
+// ResumeCommandWithFork formats a resume command, optionally asking Claude Code
+// to start a new session when the rendered command is run.
+func ResumeCommandWithFork(sourceTool, sessionID, cwd string, forkResume bool) (string, error) {
 	argv := ResumeArgv(sourceTool, sessionID)
+	// Lifted from openclaw/openclaw src/agents/cli-runner/helpers.ts L421-L425
+	// @6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8.
+	// rawclaw: this API is resume-only, so useResume is specialized by the call site.
+	// Lifted from openclaw/openclaw extensions/anthropic/cli-backend.ts L254-L257
+	// @6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8.
+	forkArg := map[string]string{"claude": "--fork-session"}[sourceTool]
+	if forkResume {
+		if forkArg == "" {
+			return "", errors.New("CLI backend does not support forked session resume")
+		}
+		argv = append(argv, forkArg)
+	}
+	return renderResumeCommand(argv, cwd), nil
+}
+
+func renderResumeCommand(argv []string, cwd string) string {
 	// Lifted from git/git quote.c L85-L95 @b8242b093d9e941a34460d715e3ce616a34ac3fe.
 	// rawclaw: a Go slice replaces the null-terminated vector; quote each local
 	// element, then retain Join for separators instead of strbuf's leading spaces.
