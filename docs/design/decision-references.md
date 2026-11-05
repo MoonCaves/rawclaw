@@ -48,3 +48,14 @@ Source: `git/git` at immutable revision `b8242b093d9e941a34460d715e3ce616a34ac3f
 - License: [GPL-2.0, `COPYING`](https://github.com/git/git/blob/b8242b093d9e941a34460d715e3ce616a34ac3fe/COPYING). Source and license fetched on 2026-11-05.
 
 Applicability is limited to PR108's `claudeExecutable`, `shellQuoteExecutable`, and whole-vector quotation in `ResumeCommand`. The Go adaptation uses `os.LookupEnv` with `CLAUDE_CLI_NAME`/`claude`, immutable strings and `strings.NewReplacer`, and a slice loop plus `strings.Join`; it does not reproduce Git's C buffer/alias handling. This is a prospective source record for extraction onto current main; it does not establish new provenance for the earlier commits, cover unrelated parser or claim logic, or grant general permission to reuse Git. License recording establishes neither incompatibility nor legal clearance.
+
+## Hermes native resume CLI
+
+Source: `NousResearch/hermes-agent` at immutable revision `d8c79e4b6b8c63e6c40167ff95ec28e7b1fee189`; the linked upstream files own this CLI contract.
+
+- [`hermes_cli/_parser.py` lines 179–181](https://github.com/NousResearch/hermes-agent/blob/d8c79e4b6b8c63e6c40167ff95ec28e7b1fee189/hermes_cli/_parser.py#L179-L181): defines `--resume` / `-r` with a session argument.
+- [`pyproject.toml` lines 586–587](https://github.com/NousResearch/hermes-agent/blob/d8c79e4b6b8c63e6c40167ff95ec28e7b1fee189/pyproject.toml#L586-L587): declares the `hermes` executable at `hermes_cli.main:main`.
+- [`hermes_cli/main.py` lines 3021–3025](https://github.com/NousResearch/hermes-agent/blob/d8c79e4b6b8c63e6c40167ff95ec28e7b1fee189/hermes_cli/main.py#L3021-L3025): promotes top-level resume/continue without a subcommand to chat.
+- License: [MIT, `LICENSE`](https://github.com/NousResearch/hermes-agent/blob/d8c79e4b6b8c63e6c40167ff95ec28e7b1fee189/LICENSE), Copyright (c) 2025 Nous Research. Source and license fetched on 2026-11-05.
+
+This records the native `hermes --resume SESSION` interface for prospective adoption in RawClaw's existing resume command table. It does not cover session discovery, ID/prefix resolution, archive source support, shell quotation, executable overrides, or the separate `hermes resume` alias. It does not claim that earlier RawClaw changes were copied from this source, retroactively approve the held candidate, or grant implementation or provenance-gate approval.
