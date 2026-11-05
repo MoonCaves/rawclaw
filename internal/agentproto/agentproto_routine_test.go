@@ -29,6 +29,8 @@ func (f *fakeEmbedder) Embed(_ context.Context, text string) []float64 {
 func setupRoutineTestCorpus(t *testing.T) (proj string, s1, s2 string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	proj = t.TempDir()
 
 	s1 = "11111111-aaaa-bbbb-cccc-000000000001"
@@ -136,6 +138,8 @@ func TestRoutine_FTS_SortsDownAtEqualRelevance(t *testing.T) {
 // still returned (never hidden).
 func TestRoutine_FTS_SoleMatchReturned(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	proj := t.TempDir()
 
 	sid := "sole-routine-sess-1"
@@ -241,6 +245,8 @@ func TestRoutine_Topics_SortsDownAtEqualRelevance(t *testing.T) {
 // is still returned.
 func TestRoutine_Topics_SoleMatchReturned(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	proj := t.TempDir()
 
 	sid := "sole-topic-routine-1"
@@ -277,6 +283,8 @@ func TestRoutine_Topics_SoleMatchReturned(t *testing.T) {
 // normal session (no destructive demotion).
 func TestRoutine_HigherRelevanceOutranksNormal(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	proj := t.TempDir()
 
 	sRoutine := "11111111-routine-high-cov"
@@ -313,6 +321,8 @@ func TestRoutine_HigherRelevanceOutranksNormal(t *testing.T) {
 // results display the routine marker.
 func TestRoutine_Rendering_ShowsRoutineMarker(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	proj := t.TempDir()
 
 	sid := "11111111-routine-marker-test"

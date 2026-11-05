@@ -18,6 +18,8 @@ import (
 func TestOutline_UntaggedSessionTailFallback(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	sid := "untagged-session-123"
 	// Write opening message
@@ -94,6 +96,8 @@ func TestOutline_UntaggedSessionTailFallback(t *testing.T) {
 func TestOutline_TaggedSessionSkipsFallback(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	sid := "tagged-session-456"
 	writeSession(t, proj, sid, "22222222-aaaa-bbbb-cccc-000000000002", "Goal: initial opening command")

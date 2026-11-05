@@ -331,6 +331,8 @@ func writeScrollSession(t *testing.T, proj, stem, content string) {
 // deadlock into a loud failure instead of a hung CI run.
 func TestBrowseReturnsPreviewsWithoutDeadlock(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	proj := t.TempDir()
 	writeScrollSession(t, proj, "aaaa00000001", "investigating the browse deadlock on the single conn pool")
 	writeScrollSession(t, proj, "bbbb00000002", "tracing the scroll resolver and subagent ids")
@@ -360,6 +362,8 @@ func TestBrowseReturnsPreviewsWithoutDeadlock(t *testing.T) {
 func TestSessionLastActivityShowsNewestRealMessage(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	lines := []string{
 		`{"type":"user","uuid":"11111111-0000-0000-0000-000000000001","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"set up the deployment pipeline"}}`,
 		`{"type":"assistant","uuid":"11111111-0000-0000-0000-000000000002","timestamp":"2026-06-01T10:05:00Z","message":{"role":"assistant","content":"the nightly job now repins every image"}}`,
@@ -399,6 +403,8 @@ func TestSessionLastActivityShowsNewestRealMessage(t *testing.T) {
 func TestSessionLastActivityEmptyWhenTailIsAllMachinery(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	lines := []string{
 		`{"type":"user","uuid":"22222222-0000-0000-0000-000000000001","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"[TOOL_RESULT] only machinery here"}}`,
 		`{"type":"user","uuid":"22222222-0000-0000-0000-000000000002","timestamp":"2026-06-01T10:01:00Z","message":{"role":"user","content":"<system-reminder>nudge</system-reminder>"}}`,
@@ -430,6 +436,8 @@ func TestSessionLastActivityEmptyWhenTailIsAllMachinery(t *testing.T) {
 func TestSessionLastActivitySkipsRedactedThinking(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	lines := []string{
 		`{"type":"user","uuid":"33333333-0000-0000-0000-000000000001","timestamp":"2026-06-01T10:00:00Z","message":{"role":"user","content":"reconcile the spec"}}`,
 		`{"type":"assistant","uuid":"33333333-0000-0000-0000-000000000002","timestamp":"2026-06-01T10:05:00Z","message":{"role":"assistant","content":"the eight commits are on the branch"}}`,

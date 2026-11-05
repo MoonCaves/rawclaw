@@ -35,6 +35,8 @@ func (c *countingEmbedder) Embed(context.Context, string) []float64 {
 // pure loss, and nothing reported it.
 func TestSearchSkipsEmbeddingWhenStoreHasNoVectors(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	proj := t.TempDir()
 	writeSession(t, proj, "5c2ba140-0000-4000-8000-00000000aa01",
@@ -67,6 +69,8 @@ func TestSearchSkipsEmbeddingWhenStoreHasNoVectors(t *testing.T) {
 // expensive call by the number of projects on the machine.
 func TestSearchEmbedsAtMostOncePerSearch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	scope := []view.Scope{}
 	for _, text := range []string{"widget calibration in the ledger", "widget calibration for billing"} {
@@ -90,6 +94,8 @@ func TestSearchEmbedsAtMostOncePerSearch(t *testing.T) {
 
 func TestSearchSkipsEmbeddingWhenLexicalLimitIsFull(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	proj := t.TempDir()
 	sid := "5c2ba140-0000-4000-8000-00000000aa03"

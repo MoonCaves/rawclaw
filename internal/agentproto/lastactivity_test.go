@@ -126,6 +126,8 @@ func TestSearchHitLastActivityEmptyWhenTailIsAllMachinery(t *testing.T) {
 // corpora, so the read-refs are comparable byte-for-byte.
 func TestLastActivityDoesNotAffectOrdering(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
 
 	strongMsg := msgSpec{role: "user", uuid: "44444444-aaaa-bbbb-cccc-000000000001",
 		content: "deployment deployment deployment notes about the deployment"}
