@@ -26,8 +26,7 @@ single keyword binary:
 - **`--json` on every command** (search, browse, read, outline, stats, resume) + real exit codes.
 - **Top-level `read` / `outline` verbs** — the agent read-protocol. Refs are **source-stable**
   (`<session8>:<uuid8>`, anchored on Claude Code's own message uuid, so a citation survives re-index and
-  transcript appends), and **ambiguity is rejected git-style** (a colliding prefix returns candidates, never
-  the wrong session/message). Neighboring messages are capped previews, and a system anchor is capped by default.
+  transcript appends). Neighboring messages are capped previews, and a system anchor is capped by default.
   `--budget N` adds an excerpt-wide cap; `--more` widens the window, and `--around N` shifts the effective anchor.
   To read a system anchor without its display cap and include tools and thinking, use `--with tools,thinking`
   without `--budget`. Neighboring previews remain capped.
