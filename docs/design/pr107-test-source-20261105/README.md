@@ -10,6 +10,6 @@ Scope: restore only the original seven-line loop; fixtures and assertions stay u
 
 Finding: the switch rewrite lost literal source correspondence despite equivalent comparisons.
 Ruling: copy the upstream if/else-if loop byte-for-byte into `internal/retrieve/retrieve_test.go`.
-Put the immutable citation and narrow, justified `//nolint:gocritic` above the copied loop.
-Validation is pending: exact source comparison, focused retrieval race test, configured lint.
+Put the immutable citation and narrow, justified `//nolint:gocritic,staticcheck` above the copied loop.
+Exact seven-line comparison and focused retrieval race test passed; configured lint is checked before commit.
 This note authorizes no fixture, assertion, runtime, configuration, or global suppression change.
