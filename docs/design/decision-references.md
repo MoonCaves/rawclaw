@@ -37,3 +37,14 @@ This is a narrow archive/scopes fixture adoption. It does not cover the 47 direc
 The source and license were fetched and independently checked on 2026-11-05. This records prospective adoption now, not provenance of the earlier held correction. Scope is only 46 direct fixture statements in 11 existing test files under `internal/agentproto` and `internal/view`, each immediately after an existing HOME assignment. Contract files, contract rows, assertions, imports, system messages, and the separate Cisco archive/scopes fixtures are excluded. Each copied statement carries an immutable copy-site citation and each target file its own `Prior-Art` trailer.
 
 The isolated statement uses standard-library APIs available at RawClaw's Go 1.24 floor; no gdu dependency or its module's Go 1.26 floor is adopted. Existing fixtures are nonparallel in the inspected source. This narrow adoption does not establish whole-suite XDG isolation.
+
+## Claude resume executable selection and shell argument quotation
+
+Source: `git/git` at immutable revision `b8242b093d9e941a34460d715e3ce616a34ac3fe`; the linked upstream files own these patterns.
+
+- [`connect.c` lines 1406–1408](https://github.com/git/git/blob/b8242b093d9e941a34460d715e3ce616a34ac3fe/connect.c#L1406-L1408): select an environment-provided executable, defaulting only when the variable is absent.
+- [`quote.c` lines 11–48](https://github.com/git/git/blob/b8242b093d9e941a34460d715e3ce616a34ac3fe/quote.c#L11-L48): single-quote a shell word and escape embedded single quotes and exclamation points.
+- [`quote.c` lines 85–95](https://github.com/git/git/blob/b8242b093d9e941a34460d715e3ce616a34ac3fe/quote.c#L85-L95): quote every argument before composing the command.
+- License: [GPL-2.0, `COPYING`](https://github.com/git/git/blob/b8242b093d9e941a34460d715e3ce616a34ac3fe/COPYING). Source and license fetched on 2026-11-05.
+
+Applicability is limited to PR108's `claudeExecutable`, `shellQuoteExecutable`, and whole-vector quotation in `ResumeCommand`. The Go adaptation uses `os.LookupEnv` with `CLAUDE_CLI_NAME`/`claude`, immutable strings and `strings.NewReplacer`, and a slice loop plus `strings.Join`; it does not reproduce Git's C buffer/alias handling. This is a prospective source record for extraction onto current main; it does not establish new provenance for the earlier commits, cover unrelated parser or claim logic, or grant general permission to reuse Git. License recording establishes neither incompatibility nor legal clearance.
