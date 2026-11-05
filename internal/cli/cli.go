@@ -594,7 +594,10 @@ func emitResumeMatches(w io.Writer, o *Options, matches []resumeCandidate, allow
 	}
 
 	m := matches[0]
-	cmd := resumeCommand(m.src, m.hit)
+	cmd, err := resumeCommand(m.src, m.hit, o.ForkSession)
+	if err != nil {
+		return err
+	}
 	if o.JSON {
 		return EmitJSON(w, struct {
 			SessionID string `json:"session_id"`
@@ -761,8 +764,8 @@ func appendResumeCandidate(matches []resumeCandidate, candidate resumeCandidate)
 
 // resumeCommand builds the paste-ready resume command for a session using the
 // runtime's registered resume verb table.
-func resumeCommand(src string, h paths.SessionHit) string {
-	return source.ResumeCommand(src, h.SessionID, h.CWD)
+func resumeCommand(src string, h paths.SessionHit, forkResume bool) (string, error) {
+	return source.ResumeCommandWithFork(src, h.SessionID, h.CWD, forkResume)
 }
 
 // foreignHit is one archive-replica resume match: a session recorded on
@@ -808,7 +811,10 @@ func resumeForeign(w io.Writer, o *Options) (handled bool, err error) {
 	}
 
 	h := hits[0]
-	remote := resumeCommand(h.source, paths.SessionHit{SessionID: h.sessionID, CWD: h.cwd, Project: h.project})
+	remote, err := resumeCommand(h.source, paths.SessionHit{SessionID: h.sessionID, CWD: h.cwd, Project: h.project}, o.ForkSession)
+	if err != nil {
+		return true, err
+	}
 	if o.JSON {
 		return true, EmitJSON(w, struct {
 			SessionID string `json:"session_id"`

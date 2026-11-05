@@ -79,11 +79,11 @@ Read-only recall is the core, but lightweight scriptable session management belo
   git-remote-backed multi-machine sync and backup mechanism; delete is filter-gated and dry-run-first
   (refuses to delete everything) with a tombstone file and vault removal so re-index won't resurrect a
   deleted session.
-- **`fork` (`--fork-session`) + `here` (`--here`)** — pass-throughs to `claude` (fork a session; or copy its
-  JSONL into the CWD's project and resume there). **(planned — WANTED:** powers the session-start
-  resume/fork *offer* — "continue from here, or fork from the decision / *before* it for clean,
-  un-tainted context." Thin wrappers over `claude --fork-session`/`--resume`. Note: lineage-dedup in
-  search already collapses a session + its forks to one hit, so forking won't flood recall.)
+- **`--resume --fork-session`** — **shipped.** Prints Claude Code's native fork argument for a
+  resolved Claude session. RawClaw does not invoke Claude Code; the new session ID is created only
+  when the user runs the printed command.
+- **`here` (`--here`)** — copy the transcript into the current working directory's Claude project
+  and resume there. **(planned — WANTED)**
 - **`list` / `show` / `usage` subcommands** — composable, exit-code-clean siblings for `jq`/`fzf` pipelines.
   **(planned — deferred:** `--list` (projects), `--stats` (corpus), and the `read` / `outline` verbs
   already cover this ground; subcommands would add public surface for marginal gain.)

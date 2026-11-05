@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoonCaves/rawclaw/internal/archive/archivetest"
 	"github.com/MoonCaves/rawclaw/internal/durable"
 	"github.com/MoonCaves/rawclaw/internal/index"
 	"github.com/MoonCaves/rawclaw/internal/model"
@@ -102,6 +103,215 @@ func TestRunResumePreservesCrossSourceAmbiguity(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "2 sessions match") {
 		t.Fatalf("cross-source exact collision was not ambiguous:\n%s", out.String())
+	}
+}
+
+func TestRunResumeForkPreservesCrossSourceAmbiguity(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		json bool
+	}{
+		{name: "text"},
+		{name: "json", json: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateResume(t)
+			id := "12345678-1234-4234-8234-123456789011"
+			registerResumeSources(t,
+				resumeLookupRegistration("resume-a", id, "/project/a"),
+				resumeLookupRegistration("resume-b", id, "/project/b"),
+			)
+
+			var out strings.Builder
+			if err := runResume(&out, &Options{Resume: id, ForkSession: true, JSON: tc.json}); err != nil {
+				t.Fatalf("runResume fork: %v", err)
+			}
+			if tc.json {
+				var rows []map[string]any
+				if err := json.Unmarshal([]byte(out.String()), &rows); err != nil {
+					t.Fatalf("decode ambiguity rows: %v\n%s", err, out.String())
+				}
+				if len(rows) != 2 {
+					t.Fatalf("got %d JSON rows, want both ambiguous sources:\n%s", len(rows), out.String())
+				}
+				if _, ok := rows[0]["command"]; ok {
+					t.Fatalf("ambiguous JSON emitted a command:\n%s", out.String())
+				}
+				return
+			}
+			if !strings.Contains(out.String(), "2 sessions match") || strings.Contains(out.String(), "--fork-session") {
+				t.Fatalf("fork capability ran before ambiguity:\n%s", out.String())
+			}
+		})
+	}
+}
+
+func TestRunResumeForkRendersClaudeAndRejectsUnsupportedLocal(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		source    string
+		want      string
+		wantError string
+	}{
+		{name: "Claude", source: "claude", want: "cd /project/claude && 'claude' '--resume' '12345678-1234-4234-8234-123456789012' '--fork-session'"},
+		{name: "Codex", source: "codex", wantError: "CLI backend does not support forked session resume"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateResume(t)
+			id := "12345678-1234-4234-8234-123456789012"
+			sourcePath := filepath.Join(t.TempDir(), "resume-source.jsonl")
+			writeTagSourceFile(t, sourcePath, "{}\n")
+			if err := durable.StoreMessages(durable.Meta{ID: id, Source: tc.source, CWD: "/project/" + tc.source, SourcePath: sourcePath}, nil); err != nil {
+				t.Fatal(err)
+			}
+
+			var out strings.Builder
+			err := runResume(&out, &Options{Resume: id, ForkSession: true})
+			if tc.wantError != "" {
+				if err == nil || err.Error() != tc.wantError {
+					t.Fatalf("runResume error = %v, want %q", err, tc.wantError)
+				}
+				if out.Len() != 0 {
+					t.Fatalf("unsupported source emitted a command: %s", out.String())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("runResume: %v", err)
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Fatalf("runResume output missing exact fork command %q:\n%s", tc.want, out.String())
+			}
+		})
+	}
+}
+
+func TestRunResumeForkPreservesMetadataGuardAndMiss(t *testing.T) {
+	isolateResume(t)
+	id := "12345678-1234-4234-8234-123456789013"
+	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude", CWD: "/gone/project"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := durable.SetOnlyCopySince(id, 1780000000); err != nil {
+		t.Fatal(err)
+	}
+	var guarded strings.Builder
+	if err := runResume(&guarded, &Options{Resume: id, ForkSession: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(guarded.String(), "cannot produce a safe local resume command") || strings.Contains(guarded.String(), "--fork-session") {
+		t.Fatalf("fork request bypassed retained metadata guard:\n%s", guarded.String())
+	}
+
+	var missing strings.Builder
+	if err := runResume(&missing, &Options{Resume: "no-such-session", ForkSession: true}); err != nil {
+		t.Fatalf("fork miss returned an error: %v", err)
+	}
+	if !strings.Contains(missing.String(), "No session id starts with") || strings.Contains(missing.String(), "--fork-session") {
+		t.Fatalf("fork miss did not retain ordinary not-found output:\n%s", missing.String())
+	}
+}
+
+func TestRunRootForkWithoutResumePreservesSourceFilteredJSONBrowse(t *testing.T) {
+	isolateResume(t)
+	baseline, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--source", "codex", "--json")
+	if err != nil {
+		t.Fatalf("baseline source-filtered browse: %v\n%s", err, baseline)
+	}
+	withFork, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--fork-session", "--source", "codex", "--json")
+	if err != nil {
+		t.Fatalf("fork flag without resume changed dispatch: %v\n%s", err, withFork)
+	}
+	if withFork != baseline {
+		t.Fatalf("fork flag without --resume changed source-filtered JSON browse:\nbaseline:\n%s\nwith flag:\n%s", baseline, withFork)
+	}
+}
+
+func TestRunRootForkPreservesSourceFilterResumeRejection(t *testing.T) {
+	isolateResume(t)
+	_, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--resume", "session", "--fork-session", "--source", "claude", "--json")
+	if err == nil || !strings.Contains(err.Error(), "--source does not apply to --resume") {
+		t.Fatalf("--source + --resume --fork-session error = %v, want unchanged rejection", err)
+	}
+}
+
+func TestResume_ForeignForkKeepsOriginGuidanceAndDoesNotExecute(t *testing.T) {
+	fixture := archivetest.Setup(t, "")
+	marker := filepath.Join(fixture.Home, "fork-was-executed")
+	executable := filepath.Join(fixture.Home, "fake-claude")
+	writeTagSourceFile(t, executable, "#!/bin/sh\ntouch '"+marker+"'\n")
+	if err := os.Chmod(executable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CLI_NAME", executable)
+
+	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", archivetest.ForeignBeacon); err != nil {
+		t.Fatalf("priming search: %v", err)
+	}
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--resume", archivetest.ForeignSession[:8], "--fork-session")
+	if err != nil {
+		t.Fatalf("--resume foreign --fork-session: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "another machine") || !strings.Contains(out, "On "+archivetest.ForeignName) || !strings.Contains(out, "'--fork-session'") {
+		t.Fatalf("foreign fork output lost origin guidance or native flag:\n%s", out)
+	}
+
+	jsonOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--resume", archivetest.ForeignSession[:8], "--fork-session", "--json")
+	if err != nil {
+		t.Fatalf("JSON foreign fork: %v\n%s", err, jsonOut)
+	}
+	var row struct {
+		Machine string `json:"machine"`
+		Command string `json:"command"`
+		Note    string `json:"note"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &row); err != nil {
+		t.Fatalf("decode foreign fork JSON: %v\n%s", err, jsonOut)
+	}
+	if row.Machine != archivetest.ForeignName || !strings.Contains(row.Command, "'--fork-session'") || !strings.Contains(row.Note, "run there") {
+		t.Fatalf("foreign fork JSON lost origin data or command: %+v", row)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("rendered fork command executed fake Claude: stat marker error=%v", err)
+	}
+}
+
+func TestResume_ForeignForkPreservesMultipleMatchAmbiguity(t *testing.T) {
+	fixture := archivetest.Setup(t, "")
+	secondID := "bbbb2222eeeeffff"
+	secondPath := filepath.Join(fixture.Archive.ClonePath(), archivetest.ForeignName, "claude", "-remote-proj", secondID+".jsonl")
+	writeTagSourceFile(t, secondPath, `{"type":"user","uuid":"dddd4444-eeee-ffff-aaaa-bbbbccccdddd","timestamp":"2026-06-02T10:00:00Z","cwd":"`+archivetest.ForeignCWD+`","message":{"role":"user","content":"`+archivetest.ForeignBeacon+` second"}}`+"\n")
+	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--reindex", archivetest.ForeignBeacon); err != nil {
+		t.Fatalf("indexing duplicate foreign session: %v", err)
+	}
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--resume", "bbbb2222", "--fork-session")
+	if err != nil {
+		t.Fatalf("ambiguous foreign fork: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "2 sessions match") || strings.Contains(out, "--fork-session") {
+		t.Fatalf("foreign multiple matches did not remain ambiguous:\n%s", out)
+	}
+}
+
+func TestResume_ForeignUnsupportedForkReturnsHandledError(t *testing.T) {
+	fixture := archivetest.Setup(t, "")
+	id := "dddd4444-1111-4111-8111-111111111111"
+	path := filepath.Join(fixture.Archive.ClonePath(), archivetest.ForeignName, "codex", "rollout-2026-11-06T01-02-03-"+id+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTagSourceFile(t, path,
+		`{"type":"session_meta","payload":{"id":"`+id+`","cwd":"/remote/codex","thread_source":"user"}}`+"\n"+
+			`{"type":"response_item","timestamp":"2026-11-06T01:02:04Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"codexforkbeacon"}]}}`+"\n")
+	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--reindex", "codexforkbeacon"); err != nil {
+		t.Fatalf("indexing foreign Codex session: %v", err)
+	}
+	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--resume", id[:8], "--fork-session")
+	if err == nil || !strings.Contains(err.Error(), "CLI backend does not support forked session resume") {
+		t.Fatalf("foreign unsupported fork error = %v, want handled capability error; output=%s", err, out)
+	}
+	if strings.Contains(out, "No session id starts with") {
+		t.Fatalf("foreign capability error fell through to not-found output: %s", out)
 	}
 }
 

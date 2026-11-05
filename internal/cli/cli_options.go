@@ -33,6 +33,7 @@ type Options struct {
 	Reindex          bool
 	JSON             bool
 	Resume           string
+	ForkSession      bool
 	Stats            bool
 	Since            string
 	Before           string
@@ -177,6 +178,7 @@ func bindRootFlags(root *cobra.Command, opts *Options) {
 	f.BoolVar(&opts.Reindex, "reindex", false, "force a full re-index before searching or browsing")
 	f.BoolVar(&opts.JSON, "json", false, "machine-readable JSON output (for agents/scripts)")
 	f.StringVar(&opts.Resume, "resume", "", "print paste-ready resume command for a session id (use the 8-char id from search output; each argument shell-quoted); Claude uses $CLAUDE_CLI_NAME when set, otherwise claude")
+	f.BoolVar(&opts.ForkSession, "fork-session", false, "with --resume, print Claude Code's native --fork-session command; run it in Claude Code to create a new session id")
 	f.BoolVar(&opts.Stats, "stats", false, "corpus overview (sessions/messages/date span) for this project, or --all for every project")
 	f.StringVar(&opts.Since, "since", "", "only results on/after this date (YYYY-MM-DD or relative like -7d)")
 	f.StringVar(&opts.Before, "before", "", "only results on/before this date (YYYY-MM-DD or relative like -24h)")
