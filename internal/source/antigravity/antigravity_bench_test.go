@@ -11,7 +11,9 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 )
 
-func writeJSONL(t *testing.T, path string, lines ...string) {
+// Lifted from golang/go src/testing/testing.go L912-L942 @3901409b5d0fb7c85a3e6730a59943cc93b2835c (BSD-3-Clause).
+// rawclaw: use the native shared T/B API for fixture failure ownership.
+func writeJSONL(t testing.TB, path string, lines ...string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -33,12 +35,12 @@ func BenchmarkAntigravityDiscover(b *testing.B) {
 		sessID := fmt.Sprintf("bench-sess-%04d", i)
 		histLines = append(histLines, fmt.Sprintf(`{"conversationId":"%s","workspace":"/workspace/bench"}`, sessID))
 		tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
-		writeJSONL(&testing.T{}, tPath,
+		writeJSONL(b, tPath,
 			`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:00Z","content":"<USER_REQUEST>run query benchmark</USER_REQUEST>"}`,
 			`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:05Z","content":"Optimizing execution plan"}`,
 		)
 	}
-	writeJSONL(&testing.T{}, filepath.Join(tmp, "history.jsonl"), histLines...)
+	writeJSONL(b, filepath.Join(tmp, "history.jsonl"), histLines...)
 
 	b.ResetTimer()
 	for b.Loop() {
@@ -80,20 +82,30 @@ func BenchmarkAntigravityEnsureIndexed_Incremental(b *testing.B) {
 	ad := antigravity.NewRoot(tmp)
 
 	sessID := "bench-incremental"
-	writeJSONL(&testing.T{}, filepath.Join(tmp, "history.jsonl"),
+	writeJSONL(b, filepath.Join(tmp, "history.jsonl"),
 		fmt.Sprintf(`{"conversationId":"%s","workspace":"/workspace/bench"}`, sessID),
 	)
 	tPath := filepath.Join(tmp, "brain", sessID, ".system_generated", "logs", "transcript.jsonl")
-	writeJSONL(&testing.T{}, tPath,
+	writeJSONL(b, tPath,
 		`{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","created_at":"2026-08-15T10:00:00Z","content":"<USER_REQUEST>initial build</USER_REQUEST>"}`,
 		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:05Z","content":"Build complete"}`,
 	)
 
-	cs, _ := ad.Discover()
+	// Lifted from MoonCaves/rawclaw internal/source/goose/goose_test.go L357-L361 @024a68702cc9c72ef945350cd31e0d3cd0d5bf91 (MIT).
+	// rawclaw: substitute this adapter, cs, b and the benchmark diagnostic.
+	cs, err := ad.Discover()
+	if err != nil || len(cs) != 1 {
+		b.Fatalf("discover failed: %v (got %d, want 1)", err, len(cs))
+	}
 	// Warm up initial index
-	_, _, err := index.EnsureIndexedContainers(dbp, true, cs, ad.Messages, antigravity.ID, "")
+	// Lifted from MoonCaves/rawclaw internal/index/containers_test.go L362-L368 @024a68702cc9c72ef945350cd31e0d3cd0d5bf91 (MIT).
+	// rawclaw: substitute the existing fixture arguments, nSessions and b.
+	nSessions, _, err := index.EnsureIndexedContainers(dbp, true, cs, ad.Messages, antigravity.ID, "")
 	if err != nil {
-		b.Fatalf("initial indexing failed: %v", err)
+		b.Fatalf("initial EnsureIndexedContainers: %v", err)
+	}
+	if nSessions != 1 {
+		b.Fatalf("sessions = %d, want 1", nSessions)
 	}
 
 	b.ResetTimer()
