@@ -107,3 +107,44 @@ fixture bytes, timed loop, timer calls or production behavior changes.
 The root contract was checked and left unchanged: this attribution correction
 does not move a runtime contract. Original-head validation does not establish
 current-main composition, future CI, a speedup or full message-content parity.
+
+
+## Current-main composition validation — 2026-11-05
+
+Supervisor command receipts validate composition
+[`eb8593ed88449677deab89b1ae7a72a93dd8f78d`](https://github.com/MoonCaves/rawclaw/commit/eb8593ed88449677deab89b1ae7a72a93dd8f78d),
+based on main `024a68702cc9c72ef945350cd31e0d3cd0d5bf91`.
+Its benchmark blob `d7b0f0721fb90f81e4e680306f2db56c7cea79e0` is byte-identical
+to the corrected original head `c389675b758173365a54efb575d4e71712e8de5c`.
+These are composition checks with `CGO_ENABLED=0` and isolated data roots:
+
+| Toolchain | Command | Recorded result |
+| --- | --- | --- |
+| Go 1.24.0 | `go build ./...` | Exit 0; empty output |
+| Go 1.24.0 | `go vet ./...` | Exit 0; empty output |
+| Go 1.24.0 | `golangci-lint run` with a fresh lint cache | Exit 0; `0 issues.` |
+| Go 1.27.3 | `go test -race -count=1 ./...` | Exit 0 |
+| Go 1.27.3 | `go test -run '^$' -bench '^BenchmarkAntigravity' -benchtime=1x -count=1 ./internal/source/antigravity` | All three existing cases ran; exit 0; `PASS` |
+
+The full-race receipt includes this package-output excerpt:
+```text
+ok  	github.com/MoonCaves/rawclaw/internal/source/antigravity	6.210s
+```
+The benchmark receipt ends:
+```text
+PASS
+ok  	github.com/MoonCaves/rawclaw/internal/source/antigravity	1.055s
+```
+
+A fresh basename-only negative control returned exit 0 at main `024a687`,
+but exit 1 at corrected head `c389675`, before timing, with
+`discover failed: <nil> (got 0, want 1)`. This tests fixture readiness;
+it establishes no speedup, full message-content parity or issue closure.
+
+Composition evidence is separate from head CI. Run
+[`42030177328`](https://github.com/MoonCaves/rawclaw/actions/runs/42030177328)
+started before PR #116 was retargeted to main. Its synthetic merge
+`a1b1aded33c9b4f25de170bc13f2ddf776ced8ac` has parents `d235ddc` and
+`c389675`, so it does not validate the current-main base even if the live
+PR metadata now names main. A subsequent head CI run must be assessed
+against its actual tested merge/base; this note claims no such result.
