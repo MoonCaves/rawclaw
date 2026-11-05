@@ -17,6 +17,7 @@ All notable changes to RawClaw are documented in this file.
 ### Changed
 
 - `--resume` honors `CLAUDE_CLI_NAME` for Claude sessions and quotes each printed argument as one shell word.
+- `setup --help` now discloses the escaped-quote JSON extraction limitation in Claude Code, Codex, and Antigravity shell hooks; hook behavior is unchanged.
 
 ## [v0.12.0] - 2026-09-02
 
