@@ -125,3 +125,16 @@ All hashes below are for complete files fetched from the immutable revisions cit
 | engram | `cmd/engram/hook_codex_test.go` | `2bd02eac0dc7ee4d827b6aa70ecfa5ce19be884d3b0898b9fb4e4fecfeed5c03` |
 | engram | [`go.mod`](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/go.mod) | `4a3ad075945ecd6bc1caf89e79b0469eca11707865adb0e714cacbc193949f9c` |
 | engram | [`LICENSE`](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/LICENSE) | `09608597ddda4e5f9033ac407a0d401986d96376c47f6d46789ca38db672dc15` |
+
+## Crush SQLite reader source candidate (2026-11-06)
+
+Source: `kenn-io/agentsview` at immutable revision `5f877363f3a7b911e73dc391692c66cd835da7be`; the linked files own these patterns.
+
+- [`internal/parser/crush.go` lines 440–504](https://github.com/kenn-io/agentsview/blob/5f877363f3a7b911e73dc391692c66cd835da7be/internal/parser/crush.go#L440-L504) selects original message IDs and parts, orders by `created_at, rowid`, scans rows and calls its message builder; [lines 507–521](https://github.com/kenn-io/agentsview/blob/5f877363f3a7b911e73dc391692c66cd835da7be/internal/parser/crush.go#L507-L521) retains the row ID as `SourceUUID`.
+- [Lines 547–585](https://github.com/kenn-io/agentsview/blob/5f877363f3a7b911e73dc391692c66cd835da7be/internal/parser/crush.go#L547-L585) extract nested `data.text` and reasoning into content; [lines 588–637](https://github.com/kenn-io/agentsview/blob/5f877363f3a7b911e73dc391692c66cd835da7be/internal/parser/crush.go#L588-L637) decodes nested tool-call and tool-result data into separate structures.
+- License: [MIT, `LICENSE` lines 1–21](https://github.com/kenn-io/agentsview/blob/5f877363f3a7b911e73dc391692c66cd835da7be/LICENSE#L1-L21), Copyright (c) 2026 Kenn Software LLC. Retain its notice when copying substantial portions.
+- Complete-file SHA256: `internal/parser/crush.go` `532bc3cf8414bb961d12fdc248f287af74c438c25c56a22b5e465087283fac17`; `LICENSE` `ffb1006bf3c32ec8da3ad6c5f693d8516eecb355df848a694332fa13174a77d4`.
+
+The source [imports](https://github.com/kenn-io/agentsview/blob/5f877363f3a7b911e73dc391692c66cd835da7be/internal/parser/crush.go#L3-L19) `encoding/json/v2`, `gjson` and project-local types/helpers, and [go.mod line 3](https://github.com/kenn-io/agentsview/blob/5f877363f3a7b911e73dc391692c66cd835da7be/go.mod#L3-L3) declares Go 1.27.3. This does not establish Go 1.24 compatibility of an extracted unit; no build was run. Compiled dependencies are not runtime services.
+
+Tool calls/results remain separate from joined text; flattening them into RawClaw's message model is unresolved. This entry records a candidate, not a complete or approved adapter, and does not adopt its discovery, lineage, driver, fallback or unrelated decisions. Any later port requires exact source-before-edit ACK, scoped citations, review and the ordinary gate; no native Crush implementation code is copied here.
