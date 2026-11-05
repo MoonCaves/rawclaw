@@ -1,0 +1,137 @@
+package agentproto
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/MoonCaves/rawclaw/internal/index"
+	"github.com/MoonCaves/rawclaw/internal/paths"
+	"github.com/MoonCaves/rawclaw/internal/view"
+)
+
+// Diagnostic fixture for the exact revision named in README.md. This records
+// observed behavior; it does not establish the desired lookup authority policy.
+func TestDiagnosticPartialPositiveConsolidated(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", filepath.Join(root, "home"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
+	config := filepath.Join(root, "claude")
+	t.Setenv("CLAUDE_CONFIG_DIR", config)
+	t.Setenv("RAWCLAW_CATALOG_DIR", filepath.Join(root, "catalog"))
+	live := filepath.Join(config, "projects", "live")
+	retained := filepath.Join(config, "projects", "retained")
+	for _, dir := range []string{
+		filepath.Join(root, "home"), filepath.Join(root, "cache"), filepath.Join(root, "data"),
+		live, retained,
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+	}
+	const liveSessionID = "aaaaaaaa-1111-2222-3333-000000000001"
+	const liveMessageUUID = "11111111-aaaa-bbbb-cccc-000000000001"
+	writeSession(t, live, liveSessionID, liveMessageUUID, "the live catalog session")
+	tagInto(t, live, liveSessionID, liveMessageUUID, "live topic", "live session summary")
+	liveDB := index.DBPath(live)
+	if err := paths.WriteCatalogEntry(paths.CatalogDir(), paths.CatalogEntry{
+		SessionID:      liveSessionID,
+		TranscriptPath: filepath.Join(live, liveSessionID+".jsonl"),
+		CWD:            live,
+		Source:         "claude",
+	}); err != nil {
+		t.Fatalf("WriteCatalogEntry(live): %v", err)
+	}
+	if got := paths.ProjectDirOf(filepath.Join(live, liveSessionID+".jsonl")); got != paths.Realpath(live) {
+		t.Fatalf("ProjectDirOf(live transcript) = %q, want %q", got, paths.Realpath(live))
+	}
+
+	const retainedSessionID = "aaaaaaaa-9999-8888-7777-000000000002"
+	const retainedMessageUUID = "22222222-aaaa-bbbb-cccc-000000000002"
+	const retainedTopic = "retained topic"
+	const retainedSummary = "retained session summary"
+	writeSession(t, retained, retainedSessionID, retainedMessageUUID, "the retained indexed session")
+	tagInto(t, retained, retainedSessionID, retainedMessageUUID, retainedTopic, retainedSummary)
+	retainedDB := index.DBPath(retained)
+	if err := os.Remove(filepath.Join(retained, retainedSessionID+".jsonl")); err != nil {
+		t.Fatalf("remove retained transcript: %v", err)
+	}
+	if err := os.RemoveAll(retained); err != nil {
+		t.Fatalf("remove retained project: %v", err)
+	}
+	if _, err := index.EnsureOrphanReconciled(retainedDB); err != nil {
+		t.Fatalf("EnsureOrphanReconciled(retained): %v", err)
+	}
+
+	scope := []view.Scope{
+		{Project: paths.ProjectLabel(live), DBP: liveDB},
+		{Project: paths.ProjectLabel(retained), DBP: retainedDB},
+	}
+	resetConsolidated := func() {
+		t.Helper()
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			if err := os.Remove(index.ConsolidatedPath() + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("remove consolidated store%s: %v", suffix, err)
+			}
+		}
+	}
+	resetConsolidated()
+	res, err := Topics("", scope[1:], TopicsOpts{Session: retainedSessionID})
+	if err != nil {
+		t.Fatalf("Topics(exact retained session): %v", err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("Topics exact-session hits = %+v, want one retained topic", res.Hits)
+	}
+	got := res.Hits[0]
+	if got.Topic != retainedTopic || got.ReadRef != "aaaaaaaa:22222222" || got.Summary != retainedSummary || got.Project != paths.ProjectLabel(retained) {
+		t.Errorf("Topics exact-session hit = %+v, want topic %q, read ref %q, summary %q, project %q",
+			got, retainedTopic, "aaaaaaaa:22222222", retainedSummary, paths.ProjectLabel(retained))
+	}
+
+	for _, tc := range []struct {
+		name          string
+		dbs           []string
+		wantAmbiguous bool
+	}{
+		{"no_consolidated", nil, true},
+		{"live_only_consolidated", []string{liveDB}, false},
+		{"all_folded_consolidated", []string{liveDB, retainedDB}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetConsolidated()
+			if tc.dbs != nil {
+				if _, err := index.ConsolidateFrom(tc.dbs, true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.dbs != nil {
+				con, n, err := index.OpenConsolidated()
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("consolidated session count=%d", n)
+				con.Close()
+			}
+			res, err := Topics("", scope, TopicsOpts{Session: "aaaaaaaa"})
+			var amb *ErrAmbiguousSession
+			ambiguous := errors.As(err, &amb)
+			n := 0
+			if amb != nil {
+				n = len(amb.Candidates)
+			}
+			t.Logf("Topics(prefix): hits=%+v error=%v ambiguous=%v candidates=%d", res.Hits, err, ambiguous, n)
+			if ambiguous != tc.wantAmbiguous {
+				t.Fatalf("ambiguous=%v want=%v", ambiguous, tc.wantAmbiguous)
+			}
+			if ambiguous && n != 2 {
+				t.Fatalf("candidates=%d want=2", n)
+			}
+			if !ambiguous && (err != nil || len(res.Hits) != 1 || res.Hits[0].Topic != "live topic") {
+				t.Fatalf("unexpected partial-positive result")
+			}
+		})
+	}
+}
