@@ -82,3 +82,28 @@ basename mutation, applied through an isolated Go overlay, now fails before
 timing with `discover failed: <nil> (got 0, want 1)` and exit 1. The original
 fixture passes. These checks establish fixture readiness behavior, not a
 performance improvement or full-suite result.
+
+
+## Source attribution correction — 2026-11-05
+
+The shared `testing.TB` API origin above is separate from readiness comparison
+origins. Existing RawClaw tests at immutable revision
+`024a68702cc9c72ef945350cd31e0d3cd0d5bf91` supply those patterns:
+
+- [Goose discovery, lines 357–361](https://github.com/MoonCaves/rawclaw/blob/024a68702cc9c72ef945350cd31e0d3cd0d5bf91/internal/source/goose/goose_test.go#L357-L361)
+  checks discovery error or a container count other than one. The benchmark
+  substitutes its adapter, `cs`, receiver `b` and existing diagnostic.
+- [Container indexing, lines 362–368](https://github.com/MoonCaves/rawclaw/blob/024a68702cc9c72ef945350cd31e0d3cd0d5bf91/internal/index/containers_test.go#L362-L368)
+  checks the indexing error and session count separately. The benchmark now
+  preserves those separate checks and source diagnostics, substituting its
+  existing fixture arguments, `nSessions` and receiver `b`.
+
+Both RawClaw sources use the repository's MIT license. The expected count of
+one is the existing single-session fixture contract, not a tuning threshold. The earlier combined
+error/index-count condition was not a verbatim donor unit; this correction
+replaces it with the cited separated checks. No status assertion, new coverage,
+fixture bytes, timed loop, timer calls or production behavior changes.
+
+The root contract was checked and left unchanged: this attribution correction
+does not move a runtime contract. Original-head validation does not establish
+current-main composition, future CI, a speedup or full message-content parity.

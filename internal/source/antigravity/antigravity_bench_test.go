@@ -11,6 +11,8 @@ import (
 	"github.com/MoonCaves/rawclaw/internal/source/antigravity"
 )
 
+// Lifted from golang/go src/testing/testing.go L912-L942 @3901409b5d0fb7c85a3e6730a59943cc93b2835c (BSD-3-Clause).
+// rawclaw: use the native shared T/B API for fixture failure ownership.
 func writeJSONL(t testing.TB, path string, lines ...string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -89,14 +91,21 @@ func BenchmarkAntigravityEnsureIndexed_Incremental(b *testing.B) {
 		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-08-15T10:00:05Z","content":"Build complete"}`,
 	)
 
+	// Lifted from MoonCaves/rawclaw internal/source/goose/goose_test.go L357-L361 @024a68702cc9c72ef945350cd31e0d3cd0d5bf91 (MIT).
+	// rawclaw: substitute this adapter, cs, b and the benchmark diagnostic.
 	cs, err := ad.Discover()
 	if err != nil || len(cs) != 1 {
 		b.Fatalf("discover failed: %v (got %d, want 1)", err, len(cs))
 	}
 	// Warm up initial index
+	// Lifted from MoonCaves/rawclaw internal/index/containers_test.go L362-L368 @024a68702cc9c72ef945350cd31e0d3cd0d5bf91 (MIT).
+	// rawclaw: substitute the existing fixture arguments, nSessions and b.
 	nSessions, _, err := index.EnsureIndexedContainers(dbp, true, cs, ad.Messages, antigravity.ID, "")
-	if err != nil || nSessions != 1 {
-		b.Fatalf("initial indexing failed: %v (got %d sessions, want 1)", err, nSessions)
+	if err != nil {
+		b.Fatalf("initial EnsureIndexedContainers: %v", err)
+	}
+	if nSessions != 1 {
+		b.Fatalf("sessions = %d, want 1", nSessions)
 	}
 
 	b.ResetTimer()
