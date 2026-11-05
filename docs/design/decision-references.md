@@ -125,3 +125,17 @@ All hashes below are for complete files fetched from the immutable revisions cit
 | engram | `cmd/engram/hook_codex_test.go` | `2bd02eac0dc7ee4d827b6aa70ecfa5ce19be884d3b0898b9fb4e4fecfeed5c03` |
 | engram | [`go.mod`](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/go.mod) | `4a3ad075945ecd6bc1caf89e79b0469eca11707865adb0e714cacbc193949f9c` |
 | engram | [`LICENSE`](https://github.com/Gentleman-Programming/engram/blob/2c71ca11bc198eb5cf52a12d6a44032c616d3b54/LICENSE) | `09608597ddda4e5f9033ac407a0d401986d96376c47f6d46789ca38db672dc15` |
+
+## Explicit native Claude session forks
+
+Source: `openclaw/openclaw` at immutable revision `6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8`; the linked upstream files own the decisions below.
+
+- [`extensions/anthropic/cli-backend.ts` lines 254–257](https://github.com/openclaw/openclaw/blob/6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8/extensions/anthropic/cli-backend.ts#L254-L257) configures Claude's resume arguments and `forkArg: "--fork-session"`.
+- [`src/agents/cli-runner/helpers.ts` lines 421–425](https://github.com/openclaw/openclaw/blob/6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8/src/agents/cli-runner/helpers.ts#L421-L425) checks explicit resume plus fork intent, rejects a backend without a fork argument, and appends that argument.
+- [`src/agents/cli-runner/helpers.system-prompt-resume.test.ts` lines 53–69](https://github.com/openclaw/openclaw/blob/6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8/src/agents/cli-runner/helpers.system-prompt-resume.test.ts#L53-L69) tests marked fork versus subsequent ordinary resume. The adaptation selects session-fork assertions and excludes checkpoint behavior.
+- [The same test file, lines 75–77](https://github.com/openclaw/openclaw/blob/6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8/src/agents/cli-runner/helpers.system-prompt-resume.test.ts#L75-L77) asserts the unsupported-fork error; checkpoint-only lines 70–74 are excluded.
+- License: [MIT, `LICENSE` lines 1–21](https://github.com/openclaw/openclaw/blob/6d7347b2da3f3ea44a85ac6fd7f3c15d9ab2caf8/LICENSE#L1-L21), Copyright (c) 2026 OpenClaw Foundation. The full notice is retained in `internal/source/NOTICE.openclaw`.
+
+Production source and license were fetched and independently checked on 2026-11-06. Full-file SHA256: backend `82c6719a27aa8fddfbfdccfee4071ca0cdf61c783ee6bdfedc04647e05525f78`; helper `abcfe709bc13adb10aa8fce399c339ef8819ec654fabf566ae11a893ec7aca74`; license `9efd316ecf1c4c60f6fd5d26433142fff2b6794d7d328e9bc6179b29bf9c82a4`.
+
+The Go port specializes `useResume=true` in a resume-only API and keeps RawClaw's existing argv builder and shell renderer. Only a known Claude source receives the configured fork capability; the ordinary unknown-source fallback does not confer it. CLI changes pass the explicit option and errors through existing selected local and foreign matches, preserving ambiguity, metadata guards, source-filter rejection and archive origin guidance. RawClaw renders a command; this source record does not establish native execution or creation of a new session ID. No OpenClaw package, checkpoint feature, transcript copying or new discovery policy is adopted.
