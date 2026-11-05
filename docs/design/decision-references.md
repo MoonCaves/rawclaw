@@ -73,3 +73,23 @@ Source: `MoonCaves/rawclaw` at immutable revision `2e5b6573555d3fc01aa844fe5ecc8
 This records historical assertion patterns for prospective reuse, not independent evidence of native Hermes semantics. A prospective adaptation must identify exact copied blocks and explain source/session/CWD fixture substitutions, JSON options and the decoded `Scope` to `Command` field substitution at each copy site. Use separate text and JSON cases, a complete literal command expectation and a command-substring check without adding text-frame expectations. Do not import the unrelated adapter-Lookup assertion or its registration.
 
 RawClaw's existing generic `ResumeCommand` quotes each source's argv without a Hermes-specific quoting branch. The Hermes native CLI source above covers its executable/option contract, not quotation; the existing shell-quotation source retains its stated scope. Any adoption is limited to fixture/field wiring through existing generic behavior; it must not introduce quoting or runtime rules. These sources establish no native arbitrary-ID acceptance. Exact adaptations still require source-before-edit ACK, three-way review and the ordinary provenance gate. This entry neither establishes provenance for PR131 or its held donor, reverses their HOLD, authorizes implementation, nor grants general same-repository source eligibility.
+
+## Codex hook schema and nullable transcript path
+
+- Repository: `entireio/cli`.
+- Immutable revision: `4188e9b89555579eb74a8bab9ab6ee054833042c`.
+- Complete session-input type: [`cmd/entire/cli/agent/codex/types.go`, lines 35–51](https://github.com/entireio/cli/blob/4188e9b89555579eb74a8bab9ab6ee054833042c/cmd/entire/cli/agent/codex/types.go#L35-L51).
+- Complete nullable-string helper: [the same file, lines 97–103](https://github.com/entireio/cli/blob/4188e9b89555579eb74a8bab9ab6ee054833042c/cmd/entire/cli/agent/codex/types.go#L97-L103).
+- Original session and null-transcript tests: [`cmd/entire/cli/agent/codex/lifecycle_test.go`, lines 26–107](https://github.com/entireio/cli/blob/4188e9b89555579eb74a8bab9ab6ee054833042c/cmd/entire/cli/agent/codex/lifecycle_test.go#L26-L107). These tests depend on the upstream agent and event types; they are not a standalone test closure for a RawClaw adapter.
+- License: [MIT, `LICENSE` lines 1–21](https://github.com/entireio/cli/blob/4188e9b89555579eb74a8bab9ab6ee054833042c/LICENSE#L1-L21), Copyright (c) 2026 Entire Inc. Complete source and license files fetched on 2026-11-05.
+
+This entry registers prospective schema and nullable-string units, not the full application module or its generic hook reader. Direct standard-library JSON decoding/encoding and assignment into the existing catalog type are a separate proposed adapter. The source boundaries and earlier probes remain in [the hook JSON boundary note](hook-json-library-boundaries-20261104.md). Any extraction still needs exact copy-site citations, license retention, source-before-edit ACK, test adaptation review and the ordinary provenance gate. Registration does not authorize implementation, establish earlier code provenance, reverse a HOLD, change gate scope, or establish a live-editor result.
+
+## Existing RawClaw real-binary fixture sources
+
+- Repository: `MoonCaves/rawclaw`, immutable revision `024a68702cc9c72ef945350cd31e0d3cd0d5bf91`.
+- Complete binary-builder and module-root helpers: [`internal/live/loopback_test.go`, lines 42–63](https://github.com/MoonCaves/rawclaw/blob/024a68702cc9c72ef945350cd31e0d3cd0d5bf91/internal/live/loopback_test.go#L42-L63).
+- Existing environment-prefixed argv-forwarding wrapper: [the same file, lines 91–99](https://github.com/MoonCaves/rawclaw/blob/024a68702cc9c72ef945350cd31e0d3cd0d5bf91/internal/live/loopback_test.go#L91-L99). This block depends on variables and quotation helpers in its enclosing fixture; it is not a standalone shell helper.
+- License: [MIT, `LICENSE` lines 1–21](https://github.com/MoonCaves/rawclaw/blob/024a68702cc9c72ef945350cd31e0d3cd0d5bf91/LICENSE#L1-L21), Copyright (c) 2026 MoonCaves. Complete source and license files fetched on 2026-11-05.
+
+These units are prospective fixture sources for testing a real binary. A CLI-test adaptation still needs explicit variable/helper substitutions, subprocess environment isolation, command accounting and source review. No SSH requirement or loopback test is proposed for copying. This entry grants no general same-repository source eligibility and no native-hook or integration result.
