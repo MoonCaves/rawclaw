@@ -131,9 +131,15 @@ func TestRunResumeForkPreservesCrossSourceAmbiguity(t *testing.T) {
 				if err := json.Unmarshal([]byte(out.String()), &rows); err != nil {
 					t.Fatalf("decode ambiguity rows: %v\n%s", err, out.String())
 				}
+				// Lifted from MoonCaves/rawclaw internal/cli/cmd_tag_onestore_test.go L189-L197
+				// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+				// rawclaw: reuse the two-candidate ambiguity count for decoded JSON rows.
 				if len(rows) != 2 {
 					t.Fatalf("got %d JSON rows, want both ambiguous sources:\n%s", len(rows), out.String())
 				}
+				// Lifted from MoonCaves/rawclaw internal/cli/cmd_live_test.go L39-L45
+				// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+				// rawclaw: reuse the first JSON row index; check command absence instead of session_id.
 				if _, ok := rows[0]["command"]; ok {
 					t.Fatalf("ambiguous JSON emitted a command:\n%s", out.String())
 				}
@@ -158,6 +164,9 @@ func TestRunResumeForkPreservesMixedClaudeUnsupportedAmbiguity(t *testing.T) {
 			home := isolateResume(t)
 			id := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 			claudeDir := filepath.Join(home, ".claude", "projects", "claude-project")
+			// Lifted from MoonCaves/rawclaw internal/cli/tagrefresh_test.go L271-L277
+			// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+			// rawclaw: reuse the transcript fixture directory mode.
 			if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -173,9 +182,15 @@ func TestRunResumeForkPreservesMixedClaudeUnsupportedAmbiguity(t *testing.T) {
 				if err := json.Unmarshal([]byte(out.String()), &rows); err != nil {
 					t.Fatalf("decode ambiguity rows: %v\n%s", err, out.String())
 				}
+				// Lifted from MoonCaves/rawclaw internal/cli/cmd_tag_onestore_test.go L189-L197
+				// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+				// rawclaw: reuse the two-candidate ambiguity count for decoded JSON rows.
 				if len(rows) != 2 {
 					t.Fatalf("got %d JSON rows, want Claude and unsupported candidates:\n%s", len(rows), out.String())
 				}
+				// Lifted from MoonCaves/rawclaw internal/cli/cmd_live_test.go L39-L45
+				// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+				// rawclaw: reuse the first JSON row index; check command absence instead of session_id.
 				if _, ok := rows[0]["command"]; ok {
 					t.Fatalf("ambiguous JSON emitted a command:\n%s", out.String())
 				}
@@ -227,6 +242,9 @@ func TestRunResumeForkRendersClaudeAndRejectsUnsupportedLocal(t *testing.T) {
 				if err == nil || err.Error() != tc.wantError {
 					t.Fatalf("runResume error = %v, want %q", err, tc.wantError)
 				}
+				// Lifted from MoonCaves/rawclaw internal/cli/tagrefresh_test.go L931-L939
+				// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+				// rawclaw: reuse the empty-output length assertion for unsupported resume.
 				if out.Len() != 0 {
 					t.Fatalf("unsupported source emitted a command: %s", out.String())
 				}
@@ -248,6 +266,9 @@ func TestRunResumeForkPreservesMetadataGuardAndMiss(t *testing.T) {
 	if err := durable.StoreMessages(durable.Meta{ID: id, Source: "claude", CWD: "/gone/project"}, nil); err != nil {
 		t.Fatal(err)
 	}
+	// Lifted from MoonCaves/rawclaw internal/cli/tagrefresh_test.go L331-L337
+	// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+	// rawclaw: reuse the retained-metadata fixture timestamp.
 	if err := durable.SetOnlyCopySince(id, 1780000000); err != nil {
 		t.Fatal(err)
 	}
@@ -296,6 +317,9 @@ func TestResume_ForeignForkKeepsOriginGuidanceAndDoesNotExecute(t *testing.T) {
 	marker := filepath.Join(fixture.Home, "fork-was-executed")
 	executable := filepath.Join(fixture.Home, "fake-claude")
 	writeTagSourceFile(t, executable, "#!/bin/sh\ntouch '"+marker+"'\n")
+	// Lifted from MoonCaves/rawclaw internal/cli/cmd_freshness_test.go L79-L82
+	// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+	// rawclaw: reuse the fixture permission mode for the fake executable.
 	if err := os.Chmod(executable, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -304,6 +328,9 @@ func TestResume_ForeignForkKeepsOriginGuidanceAndDoesNotExecute(t *testing.T) {
 	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", archivetest.ForeignBeacon); err != nil {
 		t.Fatalf("priming search: %v", err)
 	}
+	// Lifted from MoonCaves/rawclaw internal/cli/cmd_archive_pull_test.go L66-L73
+	// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+	// rawclaw: reuse the foreign resume prefix width with the fork flag.
 	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--resume", archivetest.ForeignSession[:8], "--fork-session")
 	if err != nil {
 		t.Fatalf("--resume foreign --fork-session: %v\n%s", err, out)
@@ -312,6 +339,9 @@ func TestResume_ForeignForkKeepsOriginGuidanceAndDoesNotExecute(t *testing.T) {
 		t.Fatalf("foreign fork output lost origin guidance or native flag:\n%s", out)
 	}
 
+	// Lifted from MoonCaves/rawclaw internal/cli/cmd_archive_pull_test.go L66-L73
+	// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+	// rawclaw: reuse the foreign resume prefix width with fork and JSON flags.
 	jsonOut, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--resume", archivetest.ForeignSession[:8], "--fork-session", "--json")
 	if err != nil {
 		t.Fatalf("JSON foreign fork: %v\n%s", err, jsonOut)
@@ -353,6 +383,9 @@ func TestResume_ForeignUnsupportedForkReturnsHandledError(t *testing.T) {
 	fixture := archivetest.Setup(t, "")
 	id := "dddd4444-1111-4111-8111-111111111111"
 	path := filepath.Join(fixture.Archive.ClonePath(), archivetest.ForeignName, "codex", "rollout-2026-11-06T01-02-03-"+id+".jsonl")
+	// Lifted from MoonCaves/rawclaw internal/cli/tagrefresh_test.go L271-L277
+	// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+	// rawclaw: reuse the transcript fixture directory mode.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -362,6 +395,9 @@ func TestResume_ForeignUnsupportedForkReturnsHandledError(t *testing.T) {
 	if _, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--reindex", "codexforkbeacon"); err != nil {
 		t.Fatalf("indexing foreign Codex session: %v", err)
 	}
+	// Lifted from MoonCaves/rawclaw internal/cli/cmd_archive_pull_test.go L66-L73
+	// @92e96ee34ae72f89f56233ea0d98bcc2ae681dcf.
+	// rawclaw: reuse the foreign resume prefix width for the Codex fixture.
 	out, err := runCmd(t, NewRootCmd(BuildInfo{}), "", "--resume", id[:8], "--fork-session")
 	if err == nil || !strings.Contains(err.Error(), "CLI backend does not support forked session resume") {
 		t.Fatalf("foreign unsupported fork error = %v, want handled capability error; output=%s", err, out)
