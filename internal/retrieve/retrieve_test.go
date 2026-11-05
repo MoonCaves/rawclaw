@@ -666,11 +666,12 @@ func TestMatchAnchorsPreservesRRFOrderOverCoverage(t *testing.T) {
 	}
 
 	var rrfWinner, covWinner Anchor
+	// Lifted from MoonCaves/rawclaw internal/retrieve/retrieve_test.go L669-L675 (MIT) @0afecdfab2321abb49733746f7250e6572d5ec5e.
+	//nolint:gocritic,staticcheck // Preserve the literal upstream if/else-if block cited above.
 	for _, a := range got {
-		switch a.SessionID {
-		case "doc_rrf_winner":
+		if a.SessionID == "doc_rrf_winner" {
 			rrfWinner = a
-		case "doc_cov_inflated":
+		} else if a.SessionID == "doc_cov_inflated" {
 			covWinner = a
 		}
 	}
