@@ -237,3 +237,50 @@ temporary_fixture_removed=true
 ```
 
 The scripts, configuration files, stub logs and catalog entries exist only within `TemporaryDirectory` and are removed on return. This records reproduction evidence only; parsing, serialization, native hook protocol and adoption decisions remain open.
+
+## Beads Codex typed decoder candidate
+
+Date: 2026-11-06. Source-only delta; no adoption or implementation-readiness verdict.
+
+Beads at immutable `c28ee2357ac808ed8e80bac29d7cc33441ceb5d4` supplies a typed Codex hook tuple: string `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `model` and `trigger` in [`cmd/bd/codex_hook.go` L31-L38](https://github.com/gastownhall/beads/blob/c28ee2357ac808ed8e80bac29d7cc33441ceb5d4/cmd/bd/codex_hook.go#L31-L38). Its [decoder prefix, L65-L72](https://github.com/gastownhall/beads/blob/c28ee2357ac808ed8e80bac29d7cc33441ceb5d4/cmd/bd/codex_hook.go#L65-L72), calls `json.NewDecoder(stdin).Decode(&input)`, propagates errors except `io.EOF`, then lets a nonempty decoded event override the event argument. This establishes that specific schema and decoder/error relationship, not complete-input validation.
+
+The isolated schema and decode/EOF branch (L66-L69) ran on actual Go 1.24.0 with `CGO_ENABLED=0`; the event override (L70-L72) was inspected, not exercised. It preserved escaped quotes/newlines; accepted unknown fields, empty input, root/field `null`, duplicate keys (last value wins), trailing garbage and a second JSON value; and returned errors for a malformed first value, a number in a string field and an array root. A single `Decode` leaves trailing bytes unchecked. These are scratch probe observations, not upstream suite results. The fetched [upstream tests, `codex_hook_test.go` L23-L122](https://github.com/gastownhall/beads/blob/c28ee2357ac808ed8e80bac29d7cc33441ceb5d4/cmd/bd/codex_hook_test.go#L23-L122), were inspected, not executed; they cover context injection, a compaction warning and one-shot context refresh, not those decoder boundaries.
+
+Reproduce the trailing-data boundary with Python 3, network access and Go; only the pinned schema and decoder prefix are extracted. The return expression is adapted to expose the decoded input; the wrapper, fixtures and printing are probe instrumentation. `TemporaryDirectory` removes the scratch module on return:
+
+```sh
+python3 - <<'PYTHON'
+import os, pathlib, subprocess, tempfile, urllib.request
+url = ('https://raw.githubusercontent.com/gastownhall/beads/'
+       'c28ee2357ac808ed8e80bac29d7cc33441ceb5d4/cmd/bd/codex_hook.go')
+lines = urllib.request.urlopen(url, timeout=30).read().decode().splitlines()
+source = ('package main\n'
+          'import("encoding/json";"fmt";"io";"strings")\n'
+          + '\n'.join(lines[30:38])
+          + '\nfunc decode(stdin io.Reader) (codexHookInput, error) {\n'
+          + '\n'.join(lines[65:69]).replace('return err', 'return input, err')
+          + '\nreturn input, nil\n}\n'
+          + 'func main() { for _, s := range []string{'
+          + '`{"cwd":"a"} garbage`, `{"cwd":"a"}{"cwd":"b"}`'
+          + '} { v,e := decode(strings.NewReader(s));'
+          + 'fmt.Printf("cwd=%q err=%v\\n",v.CWD,e) } }\n')
+with tempfile.TemporaryDirectory(prefix='beads-hook-decoder-') as scratch:
+    root = pathlib.Path(scratch)
+    (root/'go.mod').write_text('module hookprobe\n\ngo 1.24.0\n')
+    (root/'main.go').write_text(source)
+    env = dict(os.environ, GOTOOLCHAIN='go1.24.0', CGO_ENABLED='0')
+    subprocess.run(['gofmt', '-w', 'main.go'], cwd=root, check=True, env=env)
+    subprocess.run(['go', 'version'], cwd=root, check=True, env=env)
+    subprocess.run(['go', 'run', '.'], cwd=root, check=True, env=env)
+PYTHON
+```
+
+Observed output:
+
+```text
+go version go1.24.0 darwin/arm64
+cwd="a" err=<nil>
+cwd="a" err=<nil>
+```
+
+The [MIT license](https://github.com/gastownhall/beads/blob/c28ee2357ac808ed8e80bac29d7cc33441ceb5d4/LICENSE#L1-L21) covers this source. The whole [module requires Go 1.27.3](https://github.com/gastownhall/beads/blob/c28ee2357ac808ed8e80bac29d7cc33441ceb5d4/go.mod#L1-L3), above RawClaw's Go 1.24 floor; the isolated schema and decode/EOF branch use only `encoding/json` and `io`. The full handler also imports Cobra and other standard-library packages. Its [output writers, L134-L148](https://github.com/gastownhall/beads/blob/c28ee2357ac808ed8e80bac29d7cc33441ceb5d4/cmd/bd/codex_hook.go#L134-L148), serialize hook-response context, not catalog records or POSIX assignments. This does not establish RawClaw's shell transport, catalog serialization, claim/ingest timing or Antigravity mappings; combining it with separate primitives still needs source-backed relationships, a source-before-edit ACK and the ordinary provenance gate.
