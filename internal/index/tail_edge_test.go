@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -900,10 +899,13 @@ func TestTailEdge_FingerprintWindowBoundaries(t *testing.T) {
 
 // Lifted from MoonCaves/rawclaw internal/index/tail_edge_test.go L205-L255
 // and internal/index/incremental_test.go L173-L243
+// and internal/index/incremental_test.go L402-L442
+// and internal/source/codex/codex_test.go L201-L228
 // @38a52389987296ba5ca6ca76813fe515534c382b (MIT).
 // rawclaw: use the real full reader as the ordered message oracle;
-// append synthetic metadata, empty messages, incomplete JSON and invalid JSON.
-// Zero/one ingest count literals retain those donor assertions, not timing policy.
+// retain the six synthetic append tails, per-stage counters and message_count;
+// malformed complete JSON must retain full-reindex fallback.
+// Zero/one ingest count literals retain donor assertions, not timing policy.
 func TestTailEdge_CodexMetadataFullReaderParity(t *testing.T) {
 	dir := isolateCache(t)
 	f := filepath.Join(dir, "codex_metadata.jsonl")
@@ -912,8 +914,8 @@ func TestTailEdge_CodexMetadataFullReaderParity(t *testing.T) {
 	adapter := &codex.Adapter{}
 	header := `{"type":"session_meta","payload":{"id":"sess-codex-metadata","cwd":"/work"}}` + "\n"
 	item := `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Codex prompt"}]},"timestamp":"2026-08-25T10:00:00Z"}` + "\n"
-	contents := header + item
-	writeFile(t, f, contents)
+	initial := header + item
+	writeFile(t, f, initial)
 	if _, _, err := EnsureIndexedContainers(dbp, true, []source.Container{c}, adapter.Messages, "codex", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -926,29 +928,44 @@ func TestTailEdge_CodexMetadataFullReaderParity(t *testing.T) {
 	metadata := `{"type":"token_usage_record","payload":{}}` + "\n"
 	empty := `{"type":"response_item","payload":{"type":"message","role":"assistant","content":[]}}` + "\n"
 	partial := `{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Codex in-progress`
+	// Lifted from MoonCaves/rawclaw internal/index/incremental_test.go L178-L181
+	// @38a52389987296ba5ca6ca76813fe515534c382b (MIT).
+	// rawclaw: bind the existing six synthetic tails and explicit complete prefixes.
+	mixedTail := metadata + item +
+		`{"type":"event_msg","payload":{"type":"token_count"}}` + "\n" +
+		`{"type":"turn_context","payload":{}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"unknown"}}` + "\n" +
+		`{"type":"response_item","payload":{"type":"function_call_output","output":"tool result"},"timestamp":"2026-08-25T10:00:01Z"}` + "\n" + metadata + item
+	completion := ` done"}]},"timestamp":"2026-08-25T10:00:05Z"}` + "\n"
+	invalid := `{"type":"response_item", broken` + "\n"
+	afterMixed := initial + mixedTail
+	afterMetadata := afterMixed + metadata
+	afterEmpty := afterMetadata + empty
+	afterCompletion := afterEmpty + partial + completion
+	afterInvalid := afterCompletion + invalid
+
+	// Lifted from MoonCaves/rawclaw internal/index/tail_edge_test.go L362-L431
+	// and internal/index/incremental_test.go L493-L493
+	// @38a52389987296ba5ca6ca76813fe515534c382b (MIT).
+	// rawclaw: explicit fixture prefixes replace pending-dependent expectations;
+	// use each known transcript length without inspecting the indexed offset.
 	steps := []struct {
 		name            string
 		tail            string
 		wantIncremental int64
 		wantFull        int64
-		pending         bool
+		wantOffset      int64
 	}{
-		{"mixed metadata", metadata + item +
-			`{"type":"event_msg","payload":{"type":"token_count"}}` + "\n" +
-			`{"type":"turn_context","payload":{}}` + "\n" +
-			`{"type":"response_item","payload":{"type":"unknown"}}` + "\n" +
-			`{"type":"response_item","payload":{"type":"function_call_output","output":"tool result"},"timestamp":"2026-08-25T10:00:01Z"}` + "\n" + metadata + item, 1, 0, false},
-		{"metadata only", metadata, 1, 0, false},
-		{"empty normalized message", empty, 1, 0, false},
-		{"incomplete JSON", partial, 0, 0, true},
-		{"completed JSON", ` done"}]},"timestamp":"2026-08-25T10:00:05Z"}` + "\n", 1, 0, false},
-		{"invalid complete JSON", `{"type":"response_item", broken` + "\n", 0, 1, false},
+		{"mixed metadata", mixedTail, 1, 0, int64(len(afterMixed))},
+		{"metadata only", metadata, 1, 0, int64(len(afterMetadata))},
+		{"empty normalized message", empty, 1, 0, int64(len(afterEmpty))},
+		{"incomplete JSON", partial, 0, 0, int64(len(afterEmpty))},
+		{"completed JSON", completion, 1, 0, int64(len(afterCompletion))},
+		{"invalid complete JSON", invalid, 0, 1, int64(len(afterInvalid))},
 	}
 	for _, step := range steps {
 		t.Run(step.name, func(t *testing.T) {
-			beforeOffset := scalarInt(t, con, "SELECT byte_offset FROM file_index WHERE session_id=?", c.ID)
 			appendFile(t, f, step.tail)
-			contents += step.tail
 			ResetIngestCountersForTesting()
 			if _, _, err := EnsureIndexedContainers(dbp, false, []source.Container{c}, adapter.Messages, "codex", ""); err != nil {
 				t.Fatal(err)
@@ -959,17 +976,26 @@ func TestTailEdge_CodexMetadataFullReaderParity(t *testing.T) {
 			if got := FullReindexCount.Load(); got != step.wantFull {
 				t.Errorf("full reindex = %d, want %d", got, step.wantFull)
 			}
-			wantOffset := len(contents)
-			if step.pending {
-				wantOffset = beforeOffset
+			// Lifted from MoonCaves/rawclaw internal/index/incremental_test.go L65-L71
+			// @38a52389987296ba5ca6ca76813fe515534c382b (MIT).
+			// rawclaw: compare persisted offset with the declared fixture prefix,
+			// not file_index.size, including partial and malformed-complete stages.
+			var offset int64
+			if err := con.QueryRow("SELECT byte_offset FROM file_index WHERE session_id=?", c.ID).Scan(&offset); err != nil {
+				t.Fatal(err)
 			}
-			if got := scalarInt(t, con, "SELECT byte_offset FROM file_index WHERE session_id=?", c.ID); got != wantOffset {
-				t.Errorf("byte_offset = %d, want %d", got, wantOffset)
+			if offset != step.wantOffset {
+				t.Fatalf("byte_offset = %d, want %d", offset, step.wantOffset)
 			}
 			want, err := adapter.Messages(c)
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Lifted from MoonCaves/rawclaw internal/index/tail_edge_test.go L433-L456
+			// and internal/index/testhelpers_test.go L264-L299
+			// @38a52389987296ba5ca6ca76813fe515534c382b (MIT).
+			// rawclaw: collect comparable full messages instead of UUID strings;
+			// compare directly to the real Codex reader and retain rows.Err.
 			rows, err := con.Query("SELECT role,content,ts,ts_iso,uuid FROM messages WHERE session_id=? ORDER BY id ASC", c.ID)
 			if err != nil {
 				t.Fatal(err)
@@ -986,8 +1012,13 @@ func TestTailEdge_CodexMetadataFullReaderParity(t *testing.T) {
 			if err := rows.Err(); err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("indexed messages = %#v, full reader = %#v", got, want)
+			if len(got) != len(want) {
+				t.Fatalf("got %d messages, want %d", len(got), len(want))
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Errorf("message %d = %#v, full reader = %#v", i, got[i], want[i])
+				}
 			}
 			if count := scalarInt(t, con, "SELECT message_count FROM sessions WHERE id=?", c.ID); count != len(want) {
 				t.Errorf("session message_count = %d, want %d", count, len(want))
