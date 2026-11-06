@@ -53,7 +53,11 @@ func newSetupCmd() *cobra.Command {
 			// Same-repository HELP wording only; no runtime-algorithm provenance.
 			"undocumented and deliberately not touched here, so review it yourself if it matters. " +
 			"Known limitation: the Claude Code, Codex, and Antigravity shell hooks can truncate JSON string values " +
-			"containing escaped quotes, which can make catalog paths incorrect.",
+			"containing escaped quotes, which can make catalog paths incorrect." + "\n\n" +
+			// Lifted from MoonCaves/rawclaw internal/cli/cmd_setup.go L53-L54 @ea008640d8e092106965712f683dc1c02f52ce0e (MIT).
+			// Same-repository HELP wording only; no runtime-algorithm provenance.
+			"Known limitation: Goose and Hermes shell hooks can record an empty working directory " +
+			"for paths containing double quotes, backslashes, or newlines.",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
