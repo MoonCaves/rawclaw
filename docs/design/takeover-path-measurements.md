@@ -11,7 +11,7 @@ Measurements supporting session takeover and bounded read path hardening:
 - In `internal/view/view.go`, reading an anchor whole (`cap = -1`) causes massive context dumps when the anchor is a `system` message.
 - Measurement across corpus: 134 topic segments anchor on a system runtime injection.
 - Largest observed system prompt anchor is 41,669 characters in session 01a07ab9.
-- Policy: cap non-conversational `system` anchors to `dispCap` (1,000 characters) unless `--with tools` explicitly requests raw tool/system data.
+- Policy: cap non-conversational `system` anchors to `dispCap` (defined in `internal/view/view.go`) unless `--with tools` explicitly requests raw tool/system data.
 
 ## 3. D3: Single-session topic spine retrieval
 - In `internal/cli/cmd_topics.go`, adding `--session <id>` enables reading a single session's chronological topic spine with start refs and summaries.
