@@ -181,3 +181,9 @@ Source: `asheshgoplani/agent-deck@2e897f2a62f6dd570628d2021a0994a3a7db1f4f`; the
 Source and license were fetched and independently matched on 2026-11-07. This establishes a connected native hook JSON-to-session-file candidate. Any smaller RawClaw private-staging port still needs an exact brief naming field/type behavior, destination pass-through, shell status/redirection semantics, and omitted status/generation/context predicates. The donor's direct invocation does not itself demonstrate RawClaw's buffered staging handoff. Existing public catalog hard-link ownership is outside this source record. No runtime repair, implementation approval, or reversal of an existing hold follows.
 
 [go.mod line 3](https://github.com/asheshgoplani/agent-deck/blob/2e897f2a62f6dd570628d2021a0994a3a7db1f4f/go.mod#L3-L3) declares Go 1.26.10. No whole-module dependency is adopted, and this entry does not establish Go 1.24 compatibility of a complete handler port.
+
+### Full-input reader alternative (2026-11-07)
+
+The same revision's [`cmd/agent-deck/codex_hooks_cmd.go` lines 191–199](https://github.com/asheshgoplani/agent-deck/blob/2e897f2a62f6dd570628d2021a0994a3a7db1f4f/cmd/agent-deck/codex_hooks_cmd.go#L191-L199) reads native Codex notify stdin with `io.ReadAll(os.Stdin)` at line 192, without the hook handler's prefix limit. Source was independently fetched and matched on 2026-11-07; complete-file SHA256: `858ab364aa2ca786b15d0b983deb995996febb38d6d8bbc351148b72203c03d9`. The MIT notice above applies.
+
+This is a separately named reader candidate, not adoption of the surrounding argv, event or fallback decisions. Selecting this call alongside the hook handler's decoder and writer requires a revised source brief; a source citation alone does not establish compatibility. Neither a larger limit nor an overflow policy is introduced here. No production implementation or test authority follows from this record.
