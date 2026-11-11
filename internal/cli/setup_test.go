@@ -21,8 +21,10 @@ func TestPrimeScripts_RenderedBytesMatchBaseline(t *testing.T) {
 		tmpl string
 		want string
 	}{
-		{name: "claude", tmpl: rawclawPrimeScript, want: "05fc476d86778b7b207f873ea0c71ebf70483deea96ee853e527bc3cb551b6ad"},
-		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "5698ab96156f913de5a49dc3d550d9831359d93da408d94e1136686a3a751ed3"},
+		// policy: 2026-11-11 measured rendered bytes; see docs/design/hook-catalog-private-serializer.md
+		{name: "claude", tmpl: rawclawPrimeScript, want: "ffda573d45b4c245865790757f640828539f3472450d15211537b17230459daf"},
+		// policy: 2026-11-11 measured rendered bytes; see docs/design/hook-catalog-private-serializer.md
+		{name: "codex", tmpl: rawclawCodexPrimeScript, want: "27ca0820315f4e2b4c7de875aad8c2da154b384f090e5a284bf150017211a707"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sha256.Sum256([]byte(renderHookScript(tc.tmpl, "'/usr/local/bin/rawclaw'")))
