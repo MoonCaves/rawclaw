@@ -182,6 +182,25 @@ Both misses had empty stdout and the same ordinary not-found line shown above; t
 
 The hit/miss distinction is established by message and offset readbacks, not that JSON. [TopicsForSession](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/store/topics.go#L161-L168) can treat a query error as no topics; empty-topic output is not proof of a successful topic-table read. No tags were added, and tagged-topic refresh semantics were not tested. This observes selected-source message refresh in one fixture; it does not choose the intended replacement policy or establish internal call counts.
 
+## Initial incomplete-record characterization
+
+A separate two-call characterization, repeated independently in a fresh disposable environment, used the same baseline and binary identified above. It is separate from the combined reproduction recipe and its hit/miss append control.
+
+The sole source was the published synthetic `u1` record, 115 bytes including its newline, in project-a's `sess1.jsonl`. The first fixture contained only its first 60 bytes, a nonempty unterminated JSON fragment with no complete record. The remaining 55 bytes, including the original newline, were appended after the first observation.
+
+Each stage ran the existing `--timeout 30s topics --session deadbeef --json` miss invocation with the reproduction's isolated environment. Python SQLite observers opened both generated DBs with `mode=ro` after each call and read `file_index` path/size/byte_offset, session source/count, and message UUID/content rows. Missing rows were not treated as numeric zero.
+
+Both independent runs observed these values in **both** project-a's DB and `consolidated.db`:
+
+| Stage | Source bytes | Indexed size / byte offset | Session message count | Message rows |
+| --- | --- | --- | --- | --- |
+| Initial unterminated fragment | 60 | 60 / 60 | 0 | None |
+| Exact remainder and newline appended | 115 | 115 / 115 | 1 | `u1`, `first version`, once |
+
+Both CLI calls in each run returned exit 1 with `session "deadbeef" not found in scope`. The initial call also warned `claude: skipped malformed jsonl lines count=1` and emitted the missing/unreadable consolidated-store warning described above. All Python SQL observations succeeded; this does not explain the earlier SQLite CLI observer errors.
+
+The partial-stage offset 60 is an actual persisted row despite zero messages. Completion recovered the single message in both stores, so no data loss was observed in these runs. This characterizes initial indexing and completion; it establishes neither equivalence with later incremental appends nor internal call counts, a defect, or an intended checkpoint policy.
+
 ## Confinement and limits
 
 The child environment is allowlisted with `env -i`. [Cache paths](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/store/store.go#L303-L315) use the isolated child `HOME/.cache`, ignoring `XDG_CACHE_HOME`; adapter and data roots are also isolated. `HOME` is supplied only to the child, never reassigned in the invoking shell. [Archive off](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/archive/archive.go#L50-L52) returns before archive config is read. No embedding endpoint is supplied, so [adapter construction](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/adapters/adapters.go#L322-L333) has no configured embedder and [semantic topup](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/semantic/topup.go#L118-L120) returns for a nil embedder. SQL initialization files are disabled. No real user transcripts, stores, or configuration are used.
