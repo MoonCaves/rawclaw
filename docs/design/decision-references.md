@@ -167,3 +167,10 @@ This is a registry-reader candidate, not a complete or approved adapter or an er
 Source: published `MoonCaves/rawclaw@ea008640d8e092106965712f683dc1c02f52ce0e`, MIT. The immutable [setup help lines 53–54](https://github.com/MoonCaves/rawclaw/blob/ea008640d8e092106965712f683dc1c02f52ce0e/internal/cli/cmd_setup.go#L53-L54) supply the exact warning: “Known limitation: Goose and Hermes shell hooks can record an empty working directory for paths containing double quotes, backslashes, or newlines.” The matching [changelog line 7](https://github.com/MoonCaves/rawclaw/blob/ea008640d8e092106965712f683dc1c02f52ce0e/CHANGELOG.md#L7-L7) describes the disclosure.
 
 This is a new adoption of published HELP wording only. It supplies no provenance or approval for hook algorithms or the original branch. The existing Claude Code, Codex, and Antigravity warning remains separate. Source and [MIT license](https://github.com/MoonCaves/rawclaw/blob/ea008640d8e092106965712f683dc1c02f52ce0e/LICENSE) were fetched on 2026-11-06; no runtime repair follows from this source record.
+
+## Published system-role bookend regression fixture (2026-11-11)
+
+- Source: [`MoonCaves/rawclaw`, `internal/store/messages_test.go`, lines 44–88](https://github.com/MoonCaves/rawclaw/blob/767be51bcca2bdbccf2f63c5e95d3edcff147032/internal/store/messages_test.go#L44-L88), immutable revision `767be51bcca2bdbccf2f63c5e95d3edcff147032`, [MIT license](https://github.com/MoonCaves/rawclaw/blob/767be51bcca2bdbccf2f63c5e95d3edcff147032/LICENSE).
+- Source Git blob: `7d4aceb89092369040bc10fb304f971f904d568d`; complete source bytes fetched and checked before adoption.
+- Adopt only the `strings` import and the existing `system-before` / `system-after` insertions around `TestBookendMessages`; preserve its four existing assertions. The fixture protects system-role exclusion from bookends used by outline and view. It does not test system-anchor rendering, introduce a display cap, or close issue #101.
+- This is bounded adoption of an already published same-repository fixture, not general eligibility for unrelated local logic. Runtime code and existing test expectations are unchanged.
