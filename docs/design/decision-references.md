@@ -2,6 +2,15 @@
 
 Source: created here as a catalog of verified upstream material; the linked immutable files own the patterns.
 
+## Expand home before joining path components (2026-11-12)
+
+- Repository: `sipeed/picoclaw`, immutable revision `bbf6893ca7afad27f1d00a0f5a45982a549c6ed6`.
+- Composition: [`pkg/agent/instance.go` lines 585–598](https://github.com/sipeed/picoclaw/blob/bbf6893ca7afad27f1d00a0f5a45982a549c6ed6/pkg/agent/instance.go#L585-L598), specifically line 597: `return filepath.Join(expandHome(defaults.Workspace), "..", "workspace-"+id)`.
+- Helper context: [lines 788–800](https://github.com/sipeed/picoclaw/blob/bbf6893ca7afad27f1d00a0f5a45982a549c6ed6/pkg/agent/instance.go#L788-L800) resolves a leading tilde using `os.UserHomeDir`.
+- License: [MIT](https://github.com/sipeed/picoclaw/blob/bbf6893ca7afad27f1d00a0f5a45982a549c6ed6/LICENSE), Copyright (c) 2026 PicoClaw contributors. Source and license fetched independently on 2026-11-12.
+
+Adoption is limited to expand-before-join call composition. RawClaw retains its existing `ExpandHome` helper and base/subdirectory arguments in place of the donor's helper, configured workspace, parent component and workspace suffix. The donor helper's missing-home and general tilde behavior differs and is not copied. This source was found after the local correction; it supports the later attribution without changing that chronology. It does not establish native Windows execution or provenance-gate approval.
+
 ## Temporary HOME and XDG fixture isolation
 
 - Repository: `cisco-ai-defense/defenseclaw`.
