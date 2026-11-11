@@ -52,8 +52,9 @@ func newSetupCmd() *cobra.Command {
 			// Lifted from MoonCaves/rawclaw internal/cli/cmd_setup.go L52-L54 @d66847b317ab69b46de47e03d313f130bc34f663 (MIT).
 			// Same-repository HELP wording only; no runtime-algorithm provenance.
 			"undocumented and deliberately not touched here, so review it yourself if it matters. " +
-			"Known limitation: the Claude Code, Codex, and Antigravity shell hooks can truncate JSON string values " +
-			"containing escaped quotes, which can make catalog paths incorrect." + "\n\n" +
+			"Claude Code and Codex use native JSON decoding for catalog working directories and transcript paths. " +
+			"Their session IDs and event names still use shell extraction, which can truncate values containing escaped quotes. " +
+			"Antigravity also uses shell extraction for catalog metadata, so escaped quotes can make its catalog paths incorrect.\n\n" +
 			// Lifted from MoonCaves/rawclaw internal/cli/cmd_setup.go L53-L54 @ea008640d8e092106965712f683dc1c02f52ce0e (MIT).
 			// Same-repository HELP wording only; no runtime-algorithm provenance.
 			"Known limitation: Goose and Hermes shell hooks can record an empty working directory " +

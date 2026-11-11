@@ -10,6 +10,7 @@ All notable changes to RawClaw are documented in this file.
 
 ### Fixed
 
+- Preserve JSON escapes in Claude Code and Codex catalog working directories and transcript paths with a native serializer; session-ID/event extraction and Antigravity metadata retain their existing limitations.
 - Codex incremental ingestion skips metadata and empty messages like the full reader, avoiding unnecessary full reindexing.
 - Render already-resolved Hermes resume commands with `hermes --resume` instead of the Claude fallback; ordinary Hermes ID/prefix discovery remains unchanged.
 - Corrected `read` help to describe capped neighboring previews, the default system-anchor cap, and `--budget`/`--with` behavior.

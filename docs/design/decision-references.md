@@ -199,3 +199,18 @@ lenient field pattern to `cwd` is a declared schema adaptation: the donor's own
 claim/ingest order remain separate wiring. These sources do not establish a new
 session-ID policy, a complete startup-claim protocol, or Antigravity behavior.
 Source registration is not an implementation or a provenance verdict.
+
+## Named-command test-wrapper delegation
+
+- Source: `tarantool/tarantool` at `ee34381e9bf268bf9ae06ee48162137e0702f5bf`,
+  [`docker/entrypoint/docker-entrypoint.sh` lines 36–39](https://github.com/tarantool/tarantool/blob/ee34381e9bf268bf9ae06ee48162137e0702f5bf/docker/entrypoint/docker-entrypoint.sh#L36-L39).
+- License: [BSD-2-Clause](https://github.com/tarantool/tarantool/blob/ee34381e9bf268bf9ae06ee48162137e0702f5bf/LICENSE).
+- Selected pattern: compare the first argument with a named command, consume that
+  argument with `shift`, and `exec` its implementation with the remaining arguments.
+  The hook fixture adaptation substitutes `hook-catalog` and the real test binary,
+  restoring the consumed subcommand as a fixed argument to that binary. Other
+  commands retain their existing logging/no-op fixture body.
+
+Only that four-line dispatch unit is selected. No container configuration, privilege
+switching or environment fallback from the surrounding entrypoint is adopted.
+Registration does not establish provenance for unrelated test-helper scaffolding.
