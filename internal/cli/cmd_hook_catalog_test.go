@@ -1,4 +1,37 @@
 /*
+Copyright 2010-2020 Tarantool AUTHORS: please see AUTHORS file.
+
+Redistribution and use in source and binary forms, with or
+without modification, are permitted provided that the following
+conditions are met:
+
+1. Redistributions of source code must retain the above
+   copyright notice, this list of conditions and the
+   following disclaimer.
+
+2. Redistributions in binary form must reproduce the above
+   copyright notice, this list of conditions and the following
+   disclaimer in the documentation and/or other materials
+   provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY AUTHORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+AUTHORS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
+THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+
+*/
+
+/*
 MIT License
 
 Copyright (c) 2025 Ashesh Goplani
@@ -61,6 +94,9 @@ package cli
 
 import (
 	"encoding/json"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,4 +133,40 @@ func TestRawString(t *testing.T) {
 			t.Errorf("rawString(%q) = %#q, want %#q", tt.in, out, tt.out)
 		}
 	}
+}
+
+// Lifted from MoonCaves/rawclaw internal/live/loopback_test.go L43-L64 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+// rawclaw: helper names only.
+func buildHookCatalogRawclaw(t *testing.T) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "rawclaw")
+	cmd := exec.Command("go", "build", "-o", bin, "github.com/MoonCaves/rawclaw/cmd/rawclaw")
+	cmd.Dir = hookCatalogRepoRoot(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// hookCatalogRepoRoot resolves the module root via the go tool — robust against this
+// package ever moving depth.
+func hookCatalogRepoRoot(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}").Output()
+	if err != nil {
+		t.Fatalf("go list -m: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// Dispatch branch lifted from tarantool/tarantool docker/entrypoint/docker-entrypoint.sh L36-L39
+// (BSD-2-Clause) @ee34381e9bf268bf9ae06ee48162137e0702f5bf.
+// rawclaw: select hook-catalog, preserve shift, restore fixed subcommand before remaining args.
+// Other commands execute the entire original stub script unchanged.
+func hookCatalogStub(binary, originalScript string) string {
+	return "#!/bin/sh\n" + `if [ "$1" = "hook-catalog" ]; then
+    shift
+    exec ` + shellSingleQuote(binary) + ` hook-catalog "$@"
+fi
+` + originalScript
 }

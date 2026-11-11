@@ -54,3 +54,17 @@ The test still renders with the fixed `/usr/local/bin/rawclaw` baked path and
 uses sha256.Sum256. These expectations pin the inspected native serializer
 invocations and retained public claim sequence; they do not replace behavioral
 hook tests.
+
+### Native hook test delegation
+
+Six existing outer hook tests build the actual CLI using the complete
+`internal/live/loopback_test.go:43–64` helpers from
+[RawClaw@61fac14e](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/live/loopback_test.go#L43-L64),
+with helper names changed. Their stubs delegate only `hook-catalog` to that
+binary; detached ingest retains the original stub behavior and assertions.
+The dispatch adopts `docker/entrypoint/docker-entrypoint.sh:36–39` from
+[tarantool@ee34381e](https://github.com/tarantool/tarantool/blob/ee34381e9bf268bf9ae06ee48162137e0702f5bf/docker/entrypoint/docker-entrypoint.sh#L36-L39)
+under BSD-2-Clause. The selected command and executable are substituted;
+`shift` is retained and the fixed subcommand precedes the remaining arguments.
+The original complete stub script follows unchanged. Stop-only and unavailable
+catalog fixtures retain their existing stubs.

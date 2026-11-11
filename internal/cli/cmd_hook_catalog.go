@@ -112,7 +112,7 @@ func atomicHookWrite(path string, data []byte) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer os.Remove(tmp) //nolint:errcheck // upstream best-effort deferred temp cleanup
 	if err = f.Chmod(0600); err == nil {
 		_, err = f.Write(data)
 	}

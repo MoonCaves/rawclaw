@@ -61,7 +61,7 @@ const rawclawSessionCatalogTail = `			printf '}\n'
 fi
 `
 
-// Lifted from MoonCaves/rawclaw internal/cli/setup.go L27-L47 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+// Lifted from MoonCaves/rawclaw internal/cli/setup.go L26-L47 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
 // rawclaw: retain private staging; native JSON replaces only shell metadata extraction and printf construction.
 const rawclawNativeSessionCatalogHead = `if [ -n "$catalog_session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"

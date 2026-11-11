@@ -17,6 +17,7 @@ import (
 )
 
 func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
+	realBinary := buildHookCatalogRawclaw(t)
 	shells := []string{"/bin/sh", "dash", "bash"}
 	templates := []struct {
 		name string
@@ -57,7 +58,7 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 					stubDir := t.TempDir()
 					logPath := filepath.Join(t.TempDir(), "rawclaw.log")
 					rawclawPath := stubRawclaw(t, stubDir)
-					if err := os.WriteFile(rawclawPath, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"), 0o755); err != nil {
+					if err := os.WriteFile(rawclawPath, []byte(hookCatalogStub(realBinary, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n")), 0o755); err != nil {
 						t.Fatal(err)
 					}
 					catalogDir := filepath.Join(os.TempDir(), fmt.Sprintf("rawclaw-cat-%d", time.Now().UnixNano()))
@@ -257,13 +258,17 @@ func readDetachedIngestCalls(t *testing.T, logPath string) []string {
 // transcript_path + cwd + source ("claude"), prints the banner once, and dedups
 // subsequent calls (including simulated reboots).
 func TestClaudePrimeScript_CreatesSessionCatalogEntry(t *testing.T) {
+	realBinary := buildHookCatalogRawclaw(t)
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skip("no sh available")
 	}
 
 	stubDir := t.TempDir()
-	stubRawclaw(t, stubDir)
+	rawclawPath := stubRawclaw(t, stubDir)
+	if err := os.WriteFile(rawclawPath, []byte(hookCatalogStub(realBinary, "#!/bin/sh\nexit 0\n")), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	scriptPath := filepath.Join(t.TempDir(), "prime.sh")
 	if err := os.WriteFile(scriptPath, []byte(renderHookScript(rawclawPrimeScript, "''")), 0o755); err != nil {
@@ -338,6 +343,7 @@ func TestClaudePrimeScript_CreatesSessionCatalogEntry(t *testing.T) {
 // TestCodexPrimeScript_CreatesSessionCatalogEntry_FullPayload verifies that
 // starting a Codex session with full payload creates a catalog entry with source="codex".
 func TestCodexPrimeScript_CreatesSessionCatalogEntry_FullPayload(t *testing.T) {
+	realBinary := buildHookCatalogRawclaw(t)
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skip("no sh available")
@@ -347,7 +353,10 @@ func TestCodexPrimeScript_CreatesSessionCatalogEntry_FullPayload(t *testing.T) {
 	}
 
 	stubDir := t.TempDir()
-	stubRawclaw(t, stubDir)
+	rawclawPath := stubRawclaw(t, stubDir)
+	if err := os.WriteFile(rawclawPath, []byte(hookCatalogStub(realBinary, "#!/bin/sh\nexit 0\n")), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	scriptPath := filepath.Join(t.TempDir(), "prime.sh")
 	if err := os.WriteFile(scriptPath, []byte(renderHookScript(rawclawCodexPrimeScript, "''")), 0o755); err != nil {
@@ -430,6 +439,7 @@ func TestCodexPrimeScript_CreatesSessionCatalogEntry_FullPayload(t *testing.T) {
 // stdin only carries session_id (unverified optional fields omitted), a partial
 // catalog entry is written and is valid.
 func TestCodexPrimeScript_CreatesPartialCatalogEntry(t *testing.T) {
+	realBinary := buildHookCatalogRawclaw(t)
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skip("no sh available")
@@ -439,7 +449,10 @@ func TestCodexPrimeScript_CreatesPartialCatalogEntry(t *testing.T) {
 	}
 
 	stubDir := t.TempDir()
-	stubRawclaw(t, stubDir)
+	rawclawPath := stubRawclaw(t, stubDir)
+	if err := os.WriteFile(rawclawPath, []byte(hookCatalogStub(realBinary, "#!/bin/sh\nexit 0\n")), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	scriptPath := filepath.Join(t.TempDir(), "prime.sh")
 	if err := os.WriteFile(scriptPath, []byte(renderHookScript(rawclawCodexPrimeScript, "''")), 0o755); err != nil {
