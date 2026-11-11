@@ -62,9 +62,9 @@ fi
 `
 
 // Lifted from MoonCaves/rawclaw internal/cli/setup.go L26-L47 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
-// Donor rawclawSessionCatalogHead maps to rawclawNativeSessionCatalogHead.
-// Retain donor L26-L29 and L35-L39; omit shell metadata extraction L30-L34
-// and JSON printf construction L40-L43. Native serialization is composed separately.
+// rawclaw: Donor rawclawSessionCatalogHead maps to rawclawNativeSessionCatalogHead.
+// rawclaw: Retain donor L26-L29 and L35-L39; omit shell metadata extraction L30-L34
+// rawclaw: and JSON printf construction L40-L43. Native serialization is composed separately.
 /* Verbatim donor declaration and path setup, setup.go L26-L29:
 const rawclawSessionCatalogHead = `if [ -n "$catalog_session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"

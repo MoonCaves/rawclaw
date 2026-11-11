@@ -42,10 +42,10 @@ type hookCatalogPayload struct {
 }
 
 // Lifted from MoonCaves/rawclaw internal/cli/cmd_prewarm.go L28-L40 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
-// Donor symbol newPrewarmCmd maps to newHookCatalogCmd; this is not a whole-function copy.
-// Hidden, SilenceUsage and SilenceErrors retain the donor's literal true values.
-// Use/Short strings and callback are substituted; Args/ExactArgs and RunE/error return
-// are omitted. Local flag bindings and cmd return replace the direct literal return.
+// rawclaw: Donor symbol newPrewarmCmd maps to newHookCatalogCmd; this is not a whole-function copy.
+// rawclaw: Hidden, SilenceUsage and SilenceErrors retain the donor's literal true values.
+// rawclaw: Use/Short strings and callback are substituted; Args/ExactArgs and RunE/error return
+// rawclaw: are omitted. Local flag bindings and cmd return replace the direct literal return.
 /* Verbatim donor excerpt, cmd_prewarm.go L28-L40:
 func newPrewarmCmd() *cobra.Command {
 	return &cobra.Command{
