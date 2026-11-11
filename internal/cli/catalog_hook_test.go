@@ -137,10 +137,8 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 						beforeMode = info.Mode()
 					}
 
-					timeout := 2 * time.Second
-					if kind == "new" {
-						timeout = 15 * time.Second
-					}
+					// policy: 2026-11-11 inherited whole-fixture cap; see docs/design/hook-catalog-private-serializer.md#test-timeout-policy-2026-11-11
+					timeout := 15 * time.Second
 					ctx, cancel := context.WithTimeout(context.Background(), timeout)
 					defer cancel()
 					cmd := exec.CommandContext(ctx, shell, scriptPath)

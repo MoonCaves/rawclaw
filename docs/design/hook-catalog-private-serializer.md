@@ -68,3 +68,31 @@ under BSD-2-Clause. The selected command and executable are substituted;
 `shift` is retained and the fixed subcommand precedes the remaining arguments.
 The original complete stub script follows unchanged. Stop-only and unavailable
 catalog fixtures retain their existing stubs.
+
+### Test timeout policy, 2026-11-11
+
+Source: created here as a bounded harness policy. The special-path matrix uses
+one 15-second whole-fixture context cap for every case. Its numeric source is
+the existing new-entry cap at
+[RawClaw@61fac14e, catalog_hook_test.go:141–144](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/cli/catalog_hook_test.go#L141-L144).
+This is an inherited cap, not a threshold derived from measurements or a
+production latency guarantee. All Claude/Codex kinds now invoke the native
+helper; Antigravity remains in the matrix with its legacy serializer.
+
+Initial candidate `2ccaf2d` runs had timeout failures with the two-second cap.
+A separate 24-call trace recorded one timeout at 2.003550875 seconds in a
+directory case, with `helper-begin` and no `helper-end` or public hard-link
+operation reached in the available trace. The maximum completed call took
+0.392965625 seconds. The timed-out helper interval is right-censored: its
+completion time is unknown. The trace localizes the delay to that invocation
+interval without isolating loader startup, Go initialization, scheduling,
+stdin decoding, or another helper stage. Runtime reliability and root cause
+remain OPEN.
+
+The changed workload and censored observation make two seconds an unreliable
+whole-fixture budget; they do not establish that 15 seconds is optimal or that
+the delayed invocation would have completed within it. The shared inherited
+cap permits finite operations between two and 15 seconds to pass. A public
+FIFO open without a reader still exceeds the bounded context; all existing
+filesystem, mutation, ingest-count, failure and cancellation checks remain.
+No production code or hook payload is changed by this test policy.
