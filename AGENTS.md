@@ -93,6 +93,6 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [FINDINGS.md](FINDINGS.md) — source and regression contract for Codex metadata during incremental ingestion.
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
 - [docs/design/runtime-catalog-directory-probe.md](docs/design/runtime-catalog-directory-probe.md) — bounded Goose/Hermes catalog directory and symlink-to-directory reproduction.
-- [docs/design/session-topic-miss-probe.md](docs/design/session-topic-miss-probe.md) — bounded missing-session topic lookup indexing measurement and reproduction.
+- [docs/design/session-topic-miss-probe.md](docs/design/session-topic-miss-probe.md) — bounded session-topic miss indexing and unique-source hit/miss refresh measurements.
 - [docs/agents/session-closeout.md](docs/agents/session-closeout.md) — operational closeout semantics for supervisor and harness sessions.
 - [docs/agents/interactive-actions.md](docs/agents/interactive-actions.md) — specification and templates for mobile lockscreen action cards.
