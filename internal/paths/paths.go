@@ -52,7 +52,9 @@ func rawclawDataDir(subdir string) string {
 	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
 		return filepath.Join(x, "rawclaw", subdir)
 	}
-	return ExpandHome(filepath.Join("~/.local/share/rawclaw", subdir))
+	// Lifted from MoonCaves/rawclaw internal/paths/paths.go L51-L56 and L614-L626 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+	// rawclaw: expand the literal ~/ prefix before Join normalizes Windows separators.
+	return filepath.Join(ExpandHome("~/.local/share/rawclaw"), subdir)
 }
 
 // TranscriptsRoot is the durable home for rawclaw's OWN copy of every session
