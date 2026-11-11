@@ -96,3 +96,26 @@ cap permits finite operations between two and 15 seconds to pass. A public
 FIFO open without a reader still exceeds the bounded context; all existing
 filesystem, mutation, ingest-count, failure and cancellation checks remain.
 No production code or hook payload is changed by this test policy.
+
+### Source mapping clarification, 2026-11-11
+
+Source: created here to record the provenance rejection and clarify existing
+source mappings. The gate rejected candidate `f85396d`: two FOUND quotations
+failed substring matching for the hidden command structure and native staging
+head. The donor declarations use `newPrewarmCmd` and
+`rawclawSessionCatalogHead`; the target declarations use `newHookCatalogCmd`
+and `rawclawNativeSessionCatalogHead`. The rejection remains operative pending
+independent review and a subsequent gate result.
+
+Copy-site comments now identify these symbol substitutions and include verbatim
+pinned donor excerpts. The command retains the Hidden/SilenceUsage/SilenceErrors
+literal fields from `cmd_prewarm.go:28–40`; command strings, callback, local flag
+bindings and return shape are adapted, while Args/ExactArgs and RunE/error return
+are omitted. The staging head retains `setup.go:26–29,35–39`, omitting shell
+metadata extraction at 30–34 and printf construction at 40–43. These are selected
+source units, not unchanged whole declarations. The pins and selected source
+scope remain those already recorded above.
+
+This clarification changes comments and documentation only. It adds no runtime
+behavior, gate rule, policy label or instruction to a reviewer. It does not
+claim that the provenance gate is fixed or that approval has been obtained.

@@ -42,7 +42,25 @@ type hookCatalogPayload struct {
 }
 
 // Lifted from MoonCaves/rawclaw internal/cli/cmd_prewarm.go L28-L40 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
-// rawclaw: hidden serializer command; flag definitions and callback are CLI wiring.
+// Donor symbol newPrewarmCmd maps to newHookCatalogCmd; this is not a whole-function copy.
+// Hidden, SilenceUsage and SilenceErrors retain the donor's literal true values.
+// Use/Short strings and callback are substituted; Args/ExactArgs and RunE/error return
+// are omitted. Local flag bindings and cmd return replace the direct literal return.
+/* Verbatim donor excerpt, cmd_prewarm.go L28-L40:
+func newPrewarmCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:           "prewarm <session8>",
+		Short:         "Prepare a session closeout dump",
+		Hidden:        true,
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runPrewarmCmd(cmd.OutOrStdout(), args[0], nil, nil, sources.Registered())
+		},
+	}
+}
+*/
 func newHookCatalogCmd() *cobra.Command {
 	var output, sessionID, source string
 	cmd := &cobra.Command{

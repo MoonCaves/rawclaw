@@ -62,7 +62,21 @@ fi
 `
 
 // Lifted from MoonCaves/rawclaw internal/cli/setup.go L26-L47 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
-// rawclaw: retain private staging; native JSON replaces only shell metadata extraction and printf construction.
+// Donor rawclawSessionCatalogHead maps to rawclawNativeSessionCatalogHead.
+// Retain donor L26-L29 and L35-L39; omit shell metadata extraction L30-L34
+// and JSON printf construction L40-L43. Native serialization is composed separately.
+/* Verbatim donor declaration and path setup, setup.go L26-L29:
+const rawclawSessionCatalogHead = `if [ -n "$catalog_session_id" ]; then
+	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
+	mkdir -p "$catalog_dir" 2>/dev/null || true
+	entry="$catalog_dir/$catalog_session_id"
+Verbatim contiguous donor private staging, setup.go L35-L39:
+	tmp_dir="$catalog_dir/.tmp.$$"
+	tmp_entry="$tmp_dir/$catalog_session_id"
+	claimed=0
+	if mkdir "$tmp_dir" 2>/dev/null; then
+		{
+*/
 const rawclawNativeSessionCatalogHead = `if [ -n "$catalog_session_id" ]; then
 	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
 	mkdir -p "$catalog_dir" 2>/dev/null || true
