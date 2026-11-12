@@ -18,7 +18,7 @@ The candidate adoption is limited to expanding the default user-data home before
 - Helper context: [lines 788–800](https://github.com/sipeed/picoclaw/blob/bbf6893ca7afad27f1d00a0f5a45982a549c6ed6/pkg/agent/instance.go#L788-L800) resolves a leading tilde using `os.UserHomeDir`.
 - License: [MIT](https://github.com/sipeed/picoclaw/blob/bbf6893ca7afad27f1d00a0f5a45982a549c6ed6/LICENSE), Copyright (c) 2026 PicoClaw contributors. Source and license fetched independently on 2026-11-12.
 
-Adoption is limited to expand-before-join call composition. RawClaw retains its existing `ExpandHome` helper and base/subdirectory arguments in place of the donor's helper, configured workspace, parent component and workspace suffix. The donor helper's missing-home and general tilde behavior differs and is not copied. This source was found after the local correction; it supports the later attribution without changing that chronology. It does not establish native Windows execution or provenance-gate approval.
+The canonical provenance gate rejected this candidate because workspace resolution did not supply the same user-data-directory role. The donor helper's missing-home and general tilde behavior also differs from RawClaw and is not copied. This source was found after the local correction; it remains a research record rather than the selected attribution. It does not establish native Windows execution or provenance-gate approval.
 
 ## Temporary HOME and XDG fixture isolation
 

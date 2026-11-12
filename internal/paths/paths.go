@@ -52,10 +52,9 @@ func rawclawDataDir(subdir string) string {
 	if x := os.Getenv("XDG_DATA_HOME"); x != "" {
 		return filepath.Join(x, "rawclaw", subdir)
 	}
-	// Lifted from sipeed/picoclaw pkg/agent/instance.go L597 (MIT)
-	// @bbf6893ca7afad27f1d00a0f5a45982a549c6ed6: expand home before filepath.Join.
-	// rawclaw: retain our ExpandHome helper and existing base/subdir arguments;
-	// omit the donor's parent-directory and workspace-suffix arguments.
+	// Lifted from rjarry/aerc lib/xdg/xdg.go L63-L65 (MIT)
+	// @db342821ee09094c0919cb7d59f14ef98e5458d4: expand data home before joining relative paths.
+	// rawclaw: inline the data local; retain our ExpandHome helper, namespace and subdir.
 	return filepath.Join(ExpandHome("~/.local/share/rawclaw"), subdir)
 }
 
