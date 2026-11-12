@@ -122,7 +122,7 @@ func oneStoreCands(scope []view.Scope, session8 string) []sessionCand {
 	dbp := index.ConsolidatedPath()
 	con, err := store.ConnectRO(dbp)
 	if err != nil {
-		slog.Warn("the consolidated store cannot be opened, so this lookup falls back to the per-project indexes; run `rawclaw consolidate` to build it",
+		slog.Warn("the consolidated store cannot be opened; run `rawclaw consolidate` to build it",
 			"path", dbp, "err", err)
 		return nil
 	}
@@ -131,11 +131,11 @@ func oneStoreCands(scope []view.Scope, session8 string) []sessionCand {
 	var filled int
 	switch err := con.QueryRow("SELECT EXISTS(SELECT 1 FROM sessions)").Scan(&filled); {
 	case err != nil:
-		slog.Warn("the consolidated store is missing or unreadable, so this lookup falls back to the per-project indexes; run `rawclaw consolidate` to build it",
+		slog.Warn("the consolidated store is missing or unreadable; run `rawclaw consolidate` to build it",
 			"path", dbp, "err", err)
 		return nil
 	case filled == 0:
-		slog.Warn("the consolidated store is empty, so this lookup falls back to the per-project indexes; run `rawclaw consolidate` to fill it",
+		slog.Warn("the consolidated store is empty; run `rawclaw consolidate` to fill it",
 			"path", dbp)
 		return nil
 	}
@@ -143,7 +143,7 @@ func oneStoreCands(scope []view.Scope, session8 string) []sessionCand {
 	projects := scopeProjects(scope)
 	rows, err := store.SessionRowsByPrefix(con, session8, false, projects, 2)
 	if err != nil {
-		slog.Warn("the consolidated store could not be queried, so this lookup falls back to the per-project indexes", "path", dbp, "err", err)
+		slog.Warn("the consolidated store could not be queried", "path", dbp, "err", err)
 		return nil
 	}
 	if len(rows) == 0 {
