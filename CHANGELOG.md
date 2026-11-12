@@ -10,6 +10,9 @@ All notable changes to RawClaw are documented in this file.
 
 ### Fixed
 
+- Corrected consolidated-index warnings that incorrectly promised a per-project fallback during prewarm and cached tag-refresh checks.
+
+- Resolve home-relative durable data paths on Windows by expanding the home prefix before joining path components.
 - Codex incremental ingestion skips metadata and empty messages like the full reader, avoiding unnecessary full reindexing.
 - Render already-resolved Hermes resume commands with `hermes --resume` instead of the Claude fallback; ordinary Hermes ID/prefix discovery remains unchanged.
 - Corrected `read` help to describe capped neighboring previews, the default system-anchor cap, and `--budget`/`--with` behavior.
