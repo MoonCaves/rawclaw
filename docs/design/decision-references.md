@@ -2,6 +2,15 @@
 
 Source: created here as a catalog of verified upstream material; the linked immutable files own the patterns.
 
+## Expand the user data home before relative data paths (2026-11-12)
+
+- Repository: `rjarry/aerc`, immutable revision `db342821ee09094c0919cb7d59f14ef98e5458d4`.
+- Data-directory sequencing: [`lib/xdg/xdg.go` lines 54–68](https://github.com/rjarry/aerc/blob/db342821ee09094c0919cb7d59f14ef98e5458d4/lib/xdg/xdg.go#L54-L68). With no XDG override, line 63 expands `~/.local/share`; line 65 then joins the resolved data home and relative data components.
+- Expansion context: [`lib/xdg/home.go` lines 17–38](https://github.com/rjarry/aerc/blob/db342821ee09094c0919cb7d59f14ef98e5458d4/lib/xdg/home.go#L17-L38). Its helper behavior differs from RawClaw and is not copied.
+- License: [MIT](https://github.com/rjarry/aerc/blob/db342821ee09094c0919cb7d59f14ef98e5458d4/LICENSE), Copyright (c) 2018–2019 Drew DeVault and 2021–2022 Robin Jarry. Pinned source, helper and license fetched on 2026-11-12.
+
+The candidate adoption is limited to expanding the default user-data home before joining relative data paths. RawClaw retains its existing namespace, subdirectory and `ExpandHome` behavior; the intermediate data variable is inlined. The donor's Darwin location, absolute-path detection, initial variadic join, and current-user fallback are not adopted. This source was found after the local correction. It is a source record, not a gate verdict or native Windows runtime result.
+
 ## Expand home before joining path components (2026-11-12)
 
 - Repository: `sipeed/picoclaw`, immutable revision `bbf6893ca7afad27f1d00a0f5a45982a549c6ed6`.
