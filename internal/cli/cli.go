@@ -133,6 +133,7 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 	root.AddCommand(newIngestCmd())
 	root.AddCommand(newTagPrepCmd())
 	root.AddCommand(newPrewarmCmd())
+	root.AddCommand(newHookCatalogCmd())
 	root.AddCommand(newTagWriteCmd())
 	root.AddCommand(newCloseoutCmd())
 	root.AddCommand(newVectorTopupCmd())
