@@ -97,3 +97,4 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [docs/agents/interactive-actions.md](docs/agents/interactive-actions.md) — specification and templates for mobile lockscreen action cards.
 
 - [docs/design/hook-catalog-private-serializer.md](docs/design/hook-catalog-private-serializer.md) — native Claude/Codex private metadata serialization, its upstream sources and remaining shell limitations.
+- [docs/design/takeover-path-measurements.md](docs/design/takeover-path-measurements.md) — historical takeover measurements and bounded outline/system-read verification.
