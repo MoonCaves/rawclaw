@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/MoonCaves/rawclaw/internal/store"
@@ -40,9 +41,11 @@ func TestMessagesBeforeAfter(t *testing.T) {
 	}
 }
 
+// Lifted from MoonCaves/rawclaw internal/store/messages_test.go L44-L88 (MIT) @767be51bcca2bdbccf2f63c5e95d3edcff147032.
 func TestBookendMessages(t *testing.T) {
 	con, _ := storetest.NewDB(t)
 	storetest.InsertSession(t, con, storetest.Session{ID: "s"})
+	storetest.InsertMessage(t, con, storetest.Message{SessionID: "s", Role: "system", Content: strings.Repeat("system context ", 300), UUID: "system-before"})
 	var ids []int
 	msgs := []storetest.Message{
 		{SessionID: "s", Role: "user", Content: "u1", UUID: "a"},
@@ -55,6 +58,7 @@ func TestBookendMessages(t *testing.T) {
 	for _, m := range msgs {
 		ids = append(ids, storetest.InsertMessage(t, con, m))
 	}
+	storetest.InsertMessage(t, con, storetest.Message{SessionID: "s", Role: "system", Content: strings.Repeat("system context ", 300), UUID: "system-after"})
 
 	// Unbounded ascending: session-start bookend (user/assistant, non-empty).
 	got, err := store.BookendMessages(con, "s", 0, false, true, 2)
