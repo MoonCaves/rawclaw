@@ -119,3 +119,18 @@ scope remain those already recorded above.
 This clarification changes comments and documentation only. It adds no runtime
 behavior, gate rule, policy label or instruction to a reviewer. It does not
 claim that the provenance gate is fixed or that approval has been obtained.
+
+### Caller source mapping clarification, 2026-11-13
+
+Source: created here after the pre-merge gate rejected `ca0314bb` at tick949.
+Four FOUND quotations did not match the sources scoped to their caller files.
+The loopback build helper and Tarantool dispatch were recorded for the helper
+file, but their caller files had only the original stub/write source mappings.
+
+The existing immutable helper donors above are now also mapped explicitly to
+`catalog_hook_test.go` and `cmd_ingest_test.go`. Caller comments distinguish the
+renamed build-helper call and original-stub pass-through from the copied helper
+implementations. Original stub/write mappings remain. This changes comments
+and source records only; executable tokens, assertions and timeouts are unchanged.
+The rejection remains historical evidence. Correcting these scopes does not
+establish that a later model quotation will match or that approval is obtained.

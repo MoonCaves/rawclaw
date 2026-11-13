@@ -17,6 +17,8 @@ import (
 )
 
 func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
+	// Lifted build helper from MoonCaves/rawclaw internal/live/loopback_test.go L43-L64 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+	// rawclaw: call the renamed copied helper; no new build policy.
 	realBinary := buildHookCatalogRawclaw(t)
 	shells := []string{"/bin/sh", "dash", "bash"}
 	templates := []struct {
@@ -58,6 +60,9 @@ func TestPrimeScripts_CatalogClaimNeverOpensExistingSpecialPath(t *testing.T) {
 					stubDir := t.TempDir()
 					logPath := filepath.Join(t.TempDir(), "rawclaw.log")
 					rawclawPath := stubRawclaw(t, stubDir)
+					// Dispatch lifted from tarantool/tarantool docker/entrypoint/docker-entrypoint.sh L36-L39 (BSD-2-Clause) @ee34381e9bf268bf9ae06ee48162137e0702f5bf.
+					// rawclaw: pass the original stub through hookCatalogStub; its existing helper substitutes
+					// the named command/executable and restores the fixed subcommand.
 					if err := os.WriteFile(rawclawPath, []byte(hookCatalogStub(realBinary, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n")), 0o755); err != nil {
 						t.Fatal(err)
 					}
@@ -256,6 +261,8 @@ func readDetachedIngestCalls(t *testing.T, logPath string) []string {
 // transcript_path + cwd + source ("claude"), prints the banner once, and dedups
 // subsequent calls (including simulated reboots).
 func TestClaudePrimeScript_CreatesSessionCatalogEntry(t *testing.T) {
+	// Lifted build helper from MoonCaves/rawclaw internal/live/loopback_test.go L43-L64 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+	// rawclaw: call the renamed copied helper; no new build policy.
 	realBinary := buildHookCatalogRawclaw(t)
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -264,6 +271,9 @@ func TestClaudePrimeScript_CreatesSessionCatalogEntry(t *testing.T) {
 
 	stubDir := t.TempDir()
 	rawclawPath := stubRawclaw(t, stubDir)
+	// Dispatch lifted from tarantool/tarantool docker/entrypoint/docker-entrypoint.sh L36-L39 (BSD-2-Clause) @ee34381e9bf268bf9ae06ee48162137e0702f5bf.
+	// rawclaw: pass the original stub through hookCatalogStub; its existing helper substitutes
+	// the named command/executable and restores the fixed subcommand.
 	if err := os.WriteFile(rawclawPath, []byte(hookCatalogStub(realBinary, "#!/bin/sh\nexit 0\n")), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -341,6 +351,8 @@ func TestClaudePrimeScript_CreatesSessionCatalogEntry(t *testing.T) {
 // TestCodexPrimeScript_CreatesSessionCatalogEntry_FullPayload verifies that
 // starting a Codex session with full payload creates a catalog entry with source="codex".
 func TestCodexPrimeScript_CreatesSessionCatalogEntry_FullPayload(t *testing.T) {
+	// Lifted build helper from MoonCaves/rawclaw internal/live/loopback_test.go L43-L64 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+	// rawclaw: call the renamed copied helper; no new build policy.
 	realBinary := buildHookCatalogRawclaw(t)
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -352,6 +364,9 @@ func TestCodexPrimeScript_CreatesSessionCatalogEntry_FullPayload(t *testing.T) {
 
 	stubDir := t.TempDir()
 	rawclawPath := stubRawclaw(t, stubDir)
+	// Dispatch lifted from tarantool/tarantool docker/entrypoint/docker-entrypoint.sh L36-L39 (BSD-2-Clause) @ee34381e9bf268bf9ae06ee48162137e0702f5bf.
+	// rawclaw: pass the original stub through hookCatalogStub; its existing helper substitutes
+	// the named command/executable and restores the fixed subcommand.
 	if err := os.WriteFile(rawclawPath, []byte(hookCatalogStub(realBinary, "#!/bin/sh\nexit 0\n")), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -437,6 +452,8 @@ func TestCodexPrimeScript_CreatesSessionCatalogEntry_FullPayload(t *testing.T) {
 // stdin only carries session_id (unverified optional fields omitted), a partial
 // catalog entry is written and is valid.
 func TestCodexPrimeScript_CreatesPartialCatalogEntry(t *testing.T) {
+	// Lifted build helper from MoonCaves/rawclaw internal/live/loopback_test.go L43-L64 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+	// rawclaw: call the renamed copied helper; no new build policy.
 	realBinary := buildHookCatalogRawclaw(t)
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -448,6 +465,9 @@ func TestCodexPrimeScript_CreatesPartialCatalogEntry(t *testing.T) {
 
 	stubDir := t.TempDir()
 	rawclawPath := stubRawclaw(t, stubDir)
+	// Dispatch lifted from tarantool/tarantool docker/entrypoint/docker-entrypoint.sh L36-L39 (BSD-2-Clause) @ee34381e9bf268bf9ae06ee48162137e0702f5bf.
+	// rawclaw: pass the original stub through hookCatalogStub; its existing helper substitutes
+	// the named command/executable and restores the fixed subcommand.
 	if err := os.WriteFile(rawclawPath, []byte(hookCatalogStub(realBinary, "#!/bin/sh\nexit 0\n")), 0o755); err != nil {
 		t.Fatal(err)
 	}
