@@ -186,6 +186,53 @@ Source: published `MoonCaves/rawclaw@ea008640d8e092106965712f683dc1c02f52ce0e`, 
 
 This is a new adoption of published HELP wording only. It supplies no provenance or approval for hook algorithms or the original branch. The existing Claude Code, Codex, and Antigravity warning remains separate. Source and [MIT license](https://github.com/MoonCaves/rawclaw/blob/ea008640d8e092106965712f683dc1c02f52ce0e/LICENSE) were fetched on 2026-11-06; no runtime repair follows from this source record.
 
+## Private Claude/Codex catalog serialization
+
+Source: the immutable upstream files below own the selected patterns; this entry
+records prospective adoption, rather than provenance of earlier local candidates.
+
+- `asheshgoplani/agent-deck` at `2e897f2a62f6dd570628d2021a0994a3a7db1f4f`,
+  [MIT license](https://github.com/asheshgoplani/agent-deck/blob/2e897f2a62f6dd570628d2021a0994a3a7db1f4f/LICENSE).
+  In [`cmd/agent-deck/hook_handler.go`](https://github.com/asheshgoplani/agent-deck/blob/2e897f2a62f6dd570628d2021a0994a3a7db1f4f/cmd/agent-deck/hook_handler.go):
+  lines 56–65 declare lenient raw JSON fields; lines 98–106 implement `rawString`;
+  lines 370–377 return on read/empty/decode errors; lines 893–910 serialize and
+  invoke the writer; lines 968–985 implement `atomicHookWrite`, including its
+  temporary-file cleanup, mode 0600, close-error handling and rename.
+  [`cmd/agent-deck/codex_hooks_cmd.go` line 192](https://github.com/asheshgoplani/agent-deck/blob/2e897f2a62f6dd570628d2021a0994a3a7db1f4f/cmd/agent-deck/codex_hooks_cmd.go#L192)
+  supplies only the full `io.ReadAll` call, without the surrounding event/argv fallbacks.
+- `golang/go` at `3901409b5d0fb7c85a3e6730a59943cc93b2835c`,
+  [BSD-3-Clause license](https://github.com/golang/go/blob/3901409b5d0fb7c85a3e6730a59943cc93b2835c/LICENSE).
+  [`src/encoding/json/decode_test.go`](https://github.com/golang/go/blob/3901409b5d0fb7c85a3e6730a59943cc93b2835c/src/encoding/json/decode_test.go)
+  lines 435–437, 484, 720–722, 2030–2037, 2103–2111 and 2229–2241 supply
+  the string, invalid-suffix, invalid-UTF-8, null and wrong-type fixture units.
+  [`src/encoding/json/encode_test.go` line 980](https://github.com/golang/go/blob/3901409b5d0fb7c85a3e6730a59943cc93b2835c/src/encoding/json/encode_test.go#L980)
+  supplies the newline encoding pair; decoding reverses that pair.
+  [`src/encoding/json/decode.go` lines 97–108](https://github.com/golang/go/blob/3901409b5d0fb7c85a3e6730a59943cc93b2835c/src/encoding/json/decode.go#L97-L108)
+  validates the entire input before unmarshalling. Calling `rawString` and
+  expecting its empty-on-error result are explicit adaptations of these units.
+
+The selected serializer projects only existing catalog metadata. Applying the donor's
+lenient field pattern to `cwd` is a declared schema adaptation: the donor's own
+`Cwd` field is a string. The catalog schema, CLI flag bindings and existing shell
+claim/ingest order remain separate wiring. These sources do not establish a new
+session-ID policy, a complete startup-claim protocol, or Antigravity behavior.
+Source registration is not an implementation or a provenance verdict.
+
+## Named-command test-wrapper delegation
+
+- Source: `tarantool/tarantool` at `ee34381e9bf268bf9ae06ee48162137e0702f5bf`,
+  [`docker/entrypoint/docker-entrypoint.sh` lines 36–39](https://github.com/tarantool/tarantool/blob/ee34381e9bf268bf9ae06ee48162137e0702f5bf/docker/entrypoint/docker-entrypoint.sh#L36-L39).
+- License: [BSD-2-Clause](https://github.com/tarantool/tarantool/blob/ee34381e9bf268bf9ae06ee48162137e0702f5bf/LICENSE).
+- Selected pattern: compare the first argument with a named command, consume that
+  argument with `shift`, and `exec` its implementation with the remaining arguments.
+  The hook fixture adaptation substitutes `hook-catalog` and the real test binary,
+  restoring the consumed subcommand as a fixed argument to that binary. Other
+  commands retain their existing logging/no-op fixture body.
+
+Only that four-line dispatch unit is selected. No container configuration, privilege
+switching or environment fallback from the surrounding entrypoint is adopted.
+Registration does not establish provenance for unrelated test-helper scaffolding.
+
 ## Published system-role bookend regression fixture (2026-11-11)
 
 - Source: [`MoonCaves/rawclaw`, `internal/store/messages_test.go`, lines 44–88](https://github.com/MoonCaves/rawclaw/blob/767be51bcca2bdbccf2f63c5e95d3edcff147032/internal/store/messages_test.go#L44-L88), immutable revision `767be51bcca2bdbccf2f63c5e95d3edcff147032`, [MIT license](https://github.com/MoonCaves/rawclaw/blob/767be51bcca2bdbccf2f63c5e95d3edcff147032/LICENSE).

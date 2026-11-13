@@ -133,6 +133,9 @@ func TestPrimeScripts_StopLaunchDetachedPrewarm(t *testing.T) {
 }
 
 func TestPrimeScripts_SessionStartCatalogClaimIsPathSafe(t *testing.T) {
+	// Lifted build helper from MoonCaves/rawclaw internal/live/loopback_test.go L43-L64 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+	// rawclaw: call the renamed copied helper; no new build policy.
+	realBinary := buildHookCatalogRawclaw(t)
 	shells := []struct {
 		name string
 		path string
@@ -209,7 +212,10 @@ func TestPrimeScripts_SessionStartCatalogClaimIsPathSafe(t *testing.T) {
 					stubDir := t.TempDir()
 					logPath := filepath.Join(t.TempDir(), "calls.log")
 					stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
-					if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+					// Dispatch lifted from tarantool/tarantool docker/entrypoint/docker-entrypoint.sh L36-L39 (BSD-2-Clause) @ee34381e9bf268bf9ae06ee48162137e0702f5bf.
+					// rawclaw: pass the original stub through hookCatalogStub; its existing helper substitutes
+					// the named command/executable and restores the fixed subcommand.
+					if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(hookCatalogStub(realBinary, stub)), 0o755); err != nil {
 						t.Fatal(err)
 					}
 					script := strings.Replace(renderHookScript(tmpl.tmpl, "''"), "set -eu\n", "set -eu\ntrap 'wait' 0\n", 1)
@@ -293,6 +299,9 @@ func TestPrimeScripts_SessionStartCatalogClaimIsPathSafe(t *testing.T) {
 }
 
 func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
+	// Lifted build helper from MoonCaves/rawclaw internal/live/loopback_test.go L43-L64 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+	// rawclaw: call the renamed copied helper; no new build policy.
+	realBinary := buildHookCatalogRawclaw(t)
 	sh, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skip("no sh available")
@@ -314,7 +323,10 @@ func TestPrimeScripts_SessionStartDeduplicatesConcurrentIngest(t *testing.T) {
 			}
 			logPath := filepath.Join(root, "calls.log")
 			stub := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$RAWCLAW_TEST_LOG\"\n"
-			if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(stub), 0o755); err != nil {
+			// Dispatch lifted from tarantool/tarantool docker/entrypoint/docker-entrypoint.sh L36-L39 (BSD-2-Clause) @ee34381e9bf268bf9ae06ee48162137e0702f5bf.
+			// rawclaw: pass the original stub through hookCatalogStub; its existing helper substitutes
+			// the named command/executable and restores the fixed subcommand.
+			if err := os.WriteFile(filepath.Join(stubDir, "rawclaw"), []byte(hookCatalogStub(realBinary, stub)), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			scriptPath := filepath.Join(root, "prime.sh")

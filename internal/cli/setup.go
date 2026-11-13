@@ -61,6 +61,52 @@ const rawclawSessionCatalogTail = `			printf '}\n'
 fi
 `
 
+// Lifted from MoonCaves/rawclaw internal/cli/setup.go L26-L47 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+// rawclaw: Donor rawclawSessionCatalogHead maps to rawclawNativeSessionCatalogHead.
+// rawclaw: Retain donor L26-L29 and L35-L39; omit shell metadata extraction L30-L34
+// rawclaw: and JSON printf construction L40-L43. Native serialization is composed separately.
+/* Verbatim donor declaration and path setup, setup.go L26-L29:
+const rawclawSessionCatalogHead = `if [ -n "$catalog_session_id" ]; then
+	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
+	mkdir -p "$catalog_dir" 2>/dev/null || true
+	entry="$catalog_dir/$catalog_session_id"
+Verbatim contiguous donor private staging, setup.go L35-L39:
+	tmp_dir="$catalog_dir/.tmp.$$"
+	tmp_entry="$tmp_dir/$catalog_session_id"
+	claimed=0
+	if mkdir "$tmp_dir" 2>/dev/null; then
+		{
+*/
+const rawclawNativeSessionCatalogHead = `if [ -n "$catalog_session_id" ]; then
+	catalog_dir="${RAWCLAW_CATALOG_DIR:-${XDG_DATA_HOME:-${HOME:-${TMPDIR:-/tmp}}/.local/share}/rawclaw/catalog}"
+	mkdir -p "$catalog_dir" 2>/dev/null || true
+	entry="$catalog_dir/$catalog_session_id"
+	tmp_dir="$catalog_dir/.tmp.$$"
+	tmp_entry="$tmp_dir/$catalog_session_id"
+	claimed=0
+	if mkdir "$tmp_dir" 2>/dev/null; then
+		{
+`
+
+// Lifted from MoonCaves/rawclaw internal/cli/setup.go L47-L61 (MIT) @61fac14e674095678e47cad202e4a255c381047f.
+// rawclaw: retain stdout redirection, publication, cleanup and ingest ordering without the legacy closing-brace printf.
+const rawclawNativeSessionCatalogTail = `		} > "$tmp_entry" 2>/dev/null || true
+		if ln "$tmp_entry" "$catalog_dir" 2>/dev/null; then
+			claimed=1
+		fi
+		rm -f "$tmp_entry" 2>/dev/null || true
+		rmdir "$tmp_dir" 2>/dev/null || true
+	fi
+	if [ "$claimed" -eq 1 ]; then
+		nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
+	elif [ -e "$entry" ] || [ -L "$entry" ]; then
+		exit 0
+	else
+		nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
+	fi
+fi
+`
+
 // rawclawPrimeScript is the TEMPLATE installed at <configDir>/hooks/rawclaw/
 // prime.sh (via renderHookScript) and registered as a Claude Code SessionStart
 // hook. POSIX sh only — a SessionStart or Stop hook runs with no guaranteed
@@ -111,8 +157,8 @@ fi
 if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
 	nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
 fi
-` + rawclawSessionCatalogHead + `			printf '  "source": "claude"\n'
-` + rawclawSessionCatalogTail + `
+` + rawclawNativeSessionCatalogHead + `			printf '%s' "$input" | "$RAWCLAW" hook-catalog --output="$tmp_entry" --session-id="$session_id" --source=claude
+` + rawclawNativeSessionCatalogTail + `
 cat <<'BANNER'
 ` + rawclawBanner + `
 BANNER
@@ -163,8 +209,8 @@ fi
 if [ -n "$session_id" ] && [ -z "$catalog_session_id" ]; then
 	nohup "$RAWCLAW" ingest -- "$session_id" </dev/null >/dev/null 2>&1 &
 fi
-` + rawclawSessionCatalogHead + `			printf '  "source": "codex"\n'
-` + rawclawSessionCatalogTail + `
+` + rawclawNativeSessionCatalogHead + `			printf '%s' "$input" | "$RAWCLAW" hook-catalog --output="$tmp_entry" --session-id="$session_id" --source=codex
+` + rawclawNativeSessionCatalogTail + `
 # No python3 for JSON encoding — silent no-op rather than a hook error (a
 # dropped banner is strictly better than a failing SessionStart). Catalog write
 # runs before python3 guard: a session starting without python3 will not retry

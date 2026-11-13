@@ -95,3 +95,5 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [docs/design/runtime-catalog-directory-probe.md](docs/design/runtime-catalog-directory-probe.md) — bounded Goose/Hermes catalog directory and symlink-to-directory reproduction.
 - [docs/agents/session-closeout.md](docs/agents/session-closeout.md) — operational closeout semantics for supervisor and harness sessions.
 - [docs/agents/interactive-actions.md](docs/agents/interactive-actions.md) — specification and templates for mobile lockscreen action cards.
+
+- [docs/design/hook-catalog-private-serializer.md](docs/design/hook-catalog-private-serializer.md) — native Claude/Codex private metadata serialization, its upstream sources and remaining shell limitations.
