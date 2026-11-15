@@ -79,11 +79,11 @@ sovereign and dependency-free:
 
 ### Issue tracker
 
-GitHub Issues (`MoonCaves/rawclaw`), via the `gh` CLI. This repo is public — keep issue titles/bodies scrubbed of local absolute paths, hostnames, and org-internal names; cite `file:line` instead. See `docs/agents/issue-tracker.md`.
+GitHub Issues (`MoonCaves/rawclaw`), via the `gh` CLI. This repo is public — keep issue titles/bodies scrubbed of local absolute paths, hostnames, and org-internal names; cite `file:line` instead.
 
 ### Domain docs
 
-Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists yet; created lazily). See `docs/agents/domain.md`.
+Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists yet; created lazily).
 
 ## Index
 
@@ -93,8 +93,6 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [FINDINGS.md](FINDINGS.md) — source and regression contract for Codex metadata during incremental ingestion.
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
 - [docs/design/runtime-catalog-directory-probe.md](docs/design/runtime-catalog-directory-probe.md) — bounded Goose/Hermes catalog directory and symlink-to-directory reproduction.
-- [docs/agents/session-closeout.md](docs/agents/session-closeout.md) — operational closeout semantics for supervisor and harness sessions.
-- [docs/agents/interactive-actions.md](docs/agents/interactive-actions.md) — specification and templates for mobile lockscreen action cards.
 
 - [docs/design/hook-catalog-private-serializer.md](docs/design/hook-catalog-private-serializer.md) — native Claude/Codex private metadata serialization, its upstream sources and remaining shell limitations.
 - [docs/design/takeover-path-measurements.md](docs/design/takeover-path-measurements.md) — historical takeover measurements and bounded outline/system-read verification.
