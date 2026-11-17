@@ -269,9 +269,9 @@ func lookupSessionInDB(dbPath, id string) (source.Container, bool) {
 	var foundID, directory string
 	var parentID sql.NullString
 
-	err = db.QueryRow("SELECT id, directory, parent_id FROM session WHERE id = ? OR id LIKE ? LIMIT 1", id, id+"%").Scan(&foundID, &directory, &parentID)
+	err = db.QueryRow("SELECT id, directory, parent_id FROM session WHERE id = ?", id).Scan(&foundID, &directory, &parentID)
 	if err != nil {
-		err = db.QueryRow("SELECT id, directory, parent_id FROM sessions WHERE id = ? OR id LIKE ? LIMIT 1", id, id+"%").Scan(&foundID, &directory, &parentID)
+		err = db.QueryRow("SELECT id, directory, parent_id FROM sessions WHERE id = ?", id).Scan(&foundID, &directory, &parentID)
 		if err != nil {
 			return source.Container{}, false
 		}
