@@ -96,3 +96,4 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 
 - [docs/design/hook-catalog-private-serializer.md](docs/design/hook-catalog-private-serializer.md) — native Claude/Codex private metadata serialization, its upstream sources and remaining shell limitations.
 - [docs/design/takeover-path-measurements.md](docs/design/takeover-path-measurements.md) — historical takeover measurements and bounded outline/system-read verification.
+- [docs/design/pr156-publication-receipt-20261117.md](docs/design/pr156-publication-receipt-20261117.md) — recovered original PR156 push output, exact rejected range and remaining evidence gaps.
