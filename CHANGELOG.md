@@ -6,6 +6,7 @@ All notable changes to RawClaw are documented in this file.
 
 ### Added
 
+- Added `find` and `grep` as Cobra-native aliases for `search`; use explicit `search` or `--query` when the query starts with either command name.
 - Added `--fork-session` as a `--resume` modifier that prints Claude Code's native fork command; RawClaw does not run Claude Code.
 
 ### Fixed

@@ -133,9 +133,12 @@ regimes). The **`--with tools|thinking|subagents`** options are implemented for 
 Line-oriented grep output is **shipped** via `--oneline` / `--format text|oneline|line|json`
 (`<read_ref>\t<started_iso>\t<project>\t<snippet>`), alongside `--json` for `jq` composition.
 
+**`find` / `grep` aliases for `search` are shipped**, using Cobra's native alias field. To search
+for a literal leading command name, use explicit `search` or `--query`.
+
 Remaining discoverability refinements, **(planned)**: **auto-detect non-tty (piped) output and emit grep-friendly lines**
 (the agent greps, it just works — zero knowledge required); failing that, a one-line stderr hint at the moment of grepping;
-pair with **forgiving input parsing** (single-dash long flags, case-folding, typo-correction, `find`/`grep`→`search` aliases)
+pair with **forgiving input parsing** (single-dash long flags, case-folding, typo-correction)
 so an agent's natural attempt succeeds without knowing the exact syntax.
 
 ### Shell completion — shipped

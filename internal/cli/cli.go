@@ -169,9 +169,12 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 // newSearchCmd builds the explicit `search` subcommand as an alias for bare search.
 func newSearchCmd(opts *Options, rootFlags *pflag.FlagSet) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "search [query]",
-		Short: "search transcripts (explicit alias for bare rawclaw <query>)",
-		Args:  cobra.ArbitraryArgs,
+		Use: "search [query]",
+		// Lifted from spf13/cobra command_test.go L274-L282 @88b30ab89da2d0d0abb153818746c5a2d30eccec.
+		// rawclaw: alias names from MoonCaves/rawclaw ROADMAP.md L136-L139 @e0420b85a30f2b4f562d72e531bcab64f23b6aa9.
+		Aliases: []string{"find", "grep"},
+		Short:   "search transcripts (explicit alias for bare rawclaw <query>)",
+		Args:    cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("this-desk") {
 				opts.ThisProject = true
