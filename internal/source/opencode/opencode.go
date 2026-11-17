@@ -269,9 +269,13 @@ func lookupSessionInDB(dbPath, id string) (source.Container, bool) {
 	var foundID, directory string
 	var parentID sql.NullString
 
-	err = db.QueryRow("SELECT id, directory, parent_id FROM session WHERE id = ? OR id LIKE ? LIMIT 1", id, id+"%").Scan(&foundID, &directory, &parentID)
+	// Lifted from MoonCaves/rawclaw internal/source/hermes/hermes.go L86-L90 @e0420b85a30f2b4f562d72e531bcab64f23b6aa9.
+	// rawclaw: adapt the exact-ID predicate to OpenCode table, column and scan bindings; retain the existing error fallback.
+	err = db.QueryRow("SELECT id, directory, parent_id FROM session WHERE id = ?", id).Scan(&foundID, &directory, &parentID)
 	if err != nil {
-		err = db.QueryRow("SELECT id, directory, parent_id FROM sessions WHERE id = ? OR id LIKE ? LIMIT 1", id, id+"%").Scan(&foundID, &directory, &parentID)
+		// Lifted from MoonCaves/rawclaw internal/source/hermes/hermes.go L86-L90 @e0420b85a30f2b4f562d72e531bcab64f23b6aa9.
+		// rawclaw: adapt the exact-ID predicate to OpenCode column and scan bindings within its existing plural-table fallback.
+		err = db.QueryRow("SELECT id, directory, parent_id FROM sessions WHERE id = ?", id).Scan(&foundID, &directory, &parentID)
 		if err != nil {
 			return source.Container{}, false
 		}
