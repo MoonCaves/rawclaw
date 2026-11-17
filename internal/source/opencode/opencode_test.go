@@ -3,6 +3,7 @@ package opencode
 import (
 	"database/sql"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -218,6 +219,99 @@ func TestLookup(t *testing.T) {
 	_, ok = lookupSessionInDB(dbPath, "non_existent")
 	if ok {
 		t.Fatal("lookupSessionInDB succeeded for non_existent session")
+	}
+}
+
+func TestLookupFullID(t *testing.T) {
+	for _, table := range []string{"session", "sessions"} {
+		t.Run(table, func(t *testing.T) {
+			for _, tc := range []struct {
+				name   string
+				id     string
+				stored []string
+				parent string
+				found  bool
+			}{
+				{"exact after longer prefix", "ses_exact", []string{"ses_exact_longer", "ses_exact"}, "", true},
+				{"literal underscore", "ses_id", []string{"sesXid", "ses_id"}, "", true},
+				{"literal percent", "ses%id", []string{"sesXXid", "ses%id"}, "", true},
+				{"prefix is not full ID", "ses_root", []string{"ses_root_longer"}, "", false},
+				{"wildcard is not full ID", "ses%missing", []string{"sesXXmissing"}, "", false},
+				{"child metadata", "ses_child", []string{"ses_child"}, " ses_parent ", true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					dbPath := setupTestDB(t)
+					db, err := sql.Open("sqlite", dbPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer db.Close()
+					if _, err := db.Exec("DELETE FROM session"); err != nil {
+						t.Fatal(err)
+					}
+					for _, id := range tc.stored {
+						if _, err := db.Exec(`INSERT INTO session
+							(id, project_id, parent_id, slug, directory, title, version, time_created, time_updated)
+							VALUES (?, 'project', NULLIF(?, ''), 'slug', ?, 'title', '1.0', 1, 1)`,
+							id, tc.parent, "/workspace/"+id); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if table == "sessions" {
+						if _, err := db.Exec("ALTER TABLE session RENAME TO sessions"); err != nil {
+							t.Fatal(err)
+						}
+					}
+
+					got, found := lookupSessionInDB(dbPath, tc.id)
+					if found != tc.found {
+						t.Fatalf("lookupSessionInDB(%q) = %+v, %v; want found %v", tc.id, got, found, tc.found)
+					}
+					if !found {
+						return
+					}
+					want := source.Container{
+						ID: tc.id, Path: dbPath + "#" + tc.id, CWD: "/workspace/" + tc.id,
+						ParentID: strings.TrimSpace(tc.parent), IsSubagent: tc.parent != "",
+						ResumeArgv: []string{"opencode", "--session", tc.id},
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Errorf("lookupSessionInDB(%q) = %+v; want %+v", tc.id, got, want)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestLookupFallsBackToPlural(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		schema string
+	}{
+		{"prefix-only singular", "CREATE TABLE session (id TEXT, directory TEXT, parent_id TEXT)"},
+		{"malformed singular", "CREATE TABLE session (id TEXT, directory TEXT)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath := setupTestDB(t)
+			db, err := sql.Open("sqlite", dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			for _, stmt := range []string{
+				"ALTER TABLE session RENAME TO sessions", tc.schema,
+				"INSERT INTO session (id, directory) VALUES ('ses_root1_longer', '/wrong')",
+			} {
+				if _, err := db.Exec(stmt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, found := lookupSessionInDB(dbPath, "ses_root1")
+			if !found || got.ID != "ses_root1" || got.CWD != "/workspace/app" {
+				t.Fatalf("lookupSessionInDB = %+v, %v; want plural exact root", got, found)
+			}
+		})
 	}
 }
 
