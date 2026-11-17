@@ -239,3 +239,10 @@ Registration does not establish provenance for unrelated test-helper scaffolding
 - Source Git blob: `7d4aceb89092369040bc10fb304f971f904d568d`; complete source bytes fetched and checked before adoption.
 - Adopt only the `strings` import and the existing `system-before` / `system-after` insertions around `TestBookendMessages`; preserve its four existing assertions. The fixture protects system-role exclusion from bookends used by outline and view. It does not test system-anchor rendering, introduce a display cap, or close issue #101.
 - This is bounded adoption of an already published same-repository fixture, not general eligibility for unrelated local logic. Runtime code and existing test expectations are unchanged.
+
+## Cobra-native search aliases (2026-11-17)
+
+- Source: [`spf13/cobra`, `command_test.go`, lines 274–282](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/command_test.go#L274-L282), immutable revision `88b30ab89da2d0d0abb153818746c5a2d30eccec` (the existing v1.10.2 dependency), [Apache-2.0 license](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/LICENSE.txt).
+- Adopt only the command literal's `Aliases: []string{...}` field. Alias names `find` and `grep` are the product vocabulary already listed in this roadmap; upstream supplies the alias mechanism, not these names. Existing handlers, flags and query syntax remain the search command's own.
+- [`command.go`, lines 66–67](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/command.go#L66-L67) documents the API. This adds command names, so a bare query starting with either word selects the alias; explicit `search` or `--query` preserves a literal leading word. No custom parser or new dependency is adopted.
+- Entire upstream source and license bytes were fetched before the source acknowledgment and edit. Source SHA-256: `command_test.go` = `710a689a1512af3ca376a0aaaa2c0b77d10ea174f7e27db85c2f2316a087d0f3`; `command.go` = `f79613721ad04c9b438dfb30fe0ac3deca85c487658b0aa04a1ae6e4395bfd90`; `LICENSE.txt` = `5e3400b93bbb099e83e52bab885e7441750673c21f97988ca3f1240639b63283`.
