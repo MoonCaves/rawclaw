@@ -79,3 +79,36 @@ alone is not evidence that the three semantic findings are resolved.
 No gate was rerun to obtain this receipt. No implementation, gate, schema,
 provider configuration, or branch-publication rule is changed here. The rejected
 integration remains held pending a separately authorized resolution.
+
+## Mechanism controls (2026-11-17)
+
+A printed `None` label alone is insufficient to explain the historical
+rejection. The following synthetic controls execute only the exact extracted
+current `run_backstop` function, without schema validation or gate top-level.
+The inspected gate file has SHA-256
+`29927341dd03fbb4f4d09e5b920ef299286b4e37429dfcd339666b824eee77a9`;
+its function AST matches the archived proposal baseline. This is not a replay
+of the original provider response or proof of the November 13 installed state.
+
+Every control starts with verdict `APPROVE`, class `FOUND`, and an empty
+`sources_by_target` mapping. Let Q be `synthetic matching upstream quote` and R
+be `different synthetic upstream quote`.
+
+| File value | Unscoped chunks | Quote | Aggregate fallback | Observed verdict/class |
+| --- | --- | --- | --- | --- |
+| Missing | `[]` | Q | Q | `APPROVE FOUND` |
+| Null | `[]` | Q | Q | `APPROVE FOUND` |
+| `absent.go` | `[]` | Q | Q | `APPROVE FOUND` |
+| Missing | `[""]` | Q | Q | `REJECT MADE` |
+| Missing | `[]` | `short` | `short` | `REJECT MADE` |
+| Missing | `[]` | R | Q | `REJECT MADE` |
+
+The aggregate fallback is selected only when the allowed-chunk list is empty.
+An empty string within that list suppresses fallback. Quote length and presence
+in the selected text also affect the result. Missing and null file values in
+these function-only controls are not claims of schema-valid provider output.
+
+The historical downgrade marker does not identify which quote predicate
+failed, and the original inputs remain unavailable. These counterexamples
+narrow what can be inferred from the recovered output; they neither resolve
+the three semantic findings nor authorize a gate change or retry.
