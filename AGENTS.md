@@ -92,6 +92,7 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [CONTRIBUTING.md](CONTRIBUTING.md) — clean checkout → green build: prerequisites, build, test, lint.
 - [FINDINGS.md](FINDINGS.md) — source and regression contract for Codex metadata during incremental ingestion.
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
+- [docs/design/decision-references.md](docs/design/decision-references.md) — immutable upstream sources and declared adaptations for adopted mechanisms.
 - [docs/design/runtime-catalog-directory-probe.md](docs/design/runtime-catalog-directory-probe.md) — bounded Goose/Hermes catalog directory and symlink-to-directory reproduction.
 
 - [docs/design/hook-catalog-private-serializer.md](docs/design/hook-catalog-private-serializer.md) — native Claude/Codex private metadata serialization, its upstream sources and remaining shell limitations.

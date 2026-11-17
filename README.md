@@ -112,6 +112,10 @@ rawclaw version                             # print the version + build stamp
 rawclaw --timeout 2m "query"                # raise the self-terminating deadline (0 disables it)
 ```
 
+`rawclaw find "query"` and `rawclaw grep "query"` are aliases for `rawclaw search "query"`,
+using RawClaw's query syntax. A leading `find` or `grep` is interpreted as a command; to search
+for those words literally, use `rawclaw search find auth` or `rawclaw --query "find auth"`.
+
 For Claude sessions, `CLAUDE_CLI_NAME` selects the executable in the printed resume command. When
 unset, it defaults to `claude`; an explicitly empty value stays empty. Each argument is quoted as
 one shell word, so executable paths and session IDs with spaces or shell-special characters remain
