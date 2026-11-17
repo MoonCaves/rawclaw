@@ -2,6 +2,16 @@
 
 Source: created here as a catalog of verified upstream material; the linked immutable files own the patterns.
 
+## OpenCode registered full-ID lookup equality (2026-11-18)
+
+Source: `MoonCaves/rawclaw` at immutable revision `e0420b85a30f2b4f562d72e531bcab64f23b6aa9`, [MIT](https://github.com/MoonCaves/rawclaw/blob/e0420b85a30f2b4f562d72e531bcab64f23b6aa9/LICENSE).
+
+- Equality mechanism: [`internal/source/hermes/hermes.go` lines 86–90](https://github.com/MoonCaves/rawclaw/blob/e0420b85a30f2b4f562d72e531bcab64f23b6aa9/internal/source/hermes/hermes.go#L86-L90), specifically the bound `WHERE id = ?` query.
+- Interface and caller correspondence: [`internal/source/source.go` lines 60–61](https://github.com/MoonCaves/rawclaw/blob/e0420b85a30f2b4f562d72e531bcab64f23b6aa9/internal/source/source.go#L60-L61) defines full-ID lookup; [`internal/cli/cli.go` lines 675–683](https://github.com/MoonCaves/rawclaw/blob/e0420b85a30f2b4f562d72e531bcab64f23b6aa9/internal/cli/cli.go#L675-L683) retains exact returned IDs without parent/subagent metadata.
+- Retained tests: the same-codebase donor [`TestHermesAdapter_Lookup`, lines 101–114](https://github.com/MoonCaves/rawclaw/blob/e0420b85a30f2b4f562d72e531bcab64f23b6aa9/internal/source/hermes/hermes_test.go#L101-L114) and destination [`TestLookup`, lines 208–222](https://github.com/MoonCaves/rawclaw/blob/e0420b85a30f2b4f562d72e531bcab64f23b6aa9/internal/source/opencode/opencode_test.go#L208-L222) already exist and remain unchanged. Keeping these existing donor tests waives no source-test requirement; neither test pins prefix rejection.
+
+The adoption replaces only the two approximate predicates in OpenCode's registered lookup with the donor's equality unit, adapting existing table/column/scan bindings. OpenCode's existing singular-to-plural fallback on query/scan error and its metadata projection remain unchanged; they are not attributed to Hermes. Removing a singular prefix hit can expose that existing fallback. The CLI's UUID-shaped admission remains unchanged, so this does not add native `ses_*` CLI lookup support. Complete source and license bytes were independently fetched before the prospective source ACK and edits. This source record is not gate approval or a claim of persistent prefix-regression coverage.
+
 ## Expand the user data home before relative data paths (2026-11-12)
 
 - Repository: `rjarry/aerc`, immutable revision `db342821ee09094c0919cb7d59f14ef98e5458d4`.
