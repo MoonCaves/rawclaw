@@ -171,7 +171,7 @@ func newSearchCmd(opts *Options, rootFlags *pflag.FlagSet) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "search [query]",
 		// Lifted from spf13/cobra command_test.go L274-L282 @88b30ab89da2d0d0abb153818746c5a2d30eccec.
-		// rawclaw: alias names follow the existing roadmap's find/grep search vocabulary.
+		// rawclaw: alias names from MoonCaves/rawclaw ROADMAP.md L136-L139 @e0420b85a30f2b4f562d72e531bcab64f23b6aa9.
 		Aliases: []string{"find", "grep"},
 		Short:   "search transcripts (explicit alias for bare rawclaw <query>)",
 		Long: "Search transcripts with search, find, or grep. These commands use RawClaw's query syntax. " +
