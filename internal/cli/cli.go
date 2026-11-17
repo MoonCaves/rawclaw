@@ -174,9 +174,7 @@ func newSearchCmd(opts *Options, rootFlags *pflag.FlagSet) *cobra.Command {
 		// rawclaw: alias names from MoonCaves/rawclaw ROADMAP.md L136-L139 @e0420b85a30f2b4f562d72e531bcab64f23b6aa9.
 		Aliases: []string{"find", "grep"},
 		Short:   "search transcripts (explicit alias for bare rawclaw <query>)",
-		Long: "Search transcripts with search, find, or grep. These commands use RawClaw's query syntax. " +
-			"To search for a literal leading find or grep, use rawclaw search find ... or rawclaw --query \"find ...\".",
-		Args: cobra.ArbitraryArgs,
+		Args:    cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("this-desk") {
 				opts.ThisProject = true
