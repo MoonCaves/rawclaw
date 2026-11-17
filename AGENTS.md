@@ -94,6 +94,7 @@ Single-context — `CONTEXT.md` + `docs/adr/` at the repo root (neither exists y
 - [docs/design/](docs/design/) — design notes for specific mechanisms.
 - [docs/design/decision-references.md](docs/design/decision-references.md) — immutable upstream sources and declared adaptations for adopted mechanisms.
 - [docs/design/runtime-catalog-directory-probe.md](docs/design/runtime-catalog-directory-probe.md) — bounded Goose/Hermes catalog directory and symlink-to-directory reproduction.
+- [docs/design/session-topic-miss-probe.md](docs/design/session-topic-miss-probe.md) — bounded session-topic miss indexing and unique-source hit/miss refresh measurements.
 
 - [docs/design/hook-catalog-private-serializer.md](docs/design/hook-catalog-private-serializer.md) — native Claude/Codex private metadata serialization, its upstream sources and remaining shell limitations.
 - [docs/design/takeover-path-measurements.md](docs/design/takeover-path-measurements.md) — historical takeover measurements and bounded outline/system-read verification.
