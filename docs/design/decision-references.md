@@ -11,7 +11,7 @@ Source: created here as a factual documentation-adaptation record; linked immuta
 - Discovery/default eligibility: [scopes.go40–69](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/scopes/scopes.go#L40-L69) selects registered sources and checks nonnil opt-in callbacks; [goose.go58–87](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/source/goose/goose.go#L58-L87) supplies the Goose opt-in caveat.
 - Existing surrounding help wording: [cli_options.go174](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/cli/cli_options.go#L174-L174) supplies the unchanged default-search statement and Goose caveat; the adaptation appends the already implemented Hermes ID in builtin order.
 
-This list adaptation documents existing behavior; it adds no discovery/default choice and has no literal full-help donor. Original `1d99790` REJECT is retained; source eligibility is not gate or publication approval, both remain pending.
+This list adaptation documents existing behavior; it adds no discovery/default choice and has no literal full-help donor. Original `1d99790` REJECT remains preserved. Revised commit `594efa09c9f32e432d2deb5efa233df5e13b1319` received normal pre-push gate APPROVE for the exact range `2e391b6af9901fb2e260a7552f05b68621437719..594efa09c9f32e432d2deb5efa233df5e13b1319` (diff `ad04fba1da8a`) and was published as draft PR #171. That receipt covers only the exact range above; every subsequent diff, including this note correction, requires its own normal gate evaluation before push and publication.
 
 ## OpenCode registered full-ID lookup equality (2026-11-18)
 
