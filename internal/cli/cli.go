@@ -156,9 +156,9 @@ func NewRootCmd(build BuildInfo) *cobra.Command {
 
 	// Native API wiring: spf13/cobra shell_completions.go L81-L98 @88b30ab89da2d0d0abb153818746c5a2d30eccec.
 	// Cobra maps this annotation to directory-only completion (completions.go L416-L423 at the same revision).
-	// Local dir caller: spf13/cobra completions_test.go L1160-L1189 at the same revision.
-	// Native error handling: spf13/cobra cobra.go L234-L241 at the same revision.
-	cobra.CheckErr(root.MarkFlagDirname("dir"))
+	// Lifted from sigstore/cosign cmd/cosign/cli/options/load.go L33-L35 @0743bfcff5f81ec49ffcea2f61b98938f6ba70ec.
+	// rawclaw: rename receiver cmd to root; retain the existing optional dir flag.
+	_ = root.MarkFlagDirname("dir")
 
 	_ = root.RegisterFlagCompletionFunc("role", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return []string{"user", "assistant"}, cobra.ShellCompDirectiveNoFileComp
