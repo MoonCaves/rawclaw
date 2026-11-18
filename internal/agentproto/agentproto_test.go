@@ -1257,16 +1257,20 @@ func TestTopicsCommand(t *testing.T) {
 	}
 }
 
+// Lifted from MoonCaves/rawclaw internal/agentproto/agentproto_test.go L1253-L1326 (MIT) @767be51bcca2bdbccf2f63c5e95d3edcff147032.
 func TestTopicsSessionFlag(t *testing.T) {
 	proj := t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	// rawclaw: retain main's existing XDG assignment and its gdu attribution.
 	// Lifted from dundee/gdu pkg/remove/trash_error_test.go L116-L116 (MIT) @4361b09ccc5850413bfec35bb2b904d96d2e5cb7.
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	uuid1 := "9f3e1c20-aaaa-bbbb-cccc-000000000001"
-	uuid2 := "9f3e1c20-aaaa-bbbb-cccc-000000000002"
+	uuid2 := "bbbbbbbb-aaaa-bbbb-cccc-000000000002"
+	uuid3 := "cccccccc-aaaa-bbbb-cccc-000000000003"
 	writeMultiSession(t, proj, "sessmulti", [][2]string{
 		{uuid1, "msg 1"},
 		{uuid2, "msg 2"},
+		{uuid3, "msg 3"},
 	})
 
 	dbp, _, _, err := index.EnsureIndexed(proj, false)
@@ -1277,11 +1281,14 @@ func TestTopicsSessionFlag(t *testing.T) {
 	if err := store.EnsureTopicSchema(con); err != nil {
 		t.Fatalf("EnsureTopicSchema: %v", err)
 	}
-	if err := store.UpsertTopicSegment(con, "sessmulti", uuid1, "", "setup infrastructure", "configured servers", 1.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sessmulti", uuid1, "", "setup infrastructure", "configured servers", 3.0); err != nil {
 		t.Fatalf("UpsertTopicSegment 1: %v", err)
 	}
-	if err := store.UpsertTopicSegment(con, "sessmulti", uuid2, "", "deploy binary", "shipped release", 2.0); err != nil {
+	if err := store.UpsertTopicSegment(con, "sessmulti", uuid2, "", "deploy binary", "shipped release", 1.0); err != nil {
 		t.Fatalf("UpsertTopicSegment 2: %v", err)
+	}
+	if err := store.UpsertTopicSegment(con, "sessmulti", uuid3, "", "setup infrastructure", "revisited servers", 2.0); err != nil {
+		t.Fatalf("UpsertTopicSegment 3: %v", err)
 	}
 	con.Close()
 	if err := index.SyncConsolidatedFrom(dbp); err != nil {
@@ -1295,19 +1302,32 @@ func TestTopicsSessionFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Topics(session): %v", err)
 	}
-	if len(res.Hits) != 2 {
-		t.Fatalf("Topics hits = %d, want 2", len(res.Hits))
+	// Session mode keeps distinct segments even when their topic labels repeat.
+	// Non-monotonic tagged times distinguish insertion order from time order.
+	want := []struct {
+		topic, ref, summary string
+	}{
+		{"setup infrastructure", "sessmult:9f3e1c20", "configured servers"},
+		{"deploy binary", "sessmult:bbbbbbbb", "shipped release"},
+		{"setup infrastructure", "sessmult:cccccccc", "revisited servers"},
 	}
-	if res.Hits[0].Topic != "setup infrastructure" || res.Hits[1].Topic != "deploy binary" {
-		t.Errorf("unexpected hits order: %+v", res.Hits)
+	if len(res.Hits) != len(want) {
+		t.Fatalf("Topics hits = %+v, want %d distinct segments", res.Hits, len(want))
 	}
-	if res.Hits[0].Summary != "configured servers" {
-		t.Errorf("hit Summary = %q, want 'configured servers'", res.Hits[0].Summary)
+	for i, expected := range want {
+		got := res.Hits[i]
+		if got.Topic != expected.topic || got.ReadRef != expected.ref || got.Summary != expected.summary {
+			t.Errorf("hit %d = %+v, want %+v", i, got, expected)
+		}
+	}
+	if res.Hits[0].ReadRef == res.Hits[2].ReadRef {
+		t.Error("repeated labels must retain distinct segment refs")
 	}
 	// Render test for session topics
 	var buf bytes.Buffer
 	renderTopics(&buf, res)
 	rendered := buf.String()
+	// rawclaw: retain main's neutral render-header assertion and diagnostic.
 	if !strings.Contains(rendered, "topic segment(s):") {
 		t.Errorf("rendered output missing topic segment header:\n%s", rendered)
 	}
