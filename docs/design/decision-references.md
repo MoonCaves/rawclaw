@@ -2,6 +2,16 @@
 
 Source: created here as a catalog of verified upstream material; the linked immutable files own the patterns.
 
+## Native filesystem directory completion (2026-11-18)
+
+Source: `spf13/cobra` at immutable revision `88b30ab89da2d0d0abb153818746c5a2d30eccec` (v1.10.2).
+
+- Native API: [`shell_completions.go` lines 81–98](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/shell_completions.go#L81-L98), `MarkFlagDirname` attaches the directory annotation to an existing flag.
+- Directive contract: [`completions.go` lines 75–80](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/completions.go#L75-L80) and [lines 416–423](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/completions.go#L416-L423) map the annotation to `ShellCompDirectiveFilterDirs`.
+- License: [Apache-2.0, `LICENSE.txt`](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/LICENSE.txt). Complete source and license bytes were fetched before implementation.
+
+RawClaw calls the native API for its existing root/shared `--dir` flag; the same flag is used by `search` and its `find`/`grep` aliases. This is API configuration wiring, not a copied implementation. Cobra delegates directory discovery to shell filesystem completion. No session-ID or known-project catalog enumeration is added, and unrelated subcommands are outside this change.
+
 ## OpenCode registered full-ID lookup equality (2026-11-18)
 
 Source: `MoonCaves/rawclaw` at immutable revision `e0420b85a30f2b4f562d72e531bcab64f23b6aa9`, [MIT](https://github.com/MoonCaves/rawclaw/blob/e0420b85a30f2b4f562d72e531bcab64f23b6aa9/LICENSE).

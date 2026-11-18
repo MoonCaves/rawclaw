@@ -144,7 +144,8 @@ so an agent's natural attempt succeeds without knowing the exact syntax.
 ### Shell completion — shipped
 
 A `rawclaw completion bash|zsh|fish|powershell` subcommand is **shipped** via `spf13/cobra`.
-Dynamic completion for session-id prefixes and project paths remains an area for future exploration.
+Native filesystem directory completion for `--dir` on the root command, `search`, `find`, and `grep` is **shipped**.
+Session-ID prefix and known-project catalog completion remain areas for future exploration.
 
 ### Semantic scoring tuning
 
