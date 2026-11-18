@@ -206,3 +206,104 @@ The partial-stage offset 60 is an actual persisted row despite zero messages. Co
 The child environment is allowlisted with `env -i`. [Cache paths](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/store/store.go#L303-L315) use the isolated child `HOME/.cache`, ignoring `XDG_CACHE_HOME`; adapter and data roots are also isolated. `HOME` is supplied only to the child, never reassigned in the invoking shell. [Archive off](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/archive/archive.go#L50-L52) returns before archive config is read. No embedding endpoint is supplied, so [adapter construction](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/adapters/adapters.go#L322-L333) has no configured embedder and [semantic topup](https://github.com/MoonCaves/rawclaw/blob/61fac14e674095678e47cad202e4a255c381047f/internal/semantic/topup.go#L118-L120) returns for a nil embedder. SQL initialization files are disabled. No real user transcripts, stores, or configuration are used.
 
 This is environment confinement, not an OS network sandbox or syscall trace; absence of network syscalls was not measured. The watchdog is 30 seconds. Timings include process startup, lookup, indexing, consolidation, and shutdown, not indexing alone. No benchmark distribution, large-corpus slowdown, exact call counts, or full freshness, retained-session, subagent, archive, or collision coverage is established. The empty-scope result concerns only the monitored cache, data, and catalog roots.
+
+## One versus twenty project scopes (2026-11-18)
+
+A separate bounded run measured the global missing-session command at production baseline `a4c49eea86e0aa94c1bcd620cce49f7cce4531cd` on Darwin arm64. It reused the unchanged `u1` record above from `internal/index/index_test.go:1335`: each `sess1.jsonl` was 115 bytes including its newline, SHA-256 `0159c5b548b7e6029178971d2b5e564dc26d55246f50b88d4da62830bf329189`. One isolated case root contained one Claude project folder; another contained twenty. All project folders used the same session ID, message UUID and record bytes.
+
+The binary was built from that baseline with `CGO_ENABLED=0 GOTOOLCHAIN=go1.24.0 go build -o "$BIN" ./cmd/rawclaw`; build exit was 0 and binary SHA-256 was `6d7bac22fd83221e2803e0b763943cfa0e5d82934d3a89ce268ded0a65cd30ea`. The recorded build provenance links the binary to the baseline; `go version -m` confirms Go 1.24.0 and `CGO_ENABLED=0`, but contains no embedded VCS revision. Each case ran one cold call and three warm repetitions from its case root. The executed command shape follows, with the temporary binary and case paths normalized to `$BIN` and `$CASE_ROOT`:
+
+```sh
+/usr/bin/time -p /usr/bin/env -i \
+  PATH=/usr/bin:/bin LC_ALL=C \
+  HOME="$CASE_ROOT/home" TMPDIR="$CASE_ROOT/tmp" \
+  XDG_DATA_HOME="$CASE_ROOT/data" XDG_CONFIG_HOME="$CASE_ROOT/config" \
+  XDG_CACHE_HOME="$CASE_ROOT/cache" RAWCLAW_CATALOG_DIR="$CASE_ROOT/catalog" \
+  RAWCLAW_ARCHIVE=off \
+  CLAUDE_CONFIG_DIR="$CASE_ROOT/claude" CODEX_HOME="$CASE_ROOT/codex" \
+  ANTIGRAVITY_HOME="$CASE_ROOT/antigravity" HERMES_HOME="$CASE_ROOT/hermes" \
+  OPENCODE_DATA_DIR="$CASE_ROOT/opencode" PI_CODING_AGENT_DIR="$CASE_ROOT/pi" \
+  GOOSE_HOME="$CASE_ROOT/goose" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+  "$BIN" --timeout 30s topics --session deadbeef --json
+```
+
+Every call had empty stdout and exit 1. The times below are literal `/usr/bin/time -p` values in seconds. DB counts include the consolidated DB and individual project DBs; changed-hash counts concern existing project DB files only.
+
+| Projects | Call | real | user | sys | DB files before → after | Project DB hashes changed |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | cold | 0.06 | 0.02 | 0.02 | 0 → 2 | n/a |
+| 1 | warm-1 | 0.03 | 0.01 | 0.01 | 2 → 2 | 1 |
+| 1 | warm-2 | 0.03 | 0.01 | 0.01 | 2 → 2 | 1 |
+| 1 | warm-3 | 0.02 | 0.01 | 0.01 | 2 → 2 | 1 |
+| 20 | cold | 0.75 | 0.19 | 0.25 | 0 → 21 | n/a |
+| 20 | warm-1 | 0.25 | 0.12 | 0.13 | 21 → 21 | 20 |
+| 20 | warm-2 | 0.26 | 0.12 | 0.14 | 21 → 21 | 20 |
+| 20 | warm-3 | 0.25 | 0.12 | 0.13 | 21 → 21 | 20 |
+
+The one-project cold stderr was as follows, with its timestamp omitted and temporary case path normalized:
+
+```text
+WARN the consolidated store is missing or unreadable; run `rawclaw consolidate` to build it path=$CASE_ROOT/home/.cache/session-search/consolidated.db err="unable to open database file: out of memory (14)"
+session "deadbeef" not found in scope
+real 0.06
+user 0.02
+sys 0.02
+```
+
+Both cold calls emitted that warning. Warm calls contained the not-found line and timing lines without the warning; twenty-project warm-1 stderr was exactly:
+
+```text
+session "deadbeef" not found in scope
+real 0.25
+user 0.12
+sys 0.13
+```
+
+Before/after file snapshots establish cold DB creation and warm project DB hash changes. The first SQL observer failed with `OperationalError: no such column: source_path` when ordering `messages`; its partial reads and errors were retained. Corrected read-only SQL observations were collected after all CLI calls had finished. Despite their per-call filenames, those corrected files establish only final state, not historical per-call row snapshots. Final reads found `sess1`, message `u1|user|first version`, and the distinct fixture path with size/offset 115/115 in each project DB. The twenty-project consolidated DB contained one `sess1` session and twenty `file_index` paths: shared IDs merged during consolidation, so individual project DBs establish project coverage.
+
+These eight process samples include startup, discovery, indexing, consolidation and shutdown. Stable DB counts on warm calls did not mean stable file bytes; changed hashes establish neither the SQL rows changed nor internal call counts. The corrected final SQL readback does not repair the failed historical observer snapshots. The confinement described above was used, without an OS network sandbox or syscall trace. This small synthetic fixture does not establish a scaling law, production severity, a scope limit, or an intended replacement policy. No runtime change or issue closure follows from these measurements.
+
+## Tagged-topic refresh characterization (2026-11-18)
+
+A separate single-session experiment used baseline `a4c49eea86e0aa94c1bcd620cce49f7cce4531cd`, the same Go 1.24.0 build command and binary SHA-256 recorded in the preceding measurement, and a fresh isolated case root. As above, baseline identity rests on recorded build provenance; binary metadata contains no embedded VCS revision. The source session ID was `3a7f21b0-0000-4000-8000-0000000000ab`. Its two initial messages reused `internal/cli/cmd_tag_onestore_test.go:22-35,286-288`: UUIDs `11111111-aaaa-bbbb-cccc-000000000011` and `22222222-aaaa-bbbb-cccc-000000000012`, timestamp `2026-06-01T10:00:00Z`, content `a message worth tagging`. The 318-byte initial JSONL had SHA-256 `52ffdf9733c81b774c13cdbe9a592998213f64b76f306562daf23588c8f5de13`.
+
+The unchanged `u2` record from `internal/index/index_test.go:1371`, shown above in the append control, added 116 bytes including its newline. The source grew to 434 bytes, SHA-256 `f332e72004643b61b4e68f1013565b1a41009fa3c8db340a98b9de35785b35dc`. Tag input reused `internal/cli/cmd_tag_test.go:259`:
+
+```json
+[{"start_uuid":"11111111","topic":"full","summary":"all"}]
+```
+
+The six measured CLI processes below ran under the existing `env -i` isolation envelope, with archive off and all source/data/config roots redirected into the disposable case. Paths are normalized: `$BIN` is the temporary binary, `$PROJECT` its Claude `projects/proj-tag` folder, and `$ROOT/tag.json` the input above. Tag writing was project-scoped; all topic lookups were global. Two separate help inspections were outside this six-process sequence. The saved per-command tag-write logger omitted its arguments; the actual scoped command below comes from the executed script.
+
+```sh
+"$BIN" --timeout 30s topics --session deadbeef --json
+"$BIN" --timeout 30s tag-write --this-project --dir "$PROJECT" 3a7f21b0 < "$ROOT/tag.json"
+"$BIN" --timeout 30s topics --session 3a7f21b0 --json
+# append the exact existing u2 record to the source JSONL
+"$BIN" --timeout 30s topics --session 3a7f21b0 --json
+"$BIN" --timeout 30s topics --session deadbeef --json
+"$BIN" --timeout 30s topics --session 3a7f21b0 --json
+```
+
+Tag-write exited 0 with empty stderr and this stdout:
+
+```text
+wrote 1 topic segments for 3a7f21b0
+tag-write: publication queued (read-after-write is eventual)
+```
+
+The detached publisher's isolated log reported `tag-publish: published` for its refresh DB at the first poll (poll count 0). Its completion relative to the immediate observer is unknown because that consolidated read failed. This successful log does not establish every byte change was synchronous tag-write work. A later tagged hit and successful consolidated SQL read provided the pre-append baseline: two messages, size/offset 318/318 and one topic segment.
+
+Each tagged hit exited 0 with empty stderr and identical JSON: `{"query":"","hits":[{"topic":"full","project":"proj-tag","read_ref":"3a7f21b0:11111111","summary":"all"}]}` (whitespace compacted). Both missing-session calls exited 1 with empty stdout and stderr containing `session "deadbeef" not found in scope`; the seed also emitted the missing/unreadable consolidated-store warning. The later miss had only the not-found line.
+
+| Observation stage | Source bytes | Project messages; size/offset | Consolidated messages; size/offset | Refresh DB messages; size/offset |
+| --- | ---: | --- | --- | --- |
+| Tagged hit before append | 318 | 2; 318/318 | 2; 318/318 | 2; 318/318 |
+| Append, before next hit | 434 | 2; 318/318 | 2; 318/318 | 2; 318/318 |
+| Tagged hit after append | 434 | 2; 318/318 | 2; 318/318 | 2; 318/318 |
+| Global missing-session call | 434 | 3; 434/434 | Unknown: observer error | 2; 318/318 |
+| Final tagged hit | 434 | 3; 434/434 | 3; 434/434 | 2; 318/318 |
+
+The consolidated and refresh DBs retained one topic segment from the first UUID through the second UUID; the appended `u2` message did not extend that observed boundary. The project DB reported no `topic_segment` table. The tagged hit after append retained the two-message/318-byte observed state. After the miss, project indexing advanced; the final successful consolidated observation showed three messages while the refresh snapshot and old tag boundaries remained.
+
+Immediate consolidated reads after seed, tag-write, publisher completion and the miss printed `OBSERVER_ERROR OperationalError unable to open database file`. Those states remain unknown; later successful reads do not replace them or establish the exact moment consolidated refresh occurred. The read-only observer caught per-DB errors, so its exit 0 alone does not mean every SQL read succeeded. No error cause or corruption was established. This one session, append and invocation sequence does not establish all tag-write behavior, concurrent behavior, call counts, production severity, an intended retagging/lookup policy or a runtime fix. No OS network sandbox or syscall trace was used.
