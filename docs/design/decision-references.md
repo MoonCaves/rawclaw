@@ -4,17 +4,18 @@ Source: created here as a catalog of verified upstream material; the linked immu
 
 ## Native filesystem directory completion (2026-11-18)
 
-Source: `spf13/cobra` at immutable revision `88b30ab89da2d0d0abb153818746c5a2d30eccec` (v1.10.2).
+Source: `sigstore/cosign` at immutable revision `0743bfcff5f81ec49ffcea2f61b98938f6ba70ec` supplies the proposed application call unit; `spf13/cobra` at `88b30ab89da2d0d0abb153818746c5a2d30eccec` (v1.10.2) owns the native mechanism.
 
-- Local directory caller: [`completions_test.go` lines 1160–1189](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/completions_test.go#L1160-L1189) binds a local string `dir` flag and calls `MarkFlagDirname("dir")`; its expected result is directory filtering.
-- Native error handler: [`cobra.go` lines 234–241](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/cobra.go#L234-L241), `CheckErr` does nothing for nil and prints to global stderr and exits 1 for a nonnil error.
-- Native API: [`shell_completions.go` lines 81–98](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/shell_completions.go#L81-L98), `MarkFlagDirname` attaches the directory annotation to an existing flag.
-- Directive contract: [`completions.go` lines 75–80](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/completions.go#L75-L80) and [lines 416–423](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/completions.go#L416-L423) map the annotation to `ShellCompDirectiveFilterDirs`.
-- License: [Apache-2.0, `LICENSE.txt`](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/LICENSE.txt). Complete source and license bytes were fetched before implementation.
+- Actual local-directory caller: [`sigstore/cosign`, `cmd/cosign/cli/options/load.go` lines 33–35](https://github.com/sigstore/cosign/blob/0743bfcff5f81ec49ffcea2f61b98938f6ba70ec/cmd/cosign/cli/options/load.go#L33-L35) declares a local string `dir` flag and executes `_ = cmd.MarkFlagDirname("dir")`, explicitly ignoring the annotation error.
+- Copied unit: only that `MarkFlagDirname` call, adapting receiver `cmd` to `root`. RawClaw retains its existing flag declaration, default, help and option storage. Cosign's adjacent `MarkFlagRequired("dir")` is an independent annotation and is not adopted; RawClaw's `--dir` remains optional. Neither the whole `AddFlags` method nor Cosign's required-directory product behavior is copied.
+- Caller license: [Cosign Apache-2.0, `LICENSE`](https://github.com/sigstore/cosign/blob/0743bfcff5f81ec49ffcea2f61b98938f6ba70ec/LICENSE), Copyright 2021 The Sigstore Authors in the caller header. Full caller and license bytes were independently fetched before the proposed adoption.
+- Native API: [Cobra `shell_completions.go` lines 81–98](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/shell_completions.go#L81-L98), `MarkFlagDirname` attaches the directory annotation to an existing flag.
+- Directive contract: [Cobra `completions.go` lines 75–80](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/completions.go#L75-L80) and [lines 416–423](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/completions.go#L416-L423) map the annotation to `ShellCompDirectiveFilterDirs`.
+- Mechanism license: [Cobra Apache-2.0, `LICENSE.txt`](https://github.com/spf13/cobra/blob/88b30ab89da2d0d0abb153818746c5a2d30eccec/LICENSE.txt). Complete source and license bytes were fetched before implementation.
 
-RawClaw passes the annotation error directly to native `cobra.CheckErr`, replacing the original ignored error. The local-dir test caller and native error handler are separate sources; this does not claim an upstream `CheckErr(MarkFlagDirname(...))` pair or equivalence to the test helper `assertNoErr`, which reports via `t.Error`. A misconfigured registration now prints an error and exits 1.
+This record precedes the proposed code correction and is not publication or gate approval. The earlier mechanism-only and separately composed `CheckErr` candidates remain rejected; their gate records are preserved. The selected Cosign call ignores the result and does not source `CheckErr`, a general ignored-error policy, or equivalence to Cobra's test helper `assertNoErr`.
 
-RawClaw calls the native API for its existing root/shared `--dir` flag; the same flag is used by `search` and its `find`/`grep` aliases. This is API configuration wiring, not a copied implementation. Cobra delegates directory discovery to shell filesystem completion. No session-ID or known-project catalog enumeration is added, and unrelated subcommands are outside this change.
+The bounded adoption targets RawClaw's existing root/shared `--dir` flag, also used by `search` and its `find`/`grep` aliases. Cobra delegates directory discovery to shell filesystem completion. No session-ID or known-project catalog enumeration is added, and unrelated subcommands are outside this change.
 
 ## OpenCode registered full-ID lookup equality (2026-11-18)
 
