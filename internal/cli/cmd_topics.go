@@ -31,7 +31,8 @@ func newTopicsCmd() *cobra.Command {
 			"begins. Topics are NOT in the default search ranking; reach for this when a normal `rawclaw \"query\"` " +
 			"is ambiguous. Searches every project by default; --this-project (with --dir) to narrow. " +
 			"Use --session <id> to list all tagged topic segments for one session; the positional query, " +
-			"--limit, and --include-path are ignored. --this-project scopes session lookup.",
+			"--limit, and --include-path are ignored. --this-project scopes session lookup. " +
+			"A session lookup miss may build or refresh project indexes.",
 		Args:          cobra.ArbitraryArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
