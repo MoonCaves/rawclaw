@@ -2,6 +2,17 @@
 
 Source: created here as a catalog of verified upstream material; the linked immutable files own the patterns.
 
+## Hermes source help roster (2026-11-18)
+
+Source: created here as a factual documentation-adaptation record; linked immutable `MoonCaves/rawclaw@2e391b6af9901fb2e260a7552f05b68621437719` files own the facts ([MIT](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/LICENSE)).
+
+- Builtin roster/order: [sources.go26–33](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/sources/sources.go#L26-L33) registers Claude, Codex, Antigravity, Goose, Pi, OpenCode, Hermes; [source.go80–101](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/source/source.go#L80-L101) preserves insertion order.
+- Hermes identity/default construction: [hermes.go23–36](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/source/hermes/hermes.go#L23-L36) and [hermes.go50–57](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/source/hermes/hermes.go#L50-L57) supply `hermes`, default roots and registration without an opt-in callback.
+- Discovery/default eligibility: [scopes.go40–69](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/scopes/scopes.go#L40-L69) selects registered sources and checks nonnil opt-in callbacks; [goose.go58–87](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/source/goose/goose.go#L58-L87) supplies the Goose opt-in caveat.
+- Existing surrounding help wording: [cli_options.go174](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/cli/cli_options.go#L174-L174) supplies the unchanged default-search statement and Goose caveat; the adaptation appends the already implemented Hermes ID in builtin order.
+
+This list adaptation documents existing behavior; it adds no discovery/default choice and has no literal full-help donor. Original `1d99790` REJECT is retained; source eligibility is not gate or publication approval, both remain pending.
+
 ## OpenCode registered full-ID lookup equality (2026-11-18)
 
 Source: `MoonCaves/rawclaw` at immutable revision `e0420b85a30f2b4f562d72e531bcab64f23b6aa9`, [MIT](https://github.com/MoonCaves/rawclaw/blob/e0420b85a30f2b4f562d72e531bcab64f23b6aa9/LICENSE).
