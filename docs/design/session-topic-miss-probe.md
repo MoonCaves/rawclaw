@@ -262,3 +262,48 @@ sys 0.13
 Before/after file snapshots establish cold DB creation and warm project DB hash changes. The first SQL observer failed with `OperationalError: no such column: source_path` when ordering `messages`; its partial reads and errors were retained. Corrected read-only SQL observations were collected after all CLI calls had finished. Despite their per-call filenames, those corrected files establish only final state, not historical per-call row snapshots. Final reads found `sess1`, message `u1|user|first version`, and the distinct fixture path with size/offset 115/115 in each project DB. The twenty-project consolidated DB contained one `sess1` session and twenty `file_index` paths: shared IDs merged during consolidation, so individual project DBs establish project coverage.
 
 These eight process samples include startup, discovery, indexing, consolidation and shutdown. Stable DB counts on warm calls did not mean stable file bytes; changed hashes establish neither the SQL rows changed nor internal call counts. The corrected final SQL readback does not repair the failed historical observer snapshots. The confinement described above was used, without an OS network sandbox or syscall trace. This small synthetic fixture does not establish a scaling law, production severity, a scope limit, or an intended replacement policy. No runtime change or issue closure follows from these measurements.
+
+## Tagged-topic refresh characterization (2026-11-18)
+
+A separate single-session experiment used baseline `a4c49eea86e0aa94c1bcd620cce49f7cce4531cd`, the same Go 1.24.0 build command and binary SHA-256 recorded in the preceding measurement, and a fresh isolated case root. As above, baseline identity rests on recorded build provenance; binary metadata contains no embedded VCS revision. The source session ID was `3a7f21b0-0000-4000-8000-0000000000ab`. Its two initial messages reused `internal/cli/cmd_tag_onestore_test.go:22-35,286-288`: UUIDs `11111111-aaaa-bbbb-cccc-000000000011` and `22222222-aaaa-bbbb-cccc-000000000012`, timestamp `2026-06-01T10:00:00Z`, content `a message worth tagging`. The 318-byte initial JSONL had SHA-256 `52ffdf9733c81b774c13cdbe9a592998213f64b76f306562daf23588c8f5de13`.
+
+The unchanged `u2` record from `internal/index/index_test.go:1371`, shown above in the append control, added 116 bytes including its newline. The source grew to 434 bytes, SHA-256 `f332e72004643b61b4e68f1013565b1a41009fa3c8db340a98b9de35785b35dc`. Tag input reused `internal/cli/cmd_tag_test.go:259`:
+
+```json
+[{"start_uuid":"11111111","topic":"full","summary":"all"}]
+```
+
+The six measured CLI processes below ran under the existing `env -i` isolation envelope, with archive off and all source/data/config roots redirected into the disposable case. Paths are normalized: `$BIN` is the temporary binary, `$PROJECT` its Claude `projects/proj-tag` folder, and `$ROOT/tag.json` the input above. Tag writing was project-scoped; all topic lookups were global. Two separate help inspections were outside this six-process sequence. The saved per-command tag-write logger omitted its arguments; the actual scoped command below comes from the executed script.
+
+```sh
+"$BIN" --timeout 30s topics --session deadbeef --json
+"$BIN" --timeout 30s tag-write --this-project --dir "$PROJECT" 3a7f21b0 < "$ROOT/tag.json"
+"$BIN" --timeout 30s topics --session 3a7f21b0 --json
+# append the exact existing u2 record to the source JSONL
+"$BIN" --timeout 30s topics --session 3a7f21b0 --json
+"$BIN" --timeout 30s topics --session deadbeef --json
+"$BIN" --timeout 30s topics --session 3a7f21b0 --json
+```
+
+Tag-write exited 0 with empty stderr and this stdout:
+
+```text
+wrote 1 topic segments for 3a7f21b0
+tag-write: publication queued (read-after-write is eventual)
+```
+
+The detached publisher's isolated log reported `tag-publish: published` for its refresh DB at the first poll (poll count 0). Its completion relative to the immediate observer is unknown because that consolidated read failed. This successful log does not establish every byte change was synchronous tag-write work. A later tagged hit and successful consolidated SQL read provided the pre-append baseline: two messages, size/offset 318/318 and one topic segment.
+
+Each tagged hit exited 0 with empty stderr and identical JSON: `{"query":"","hits":[{"topic":"full","project":"proj-tag","read_ref":"3a7f21b0:11111111","summary":"all"}]}` (whitespace compacted). Both missing-session calls exited 1 with empty stdout and stderr containing `session "deadbeef" not found in scope`; the seed also emitted the missing/unreadable consolidated-store warning. The later miss had only the not-found line.
+
+| Observation stage | Source bytes | Project messages; size/offset | Consolidated messages; size/offset | Refresh DB messages; size/offset |
+| --- | ---: | --- | --- | --- |
+| Tagged hit before append | 318 | 2; 318/318 | 2; 318/318 | 2; 318/318 |
+| Append, before next hit | 434 | 2; 318/318 | 2; 318/318 | 2; 318/318 |
+| Tagged hit after append | 434 | 2; 318/318 | 2; 318/318 | 2; 318/318 |
+| Global missing-session call | 434 | 3; 434/434 | Unknown: observer error | 2; 318/318 |
+| Final tagged hit | 434 | 3; 434/434 | 3; 434/434 | 2; 318/318 |
+
+The consolidated and refresh DBs retained one topic segment from the first UUID through the second UUID; the appended `u2` message did not extend that observed boundary. The project DB reported no `topic_segment` table. The tagged hit after append retained the two-message/318-byte observed state. After the miss, project indexing advanced; the final successful consolidated observation showed three messages while the refresh snapshot and old tag boundaries remained.
+
+Immediate consolidated reads after seed, tag-write, publisher completion and the miss printed `OBSERVER_ERROR OperationalError unable to open database file`. Those states remain unknown; later successful reads do not replace them or establish the exact moment consolidated refresh occurred. The read-only observer caught per-DB errors, so its exit 0 alone does not mean every SQL read succeeded. No error cause or corruption was established. This one session, append and invocation sequence does not establish all tag-write behavior, concurrent behavior, call counts, production severity, an intended retagging/lookup policy or a runtime fix. No OS network sandbox or syscall trace was used.
