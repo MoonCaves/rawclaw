@@ -11,6 +11,7 @@ All notable changes to RawClaw are documented in this file.
 
 ### Fixed
 
+- Include the existing Hermes adapter in the shared `--source` help roster.
 - Use exact ID equality in OpenCode's registered session lookup instead of prefix matching.
 - Preserve JSON escapes in Claude Code and Codex catalog working directories and transcript paths with a native serializer; session-ID/event extraction and Antigravity metadata retain their existing limitations.
 - Corrected consolidated-index warnings that incorrectly promised a per-project fallback during prewarm and cached tag-refresh checks.

@@ -171,7 +171,7 @@ func bindRootFlags(root *cobra.Command, opts *Options) {
 	f.BoolVar(&opts.All, "all", false, "cover every project: the search default already, and the widener for bare browse and --stats")
 	f.BoolVar(&opts.List, "list", false, "list all searchable projects (with session counts) and exit")
 	f.StringVar(&opts.Role, "role", "", "only this author role (user|assistant)")
-	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|antigravity|goose|pi|opencode); default searches all (goose discovery is opt-in: pass --source goose or set RAWCLAW_GOOSE=1)")
+	f.StringVar(&opts.Source, "source", "", "only this runtime (claude|codex|antigravity|goose|pi|opencode|hermes); default searches all (goose discovery is opt-in: pass --source goose or set RAWCLAW_GOOSE=1)")
 	f.StringVar(&opts.Sort, "sort", "", "result order (newest|oldest)")
 	f.BoolVar(&opts.IncludeTools, "include-tools", false, "also match/show tool calls + tool-only hits")
 	f.BoolVar(&opts.IncludeSubagents, "include-subagents", false, "also search delegated subagent threads")
