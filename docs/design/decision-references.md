@@ -12,6 +12,16 @@ Source: `MoonCaves/rawclaw` at immutable revision `e0420b85a30f2b4f562d72e531bca
 
 The adoption replaces only the two approximate predicates in OpenCode's registered lookup with the donor's equality unit, adapting existing table/column/scan bindings. OpenCode's existing singular-to-plural fallback on query/scan error and its metadata projection remain unchanged; they are not attributed to Hermes. Removing a singular prefix hit can expose that existing fallback. The CLI's UUID-shaped admission remains unchanged, so this does not add native `ses_*` CLI lookup support. Complete source and license bytes were independently fetched before the prospective source ACK and edits. This source record is not gate approval or a claim of persistent prefix-regression coverage.
 
+## OpenCode proper-prefix lookup rejection test (2026-11-21)
+
+Source: `keon/algorithms` at immutable revision `9d9d822875f938d921032f220f7721ce653e0e20`, [MIT](https://github.com/keon/algorithms/blob/9d9d822875f938d921032f220f7721ce653e0e20/LICENSE).
+
+- Proper-prefix rejection pattern: [`tests/test_data_structures.py` lines 91–100](https://github.com/keon/algorithms/blob/9d9d822875f938d921032f220f7721ce653e0e20/tests/test_data_structures.py#L91-L100). The test inserts key `"apple"`, retrieves full `"apple"`, and rejects proper prefix `"app"` while the longer key exists.
+- Destination test: [`internal/source/opencode/opencode_test.go` lines 208–229](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/source/opencode/opencode_test.go#L208-L229), extending existing `TestLookup` using the `'ses_root1'` record inserted at lines 80–92.
+- License: [MIT](https://github.com/keon/algorithms/blob/9d9d822875f938d921032f220f7721ce653e0e20/LICENSE), Copyright (c) 2017 Keon. Complete source and license bytes independently fetched and verified on 2026-11-21. Complete-file SHA256: `tests/test_data_structures.py` `293d525ad809f393c1440a290a5fd4e95a8d3a1475032230d608b3f89bd15e4a`; `LICENSE` `f676cbf8e504df7f12c9628ab17dddf686671d785f2a9f403098f29fadde4a96`.
+
+The adoption applies only the test assertion relation: verifying that lookup of a proper prefix (`"ses_root"`) of an existing stored record (`"ses_root1"`) yields false while the full record is present. Existing exact positive (`"ses_root1"`) and unrelated negative (`"non_existent"`) controls in `TestLookup` are retained. This does not copy Trie or Python code, does not cover wildcard handling or the plural schema, and does not introduce helper functions or fixture tables.
+
 ## Expand the user data home before relative data paths (2026-11-12)
 
 - Repository: `rjarry/aerc`, immutable revision `db342821ee09094c0919cb7d59f14ef98e5458d4`.
