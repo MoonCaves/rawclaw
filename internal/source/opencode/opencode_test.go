@@ -215,6 +215,13 @@ func TestLookup(t *testing.T) {
 		t.Errorf("lookup result = %+v", c)
 	}
 
+	// Lifted from keon/algorithms tests/test_data_structures.py L91-L100 (MIT) @9d9d822875f938d921032f220f7721ce653e0e20.
+	// rawclaw: use the existing ses_root1 fixture and its proper prefix ses_root.
+	_, ok = lookupSessionInDB(dbPath, "ses_root")
+	if ok {
+		t.Fatal("lookupSessionInDB succeeded for proper prefix ses_root")
+	}
+
 	_, ok = lookupSessionInDB(dbPath, "non_existent")
 	if ok {
 		t.Fatal("lookupSessionInDB succeeded for non_existent session")

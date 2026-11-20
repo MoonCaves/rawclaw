@@ -12,6 +12,17 @@ Source: `MoonCaves/rawclaw` at immutable revision `e0420b85a30f2b4f562d72e531bca
 
 The adoption replaces only the two approximate predicates in OpenCode's registered lookup with the donor's equality unit, adapting existing table/column/scan bindings. OpenCode's existing singular-to-plural fallback on query/scan error and its metadata projection remain unchanged; they are not attributed to Hermes. Removing a singular prefix hit can expose that existing fallback. The CLI's UUID-shaped admission remains unchanged, so this does not add native `ses_*` CLI lookup support. Complete source and license bytes were independently fetched before the prospective source ACK and edits. This source record is not gate approval or a claim of persistent prefix-regression coverage.
 
+## OpenCode proper-prefix lookup rejection test (2026-11-21)
+
+Two tests in `keon/algorithms` each insert the single key `apple`. One finds `apple`. The other rejects its proper prefix `app`. [Upstream tests, lines 91–100](https://github.com/keon/algorithms/blob/9d9d822875f938d921032f220f7721ce653e0e20/tests/test_data_structures.py#L91-L100) · [MIT license, copyright 2017 Keon](https://github.com/keon/algorithms/blob/9d9d822875f938d921032f220f7721ce653e0e20/LICENSE)
+
+RawClaw's OpenCode fixture contains `ses_root1` and `ses_sub1`. The additional assertion in `TestLookup` rejects `ses_root` alongside the existing exact-hit and unrelated-miss checks. [SQLite fixture, lines 80–92](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/source/opencode/opencode_test.go#L80-L92) · [Existing test, lines 208–222](https://github.com/MoonCaves/rawclaw/blob/2e391b6af9901fb2e260a7552f05b68621437719/internal/source/opencode/opencode_test.go#L208-L222)
+
+| Pinned upstream file | SHA-256 |
+| --- | --- |
+| `tests/test_data_structures.py` | `293d525ad809f393c1440a290a5fd4e95a8d3a1475032230d608b3f89bd15e4a` |
+| `LICENSE` | `f676cbf8e504df7f12c9628ab17dddf686671d785f2a9f403098f29fadde4a96` |
+
 ## Expand the user data home before relative data paths (2026-11-12)
 
 - Repository: `rjarry/aerc`, immutable revision `db342821ee09094c0919cb7d59f14ef98e5458d4`.
