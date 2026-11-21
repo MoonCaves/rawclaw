@@ -259,6 +259,25 @@ func TestSessionHasRealSegments(t *testing.T) {
 	})
 }
 
+func TestTopicsForSessionReadErrors(t *testing.T) {
+	con, _ := storetest.NewDB(t)
+	if got, err := store.TopicsForSession(con, "sess-1"); err != nil || len(got) != 0 {
+		t.Fatalf("missing optional table: got %v, %v; want no topics", got, err)
+	}
+	if _, err := con.Exec("CREATE VIEW topic_segment AS SELECT * FROM topic_segment_archive"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.TopicsForSession(con, "sess-1"); err == nil {
+		t.Fatal("expected an error for a view with a missing source table")
+	}
+	if err := con.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.TopicsForSession(con, "sess-1"); err == nil {
+		t.Fatal("expected an error for a closed database")
+	}
+}
+
 func TestInsertTopicSegments(t *testing.T) {
 	con, _ := storetest.NewDB(t)
 	if err := store.EnsureTopicSchema(con); err != nil {

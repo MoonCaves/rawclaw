@@ -163,7 +163,11 @@ func TopicsForSession(con *sql.DB, sessionID string) ([]TopicSegment, error) {
 		"SELECT session_id, start_uuid, end_uuid, topic, summary, tagged_at, origin_machine FROM topic_segment WHERE session_id=? ORDER BY id",
 		sessionID)
 	if err != nil {
-		return nil, nil // missing table / read error reads as no topics (non-fatal)
+		// SQLite uses the same error code for missing tables and other SQL errors.
+		if err.Error() == "SQL logic error: no such table: topic_segment (1)" {
+			return nil, nil // missing optional table reads as no topics (non-fatal)
+		}
+		return nil, err
 	}
 	defer rows.Close()
 	var out []TopicSegment
