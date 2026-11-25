@@ -2,7 +2,7 @@
 // ~/.pi/agent/sessions/ (or $PI_CODING_AGENT_DIR/sessions, $PI_CONFIG_DIR/agent/sessions).
 //
 // Pi persists session transcripts as date-stamped JSONL files grouped by project
-// working directories (e.g. ~/.pi/agent/sessions/--Users-jay-m4-code-rawclaw--/*.jsonl).
+// working directories (e.g. ~/.pi/agent/sessions/--Users-alice-code-rawclaw--/*.jsonl).
 //
 // The first record in each session file is a session header containing metadata (ID, CWD,
 // timestamp). Subsequent records represent user/assistant/tool messages, custom extension
