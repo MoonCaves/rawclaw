@@ -112,3 +112,51 @@ func TestHermesAdapter_Lookup(t *testing.T) {
 		t.Fatalf("unexpected lookup result: %+v", containers)
 	}
 }
+
+func TestHermesAdapter_NullCWD(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("HERMES_HOME", tmp)
+	dbPath := filepath.Join(tmp, "state.db")
+
+	// Lifted from MoonCaves/rawclaw internal/source/hermes/hermes_test.go L12-L44 and NousResearch/hermes-agent persistence/conversation/sessions.py L361-L362
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, cwd TEXT, parent_session_id TEXT, started_at REAL NOT NULL)`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	now := float64(time.Now().Unix())
+	if _, err := db.Exec("INSERT INTO sessions(id, source, cwd, parent_session_id, started_at) VALUES(?,?,?,?,?)",
+		"sess-001", "cli", nil, nil, now); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Lifted from MoonCaves/rawclaw internal/source/hermes/hermes_test.go L65-L78 and golang/go src/database/sql/sql.go L200-L203
+	adapter := NewRoot(tmp)
+	containers, err := adapter.Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(containers) != 1 {
+		t.Fatalf("expected 1 container, got %d", len(containers))
+	}
+	rootSess := containers[0]
+	if rootSess.ID != "sess-001" || rootSess.CWD != "" || rootSess.IsSubagent {
+		t.Errorf("unexpected root session: %+v", rootSess)
+	}
+
+	// Lifted from MoonCaves/rawclaw internal/source/hermes/hermes_test.go L106-L113 and golang/go src/database/sql/sql.go L200-L203
+	lookedUp, err := lookup("sess-001")
+	if err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	if len(lookedUp) != 1 || lookedUp[0].ID != "sess-001" || lookedUp[0].CWD != "" {
+		t.Fatalf("unexpected lookup result: %+v", lookedUp)
+	}
+}
