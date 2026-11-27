@@ -83,8 +83,9 @@ func lookupDatabase(path, id string) (source.Container, bool) {
 	}
 	defer db.Close()
 
-	var rowID, cwd string
-	var parentSessionID sql.NullString
+	// Lifted from golang/go src/database/sql/sql.go L194-L207 and MoonCaves/rawclaw internal/source/hermes/hermes.go L86-L97
+	var rowID string
+	var cwd, parentSessionID sql.NullString
 	err = db.QueryRow("SELECT id, cwd, parent_session_id FROM sessions WHERE id = ?", id).Scan(&rowID, &cwd, &parentSessionID)
 	if err != nil {
 		return source.Container{}, false
@@ -92,7 +93,7 @@ func lookupDatabase(path, id string) (source.Container, bool) {
 	return source.Container{
 		ID:         rowID,
 		Path:       fmt.Sprintf("%s#%s", path, rowID),
-		CWD:        cwd,
+		CWD:        cwd.String,
 		ParentID:   parentSessionID.String,
 		IsSubagent: parentSessionID.Valid && parentSessionID.String != "",
 		ResumeArgv: []string{"hermes", "resume", rowID},
@@ -164,15 +165,16 @@ func (a *Adapter) discoverDatabase(dbPath string) ([]source.Container, error) {
 
 	var out []source.Container
 	for rows.Next() {
-		var id, cwd string
-		var parentSessionID sql.NullString
+		// Lifted from golang/go src/database/sql/sql.go L194-L207 and MoonCaves/rawclaw internal/source/hermes/hermes.go L167-L177
+		var id string
+		var cwd, parentSessionID sql.NullString
 		if err := rows.Scan(&id, &cwd, &parentSessionID); err != nil {
 			continue
 		}
 		out = append(out, source.Container{
 			ID:         id,
 			Path:       fmt.Sprintf("%s#%s", dbPath, id),
-			CWD:        cwd,
+			CWD:        cwd.String,
 			ParentID:   parentSessionID.String,
 			IsSubagent: parentSessionID.Valid && parentSessionID.String != "",
 			ResumeArgv: []string{"hermes", "resume", id},
